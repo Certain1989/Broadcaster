@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: d-k-bo <d-k-bo@mailbox.org>
+# SPDX-FileCopyrightText: 2026 Televido contributors
+# SPDX-FileContributor: Claude (Anthropic)
+# SPDX-License-Identifier: CC0-1.0
+
+/_build
+/.env/
+/.flatpak
+/.flatpak-builder
+/target
+/subprojects/blueprint-compiler
+/data/gschemas.compiled
+/data/resources/io.github.Certain1989.Broadcaster.metainfo.xml

@@ -1,0 +1,84 @@
+/* SPDX-FileCopyrightText: 2026 Broadcaster contributors */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+
+/* Retain libadwaita's scheme, but improve TV focus and visual hierarchy. */
+headerbar.tv-header {
+  border-bottom: 2px solid @accent_color;
+}
+
+
+/* Adw.ViewSwitcher tabs live in the header rather than in the active view.
+ * GTK can move keyboard focus there without a clearly visible indicator on
+ * a dark TV theme. Expose actual focus, not only :focus-visible, because
+ * GTK's programmatic child_focus() can produce the former on Wayland. */
+headerbar.tv-header button:focus,
+headerbar.tv-header button:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
+/* Round the blue-grey toolbar PANEL, not its individual controls. */
+.tv-controls {
+  background-color: alpha(@accent_bg_color, 0.055);
+  border-radius: 16px;
+}
+
+.tv-controls entry.search,
+.tv-controls dropdown,
+.tv-controls menubutton,
+.tv-controls button {
+  min-height: 40px;
+}
+
+.tv-results row {
+  min-height: 84px;
+  transition: background-color 120ms ease;
+}
+
+.tv-results row .heading {
+  font-size: 17px;
+}
+
+.tv-results row:focus,
+.tv-results row:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -3px;
+  border-radius: 12px;
+  background-color: alpha(@accent_bg_color, 0.14);
+}
+
+.tv-results row:hover {
+  background-color: alpha(@accent_bg_color, 0.07);
+}
+
+/* The remote may assign real focus before GTK marks focus as
+ * :focus-visible (notably on first launch). Keep the TV selection indicator
+ * tied to actual focus, including internal children of compound controls.
+ * This must not require a first OK/Enter press to become visible. */
+.tv-controls button:focus,
+.tv-controls button:focus-within,
+.tv-controls button:focus-visible,
+.tv-controls menubutton:focus,
+.tv-controls menubutton:focus-within,
+.tv-controls menubutton:focus-visible,
+.tv-controls dropdown:focus,
+.tv-controls dropdown:focus-within,
+.tv-controls dropdown:focus-visible,
+.tv-controls entry.search:focus,
+.tv-controls entry.search:focus-within,
+.tv-controls entry.search:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: 1px;
+  border-radius: 10px;
+}
+
+label.channel-fallback {
+  border: 1px solid @accent_color;
+  border-radius: 10px;
+  background-color: alpha(@accent_bg_color, 0.16);
+  color: @accent_color;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 6px;
+}

@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: 2026 Televido contributors
+// SPDX-FileContributor: Claude (Anthropic)
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvMpvArgumentsPage: Adw.NavigationPage {
+  title: _("mpv Arguments");
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    Adw.PreferencesPage {
+      Adw.PreferencesGroup arguments_group {
+        title: _("Arguments");
+        description: _("Passed to mpv when playing a video, one argument per row. The title and the stream URL are appended automatically.");
+
+        header-suffix: Gtk.Box {
+          spacing: 6;
+
+          Gtk.Button {
+            icon-name: "edit-undo-symbolic";
+            tooltip-text: _("Restore Defaults");
+            clicked => $restore_defaults() swapped;
+
+            styles [
+              "flat"
+            ]
+          }
+
+          Gtk.Button {
+            icon-name: "list-add-symbolic";
+            tooltip-text: _("Add Argument");
+            clicked => $add_argument() swapped;
+
+            styles [
+              "flat"
+            ]
+          }
+        };
+
+        Gtk.ListBox arguments_list {
+          selection-mode: none;
+
+          styles [
+            "boxed-list"
+          ]
+        }
+      }
+    }
+  }
+}

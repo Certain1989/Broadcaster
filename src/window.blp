@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-FileCopyrightText: 2026 Televido contributors
+// SPDX-FileContributor: Claude (Anthropic)
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvWindow: Adw.ApplicationWindow {
+  width-request: 360;
+  height-request: 294;
+  title: "Broadcaster";
+
+  Adw.Breakpoint {
+    condition ("max-width: 550sp")
+
+    setters {
+      switcher_bar.reveal: true;
+      header_bar.title-widget: null;
+      mediathek_view.compact: true;
+    }
+  }
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar header_bar {
+      styles [
+        "tv-header"
+      ]
+      [title]
+      Adw.ViewSwitcher {
+        stack: stack;
+        policy: wide;
+      }
+
+      [end]
+      Gtk.MenuButton menu_button {
+        primary: true;
+        icon-name: "open-menu-symbolic";
+        tooltip-text: _("Menu");
+        menu-model: primary_menu;
+      }
+
+      [end]
+      Gtk.Button {
+        icon-name: "refresh-symbolic";
+        tooltip-text: _("Reload");
+        action-name: "window.reload";
+      }
+    }
+
+    Adw.ToastOverlay toast_overlay {
+      Adw.ViewStack stack {
+        Adw.ViewStackPage {
+          name: "live";
+          title: _("Live");
+          icon-name: "tv-symbolic";
+
+          child: $TvLiveView live_view {};
+        }
+
+        Adw.ViewStackPage {
+          name: "mediathek";
+          title: _("Mediathek");
+          icon-name: "library-symbolic";
+
+          child: $TvMediathekView mediathek_view {};
+        }
+
+      }
+    }
+
+    [bottom]
+    Adw.ViewSwitcherBar switcher_bar {
+      stack: stack;
+    }
+  }
+}
+
+menu primary_menu {
+  section {
+    item {
+      label: _("Preferences");
+      action: "app.preferences";
+    }
+
+    item {
+      label: _("Toggle Fullscreen");
+      action: "window.toggle-fullscreen";
+    }
+
+    item {
+      label: _("Keyboard Shortcuts");
+      action: "app.shortcuts";
+    }
+
+    item {
+      label: _("About Broadcaster");
+      action: "app.about";
+    }
+  }
+}

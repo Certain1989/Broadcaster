@@ -1,0 +1,103 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-FileCopyrightText: 2026 Televido contributors
+// SPDX-FileContributor: Claude (Anthropic)
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvLiveView: Adw.Bin {
+  Gtk.Stack stack {
+    visible-child: spinner;
+
+    Gtk.StackPage {
+      name: "spinner";
+
+      child: Adw.Spinner spinner {
+        halign: center;
+        valign: center;
+        width-request: 32;
+        height-request: 32;
+      };
+    }
+
+    Gtk.StackPage {
+      name: "channels";
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.Clamp {
+          maximum-size: 1240;
+          tightening-threshold: 1000;
+
+          Gtk.Box {
+            margin-top: 6;
+            margin-bottom: 6;
+            margin-start: 6;
+            margin-end: 6;
+
+            Gtk.SearchEntry search_entry {
+              placeholder-text: _("Filter channels");
+              hexpand: true;
+            }
+          }
+        }
+
+        Gtk.Stack results_stack {
+          Gtk.StackPage {
+            name: "list";
+
+            child: Gtk.ScrolledWindow {
+              Adw.Clamp {
+                maximum-size: 1240;
+                tightening-threshold: 1000;
+
+                Gtk.ListBox channels_list {
+                  margin-top: 12;
+                  margin-bottom: 12;
+                  margin-start: 12;
+                  margin-end: 12;
+                  valign: start;
+
+                  styles [
+                    "boxed-list",
+                    "tv-results"
+                  ]
+                }
+              }
+            };
+          }
+
+          Gtk.StackPage {
+            name: "no-matches";
+
+            child: Adw.StatusPage {
+              icon-name: "item-missing-symbolic";
+              title: _("No Matching Channels");
+              description: _("Try a different channel name");
+            };
+          }
+        }
+      };
+    }
+
+    Gtk.StackPage {
+      name: "error";
+
+      child: Adw.StatusPage error_page {
+        icon-name: "error-symbolic";
+        title: _("Could Not Load Channels");
+
+        child: Gtk.Button {
+          label: _("Retry");
+          halign: center;
+          action-name: "window.reload";
+
+          styles [
+            "pill",
+            "suggested-action"
+          ]
+        };
+      };
+    }
+  }
+}

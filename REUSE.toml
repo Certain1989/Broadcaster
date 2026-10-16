@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+# SPDX-FileCopyrightText: 2026 Televido contributors
+# SPDX-FileContributor: Claude (Anthropic)
+# SPDX-License-Identifier: CC0-1.0
+
+version = 1
+SPDX-PackageName = "broadcaster"
+SPDX-PackageSupplier = "Broadcaster contributors"
+SPDX-PackageDownloadLocation = "https://github.com/Certain1989/Broadcaster"
+
+[[annotations]]
+path = "data/io.github.Certain1989.Broadcaster.desktop.in"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "David Cabot <d-k-bo@mailbox.org>"
+SPDX-License-Identifier = "CC0-1.0"
+
+# Adapted manifests and inherited metadata; retain original copyright notices
+[[annotations]]
+path = [
+    "build-aux/io.github.Certain1989.Broadcaster.Devel.json",
+    "build-aux/io.github.Certain1989.Broadcaster.json",
+    "data/io.github.Certain1989.Broadcaster.gschema.xml",
+    "data/io.github.Certain1989.Broadcaster.metainfo.xml.in",
+    "Cargo.lock",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["David Cabot <d-k-bo@mailbox.org>", "2026 Televido contributors"]
+SPDX-FileContributor = "Claude (Anthropic)"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "data/resources/icons/scalable/actions/**.svg"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "GNOME Icon Development Kit Contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "data/resources/icons/scalable/channels/**/**.svg"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2016 cemrich"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = [
+    "data/resources/icons/scalable/channels/**/ard.svg",
+    "data/resources/icons/scalable/channels/**/orf.svg",
+    "data/resources/icons/scalable/channels/**/srf.svg",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Wikimedia Commons Contributors"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "build-aux/dist-vendor.sh"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Bilal Elmoussaoui"
+SPDX-License-Identifier = "MIT"
+
+# ChatGPT-generated raster icon selected by the project maintainer.
+# NOASSERTION avoids claiming exclusive copyright in potentially unprotected AI output.
+# CC BY 4.0 permission applies to the extent protectable rights exist.
+# See docs/artwork-and-attribution.md for provenance and no-endorsement details.
+[[annotations]]
+path = "data/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "NOASSERTION"
+SPDX-License-Identifier = "CC-BY-4.0"

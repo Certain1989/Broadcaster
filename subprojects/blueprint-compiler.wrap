@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: d-k-bo <d-k-bo@mailbox.org>
+# SPDX-FileCopyrightText: 2026 Televido contributors
+# SPDX-FileContributor: Claude (Anthropic)
+# SPDX-License-Identifier: CC0-1.0
+
+[wrap-git]
+directory = blueprint-compiler
+url = https://gitlab.gnome.org/GNOME/blueprint-compiler.git
+revision = v0.22.2
+depth = 1
+
+[provide]
+program_names = blueprint-compiler

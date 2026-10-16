@@ -1,0 +1,107 @@
+# SPDX-FileCopyrightText: 2026 Televido contributors
+# SPDX-FileContributor: Claude (Anthropic)
+# SPDX-License-Identifier: CC0-1.0
+#
+# Git-based package for local builds on Arch Linux, derived from the AUR
+# package "televido" by zzzardoz <zzzardoz at mail dot de> and
+# Sebastian Wiesner <sebastian@swsnr.de>.
+#
+# Build Broadcaster from main by default:
+#   makepkg -si
+#
+# Build another branch or the local checkout (committed changes only):
+#   BROADCASTER_BRANCH=my-branch makepkg -si
+#   BROADCASTER_SOURCE="file://$(git rev-parse --show-toplevel)" \
+#     BROADCASTER_BRANCH="$(git branch --show-current)" makepkg -si
+# When switching BROADCASTER_SOURCE, delete the cached clone (./broadcaster) first.
+
+pkgname=broadcaster-git
+_pkgname=broadcaster
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Browse German-language public-service broadcaster archives and watch with mpv"
+arch=(x86_64 aarch64)
+url="https://github.com/Certain1989/Broadcaster"
+license=('GPL-3.0-or-later')
+depends=(
+    gcc-libs
+    glib2
+    glibc
+    gtk4
+    libadwaita
+    mpv
+    openssl
+)
+makedepends=(
+    blueprint-compiler
+    git
+    meson
+    rust
+)
+checkdepends=(
+    appstream
+    desktop-file-utils
+)
+optdepends=(
+    'totem: external video player'
+    'celluloid: external video player'
+    'clapper: external video player'
+    'daikhan-git: external video player'
+    'parabolic: video download'
+)
+
+_source="${BROADCASTER_SOURCE:-${url}.git}"
+_branch="${BROADCASTER_BRANCH:-main}"
+source=("${_pkgname}::git+${_source}#branch=${_branch}")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${_pkgname}"
+    # pkgver can't contain hyphens: 0.6.0-beta.1 becomes 0.6.0beta1, which
+    # pacman sorts before 0.6.0
+    printf '%s.r%s.g%s' \
+        "$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1 | sed 's/-\([a-z]*\)\.\{0,1\}/\1/')" \
+        "$(git rev-list --count HEAD)" \
+        "$(git rev-parse --short=7 HEAD)"
+}
+
+# Must be identical in build() and check(), otherwise cargo rebuilds everything.
+_cargo_env() {
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_NET_OFFLINE=true
+    # Use LTO
+    export CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+    # Keep debug symbols for the -debug package
+    export CARGO_PROFILE_RELEASE_DEBUG=2
+    # Don't embed $srcdir in the binary (same mapping as makepkg's debug option)
+    local remap="--remap-path-prefix=${srcdir}=/usr/src/debug/${pkgbase}"
+    if [[ " ${RUSTFLAGS:-} " != *" ${remap} "* ]]; then
+        export RUSTFLAGS="${RUSTFLAGS:-} ${remap}"
+    fi
+}
+
+prepare() {
+    cd "${_pkgname}"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    _cargo_env
+    # makepkg keeps $srcdir between runs (without -C) and meson can't set up
+    # an existing build directory again. Cargo's target directory lives in
+    # the source tree, so the Rust build stays incremental.
+    rm -rf build
+    arch-meson "${_pkgname}" build
+    meson compile -C build
+}
+
+check() {
+    _cargo_env
+    meson test -C build --print-errorlogs
+    cargo test --frozen --release --manifest-path "${_pkgname}/Cargo.toml"
+}
+
+package() {
+    meson install -C build --destdir "${pkgdir}" --no-rebuild
+}

@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvLiveChannelSelectorRow: Adw.ActionRow {
+  title: bind template.channel-name;
+  selectable: false;
+
+  [prefix]
+  Gtk.Image icon {}
+
+  [prefix]
+  Gtk.Label fallback_icon {
+    visible: false;
+    styles [
+      "channel-fallback"
+    ]
+  }
+
+  [prefix]
+  Gtk.Image {
+    icon-name: "list-drag-handle-symbolic";
+  }
+
+  [suffix]
+  Gtk.Switch switch {
+    valign: center;
+    active: bind template.visible;
+    state: bind template.visible bidirectional;
+  }
+
+  // an alternative to dragging, e.g. for the keyboard
+  [suffix]
+  Gtk.MenuButton {
+    icon-name: "view-more-symbolic";
+    tooltip-text: _("Move");
+    valign: center;
+    menu-model: move_menu;
+    visible: bind template.visible;
+
+    styles [
+      "flat"
+    ]
+  }
+
+  Gtk.DragSource drag_source {
+    actions: move;
+    prepare => $drag_prepare() swapped;
+    drag-begin => $drag_begin() swapped;
+  }
+
+  Gtk.DropTarget drop_target {
+    actions: move;
+    formats: "TvLiveChannelSelectorRow";
+    drop => $drop() swapped;
+  }
+}
+
+menu move_menu {
+  section {
+    item {
+      label: _("Move Up");
+      action: "row.move-up";
+    }
+
+    item {
+      label: _("Move Down");
+      action: "row.move-down";
+    }
+  }
+}

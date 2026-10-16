@@ -1,0 +1,93 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-FileCopyrightText: 2026 Televido contributors
+// SPDX-FileContributor: Claude (Anthropic)
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvPreferencesDialog: Adw.PreferencesDialog {
+  Adw.PreferencesPage {
+    Adw.PreferencesGroup {
+      title: _("Playback");
+      description: _("Videos are played with mpv.");
+      name: "playback";
+
+      Adw.ActionRow {
+        title: _("mpv is not installed");
+        subtitle: _("Broadcaster needs the mpv video player");
+        visible: bind template.mpv-missing;
+
+        [prefix]
+        Gtk.Image {
+          icon-name: "dialog-warning-symbolic";
+
+          styles [
+            "warning"
+          ]
+        }
+      }
+
+      Adw.ActionRow {
+        title: _("mpv Arguments");
+        subtitle: bind template.mpv-arguments-summary;
+        subtitle-lines: 1;
+        activatable: true;
+        activated => $edit_mpv_arguments() swapped;
+
+        Gtk.Image {
+          icon-name: "go-next-symbolic";
+        }
+      }
+
+      Adw.SwitchRow {
+        title: _("Use External Video Player");
+        subtitle: _("Play live channels and the Mediathek with another player.");
+        active: bind template.use-external-player bidirectional;
+      }
+
+      Adw.ActionRow video_player_row {
+        title: _("Video Player");
+        subtitle: bind template.video-player-display-name;
+        visible: bind template.use-external-player;
+
+        Gtk.Button {
+          label: _("Change");
+          valign: center;
+          clicked => $select_video_player() swapped;
+        }
+      }
+    }
+
+    Adw.PreferencesGroup {
+      title: _("Download");
+      name: "download";
+
+      Adw.ActionRow video_downloader_row {
+        title: _("Video Downloader");
+        subtitle: bind template.video-downloader-display-name;
+
+        Gtk.Button {
+          label: _("Change");
+          valign: center;
+          clicked => $select_video_downloader() swapped;
+        }
+      }
+    }
+
+    Adw.PreferencesGroup {
+      title: _("Live Channels");
+      name: "live-channels";
+
+      Adw.ActionRow {
+        title: _("Select and Reorder Channels");
+        activatable: true;
+        activated => $select_live_channels() swapped;
+
+        Gtk.Image {
+          icon-name: "go-next-symbolic";
+        }
+      }
+    }
+
+  }
+}

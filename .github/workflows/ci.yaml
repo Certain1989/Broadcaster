@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: d-k-bo <d-k-bo@mailbox.org>
+# SPDX-FileCopyrightText: 2026 Televido contributors
+# SPDX-FileContributor: Claude (Anthropic)
+# SPDX-License-Identifier: CC0-1.0
+
+name: CI
+
+# Full CI runs only at integrated source checkpoints, not intermediate staging commits.
+# With checkpoint-only pushes, superseded full runs may be cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+    # Journal/documentation-only pushes must not cancel an expensive source build.
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'README.de.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'README.de.md'
+      - 'CONTRIBUTING.md'
+      - 'SECURITY.md'
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: "Rust (fmt, clippy)"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Cache only Rust job compiler artifacts, not Flatpak build trees.
+      # rust-cache includes rustc version and Cargo.lock in its cache keys.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-targets: true
+          cache-all-crates: false
+          key: archlinux-container
+      # Configure Rust values in the Meson build tree; Cargo's build.rs stages resources in OUT_DIR.
+      - name: Configure
+        run: meson setup _build -Dprofile=development
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Unit tests
+        run: cargo test --locked
+      # Tests icon-name lookup on a *live* GDK display; file existence or PNG
+      # decoding alone would have missed the N100 About placeholder.
+      - name: Verify About icon theme lookup under a live display
+        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked icon_theme_resolves_about_icon_on_open_display -- --ignored --test-threads=1
+      - name: Verify live-channel GTK activation with an actual ListBox
+        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked gtk_row_activation_expands_then_plays_exactly_once -- --ignored --test-threads=1
+      - name: Verify list-boundary GTK child widget ancestry
+        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked gtk_focus_boundary_distinguishes_first_and_interior_rows -- --ignored --test-threads=1
+      - name: Exercise Mediathek remote focus across filters, results and expanded cards
+        run: |
+          schema_dir=$(mktemp -d)
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_tv_remote_vertical_focus_follows_all_filters -- --ignored --test-threads=1
+      - name: Verify real playback-view restoration and cold-start routing in GTK
+        run: |
+          schema_dir=$(mktemp -d)
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_playback_window_origin_and_cold_start -- --ignored --test-threads=1
+      - name: Verify isolated first-launch fullscreen settings
+        run: bash tests/first-launch-fullscreen.sh
+      - name: Exercise MPV remote overlay state transitions
+        run: |
+          LC_ALL=C lua tests/mpv-remote.lua
+          LC_ALL=de_DE.UTF-8 lua tests/mpv-remote.lua
+          LC_ALL=fr_FR.UTF-8 lua tests/mpv-remote.lua
+      - name: Native Meson compile and validation
+        run: |
+          meson compile -C _build
+          meson test -C _build --print-errorlogs
+      - name: Verify staged native installation
+        run: |
+          DESTDIR="$PWD/_build/install-root" meson install -C _build --no-rebuild
+          test -x _build/install-root/usr/local/bin/broadcaster
+          test -f _build/install-root/usr/local/share/glib-2.0/schemas/io.github.Certain1989.Broadcaster.gschema.xml
+          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-input.conf
+          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-remote.lua
+          test -f _build/install-root/usr/local/share/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png
+          grep -Fx 'Icon=io.github.Certain1989.Broadcaster' _build/install-root/usr/local/share/applications/io.github.Certain1989.Broadcaster.desktop
+          test ! -f _build/install-root/usr/local/share/icons/hicolor/scalable/apps/io.github.Certain1989.Broadcaster.svg
+      - name: Verify builds did not modify source checkout
+        run: |
+          test ! -e src/config.rs
+          test ! -e data/resources/shortcuts-dialog.ui
+          test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  flatpak:
+    name: "Flatpak"
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+      # Expose only a disposable, unused host SDK for cleanup inside the
+      # job container. GitHub-hosted runners install this SDK by default.
+      volumes:
+        - /usr/local/lib/android:/unused-runner-android
+    strategy:
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+      fail-fast: false
+    runs-on: ${{ matrix.variant.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Reclaim unused Android SDK on x86-64 runner
+        if: matrix.variant.arch == 'x86_64'
+        run: |
+          echo 'Disk before cleanup:'
+          df -h .
+          du -sh /unused-runner-android 2>/dev/null || true
+          # The Android SDK is unrelated to GTK/Rust/Flatpak builds.
+          rm -rf /unused-runner-android/*
+          echo 'Disk after cleanup:'
+          df -h .
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
+        with:
+          bundle: broadcaster.flatpak
+          manifest-path: build-aux/io.github.Certain1989.Broadcaster.Devel.json
+          run-tests: true
+          arch: ${{ matrix.variant.arch }}
+          verbose: true
+      - name: Verify exported development desktop metadata and icon
+        run: |
+          app=io.github.Certain1989.Broadcaster.Devel
+          root=flatpak_app/files/share
+          test -f "$root/applications/$app.desktop"
+          test -f "$root/metainfo/$app.metainfo.xml"
+          test -f "$root/icons/hicolor/128x128/apps/$app.png"
+          # Flatpak renamed the launcher. About uses a resource-only alias
+          # instead of requesting the now-missing base-name launcher file.
+          test ! -e "$root/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png"
+          test ! -e "$root/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster-about.png"
+          # Desktop still uses the exported .Devel icon name.
+          grep -Fx "Icon=$app" "$root/applications/$app.desktop"
+          test -f "$root/icons/hicolor/symbolic/apps/$app-symbolic.svg"
+          test ! -e "$root/icons/hicolor/128x128/apps/$app.Devel.png"
+      - name: Report Flatpak CI disk usage
+        if: always()
+        run: |
+          df -h .
+          du -sh repo flatpak_app .flatpak-builder 2>/dev/null || true

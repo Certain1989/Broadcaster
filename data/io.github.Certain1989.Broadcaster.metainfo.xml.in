@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Certain1989.Broadcaster</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Broadcaster</name>
+  <summary>Watch German television livestreams and Mediathek programmes</summary>
+  <description>
+    <p>Broadcaster searches the German-language public-service broadcasters'
+    Mediathek archives and plays programmes using mpv. Livestreams from the
+    MediathekView Zapp service are available as well. The fullscreen interface
+    supports directional television remotes alongside mouse and keyboard.</p>
+    <p>Broadcaster was substantially developed with the assistance of large
+    language models. It is a personal project distributed as-is, without a
+    guaranteed response to issues or a regular maintenance commitment.</p>
+    <p>Programme media is hosted by the respective broadcasters; Broadcaster
+    only helps you find and access it. External video players and download
+    applications are supported where available.</p>
+  </description>
+  <developer id="io.github.certain1989">
+    <name translate="no">Broadcaster contributors</name>
+  </developer>
+  <launchable type="desktop-id">io.github.Certain1989.Broadcaster.desktop</launchable>
+  <url type="homepage">https://github.com/Certain1989/Broadcaster</url>
+  <url type="bugtracker">https://github.com/Certain1989/Broadcaster/issues</url>
+  <url type="vcs-browser">https://github.com/Certain1989/Broadcaster</url>
+  <translation type="gettext">broadcaster</translation>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <internet>always</internet>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+</component>

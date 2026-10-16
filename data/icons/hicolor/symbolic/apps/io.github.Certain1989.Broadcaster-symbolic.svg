@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20">
+  <title>Broadcaster (symbolic)</title>
+  <!-- Theme-coloured B/play/broadcast motif, replacing the Televido TV symbol. -->
+  <path fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round"
+        d="M2.2 3.1V16.9H7.3C10.8 16.9 11.4 12 8.4 10.3
+           C10.8 8.7 10.4 3.1 7.2 3.1Z"/>
+  <path fill="currentColor" d="M4.6 7.1V13.5L9.2 10.3Z"/>
+  <path fill="none" stroke="currentColor" stroke-width="1.7"
+        stroke-linecap="round" d="M13 8.2Q15 10.3 13 12.4M15.1 5.5Q19 10.3 15.1 15.2"/>
+</svg>

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Broadcaster
+Comment=Watch German television livestreams and Mediathek programmes
+Categories=AudioVideo;Video;TV;GNOME;GTK;
+Icon=io.github.Certain1989.Broadcaster
+Exec=broadcaster
+Terminal=false
+StartupNotify=true
+# Translators: search terms to find this application. Do NOT translate or localize the semicolons. The list MUST also end with a semicolon.
+Keywords=TV;Television;Livestream;Mediathek;ARD;ZDF;ARTE;
+X-Purism-FormFactor=Workstation;Mobile;

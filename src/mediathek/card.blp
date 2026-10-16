@@ -1,0 +1,191 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvMediathekCard: Gtk.ListBoxRow {
+  activatable: true;
+  selectable: false;
+
+  styles [
+    "tv-result-row"
+  ]
+
+  Gtk.Box {
+    orientation: vertical;
+    hexpand: true;
+    vexpand: true;
+    spacing: 12;
+    margin-top: 12;
+    margin-bottom: 12;
+    margin-start: 12;
+    margin-end: 12;
+
+    Gtk.Box {
+      orientation: horizontal;
+      spacing: 12;
+
+      Gtk.Image icon {
+        width-request: 64;
+        height-request: 64;
+        pixel-size: 64;
+        valign: center;
+        tooltip-text: bind template.show as <$ShowObject>.channel;
+      }
+
+      Gtk.Label fallback_icon {
+        visible: false;
+        width-request: 64;
+        height-request: 64;
+        valign: center;
+        tooltip-text: bind template.show as <$ShowObject>.channel;
+        styles [
+          "channel-fallback"
+        ]
+      }
+
+      Gtk.Box {
+        orientation: vertical;
+        spacing: 6;
+        halign: fill;
+        valign: center;
+        hexpand: true;
+
+        Gtk.Label title {
+          label: bind template.show as <$ShowObject>.title;
+          tooltip-text: bind template.show as <$ShowObject>.title;
+          ellipsize: end;
+
+          styles [
+            "heading"
+          ]
+
+          halign: start;
+        }
+
+        Gtk.Label topic {
+          label: bind template.show as <$ShowObject>.topic;
+          tooltip-text: bind template.show as <$ShowObject>.topic;
+          halign: start;
+          ellipsize: end;
+
+          styles [
+            "dimmed"
+          ]
+        }
+
+        Gtk.Box {
+          Gtk.Label duration {
+            label: bind template.show as <$ShowObject>.duration;
+
+            styles [
+              "numeric"
+            ]
+          }
+
+          Gtk.Label date {
+            label: bind template.show as <$ShowObject>.date;
+            halign: end;
+            hexpand: true;
+
+            styles [
+              "numeric"
+            ]
+          }
+        }
+      }
+    }
+
+    Gtk.Revealer revealer {
+      visible: false;
+      reveal-child: bind template.expanded;
+      transition-type: none;
+
+      Gtk.Box {
+        orientation: vertical;
+        spacing: 6;
+
+        Gtk.Box {
+          orientation: horizontal;
+          halign: center;
+          spacing: 4;
+
+          Adw.SplitButton play_button {
+            icon-name: "play-symbolic";
+            tooltip-text: _("Play");
+            action-name: "card.play-default";
+            menu-model: play_menu;
+          }
+
+          Gtk.MenuButton copy_url_button {
+            icon-name: "copy-symbolic";
+            tooltip-text: _("Copy Video URL");
+            menu-model: copy_url_menu;
+          }
+
+          Gtk.Button {
+            icon-name: "document-save-symbolic";
+            tooltip-text: _("Download");
+            action-name: "card.download";
+          }
+
+          Gtk.Button {
+            icon-name: "globe-alt2-symbolic";
+            tooltip-text: _("Open Website");
+            action-name: "card.open-website";
+          }
+        }
+
+        Gtk.Label description {
+          label: bind template.show as <$ShowObject>.description;
+          halign: start;
+          use-markup: false;
+          wrap: true;
+
+          styles [
+            "body"
+          ]
+        }
+      }
+    }
+  }
+}
+
+menu play_menu {
+  item {
+    label: _("High Quality");
+    action: "card.play-high";
+  }
+
+  item {
+    label: _("Medium Quality");
+    action: "card.play-medium";
+  }
+
+  item {
+    label: _("Low Quality");
+    action: "card.play-low";
+  }
+}
+
+menu copy_url_menu {
+  item {
+    label: _("High Quality");
+    action: "card.copy-url-high";
+  }
+
+  item {
+    label: _("Medium Quality");
+    action: "card.copy-url-medium";
+  }
+
+  item {
+    label: _("Low Quality");
+    action: "card.copy-url-low";
+  }
+
+  item {
+    label: _("Subtitles");
+    action: "card.copy-subtitles-url";
+  }
+}

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-model href="https://gitlab.gnome.org/GNOME/glib/-/raw/main/gio/gschema.dtd"?>
+<schemalist gettext-domain="broadcaster">
+	<schema id="io.github.Certain1989.Broadcaster" path="/io/github/Certain1989/Broadcaster/">
+		<key name="width" type="i">
+			<default>720</default>
+		</key>
+		<key name="height" type="i">
+			<default>480</default>
+		</key>
+		<key name="is-maximized" type="b">
+			<default>false</default>
+		</key>
+		<key name="is-fullscreen" type="b">
+			<default>true</default>
+		</key>
+		<key name="visible-view" type="s">
+			<default>"mediathek"</default>
+		</key>
+		<key name="search-everywhere" type="b">
+			<default>false</default>
+		</key>
+		<key name="include-future" type="b">
+			<default>false</default>
+		</key>
+		<key name="sort-by" type="s">
+			<choices>
+				<choice value="channel"/>
+				<choice value="date"/>
+				<choice value="duration"/>
+			</choices>
+			<default>"date"</default>
+		</key>
+		<key name="sort-order" type="s">
+			<choices>
+				<choice value="ascending"/>
+				<choice value="descending"/>
+			</choices>
+			<default>"descending"</default>
+		</key>
+		<key name="use-external-player" type="b">
+			<default>false</default>
+		</key>
+		<key name="video-player-name" type="s">
+			<default>""</default>
+		</key>
+		<key name="video-player-id" type="s">
+			<default>""</default>
+		</key>
+		<key name="video-downloader-name" type="s">
+			<default>""</default>
+		</key>
+		<key name="video-downloader-id" type="s">
+			<default>""</default>
+		</key>
+		<key name="default-playback-quality" type="s">
+			<choices>
+				<choice value="high"/>
+				<choice value="medium"/>
+				<choice value="low"/>
+			</choices>
+			<default>"high"</default>
+		</key>
+		<key name="live-channels" type="as">
+			<default>[]</default>
+		</key>
+		<key name="mpv-arguments" type="as">
+			<default>[
+				"--force-window=yes",
+				"--fullscreen",
+				"--hwdec=auto",
+				"--msg-level=ffmpeg=fatal"
+			]</default>
+		</key>
+	</schema>
+</schemalist>

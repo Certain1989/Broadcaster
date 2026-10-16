@@ -1,0 +1,203 @@
+// SPDX-FileCopyrightText: David Cabot <d-k-bo@mailbox.org>
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvMediathekView: Adw.Bin {
+  [child]
+  Adw.ToolbarView {
+    [top]
+    Gtk.Box search_toolbar {
+      orientation: vertical;
+      spacing: 10;
+      margin-top: 12;
+      margin-bottom: 12;
+      margin-start: 16;
+      margin-end: 16;
+
+      styles [
+        "tv-controls"
+      ]
+
+      // Inset controls from the rounded panel instead of restyling them.
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 10;
+        margin-top: 12;
+        margin-start: 16;
+        margin-end: 16;
+
+        Gtk.SearchEntry search_entry {
+          placeholder-text: _("Search the Mediathek");
+          hexpand: true;
+          search-delay: 250;
+          text: bind template.query_string bidirectional;
+        }
+
+        Gtk.ToggleButton {
+          icon-name: "search-global-symbolic";
+          tooltip-text: _("Search Everywhere");
+          active: bind template.search_everywhere bidirectional;
+        }
+
+        Gtk.ToggleButton {
+          icon-name: "month-symbolic";
+          tooltip-text: _("Include Future Shows");
+          active: bind template.include-future bidirectional;
+        }
+      }
+
+      Gtk.Box filters_toolbar {
+        orientation: horizontal;
+        spacing: 10;
+        margin-bottom: 12;
+        margin-start: 16;
+        margin-end: 16;
+
+        Gtk.Box {
+          orientation: horizontal;
+          spacing: 8;
+
+          Gtk.Label {
+            label: _("Channel");
+            valign: center;
+          }
+
+          Gtk.DropDown broadcaster_filter {
+            tooltip-text: _("Filter by broadcaster");
+            width-request: 170;
+          }
+        }
+
+        Gtk.Box {
+          orientation: horizontal;
+          spacing: 8;
+
+          Gtk.Label {
+            label: _("Duration");
+            valign: center;
+          }
+
+          Gtk.DropDown duration_filter {
+            tooltip-text: _("Filter by duration");
+            width-request: 180;
+          }
+        }
+
+        Gtk.MenuButton sort_button {
+          label: _("Sort");
+          tooltip-text: _("Sort results");
+          menu-model: sort_menu;
+        }
+      }
+    }
+
+    Gtk.Stack stack {
+      visible-child: status_page;
+
+      Adw.StatusPage status_page {
+        icon-name: "loupe-symbolic";
+        title: _("Search for Content");
+        description: _("Start typing in the search bar to see a list of matching shows.\n\nThe search field supports <a href=\"https://github.com/mediathekview/mediathekviewweb/blob/master/README.md#erweiterte-suche\">MediathekViewWeb's advanced search syntax</a> (German).");
+      }
+
+      Adw.StatusPage nothing_found_view {
+        icon-name: "item-missing-symbolic";
+        title: _("No Results");
+        description: _("Try different search terms or adjust the search filters");
+      }
+
+      Adw.Spinner loading_view {
+        halign: center;
+        valign: center;
+        width-request: 32;
+        height-request: 32;
+      }
+
+      Adw.StatusPage error_view {
+        icon-name: "error-symbolic";
+        title: _("Could Not Load Results");
+
+        child: Gtk.Button {
+          label: _("Retry");
+          halign: center;
+          action-name: "window.reload";
+
+          styles [
+            "pill",
+            "suggested-action"
+          ]
+        };
+      }
+
+      Gtk.ScrolledWindow results_view {
+        Adw.Clamp {
+          maximum-size: 1240;
+          tightening-threshold: 1000;
+          Gtk.Box {
+            orientation: vertical;
+            spacing: 12;
+            margin-top: 12;
+            margin-bottom: 12;
+            margin-start: 12;
+            margin-end: 12;
+
+            Gtk.ListBox results_list {
+              styles [
+                "boxed-list",
+                "tv-results"
+              ]
+            }
+
+            Gtk.Button load_more_button {
+              visible: bind template.more-available;
+              halign: center;
+              label: _("Load More");
+              action-name: "mediathek.load-more";
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+menu sort_menu {
+  section {
+    label: _("Sort By");
+
+    item {
+      label: _("Channel");
+      action: "mediathek.sort-by";
+      target: "channel";
+    }
+
+    item {
+      label: _("Date");
+      action: "mediathek.sort-by";
+      target: "date";
+    }
+
+    item {
+      label: _("Duration");
+      action: "mediathek.sort-by";
+      target: "duration";
+    }
+  }
+
+  section {
+    label: _("Sort Order");
+
+    item {
+      label: _("Ascending");
+      action: "mediathek.sort-order";
+      target: "ascending";
+    }
+
+    item {
+      label: _("Descending");
+      action: "mediathek.sort-order";
+      target: "descending";
+    }
+  }
+}
