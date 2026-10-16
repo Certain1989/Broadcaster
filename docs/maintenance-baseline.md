@@ -13,4 +13,4 @@ This document describes the public v0.1.0 design. It is not a support promise or
 
 The test workflow includes Rust formatting/Clippy/locked tests, GTK tests under Xvfb, Lua overlay tests, Meson, REUSE, and Flatpak checks for x86-64 and ARM64. Use `.github/workflows/` for the exact commands. Stream providers and remote hardware cannot be fully emulated in CI; actual programme playback needs manual smoke testing.
 
-Known limitations include the brief stock mpv OSC flash on some Wayland starts, incomplete older translations beyond English/German, and audio/subtitle labels that can only use metadata provided by media sources. Remote-control keys vary with desktop and hardware. Broadcaster is supplied as-is with no guaranteed fix schedule or issue response time.
+Known limitations include the brief stock mpv OSC flash on some Wayland starts, English and German as the maintained interface languages, and audio/subtitle labels that can only use metadata provided by media sources. Remote-control keys vary with desktop and hardware. Broadcaster is supplied as-is with no guaranteed fix schedule or issue response time.
