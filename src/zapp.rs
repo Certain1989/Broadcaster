@@ -61,6 +61,7 @@ fn shows_url(channel_id: &ChannelId) -> eyre::Result<reqwest::Url> {
     // query parameters. The URL library encodes it as one path segment.
     url.path_segments_mut()
         .map_err(|_| eyre::eyre!("Invalid Zapp backend URL"))?
+        .pop_if_empty()
         .push(channel_id.as_ref());
     Ok(url)
 }
@@ -151,6 +152,16 @@ pub struct Show {
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn standard_channel_id_builds_exact_shows_endpoint() {
+        let id = ChannelId::from("das_erste".to_owned());
+        let url = shows_url(&id).expect("static backend URL is valid");
+        assert_eq!(
+            url.as_str(),
+            "https://api.zapp.mediathekview.de/v1/shows/das_erste"
+        );
+    }
 
     #[test]
     fn channel_id_cannot_rewrite_url_or_add_query_parameters() {
