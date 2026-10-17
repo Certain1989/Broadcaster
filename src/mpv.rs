@@ -301,14 +301,14 @@ mod redaction_tests {
         assert!(valid_media_inputs("https://example.invalid/video?token=fake", None));
         assert!(valid_media_inputs("rtmp://example.invalid/live", Some("file:///subs.srt")));
         assert!(!valid_media_inputs("", None));
-        assert!(!valid_media_inputs("--vo=null\\n--script=bad", None));
-        assert!(!valid_media_inputs("https://example.invalid/video", Some("url\\runsafe")));
+        assert!(!valid_media_inputs("--vo=null\n--script=bad", None));
+        assert!(!valid_media_inputs("https://example.invalid/video", Some("url\runsafe")));
     }
 
     #[test]
     fn failures_have_only_code_owned_diagnostic_categories() {
         let private_url = "https://user:fake-password@example.invalid/video?token=fake-secret";
-        let synthetic_mpv_output = format!("Failed to open {private_url}\\nHTTP 403\\r{private_url}");
+        let synthetic_mpv_output = format!("Failed to open {private_url}\nHTTP 403\r{private_url}");
         let private_query = "https://example.invalid/live?a=fake-secret&b=one&c=two";
         // The watcher never passes mpv output to logging or error display:
         // only status and a fixed message are used for the failure category.
