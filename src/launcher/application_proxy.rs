@@ -16,21 +16,21 @@ pub trait Application {
     /// Activate method
     fn activate(
         &self,
-        platform_data: std::collections::HashMap<&str, zbus::wire::Variant<'_>>,
+        platform_data: std::collections::HashMap<&str, zbus::Variant<'_>>,
     ) -> zbus::Result<()>;
 
     /// ActivateAction method
     fn activate_action(
         &self,
         action_name: &str,
-        parameter: &[zbus::wire::Variant<'_>],
-        platform_data: std::collections::HashMap<&str, zbus::wire::Variant<'_>>,
+        parameter: &[zbus::Variant<'_>],
+        platform_data: std::collections::HashMap<&str, zbus::Variant<'_>>,
     ) -> zbus::Result<()>;
 
     /// Open method
     fn open(
         &self,
         uris: &[&str],
-        platform_data: std::collections::HashMap<&str, zbus::wire::Variant<'_>>,
+        platform_data: std::collections::HashMap<&str, zbus::Variant<'_>>,
     ) -> zbus::Result<()>;
 }
