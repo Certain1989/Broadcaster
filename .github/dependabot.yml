@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+
+version: 2
+updates:
+  # Dependabot refreshes Cargo.toml/Cargo.lock together; no unlocked manifests.
+  # Keep reviewable, low-volume PRs and require the existing CI checks.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      rust-compatible-updates:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
