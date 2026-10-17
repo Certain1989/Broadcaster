@@ -34,6 +34,26 @@ The checksum command checks both named files, so download **both** architectures
 
 Broadcaster requires the GNOME Platform 50 runtime, which Flatpak can download from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable ID above is distinct from `io.github.Certain1989.Broadcaster.Devel` used for CI development builds.
 
+### Black video after installing the Flatpak
+
+The Flatpak uses mpv with the GNOME Platform 50 runtime's FFmpeg libraries. H.264 playback needs the matching Freedesktop codec extension, `org.freedesktop.Platform.codecs-extra//25.08-extra`. Flatpak normally installs this automatically, but an incomplete installation can result in **audio playing while the video stays black**. An installed `26.08-extra` extension does not replace `25.08-extra` for this runtime.
+
+Check the installed extensions and whether the running Broadcaster sandbox mounts `codecs-extra`:
+
+```bash
+flatpak list --runtime --columns=application,branch,installation | grep -E 'codecs-extra|org.gnome.Platform'
+flatpak run --command=sh io.github.Certain1989.Broadcaster \
+  -c "grep '^runtime-extensions=' /.flatpak-info"
+```
+
+If `25.08-extra` is absent, install it from Flathub and retry video playback:
+
+```bash
+flatpak install --user flathub org.freedesktop.Platform.codecs-extra//25.08-extra
+```
+
+For a system-wide Flatpak installation, use `--system` instead of `--user` (with Flathub configured system-wide). A per-user Broadcaster installation can also use a matching system-installed codec extension; **Broadcaster itself does not need to be installed system-wide**. If the extension is present and mounted but video still fails, report the Flatpak/runtime versions and a test with a public or synthetic video, not private stream URLs or credentials.
+
 ## Build from source (Fedora example)
 
 ```bash
