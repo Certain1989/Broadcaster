@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: CC0-1.0
 
-# Temporary resolver, removed before review; validates explicit proxy feature and zbus 6 Variant API.
+# Temporary resolver, removed before review; validates zbus 6 proxy macro API adaptation.
 name: Validate zbus 6 transition
 
 on:
