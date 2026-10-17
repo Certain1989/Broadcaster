@@ -34,12 +34,12 @@ pub enum StartError {
 impl StartError {
     pub fn message(self) -> String {
         match self {
-            Self::MissingPlayer => gettext(
-                "mpv is not installed. Broadcaster needs the mpv video player.",
-            ),
-            Self::MissingRemoteResources => gettext(
-                "Broadcaster's packaged mpv remote-control resources are missing.",
-            ),
+            Self::MissingPlayer => {
+                gettext("mpv is not installed. Broadcaster needs the mpv video player.")
+            }
+            Self::MissingRemoteResources => {
+                gettext("Broadcaster's packaged mpv remote-control resources are missing.")
+            }
             Self::InvalidMediaUrl => gettext("The video or subtitle URL is invalid."),
             Self::LaunchFailed => gettext("Failed to start mpv. Check the player installation."),
         }
@@ -50,12 +50,9 @@ impl StartError {
 /// Media URLs themselves remain opaque: Broadcaster must not reject supported
 /// protocols, and the `--` argument already prevents option injection.
 fn valid_media_inputs(uri: &str, subtitles: Option<&str>) -> bool {
-    let valid = |value: &str| {
-        !value.trim().is_empty() && !value.chars().any(char::is_control)
-    };
+    let valid = |value: &str| !value.trim().is_empty() && !value.chars().any(char::is_control);
     valid(uri) && subtitles.is_none_or(valid)
 }
-
 
 /// SIGTERM, lets mpv shut down gracefully.
 const SIGTERM: i32 = 15;
@@ -298,11 +295,20 @@ mod redaction_tests {
 
     #[test]
     fn malformed_media_inputs_are_rejected_without_protocol_restrictions() {
-        assert!(valid_media_inputs("https://example.invalid/video?token=fake", None));
-        assert!(valid_media_inputs("rtmp://example.invalid/live", Some("file:///subs.srt")));
+        assert!(valid_media_inputs(
+            "https://example.invalid/video?token=fake",
+            None
+        ));
+        assert!(valid_media_inputs(
+            "rtmp://example.invalid/live",
+            Some("file:///subs.srt")
+        ));
         assert!(!valid_media_inputs("", None));
         assert!(!valid_media_inputs("--vo=null\n--script=bad", None));
-        assert!(!valid_media_inputs("https://example.invalid/video", Some("url\runsafe")));
+        assert!(!valid_media_inputs(
+            "https://example.invalid/video",
+            Some("url\runsafe")
+        ));
     }
 
     #[test]

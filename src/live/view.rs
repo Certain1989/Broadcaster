@@ -86,11 +86,15 @@ mod imp {
                             match client.shows(&channel_id).await {
                                 Ok(ShowsResult::Shows(shows)) => Some(shows),
                                 Ok(ShowsResult::Error(_)) => {
-                                    tracing::debug!("No programme information available for a channel");
+                                    tracing::debug!(
+                                        "No programme information available for a channel"
+                                    );
                                     None
                                 }
                                 Err(_) => {
-                                    tracing::warn!("Failed to load programme information for a channel");
+                                    tracing::warn!(
+                                        "Failed to load programme information for a channel"
+                                    );
                                     None
                                 }
                             }

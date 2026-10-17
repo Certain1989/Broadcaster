@@ -65,7 +65,6 @@ fn shows_url(channel_id: &ChannelId) -> eyre::Result<reqwest::Url> {
     Ok(url)
 }
 
-
 #[derive(Debug)]
 pub struct Zapp {
     http: reqwest::Client,

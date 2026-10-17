@@ -559,12 +559,12 @@ impl TvMediathekView {
                         }
                     }
                 }
-                Ok(_) => tracing::warn!(
-                    "Mediathek channel catalogue unavailable; retaining fallback"
-                ),
-                Err(_) => tracing::warn!(
-                    "Could not load Mediathek channel catalogue; retaining fallback"
-                ),
+                Ok(_) => {
+                    tracing::warn!("Mediathek channel catalogue unavailable; retaining fallback")
+                }
+                Err(_) => {
+                    tracing::warn!("Could not load Mediathek channel catalogue; retaining fallback")
+                }
             }
         });
     }
