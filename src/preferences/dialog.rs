@@ -44,7 +44,7 @@ mod imp {
         #[property(get)]
         mpv_arguments_summary: RefCell<String>,
 
-        #[property(get)]
+        // Internal settings handle, not a public GObject property.
         settings: TvSettings,
         settings_handlers: RefCell<Vec<glib::SignalHandlerId>>,
     }
