@@ -207,19 +207,8 @@ fn is_current(process: &gio::Subprocess) -> bool {
 async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() + 'static) {
     let _hold = TvApplication::get().hold();
 
-    // Always drain the output, otherwise mpv blocks once the pipe is full.
-    if let Some(stdout) = process.stdout_pipe() {
-        loop {
-            match stdout
-                .read_bytes_future(4096, glib::Priority::DEFAULT)
-                .await
-            {
-                Ok(bytes) if !bytes.is_empty() => (),
-                _ => break,
-            }
-        }
-    }
-
+    // Do not allow a full output pipe to block playback or shutdown.
+    drain_process_output(&process).await;
     let _ = process.wait_future().await;
 
     // terminated on purpose by `stop()` or `terminate()`
@@ -264,6 +253,21 @@ async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() +
                 .timeout(10)
                 .build(),
         );
+    }
+}
+
+/// Consume subprocess output without retaining or forwarding untrusted bytes.
+async fn drain_process_output(process: &gio::Subprocess) {
+    if let Some(stdout) = process.stdout_pipe() {
+        loop {
+            match stdout
+                .read_bytes_future(4096, glib::Priority::DEFAULT)
+                .await
+            {
+                Ok(bytes) if !bytes.is_empty() => (),
+                _ => break,
+            }
+        }
     }
 }
 
@@ -334,6 +338,34 @@ mod redaction_tests {
         ] {
             assert!(!error.message().contains("fake-secret"));
         }
+    }
+
+    #[test]
+    fn discarded_subprocess_output_does_not_block_later_playback() {
+        // A genuine pipe-heavy subprocess, using only fabricated values.
+        // The test shell is a fixture, not a media-launch implementation.
+        let context = glib::MainContext::new();
+        context.block_on(async {
+            let scripts = [
+                (
+                    r#"i=0; while [ "$i" -lt 4000 ]; do printf '%s\n' 'https://fake-user:fake-pass@example.invalid/stream?token=fake'; i=$((i+1)); done; exit 9"#,
+                    9,
+                ),
+                ("printf '%s\\n' 'normal playback'; exit 0", 0),
+            ];
+            for (script, expected_status) in scripts {
+                let process = gio::Subprocess::newv(
+                    &[OsStr::new("sh"), OsStr::new("-c"), OsStr::new(script)],
+                    gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_MERGE,
+                )
+                .expect("test fixture must launch");
+                // If the output is not drained, the first subprocess would
+                // block on its pipe long before reaching its exit status.
+                drain_process_output(&process).await;
+                process.wait_future().await.expect("test fixture must exit");
+                assert_eq!(process.exit_status(), expected_status);
+            }
+        });
     }
 
     #[test]
