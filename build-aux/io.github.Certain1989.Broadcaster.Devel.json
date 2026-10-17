@@ -74,7 +74,8 @@
         {
           "type": "git",
           "url": "https://github.com/libass/libass.git",
-          "tag": "0.17.5"
+          "tag": "0.17.5",
+          "commit": "4a05d8127f525943ebf45fdc6497c9e665947f0d"
         }
       ]
     },
@@ -89,7 +90,8 @@
         {
           "type": "git",
           "url": "https://github.com/haasn/libplacebo.git",
-          "tag": "v7.360.1"
+          "tag": "v7.360.1",
+          "commit": "cee9b076f2c63104ccfd497fa79c39a867293ec4"
         }
       ]
     },
@@ -118,7 +120,8 @@
         {
           "type": "git",
           "url": "https://github.com/mpv-player/mpv.git",
-          "tag": "v0.41.0"
+          "tag": "v0.41.0",
+          "commit": "41f6a645068483470267271e1d09966ca3b9f413"
         }
       ]
     },
@@ -130,7 +133,8 @@
         {
           "type": "git",
           "url": "https://gitlab.gnome.org/GNOME/blueprint-compiler",
-          "tag": "v0.22.2"
+          "tag": "v0.22.2",
+          "commit": "ed35ac74de0c1bb1f5e852410b97edd1f08904c9"
         }
       ]
     },
