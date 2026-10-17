@@ -7,10 +7,7 @@
 
 use zbus::proxy;
 
-#[proxy(
-    interface = "org.freedesktop.Application",
-    assume_defaults = false
-)]
+#[proxy(interface = "org.freedesktop.Application", assume_defaults = false)]
 pub trait Application {
     /// Activate method
     fn activate(
