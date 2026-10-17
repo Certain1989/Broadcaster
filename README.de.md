@@ -34,6 +34,26 @@ Zum Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Bei
 
 Benötigt wird GNOME Platform 50, die Flatpak von Flathub beziehen kann. **Broadcaster selbst ist nicht auf Flathub veröffentlicht.** Einzelne Flatpak-Bundles richten keine automatischen Programm-Updates ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von der Entwicklungs-ID `io.github.Certain1989.Broadcaster.Devel`.
 
+### Schwarzes Bild nach der Flatpak-Installation
+
+Das Flatpak verwendet mpv mit den FFmpeg-Bibliotheken der GNOME Platform 50. Für H.264-Wiedergabe wird die passende Freedesktop-Codec-Erweiterung `org.freedesktop.Platform.codecs-extra//25.08-extra` benötigt. Normalerweise installiert Flatpak sie automatisch. Bei einer unvollständigen Installation kann jedoch **Ton zu hören sein, während das Bild schwarz bleibt**. Eine installierte Erweiterung `26.08-extra` ersetzt für diese Runtime nicht `25.08-extra`.
+
+Installierte Erweiterungen anzeigen und prüfen, ob `codecs-extra` in der Broadcaster-Sandbox eingebunden ist:
+
+```bash
+flatpak list --runtime --columns=application,branch,installation | grep -E 'codecs-extra|org.gnome.Platform'
+flatpak run --command=sh io.github.Certain1989.Broadcaster \
+  -c "grep '^runtime-extensions=' /.flatpak-info"
+```
+
+Fehlt `25.08-extra`, die Erweiterung von Flathub installieren und die Videowiedergabe erneut testen:
+
+```bash
+flatpak install --user flathub org.freedesktop.Platform.codecs-extra//25.08-extra
+```
+
+Bei einer systemweiten Flatpak-Installation statt `--user` die Option `--system` verwenden (Flathub muss systemweit eingerichtet sein). Auch eine benutzerbezogene Broadcaster-Installation kann eine passende, systemweit installierte Codec-Erweiterung verwenden; **Broadcaster selbst muss nicht systemweit installiert sein**. Falls die Erweiterung vorhanden und eingebunden ist, aber weiterhin kein Bild erscheint, bitte die Flatpak-/Runtime-Versionen und einen Test mit einem öffentlichen oder synthetischen Video melden, keine privaten Stream-URLs oder Zugangsdaten.
+
 ## Aus dem Quellcode bauen (Fedora)
 
 ```bash
