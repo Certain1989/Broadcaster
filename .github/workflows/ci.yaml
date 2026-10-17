@@ -109,7 +109,7 @@ jobs:
   flatpak:
     name: "Flatpak"
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
       # Expose only a disposable, unused host SDK for cleanup inside the
       # job container. GitHub-hosted runners install this SDK by default.
