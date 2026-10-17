@@ -73,10 +73,22 @@ impl TvSettings {
         self.0.boolean("use-external-player")
     }
 
-    string_setting!(video_player_name, set_video_player_name, "video-player-name");
+    string_setting!(
+        video_player_name,
+        set_video_player_name,
+        "video-player-name"
+    );
     string_setting!(video_player_id, set_video_player_id, "video-player-id");
-    string_setting!(video_downloader_name, set_video_downloader_name, "video-downloader-name");
-    string_setting!(video_downloader_id, set_video_downloader_id, "video-downloader-id");
+    string_setting!(
+        video_downloader_name,
+        set_video_downloader_name,
+        "video-downloader-name"
+    );
+    string_setting!(
+        video_downloader_id,
+        set_video_downloader_id,
+        "video-downloader-id"
+    );
 
     pub fn mpv_arguments(&self) -> Vec<String> {
         self.0
@@ -113,7 +125,10 @@ impl TvSettings {
     connect_setting!(connect_mpv_arguments_changed, "mpv-arguments");
     connect_setting!(connect_video_player_name_changed, "video-player-name");
     connect_setting!(connect_video_player_id_changed, "video-player-id");
-    connect_setting!(connect_video_downloader_name_changed, "video-downloader-name");
+    connect_setting!(
+        connect_video_downloader_name_changed,
+        "video-downloader-name"
+    );
     connect_setting!(connect_video_downloader_id_changed, "video-downloader-id");
 
     bind_setting!(bind_use_external_player, "use-external-player");
