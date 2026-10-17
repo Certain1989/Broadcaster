@@ -128,7 +128,10 @@ mod imp {
                         channel.set_title(Some(title.as_str()));
                         channel.set_subtitle(subtitle.as_deref());
                         channel.set_description(
-                            description.as_deref().map(crate::programme_markup::markup).as_deref(),
+                            description
+                                .as_deref()
+                                .map(crate::programme_markup::markup)
+                                .as_deref(),
                         );
                         channel.set_start_time(start_time.unix_timestamp());
                         channel.set_end_time(end_time.unix_timestamp());
