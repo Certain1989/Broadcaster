@@ -15,7 +15,8 @@ eyre = "0.6.14"
 futures-util = "0.3.31"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 gtk = { version = "0.11.5", package = "gtk4", features = ["gnome_46", "blueprint"] }
-html2pango = "0.6.0"
+ammonia = "4.2.4"
+regex = "1"
 indexmap = { version = "2.7.1", features = ["serde"] }
 mediathekviewweb = { version = "0.5.0", default-features = false, features = ["native-tls"] }
 phf = { version = "0.14.0", features = ["macros"] }

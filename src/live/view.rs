@@ -128,7 +128,10 @@ mod imp {
                         channel.set_title(Some(title.as_str()));
                         channel.set_subtitle(subtitle.as_deref());
                         channel.set_description(
-                            description.as_deref().map(html2pango::markup).as_deref(),
+                            description
+                                .as_deref()
+                                .map(crate::programme_markup::markup)
+                                .as_deref(),
                         );
                         channel.set_start_time(start_time.unix_timestamp());
                         channel.set_end_time(end_time.unix_timestamp());
@@ -349,11 +352,11 @@ mod live_row_activation_tests {
 mod programme_description_markup_tests {
     #[test]
     fn default_sanitizer_preserves_formatting_without_css_or_svg_animation() {
-        // The html2pango::markup path uses ammonia's default allowlist.
+        // The crate::programme_markup::markup path uses ammonia's default allowlist.
         // The style/SVG conditions described in RUSTSEC-2021-0157/0158
         // must not be enabled when displaying programme descriptions.
         let input = r#"<b>Bold programme</b><span style="color:red">Text</span><svg><a><animateMotion attributeName="href" to="javascript:alert(1)"></animateMotion></a></svg>"#;
-        let rendered = html2pango::markup(input);
+        let rendered = crate::programme_markup::markup(input);
 
         assert!(rendered.contains("<b>Bold programme</b>"));
         assert!(!rendered.contains("style="));
