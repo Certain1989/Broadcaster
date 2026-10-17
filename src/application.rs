@@ -100,7 +100,7 @@ impl TvApplication {
                         .map(Rc::new)
                         .map_err(|e| {
                             let e = e.wrap_err(gettext("Failed to load livestream channels"));
-                            tracing::error!("{e:?}");
+                            tracing::error!("Failed to load livestream channels (upstream diagnostics suppressed)");
                             Rc::new(e)
                         })
                 })
@@ -155,7 +155,7 @@ impl TvApplication {
 
     pub async fn play(&self, video: VideoInfo) {
         let Some(uri) = video.uri() else {
-            show_error(eyre::eyre!(gettext("No playable video URL is available")));
+            show_error(&gettext("No playable video URL is available"));
             return;
         };
 
@@ -170,8 +170,8 @@ impl TvApplication {
             } else {
                 match ExternalProgram::find(player_name, player_id.clone()).await {
                     Ok(player) => player,
-                    Err(e) => {
-                        show_error(e);
+                    Err(_) => {
+                        show_error(&gettext("Failed to find the configured video player"));
                         None
                     }
                 }
@@ -196,7 +196,7 @@ impl TvApplication {
 
             match player.open(uri.to_owned()).await {
                 Ok(()) => (),
-                Err(e) => show_error(e.wrap_err(gettext("Failed to play video stream"))),
+                Err(_) => show_error(&gettext("Failed to play video stream")),
             }
         } else {
             // The managed player is a separate process. Capture the source view
@@ -214,7 +214,7 @@ impl TvApplication {
                 // A spawn failure has no watcher. Discard this context without
                 // allowing an older playback request to override newer state.
                 window.finish_playback(token);
-                show_error(e);
+                show_error(&e.message());
             }
         }
     }
@@ -229,8 +229,8 @@ impl TvApplication {
         } else {
             match ExternalProgram::find(downloader_name, downloader_id.clone()).await {
                 Ok(downloader) => downloader,
-                Err(e) => {
-                    show_error(e);
+                Err(_) => {
+                    show_error(&gettext("Failed to find the configured video downloader"));
                     None
                 }
             }
@@ -258,7 +258,7 @@ impl TvApplication {
 
         match downloader.open(uri).await {
             Ok(()) => (),
-            Err(e) => show_error(e.wrap_err(gettext("Failed to launch video downloader"))),
+            Err(_) => show_error(&gettext("Failed to launch video downloader")),
         }
     }
 
