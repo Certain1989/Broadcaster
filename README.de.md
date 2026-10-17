@@ -19,14 +19,14 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für deutschsprachiges öf
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-## Installation von v0.1.0
+## Installation von v0.1.1
 
-Nach der **öffentlichen Veröffentlichung** des [GitHub-Releases v0.1.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.1.0) `broadcaster-0.1.0-x86_64.flatpak` für Intel-/AMD-PCs oder `broadcaster-0.1.0-aarch64.flatpak` für ARM64 zusammen mit `SHA256SUMS` herunterladen. Im Download-Verzeichnis ausführen (auf ARM64 `x86_64` durch `aarch64` ersetzen):
+Aus dem [GitHub-Release v0.1.1](https://github.com/Certain1989/Broadcaster/releases/tag/v0.1.1) `broadcaster-0.1.1-x86_64.flatpak` für Intel-/AMD-PCs oder `broadcaster-0.1.1-aarch64.flatpak` für ARM64 zusammen mit `SHA256SUMS` herunterladen. Im Download-Verzeichnis ausführen (auf ARM64 `x86_64` durch `aarch64` ersetzen):
 
 ```bash
-grep 'broadcaster-0.1.0-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.1.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.1.0-x86_64.flatpak
+flatpak install --user ./broadcaster-0.1.1-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
