@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+# Temporary combined-dependency validation. Remove once completed.
+name: Verify combined security fixes
+
+on:
+  push:
+    branches: [validation/security-combined-pr9-pr10]
+    paths: [.github/workflows/validate-combined-security-once.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  combined-security:
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/validation/security-combined-pr9-pr10'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install compiler and native desktop dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust cargo-audit dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true
+      - name: Resolve both dependency migrations in one lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo update
+          cargo tree --locked -i ammonia
+          cargo tree --locked -i zbus
+          if grep -Eq '^name = "(html2pango|zvariant|zvariant_derive|zbus_names)"$' Cargo.lock; then
+            echo "::error::Obsolete dependency found in combined lockfile"
+            exit 1
+          fi
+          grep -A2 '^name = "ammonia"$' Cargo.lock | grep -Fx 'version = "4.2.4"'
+          grep -A2 '^name = "zbus"$' Cargo.lock | grep -Fx 'version = "6.0.0"'
+          git diff --check
+      - name: Verify Rust compile and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          meson setup _build -Dprofile=development
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
+          meson compile -C _build
+          meson test -C _build --print-errorlogs
+      - name: Audit combined dependency graph without suppressions
+        run: cargo audit --deny warnings
+      - name: Save tested combined lockfile only to validation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Certain1989/Broadcaster
+          test "$GITHUB_REF" = refs/heads/validation/security-combined-pr9-pr10
+          cd "$GITHUB_WORKSPACE"
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" config user.name 'github-actions[bot]'
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" add -- Cargo.lock
+          if git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" diff --cached --quiet; then
+            exit 0
+          fi
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" commit -m 'validation: resolve combined sanitizer and zbus 6 dependency lock'
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" push origin HEAD:refs/heads/validation/security-combined-pr9-pr10
