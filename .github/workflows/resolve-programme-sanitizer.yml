@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: CC0-1.0
 
-# One-time resolver for a security dependency migration, removed before PR review.
+# One-time resolver for a security dependency migration; second run validates the corrected converter pattern.
 name: Resolve patched programme sanitizer
 
 on:
