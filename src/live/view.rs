@@ -167,10 +167,13 @@ mod imp {
                     });
                     self.stack.set_visible_child_name("channels");
                 }
-                Err(e) => {
-                    tracing::error!("{e:?}");
-                    self.error_page
-                        .set_description(Some(&glib::markup_escape_text(&format!("{e:#}"))));
+                Err(_) => {
+                    // No upstream diagnostics in logs or UI: network errors may
+                    // contain credential-bearing URLs or response data.
+                    tracing::error!("Failed to load livestream channels");
+                    self.error_page.set_description(Some(&gettext(
+                        "Failed to load livestream channels. Check your connection and retry.",
+                    )));
                     self.stack.set_visible_child_name("error");
                 }
             }
