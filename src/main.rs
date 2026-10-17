@@ -15,6 +15,7 @@ mod launcher;
 mod live;
 mod mediathek;
 mod mpv;
+mod programme_markup;
 mod preferences;
 mod settings;
 mod utils;
