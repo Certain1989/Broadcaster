@@ -27,9 +27,9 @@ static TAGS: LazyLock<Regex> = LazyLock::new(|| {
         r"<|>|",
         r"&nbsp;|",
         r"https?://",
-        r#"[^s,)("]+"#,
-        r"(?((&amp;)?w+(=[w._-]+)?)*)*",
-        r"(#[w._-]+)?",
+        r#"[^\s,)("]+"#,
+        r"(\?((&amp;)?\w+(=[\w._-]+)?)*)*",
+        r"(#[\w._-]+)?",
     ])
     .expect("valid programme markup pattern")
 });
