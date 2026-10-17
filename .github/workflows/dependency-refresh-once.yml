@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+#
+# One-time, branch-scoped lockfile refresh; remove this workflow after its run.
+name: Refresh Rust lockfile (one-time)
+
+on:
+  push:
+    branches: [maintenance/rust-dependency-refresh]
+    paths: [.github/workflows/dependency-refresh-once.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-refresh:
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/maintenance/rust-dependency-refresh'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install source build and audit dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust cargo-audit gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true
+      - name: Resolve newest compatible Rust crates
+        run: cargo update
+      - name: Report upgraded versions
+        run: |
+          git diff --stat -- Cargo.lock
+          cargo tree --locked -i ammonia || true
+          cargo tree --locked -i quick-xml || true
+          cargo tree --locked -i proc-macro-error || true
+      - name: Compile and test with refreshed lockfile
+        run: |
+          meson setup _build -Dprofile=development
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+          meson compile -C _build
+          meson test -C _build --print-errorlogs
+      - name: Report RustSec findings (no exclusions or suppression)
+        run: |
+          if cargo audit --deny warnings; then
+            echo "No RustSec vulnerabilities or maintenance warnings."
+          else
+            echo "::warning::RustSec advisories remain; parent-crate migration is still needed."
+          fi
+      - name: Commit tested lockfile to isolated maintenance branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/maintenance/rust-dependency-refresh
+          test "$GITHUB_REPOSITORY" = Certain1989/Broadcaster
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- Cargo.lock
+          if git diff --cached --quiet; then
+            echo "Lockfile already has the newest compatible versions."
+            exit 0
+          fi
+          git commit -m 'build: refresh compatible Rust dependencies'
+          git push origin HEAD:refs/heads/maintenance/rust-dependency-refresh
