@@ -28,7 +28,7 @@ time = { version = "0.3.37", features = ["parsing", "serde"] }
 tokio = { version = "1.43.0", features = ["fs", "time", "rt-multi-thread", "macros", "sync", "net", "io-util"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-zbus = { version = "5.5.0", default-features = false, features = ["tokio"] }
+zbus = { version = "6.0.0", default-features = false, features = ["tokio"] }
 
 [profile.dev.build-override]
 opt-level = 3
