@@ -30,7 +30,10 @@ jobs:
         run: cargo update
       - name: Report upgraded versions
         run: |
-          git diff --stat -- Cargo.lock
+          pwd
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -ld "$GITHUB_WORKSPACE/.git" .git 2>/dev/null || true
+          git -C "$GITHUB_WORKSPACE" diff --stat -- Cargo.lock
           cargo tree --locked -i ammonia || true
           cargo tree --locked -i quick-xml || true
           cargo tree --locked -i proc-macro-error || true
@@ -55,6 +58,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/maintenance/rust-dependency-refresh
           test "$GITHUB_REPOSITORY" = Certain1989/Broadcaster
+          cd "$GITHUB_WORKSPACE"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- Cargo.lock
