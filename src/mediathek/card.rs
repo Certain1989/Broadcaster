@@ -355,14 +355,21 @@ impl TvMediathekCard {
                     .show()
                     .and_then(|show| show.website_url())
                     .expect("action must only be enabled if url is not None");
-                if let Err(e) = gtk::UriLauncher::new(&url)
+                // A third-party programme URL is only a website link. Do
+                // not invoke desktop handlers for arbitrary URI schemes.
+                if !matches!(
+                    reqwest::Url::parse(&url),
+                    Ok(parsed) if matches!(parsed.scheme(), "http" | "https")
+                ) {
+                    show_error(&gettext("Invalid programme website URL"));
+                    return;
+                }
+                if gtk::UriLauncher::new(&url)
                     .launch_future(slf.root().and_downcast_ref::<gtk::Window>())
                     .await
+                    .is_err()
                 {
-                    show_error(
-                        eyre::Report::msg(e.to_string())
-                            .wrap_err(gettext("Failed to open website in browser")),
-                    );
+                    show_error(&gettext("Failed to open website in browser"));
                 }
             })
         ));
