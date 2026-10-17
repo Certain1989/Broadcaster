@@ -40,7 +40,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed base-devel git rust gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Cache only Rust job compiler artifacts, not Flatpak build trees.
       # rust-cache includes rustc version and Cargo.lock in its cache keys.
@@ -58,6 +58,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Unit tests
         run: cargo test --locked
+      - name: Exercise external-player D-Bus discovery on an isolated session bus
+        run: dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
       # Tests icon-name lookup on a *live* GDK display; file existence or PNG
       # decoding alone would have missed the N100 About placeholder.
       - name: Verify About icon theme lookup under a live display
