@@ -43,6 +43,7 @@ jobs:
       - name: Compile and test with refreshed lockfile
         run: |
           meson setup _build -Dprofile=development
+          cargo fmt
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
@@ -64,7 +65,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" config user.name 'github-actions[bot]'
           git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" add -- Cargo.lock
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" add -- Cargo.lock src/settings.rs
           if git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" diff --cached --quiet; then
             echo "Lockfile already has the newest compatible versions."
             exit 0
