@@ -134,4 +134,21 @@ mod tests {
         assert_eq!(object_path("org.gnome.Totem"), "/org/gnome/Totem");
         assert_eq!(object_path("org.example.my-app"), "/org/example/my_app");
     }
+
+    // Use dbus-run-session in CI so this exercises the real freedesktop
+    // interface and message encoding instead of only compiling generated code.
+    #[tokio::test]
+    #[ignore = "requires an isolated D-Bus session; CI runs it with dbus-run-session"]
+    async fn dbus_proxy_lists_activatable_names() {
+        let connection = zbus::Connection::session()
+            .await
+            .expect("connect to isolated D-Bus session");
+        let proxy = zbus::fdo::DBusProxy::new(&connection)
+            .await
+            .expect("construct freedesktop D-Bus proxy");
+        proxy
+            .list_activatable_names()
+            .await
+            .expect("query activatable application names through the proxy");
+    }
 }
