@@ -32,11 +32,11 @@ flatpak run io.github.Certain1989.Broadcaster
 
 Zum Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Bei einer systemweiten Installation für einen anderen TV-Benutzer die entsprechenden Befehle mit `sudo flatpak remote-add --system`, `sudo flatpak install --system` und `sudo flatpak uninstall --system` verwenden; das Programm selbst ohne sudo starten.
 
-Benötigt wird GNOME Platform 50, die Flatpak von Flathub beziehen kann. **Broadcaster selbst ist nicht auf Flathub veröffentlicht.** Einzelne Flatpak-Bundles richten keine automatischen Programm-Updates ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von der Entwicklungs-ID `io.github.Certain1989.Broadcaster.Devel`.
+Benötigt wird GNOME Platform 51, die Flatpak von Flathub beziehen kann. **Broadcaster selbst ist nicht auf Flathub veröffentlicht.** Einzelne Flatpak-Bundles richten keine automatischen Programm-Updates ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von der Entwicklungs-ID `io.github.Certain1989.Broadcaster.Devel`.
 
 ### Schwarzes Bild nach der Flatpak-Installation
 
-Das Flatpak verwendet mpv mit den FFmpeg-Bibliotheken der GNOME Platform 50. Für H.264-Wiedergabe wird die passende Freedesktop-Codec-Erweiterung `org.freedesktop.Platform.codecs-extra//25.08-extra` benötigt. Normalerweise installiert Flatpak sie automatisch. Bei einer unvollständigen Installation kann jedoch **Ton zu hören sein, während das Bild schwarz bleibt**. Eine installierte Erweiterung `26.08-extra` ersetzt für diese Runtime nicht `25.08-extra`.
+Das Flatpak mit GNOME Platform 51 verwendet mpv mit den FFmpeg-Bibliotheken der Runtime. Für H.264-Wiedergabe wird die passende Freedesktop-Codec-Erweiterung `org.freedesktop.Platform.codecs-extra//26.08-extra` benötigt. Normalerweise installiert Flatpak sie automatisch. Bei einer unvollständigen Installation kann jedoch **Ton zu hören sein, während das Bild schwarz bleibt**. Codec-Erweiterungen sind an die Runtime-Version gebunden: ältere Broadcaster-Builds mit GNOME Platform 50 benötigen weiterhin `25.08-extra`. Eine neuere Erweiterung allein ersetzt die zu einer älteren Runtime passende Version nicht.
 
 Installierte Erweiterungen anzeigen und prüfen, ob `codecs-extra` in der Broadcaster-Sandbox eingebunden ist:
 
@@ -46,10 +46,10 @@ flatpak run --command=sh io.github.Certain1989.Broadcaster \
   -c "grep '^runtime-extensions=' /.flatpak-info"
 ```
 
-Fehlt `25.08-extra`, die Erweiterung von Flathub installieren und die Videowiedergabe erneut testen:
+Fehlt die für diesen Build passende Erweiterung `26.08-extra`, diese von Flathub installieren und die Videowiedergabe erneut testen:
 
 ```bash
-flatpak install --user flathub org.freedesktop.Platform.codecs-extra//25.08-extra
+flatpak install --user flathub org.freedesktop.Platform.codecs-extra//26.08-extra
 ```
 
 Bei einer systemweiten Flatpak-Installation statt `--user` die Option `--system` verwenden (Flathub muss systemweit eingerichtet sein). Auch eine benutzerbezogene Broadcaster-Installation kann eine passende, systemweit installierte Codec-Erweiterung verwenden; **Broadcaster selbst muss nicht systemweit installiert sein**. Falls die Erweiterung vorhanden und eingebunden ist, aber weiterhin kein Bild erscheint, bitte die Flatpak-/Runtime-Versionen und einen Test mit einem öffentlichen oder synthetischen Video melden, keine privaten Stream-URLs oder Zugangsdaten.
