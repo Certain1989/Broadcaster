@@ -249,7 +249,7 @@ async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() +
     // Subprocess output is deliberately discarded, not filtered: arbitrary
     // mpv diagnostics may reproduce credential-bearing playback URLs.
     tracing::error!("mpv playback failed (exit status {status}; diagnostics suppressed)");
-    let reason = format!("exit status {status}");
+    let reason = safe_failure_reason(status);
 
     if let Some(window) = TvApplication::get()
         .active_window()
@@ -268,6 +268,12 @@ async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() +
                 .build(),
         );
     }
+}
+
+/// The failure category is intentionally derived only from the exit status,
+/// never from mpv's arbitrary output.
+fn safe_failure_reason(status: i32) -> String {
+    format!("exit status {status}")
 }
 
 /// A deliberately value-free startup diagnostic: even user-supplied mpv flags
@@ -308,7 +314,7 @@ mod redaction_tests {
         // only status and a fixed message are used for the failure category.
         let status = 2;
         let message = format!("mpv playback failed (exit status {status}; diagnostics suppressed)");
-        let reason = format!("exit status {status}");
+        let reason = safe_failure_reason(status);
         for secret in ["fake-password", "fake-secret", "user:", "example.invalid"] {
             assert!(synthetic_mpv_output.contains(secret) || private_query.contains(secret));
             assert!(!message.contains(secret));
