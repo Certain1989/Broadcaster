@@ -38,7 +38,7 @@ jobs:
           fi
           grep -A2 '^name = "ammonia"$' Cargo.lock | grep -Fx 'version = "4.2.4"'
           grep -A2 '^name = "zbus"$' Cargo.lock | grep -Fx 'version = "6.0.0"'
-          git diff --check
+          git --git-dir="$GITHUB_WORKSPACE/.git" --work-tree="$GITHUB_WORKSPACE" diff --check
       - name: Verify Rust compile and tests
         shell: bash
         run: |
