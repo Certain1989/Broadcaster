@@ -328,10 +328,11 @@ mod imp {
         pub(super) fn show_loading(&self) {
             self.stack.set_visible_child(&*self.loading_view);
         }
-        pub(super) fn show_error_page(&self, e: &eyre::Report) {
-            tracing::error!("{e:?}");
-            self.error_view
-                .set_description(Some(&glib::markup_escape_text(&format!("{e:#}"))));
+        pub(super) fn show_error_page(&self) {
+            tracing::error!("Mediathek search failed (upstream diagnostics suppressed)");
+            self.error_view.set_description(Some(&gettext(
+                "Mediathek search failed. Check your connection and retry.",
+            )));
             self.stack.set_visible_child(&*self.error_view);
         }
     }
@@ -558,12 +559,11 @@ impl TvMediathekView {
                         }
                     }
                 }
-                Ok(response) => tracing::warn!(
-                    "Mediathek channel catalogue unavailable ({:?}); retaining fallback",
-                    response.error
+                Ok(_) => tracing::warn!(
+                    "Mediathek channel catalogue unavailable; retaining fallback"
                 ),
-                Err(error) => tracing::warn!(
-                    "Could not load Mediathek channel catalogue ({error}); retaining fallback"
+                Err(_) => tracing::warn!(
+                    "Could not load Mediathek channel catalogue; retaining fallback"
                 ),
             }
         });
@@ -780,7 +780,7 @@ impl TvMediathekView {
                 shows_model.splice(0, shows_model.n_items(), &shows);
                 imp.show_results();
             }
-            Err(e) => imp.show_error_page(&e),
+            Err(_) => imp.show_error_page(),
         }
     }
     async fn load_more(&self) {
@@ -869,12 +869,12 @@ impl TvMediathekView {
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 self.action_set_enabled("mediathek.load-more", self.more_available());
                 if restore_load_more_focus && self.more_available() {
                     imp.load_more_button.grab_focus();
                 }
-                show_error(e);
+                show_error(&gettext("Failed to load more Mediathek results"));
             }
         }
     }
