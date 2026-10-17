@@ -516,3 +516,47 @@ msgstr "Broadcaster durchsucht die Mediatheken deutschsprachiger öffentlich-rec
 #: Broadcaster active source/metadata (2026-10)
 msgid "Programme media is hosted by the respective broadcasters; Broadcaster only helps you find and access it. External video players and download applications are supported where available."
 msgstr "Die Inhalte werden von den jeweiligen Sendern bereitgestellt. Broadcaster hilft beim Auffinden und Abrufen und unterstützt, soweit verfügbar, auch externe Videoplayer und Downloadprogramme."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Broadcaster's packaged mpv remote-control resources are missing."
+msgstr "Die mitgelieferten mpv-Fernbedienungsdateien von Broadcaster fehlen."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "The video or subtitle URL is invalid."
+msgstr "Die Video- oder Untertitel-URL ist ungültig."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to start mpv. Check the player installation."
+msgstr "mpv konnte nicht gestartet werden. Überprüfen Sie die Installation des Players."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to find the configured video player"
+msgstr "Der konfigurierte Videoplayer konnte nicht gefunden werden."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to find the configured video downloader"
+msgstr "Das konfigurierte Videodownloadprogramm konnte nicht gefunden werden."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to load livestream channels. Check your connection and retry."
+msgstr "Livestream-Sender konnten nicht geladen werden. Überprüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to load livestream channel settings"
+msgstr "Die Livestream-Sendereinstellungen konnten nicht geladen werden."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Mediathek search failed. Check your connection and retry."
+msgstr "Die Mediathek-Suche ist fehlgeschlagen. Überprüfen Sie Ihre Verbindung und versuchen Sie es erneut."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to load more Mediathek results"
+msgstr "Weitere Mediathek-Ergebnisse konnten nicht geladen werden."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Failed to check the external application"
+msgstr "Die externe Anwendung konnte nicht überprüft werden."
+
+#: Broadcaster v0.1.1 security and error handling
+msgid "Invalid programme website URL"
+msgstr "Ungültige URL der Sendungswebseite"
