@@ -25,12 +25,46 @@ use std::time::Duration;
 
 use adw::glib;
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use time::OffsetDateTime;
 
 use crate::config::{APP_ID, PROJECT_URL, VERSION};
 
 const ZAPP_BACKEND_URL: &str = "https://api.zapp.mediathekview.de";
+/// Defend against malformed or unexpectedly large upstream JSON responses.
+const MAX_CHANNEL_LIST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SHOWS_BYTES: usize = 8 * 1024 * 1024;
+
+/// Bound streaming response consumption rather than relying on Content-Length.
+fn append_bounded(buffer: &mut Vec<u8>, bytes: &[u8], max_bytes: usize) -> eyre::Result<()> {
+    if bytes.len() > max_bytes.saturating_sub(buffer.len()) {
+        eyre::bail!("Zapp response exceeds the allowed size");
+    }
+    buffer.extend_from_slice(bytes);
+    Ok(())
+}
+
+async fn decode_bounded<T: DeserializeOwned>(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> eyre::Result<T> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        append_bounded(&mut body, &chunk, max_bytes)?;
+    }
+    Ok(serde_json::from_slice(&body)?)
+}
+
+fn shows_url(channel_id: &ChannelId) -> eyre::Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!("{ZAPP_BACKEND_URL}/v1/shows/"))?;
+    // Never let a provider-supplied ID replace the endpoint path or inject
+    // query parameters. The URL library encodes it as one path segment.
+    url.path_segments_mut()
+        .map_err(|_| eyre::eyre!("Invalid Zapp backend URL"))?
+        .pop_if_empty()
+        .push(channel_id.as_ref());
+    Ok(url)
+}
 
 #[derive(Debug)]
 pub struct Zapp {
@@ -49,24 +83,22 @@ impl Zapp {
 }
 impl Zapp {
     pub async fn channel_info_list(&self) -> eyre::Result<ChannelInfoList> {
-        Ok(self
+        let response = self
             .http
             .get(format!("{ZAPP_BACKEND_URL}/v1/channelInfoList"))
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await?)
+            .error_for_status()?;
+        decode_bounded(response, MAX_CHANNEL_LIST_BYTES).await
     }
     pub async fn shows(&self, channel_id: &ChannelId) -> eyre::Result<ShowsResult> {
-        Ok(self
+        let response = self
             .http
-            .get(format!("{ZAPP_BACKEND_URL}/v1/shows/{channel_id}"))
+            .get(shows_url(channel_id)?)
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await?)
+            .error_for_status()?;
+        decode_bounded(response, MAX_SHOWS_BYTES).await
     }
 }
 
@@ -115,4 +147,39 @@ pub struct Show {
     pub start_time: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub end_time: OffsetDateTime,
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn standard_channel_id_builds_exact_shows_endpoint() {
+        let id = ChannelId::from("das_erste".to_owned());
+        let url = shows_url(&id).expect("static backend URL is valid");
+        assert_eq!(
+            url.as_str(),
+            "https://api.zapp.mediathekview.de/v1/shows/das_erste"
+        );
+    }
+
+    #[test]
+    fn channel_id_cannot_rewrite_url_or_add_query_parameters() {
+        let id = ChannelId::from("../admin?token=fake&x=1".to_owned());
+        let url = shows_url(&id).expect("static backend URL is valid");
+        assert_eq!(url.host_str(), Some("api.zapp.mediathekview.de"));
+        assert_eq!(url.query(), None);
+        assert!(url.path().starts_with("/v1/shows/"));
+        assert!(!url.path().starts_with("/v1/admin"));
+        assert!(url.as_str().contains("%3Ftoken=fake"));
+    }
+
+    #[test]
+    fn upstream_size_limit_applies_even_without_content_length() {
+        let mut body = Vec::new();
+        append_bounded(&mut body, b"123", 4).unwrap();
+        assert!(append_bounded(&mut body, b"45", 4).is_err());
+        assert_eq!(body, b"123");
+        assert!(append_bounded(&mut body, b"4", 4).is_ok());
+    }
 }

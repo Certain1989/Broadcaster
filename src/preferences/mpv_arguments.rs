@@ -65,11 +65,12 @@ mod imp {
                 #[weak(rename_to = slf)]
                 self,
                 move |_| {
-                    if let Err(e) = slf
+                    if slf
                         .settings
                         .set_strv(&slf.key.borrow(), previous.as_slice())
+                        .is_err()
                     {
-                        tracing::error!("failed to restore the mpv arguments: {e}");
+                        tracing::error!("Failed to restore mpv arguments");
                     }
                     slf.load();
                 }
@@ -101,11 +102,12 @@ mod imp {
                 child = row.next_sibling();
             }
 
-            if let Err(e) = self
+            if self
                 .settings
                 .set_strv(&self.key.borrow(), arguments.as_slice())
+                .is_err()
             {
-                tracing::error!("failed to save the mpv arguments: {e}");
+                tracing::error!("Failed to save mpv arguments");
             }
         }
 

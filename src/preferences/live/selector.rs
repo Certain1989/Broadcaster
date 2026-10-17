@@ -45,8 +45,10 @@ mod imp {
         async fn load(&self) {
             let live_channels = match TvApplication::get().live_channels().await {
                 Ok(live_channels) => live_channels,
-                Err(e) => {
-                    show_error(eyre::eyre!("{e:#}"));
+                Err(_) => {
+                    show_error(&gettextrs::gettext(
+                        "Failed to load livestream channel settings",
+                    ));
                     return;
                 }
             };

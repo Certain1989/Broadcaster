@@ -53,7 +53,7 @@ mod imp {
             let live_channels = TvApplication::get()
                 .live_channels()
                 .await
-                .map_err(|e| eyre::eyre!("{e:#}"))?;
+                .map_err(|_| eyre::eyre!(gettext("Failed to load livestream channels")))?;
 
             let live_channels: Vec<(ChannelId, ChannelInfo)> = if visible_channels.is_empty() {
                 live_channels
@@ -85,13 +85,15 @@ mod imp {
                         async move {
                             match client.shows(&channel_id).await {
                                 Ok(ShowsResult::Shows(shows)) => Some(shows),
-                                Ok(ShowsResult::Error(e)) => {
-                                    tracing::debug!("no shows for channel “{channel_id}”: {e}");
+                                Ok(ShowsResult::Error(_)) => {
+                                    tracing::debug!(
+                                        "No programme information available for a channel"
+                                    );
                                     None
                                 }
-                                Err(e) => {
+                                Err(_) => {
                                     tracing::warn!(
-                                        "failed to load the shows of channel “{channel_id}”: {e:?}"
+                                        "Failed to load programme information for a channel"
                                     );
                                     None
                                 }
@@ -167,10 +169,13 @@ mod imp {
                     });
                     self.stack.set_visible_child_name("channels");
                 }
-                Err(e) => {
-                    tracing::error!("{e:?}");
-                    self.error_page
-                        .set_description(Some(&glib::markup_escape_text(&format!("{e:#}"))));
+                Err(_) => {
+                    // No upstream diagnostics in logs or UI: network errors may
+                    // contain credential-bearing URLs or response data.
+                    tracing::error!("Failed to load livestream channels");
+                    self.error_page.set_description(Some(&gettext(
+                        "Failed to load livestream channels. Check your connection and retry.",
+                    )));
                     self.stack.set_visible_child_name("error");
                 }
             }
