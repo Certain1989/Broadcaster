@@ -64,17 +64,8 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-      - name: RustSec dependency advisory scan (triage required)
-        shell: bash
-        run: |
-          # Audit the exact checked-in lockfile without suppressing advisories.
-          # An advisory can require application-specific assessment before release.
-          # Preserve the report and flag findings without blocking candidate builds.
-          if cargo audit; then
-            echo "No RustSec advisories reported by cargo-audit."
-          else
-            echo "::warning::RustSec reported advisories or an audit error. Review output and document applicability before final release."
-          fi
+      - name: RustSec dependency security gate
+        run: cargo audit --deny warnings
       - name: Live GTK About icon test
         run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked icon_theme_resolves_about_icon_on_open_display -- --ignored --test-threads=1
       - name: Verify live-channel GTK activation with an actual ListBox
