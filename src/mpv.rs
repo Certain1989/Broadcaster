@@ -21,11 +21,45 @@ use crate::{application::TvApplication, settings::TvSettings, utils::spawn, wind
 
 pub const MPV: &str = "mpv";
 
+/// Only application-owned categories may reach the UI. GLib process
+/// errors and mpv output may contain the media URL or its credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartError {
+    MissingPlayer,
+    MissingRemoteResources,
+    InvalidMediaUrl,
+    LaunchFailed,
+}
+
+impl StartError {
+    pub fn message(self) -> String {
+        match self {
+            Self::MissingPlayer => gettext(
+                "mpv is not installed. Broadcaster needs the mpv video player.",
+            ),
+            Self::MissingRemoteResources => gettext(
+                "Broadcaster's packaged mpv remote-control resources are missing.",
+            ),
+            Self::InvalidMediaUrl => gettext("The video or subtitle URL is invalid."),
+            Self::LaunchFailed => gettext("Failed to start mpv. Check the player installation."),
+        }
+    }
+}
+
+/// Do not allow literal control characters through to mpv command-line values.
+/// Media URLs themselves remain opaque: Broadcaster must not reject supported
+/// protocols, and the `--` argument already prevents option injection.
+fn valid_media_inputs(uri: &str, subtitles: Option<&str>) -> bool {
+    let valid = |value: &str| {
+        !value.trim().is_empty() && !value.chars().any(char::is_control)
+    };
+    valid(uri) && subtitles.is_none_or(valid)
+}
+
+
 /// SIGTERM, lets mpv shut down gracefully.
 const SIGTERM: i32 = 15;
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(3);
-/// Number of output bytes kept for error messages.
-const OUTPUT_TAIL_SIZE: usize = 8 * 1024;
 /// mpv exit code when quitting due to a signal or the quit key bindings.
 const EXIT_CODE_QUIT: i32 = 4;
 /// The bundled MPV 0.41 OSC starts on every synthetic mouse-motion event by
@@ -54,7 +88,7 @@ pub async fn play(
     uri: &str,
     subtitles: Option<&str>,
     on_exit: impl FnOnce() + 'static,
-) -> eyre::Result<()> {
+) -> Result<(), StartError> {
     // Keep stop/start atomic across asynchronous playback requests.
     let lock = PLAY_LOCK.with(Clone::clone);
     let _guard = lock.lock().await;
@@ -67,11 +101,12 @@ fn start(
     uri: &str,
     subtitles: Option<&str>,
     on_exit: impl FnOnce() + 'static,
-) -> eyre::Result<()> {
+) -> Result<(), StartError> {
+    if !valid_media_inputs(uri, subtitles) {
+        return Err(StartError::InvalidMediaUrl);
+    }
     if !is_installed() {
-        eyre::bail!(gettext(
-            "mpv is not installed. Broadcaster needs the mpv video player."
-        ));
+        return Err(StartError::MissingPlayer);
     }
 
     let settings = TvSettings::get();
@@ -87,11 +122,7 @@ fn start(
     // Do not silently start an unresponsive remote-only player if a staged
     // native install or Flatpak omits either required resource.
     if !input_conf.is_file() || !script.is_file() {
-        eyre::bail!(
-            "Broadcaster MPV remote resources are missing: {} or {}",
-            input_conf.display(),
-            script.display()
-        );
+        return Err(StartError::MissingRemoteResources);
     }
 
     let input_argument = format!("--input-conf={}", input_conf.display());
@@ -127,7 +158,7 @@ fn start(
         &argv,
         gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_MERGE,
     )
-    .map_err(|e| eyre::eyre!(e).wrap_err(gettext("Failed to start mpv")))?;
+    .map_err(|_| StartError::LaunchFailed)?;
 
     CURRENT.with(|current| {
         current.replace(Some(Current {
@@ -180,19 +211,13 @@ async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() +
     let _hold = TvApplication::get().hold();
 
     // Always drain the output, otherwise mpv blocks once the pipe is full.
-    let mut tail: Vec<u8> = Vec::new();
     if let Some(stdout) = process.stdout_pipe() {
         loop {
             match stdout
                 .read_bytes_future(4096, glib::Priority::DEFAULT)
                 .await
             {
-                Ok(bytes) if !bytes.is_empty() => {
-                    tail.extend_from_slice(&bytes);
-                    if tail.len() > OUTPUT_TAIL_SIZE {
-                        tail.drain(..tail.len() - OUTPUT_TAIL_SIZE);
-                    }
-                }
+                Ok(bytes) if !bytes.is_empty() => (),
                 _ => break,
             }
         }
@@ -221,16 +246,10 @@ async fn watch(process: gio::Subprocess, title: String, on_exit: impl FnOnce() +
         return;
     }
 
-    let output = String::from_utf8_lossy(&tail);
-    tracing::error!("mpv exited with status {status}:\n{output}");
-
-    let reason = output
-        .lines()
-        .flat_map(|line| line.split('\r'))
-        .map(str::trim)
-        .rfind(|line| !line.is_empty() && !line.starts_with("Exiting..."))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("exit status {status}"));
+    // Subprocess output is deliberately discarded, not filtered: arbitrary
+    // mpv diagnostics may reproduce credential-bearing playback URLs.
+    tracing::error!("mpv playback failed (exit status {status}; diagnostics suppressed)");
+    let reason = format!("exit status {status}");
 
     if let Some(window) = TvApplication::get()
         .active_window()
@@ -269,6 +288,40 @@ mod redaction_tests {
         assert_eq!(OSC_MOUSE_THRESHOLD, "--script-opt=osc-minmousemove=18");
         assert!(!OSC_MOUSE_THRESHOLD.contains("osc=no"));
         assert!(!OSC_MOUSE_THRESHOLD.contains("osc-visibility=never"));
+    }
+
+    #[test]
+    fn malformed_media_inputs_are_rejected_without_protocol_restrictions() {
+        assert!(valid_media_inputs("https://example.invalid/video?token=fake", None));
+        assert!(valid_media_inputs("rtmp://example.invalid/live", Some("file:///subs.srt")));
+        assert!(!valid_media_inputs("", None));
+        assert!(!valid_media_inputs("--vo=null\\n--script=bad", None));
+        assert!(!valid_media_inputs("https://example.invalid/video", Some("url\\runsafe")));
+    }
+
+    #[test]
+    fn failures_have_only_code_owned_diagnostic_categories() {
+        let private_url = "https://user:fake-password@example.invalid/video?token=fake-secret";
+        let synthetic_mpv_output = format!("Failed to open {private_url}\\nHTTP 403\\r{private_url}");
+        let private_query = "https://example.invalid/live?a=fake-secret&b=one&c=two";
+        // The watcher never passes mpv output to logging or error display:
+        // only status and a fixed message are used for the failure category.
+        let status = 2;
+        let message = format!("mpv playback failed (exit status {status}; diagnostics suppressed)");
+        let reason = format!("exit status {status}");
+        for secret in ["fake-password", "fake-secret", "user:", "example.invalid"] {
+            assert!(synthetic_mpv_output.contains(secret) || private_query.contains(secret));
+            assert!(!message.contains(secret));
+            assert!(!reason.contains(secret));
+        }
+        for error in [
+            StartError::MissingPlayer,
+            StartError::MissingRemoteResources,
+            StartError::InvalidMediaUrl,
+            StartError::LaunchFailed,
+        ] {
+            assert!(!error.message().contains("fake-secret"));
+        }
     }
 
     #[test]
