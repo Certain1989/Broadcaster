@@ -15,8 +15,7 @@ eyre = "0.6.14"
 futures-util = "0.3.31"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 gtk = { version = "0.11.5", package = "gtk4", features = ["gnome_46", "blueprint"] }
-ammonia = "4.2.4"
-regex = "1"
+html2pango = "0.6.0"
 indexmap = { version = "2.7.1", features = ["serde"] }
 mediathekviewweb = { version = "0.5.0", default-features = false, features = ["native-tls"] }
 phf = { version = "0.14.0", features = ["macros"] }
@@ -28,7 +27,7 @@ time = { version = "0.3.37", features = ["parsing", "serde"] }
 tokio = { version = "1.43.0", features = ["fs", "time", "rt-multi-thread", "macros", "sync", "net", "io-util"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-zbus = { version = "5.5.0", default-features = false, features = ["tokio"] }
+zbus = { version = "6.0.0", default-features = false, features = ["tokio", "proxy"] }
 
 [profile.dev.build-override]
 opt-level = 3
