@@ -46,7 +46,9 @@ mod imp {
             let live_channels = match TvApplication::get().live_channels().await {
                 Ok(live_channels) => live_channels,
                 Err(_) => {
-                    show_error(&gettextrs::gettext("Failed to load livestream channel settings"));
+                    show_error(&gettextrs::gettext(
+                        "Failed to load livestream channel settings",
+                    ));
                     return;
                 }
             };
