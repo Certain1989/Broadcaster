@@ -57,7 +57,9 @@ fn append_channels_bounded(body: &mut Vec<u8>, chunk: &[u8]) -> eyre::Result<()>
     Ok(())
 }
 
-async fn decode_channels_bounded(mut response: reqwest::Response) -> eyre::Result<ChannelsResponse> {
+async fn decode_channels_bounded(
+    mut response: reqwest::Response,
+) -> eyre::Result<ChannelsResponse> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         append_channels_bounded(&mut body, &chunk)?;
@@ -1029,8 +1031,7 @@ mod tests {
     #[test]
     fn catalogue_body_limit_accepts_exact_boundary_across_chunks() {
         let mut body = Vec::new();
-        append_channels_bounded(&mut body, &vec![b'a'; MAX_CHANNELS_RESPONSE_BYTES - 1])
-            .unwrap();
+        append_channels_bounded(&mut body, &vec![b'a'; MAX_CHANNELS_RESPONSE_BYTES - 1]).unwrap();
         append_channels_bounded(&mut body, b"b").unwrap();
         assert_eq!(body.len(), MAX_CHANNELS_RESPONSE_BYTES);
     }
@@ -1046,7 +1047,9 @@ mod tests {
     #[test]
     fn catalogue_body_limit_rejects_single_oversize_chunk() {
         let mut body = Vec::new();
-        assert!(append_channels_bounded(&mut body, &vec![0; MAX_CHANNELS_RESPONSE_BYTES + 1]).is_err());
+        assert!(
+            append_channels_bounded(&mut body, &vec![0; MAX_CHANNELS_RESPONSE_BYTES + 1]).is_err()
+        );
         assert!(body.is_empty());
     }
 
