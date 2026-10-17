@@ -28,6 +28,8 @@ use super::{card::TvMediathekCard, shows::ShowObject};
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(25);
 const CHANNELS_TIMEOUT: Duration = Duration::from_secs(8);
+/// Bound catalogue responses independently of server-provided Content-Length.
+const MAX_CHANNELS_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const CHANNELS_URL: &str = "https://mediathekviewweb.de/api/channels";
 
 // Immediately available offline; replaced with the indexed catalogue when online.
@@ -45,6 +47,24 @@ struct Broadcaster {
 struct ChannelsResponse {
     error: Option<String>,
     channels: Option<Vec<String>>,
+}
+
+fn append_channels_bounded(body: &mut Vec<u8>, chunk: &[u8]) -> eyre::Result<()> {
+    if chunk.len() > MAX_CHANNELS_RESPONSE_BYTES.saturating_sub(body.len()) {
+        eyre::bail!("Mediathek channel catalogue exceeds the allowed size");
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn decode_channels_bounded(
+    mut response: reqwest::Response,
+) -> eyre::Result<ChannelsResponse> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        append_channels_bounded(&mut body, &chunk)?;
+    }
+    Ok(serde_json::from_slice(&body)?)
 }
 
 fn broadcaster_index(entries: &[Broadcaster], identifier: Option<&str>) -> u32 {
@@ -539,7 +559,7 @@ impl TvMediathekView {
                     .send()
                     .await?
                     .error_for_status()?;
-                response.json::<ChannelsResponse>().await
+                decode_channels_bounded(response).await
             })
             .await;
 
@@ -562,8 +582,11 @@ impl TvMediathekView {
                 Ok(_) => {
                     tracing::warn!("Mediathek channel catalogue unavailable; retaining fallback")
                 }
-                Err(_) => {
-                    tracing::warn!("Could not load Mediathek channel catalogue; retaining fallback")
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "Could not load Mediathek channel catalogue; retaining fallback"
+                    );
                 }
             }
         });
@@ -999,10 +1022,36 @@ struct QueryProperties {
 #[cfg(test)]
 mod tests {
     use super::{
-        broadcaster_index, compose_query, duration_bounds, normalise_channels,
-        separate_search_terms, ChannelsResponse, SearchRequests, FALLBACK_BROADCASTERS,
+        append_channels_bounded, broadcaster_index, compose_query, duration_bounds,
+        normalise_channels, separate_search_terms, ChannelsResponse, SearchRequests,
+        FALLBACK_BROADCASTERS, MAX_CHANNELS_RESPONSE_BYTES,
     };
     use std::time::Duration;
+
+    #[test]
+    fn catalogue_body_limit_accepts_exact_boundary_across_chunks() {
+        let mut body = Vec::new();
+        append_channels_bounded(&mut body, &vec![b'a'; MAX_CHANNELS_RESPONSE_BYTES - 1]).unwrap();
+        append_channels_bounded(&mut body, b"b").unwrap();
+        assert_eq!(body.len(), MAX_CHANNELS_RESPONSE_BYTES);
+    }
+
+    #[test]
+    fn catalogue_body_limit_rejects_oversize_chunk_without_appending() {
+        let mut body = vec![b'a'; MAX_CHANNELS_RESPONSE_BYTES - 1];
+        let error = append_channels_bounded(&mut body, b"bc").unwrap_err();
+        assert!(error.to_string().contains("exceeds the allowed size"));
+        assert_eq!(body.len(), MAX_CHANNELS_RESPONSE_BYTES - 1);
+    }
+
+    #[test]
+    fn catalogue_body_limit_rejects_single_oversize_chunk() {
+        let mut body = Vec::new();
+        assert!(
+            append_channels_bounded(&mut body, &vec![0; MAX_CHANNELS_RESPONSE_BYTES + 1]).is_err()
+        );
+        assert!(body.is_empty());
+    }
 
     /// Exercise the *real* Mediathek template and GTK focus instead of only
     /// checking which ListBoxRow owns a nested widget. This specifically
