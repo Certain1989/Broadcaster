@@ -124,7 +124,7 @@ mod imp {
                     ));
                     self.custom_program_validation_icon.set_visible(true);
                 }
-                Err(e) => show_error(e),
+                Err(_) => show_error(&gettext("Failed to check the external application")),
             }
         }
         pub(super) async fn load(&self) {
@@ -177,11 +177,11 @@ mod imp {
                     let selected_program = self.selected_program.borrow().clone();
                     self.set_program(selected_program.into()).await;
                 }
-                Err(e) => {
+                Err(_) => {
                     let msg = gettext("Failed to load external applications");
                     self.program_list
                         .add(&adw::ActionRow::builder().title(&msg).build());
-                    show_error(e.wrap_err(msg));
+                    show_error(&msg);
                 }
             }
         }
