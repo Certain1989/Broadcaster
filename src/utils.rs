@@ -89,10 +89,13 @@ pub fn format_duration(duration: &Duration) -> String {
     }
 }
 
-/// Shows the error in a toast. Its “Details” button shows the whole chain of
-/// causes.
-pub fn show_error(e: eyre::Report) {
-    tracing::error!("{e:?}");
+/// Show only a trusted application-owned message, never a dependency error
+/// or an `eyre` report. Upstream errors can embed URL credentials, private
+/// paths, and arbitrary remote response data in their Display/Debug chains.
+/// Code that calls this function must choose a fixed, translated failure
+/// category rather than forwarding untrusted error text.
+pub fn show_error(message: &str) {
+    tracing::error!("{message}");
 
     let Some(window) = TvApplication::get()
         .active_window()
@@ -101,59 +104,12 @@ pub fn show_error(e: eyre::Report) {
         return;
     };
 
-    let message = e.to_string();
-    let toast = adw::Toast::builder()
-        .title(&message)
-        // the message may contain characters like `&` that aren't valid markup
-        .use_markup(false)
-        .build();
-
-    // the causes, without the backtrace of the debug output
-    let causes: Vec<String> = e.chain().skip(1).map(ToString::to_string).collect();
-    if !causes.is_empty() {
-        toast.set_button_label(Some(&gettext("Details")));
-        toast.connect_button_clicked(glib::clone!(
-            #[weak]
-            window,
-            move |_| show_error_details(&window, &message, &causes.join("\n"))
-        ));
-    }
-    window.add_toast(toast);
-}
-
-fn show_error_details(window: &TvWindow, message: &str, details: &str) {
-    let label = gtk::Label::builder()
-        .label(details)
-        .selectable(true)
-        // a focused label selects all of its text, it is copied with the
-        // “Copy” button instead
-        .focusable(false)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .xalign(0.0)
-        .valign(gtk::Align::Start)
-        .css_classes(["monospace"])
-        .build();
-    let scrolled_window = gtk::ScrolledWindow::builder()
-        .child(&label)
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_height(true)
-        .max_content_height(320)
-        .build();
-
-    let dialog = adw::AlertDialog::builder()
-        .heading(message)
-        .extra_child(&scrolled_window)
-        .build();
-    dialog.add_responses(&[("copy", &gettext("_Copy")), ("close", &gettext("_Close"))]);
-    dialog.set_default_response(Some("close"));
-    dialog.set_close_response("close");
-
-    let text = format!("{message}\n{details}");
-    dialog.connect_response(Some("copy"), move |dialog, _| {
-        dialog.clipboard().set_text(&text);
-    });
-    dialog.present(Some(window));
+    window.add_toast(
+        adw::Toast::builder()
+            .title(message)
+            .use_markup(false)
+            .build(),
+    );
 }
 
 pub trait ListStoreExtManual {
