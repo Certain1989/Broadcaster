@@ -132,20 +132,20 @@ pub(crate) fn parse_playlist(
     let mut group_hint: Option<String> = None;
     let mut source_label = None;
 
-    for line in text.split(['\n', '\r']) {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    for raw_line in text.split(['\n', '\r']) {
+        let line = raw_line.trim();
         if line.starts_with("#EXT-X-") {
             return Err(ParseError::HlsManifest);
         }
-        if line.len() > MAX_LINE_BYTES {
+        if raw_line.len() > MAX_LINE_BYTES {
             // An overlong line is not retained or echoed, even in a warning.
             diagnostics.skip(WarningKind::OversizedLine);
             pending = Metadata::default();
             has_extinf = false;
             group_hint = None;
+            continue;
+        }
+        if line.is_empty() {
             continue;
         }
         if let Some(body) = line.strip_prefix("#EXTINF:") {
