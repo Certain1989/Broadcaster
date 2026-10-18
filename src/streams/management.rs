@@ -260,6 +260,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     body.append(&advanced);
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    dialog.set_child(None);
     scroll.set_child(Some(&body));
     dialog.set_content_height(620);
     dialog.set_child(Some(&scroll));
