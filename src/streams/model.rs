@@ -12,6 +12,25 @@ use super::storage::{StorageError, StorageResult};
 pub type SourceId = String;
 pub type ChannelId = String;
 
+impl std::fmt::Debug for SourceOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceOrigin").field("kind", &self.kind)
+            .field("locator", &"<redacted>").finish()
+    }
+}
+impl std::fmt::Debug for IncomingChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IncomingChannel").field("order", &self.order)
+            .field("stream_url", &"<redacted>").finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for ChannelEffective {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChannelEffective").field("id", &self.id)
+            .field("stream_url", &"<redacted>").finish_non_exhaustive()
+    }
+}
+
 /// Untrusted values must never be included in diagnostics or public logs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OriginKind {
@@ -34,7 +53,7 @@ impl OriginKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SourceOrigin {
     pub kind: OriginKind,
     /// Sensitive: never log, print, or display this value unredacted.
@@ -120,7 +139,7 @@ pub struct Source {
     pub last_error_code: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IncomingChannel {
     pub order: u32,
     pub imported_name: String,
@@ -323,7 +342,7 @@ impl Default for ChannelQuery {
             region: FacetSelection::Any, sort: SortOrder::PlaylistOrder, limit: 100, offset: 0 }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ChannelEffective {
     pub id: ChannelId,
     pub source_id: SourceId,
