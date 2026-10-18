@@ -17,3 +17,5 @@ pub(crate) mod storage;
 mod parser_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod service_tests;
