@@ -30,6 +30,7 @@ use super::{
 struct RowUi {
     title: gtk::Label,
     icon: gtk::Image,
+    logo: gtk::Picture,
     summary: gtk::Label,
     details: gtk::Label,
     reveal: gtk::Revealer,
@@ -49,6 +50,8 @@ struct LogoState {
     textures: HashMap<String, gtk::gdk::Texture>,
     lru: std::collections::VecDeque<String>,
     pending: HashSet<String>,
+    // Avoid repeatedly downloading invalid/offline images during row recycling.
+    failed: HashSet<String>,
     pixels: u64,
 }
 
@@ -791,24 +794,43 @@ impl TvStreamsView {
             return;
         };
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        root.set_margin_top(5);
-        root.set_margin_bottom(5);
-        root.set_margin_start(8);
-        root.set_margin_end(8);
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        root.set_margin_top(10);
+        root.set_margin_bottom(10);
+        root.set_margin_start(12);
+        root.set_margin_end(12);
+        root.add_css_class("tv-stream-channel-row");
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        // The logo overlay does not measure the picture's untrusted intrinsic
+        // dimensions; a large original bitmap must never stretch the list.
+        let logo_area = gtk::Overlay::new();
+        logo_area.set_size_request(76, 72);
+        logo_area.set_valign(gtk::Align::Center);
         let icon = gtk::Image::from_icon_name("tv-symbolic");
-        icon.set_pixel_size(28);
-        header.append(&icon);
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        icon.set_pixel_size(60);
+        icon.set_halign(gtk::Align::Center);
+        icon.set_valign(gtk::Align::Center);
+        logo_area.set_child(Some(&icon));
+        let logo = gtk::Picture::new();
+        logo.set_can_shrink(true);
+        logo.set_content_fit(gtk::ContentFit::Contain);
+        logo.set_halign(gtk::Align::Fill);
+        logo.set_valign(gtk::Align::Fill);
+        logo.set_visible(false);
+        logo_area.add_overlay(&logo);
+        header.append(&logo_area);
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 6);
         text.set_hexpand(true);
+        text.set_valign(gtk::Align::Center);
         let title = gtk::Label::new(None);
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.add_css_class("tv-stream-channel-title");
         text.append(&title);
         let summary = gtk::Label::new(None);
         summary.set_xalign(0.0);
         summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
         summary.add_css_class("dim-label");
+        summary.add_css_class("tv-stream-channel-summary");
         text.append(&summary);
         header.append(&text);
         root.append(&header);
@@ -858,6 +880,7 @@ impl TvStreamsView {
                 ui: RowUi {
                     title,
                     icon,
+                    logo,
                     summary,
                     details,
                     reveal,
@@ -914,7 +937,9 @@ impl TvStreamsView {
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
-            binding.ui.icon.set_icon_name(Some("tv-symbolic"));
+            binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
+            binding.ui.logo.set_visible(false);
+            binding.ui.icon.set_visible(true);
             binding.ui.title.set_text("");
             binding.ui.summary.set_text("");
             binding.ui.details.set_text("");
@@ -1008,9 +1033,22 @@ impl TvStreamsView {
                     .as_ref()
                     .and_then(|url| imp.logos.borrow().textures.get(url).cloned())
                 {
-                    binding.ui.icon.set_paintable(Some(&texture));
+                    binding.ui.logo.set_paintable(Some(&texture));
+                    binding.ui.logo.set_visible(true);
+                    binding.ui.icon.set_visible(false);
                 } else {
-                    binding.ui.icon.set_icon_name(Some("tv-symbolic"));
+                    binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
+                    binding.ui.logo.set_visible(false);
+                    binding.ui.icon.set_visible(true);
+                    // A playlist can omit tvg-logo entirely; do not invent a
+                    // logo for unrelated channels with similar names.
+                    binding.ui.icon.set_tooltip_text(Some(&gettext(
+                        if logo_url.is_some() {
+                            "Channel logo unavailable"
+                        } else {
+                            "No logo supplied by playlist"
+                        },
+                    )));
                 }
             }
         }
@@ -1027,6 +1065,7 @@ impl TvStreamsView {
             let mut state = self.imp().logos.borrow_mut();
             if state.textures.contains_key(&url)
                 || state.pending.contains(&url)
+                || state.failed.contains(&url)
                 || state.pending.len() >= 16
             {
                 return;
@@ -1046,8 +1085,16 @@ impl TvStreamsView {
                     // Signature/dimension validation was completed before GTK decode.
                     let data = glib::Bytes::from(bytes.as_slice());
                     if let Ok(texture) = gtk::gdk::Texture::from_bytes(&data) {
-                        state.insert(url, texture);
+                        state.insert(url.clone(), texture);
+                    } else {
+                        state.failed.insert(url);
                     }
+                } else {
+                    state.failed.insert(url);
+                }
+                // Negative cache remains bounded independently of the 10k list.
+                if state.failed.len() > 256 {
+                    state.failed.clear();
                 }
                 drop(state);
                 let bound: Vec<StreamSlot> = view
@@ -1059,6 +1106,9 @@ impl TvStreamsView {
                     .collect();
                 for slot in bound {
                     view.refresh_logo(&slot);
+                    // Requests skipped during a burst of rapid scrolling may
+                    // now use an available slot without ever rebinding.
+                    view.request_logo(&slot);
                 }
             }
         ));
