@@ -5,17 +5,17 @@
 //! No streams tab, logos, or playback integration is registered here.
 #![allow(dead_code)]
 
+mod fetch;
 pub(crate) mod model;
 pub(crate) mod parser;
-mod fetch;
-pub(crate) mod service;
 mod query;
 mod refresh;
+pub(crate) mod service;
 pub(crate) mod storage;
 
 #[cfg(test)]
 mod parser_tests;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod tests;

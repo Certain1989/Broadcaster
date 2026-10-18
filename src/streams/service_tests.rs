@@ -10,7 +10,10 @@ use std::{
 };
 
 use adw::{gio, glib};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 
 use super::{
     model::{ChannelQuery, SourceDefaults},
@@ -24,9 +27,12 @@ struct Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
-        let directory = std::env::temp_dir().join(format!("broadcaster-service-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("broadcaster-service-{}", uuid::Uuid::new_v4()));
         let path = directory.join("broadcaster.sqlite3");
-        let service = StreamsService::with_storage(Storage::at(&path)).await.unwrap();
+        let service = StreamsService::with_storage(Storage::at(&path))
+            .await
+            .unwrap();
         Self { path, service }
     }
 }
@@ -72,7 +78,11 @@ impl HttpFixture {
                 });
             }
         });
-        Self { addr, body: shared, task }
+        Self {
+            addr,
+            body: shared,
+            task,
+        }
     }
     fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.addr)
@@ -102,10 +112,19 @@ async fn import_refresh_rejects_shrink_without_approval_and_keeps_offline_cache(
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(20)).await;
     let service = &test.service;
-    let source = service.add_url(
-        "Synthetic", server.url("/list"), 0, SourceDefaults::default()
-    ).await.unwrap();
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 20);
+    let source = service
+        .add_url(
+            "Synthetic",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
 
     server.replace(playlist(4));
     let ticket = match service.refresh(&source.id).await.unwrap() {
@@ -115,25 +134,40 @@ async fn import_refresh_rejects_shrink_without_approval_and_keeps_offline_cache(
     assert!(ticket.preview.requires_confirmation);
     assert_eq!(ticket.preview.old_present, 20);
     assert_eq!(ticket.preview.new_present, 4);
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 20);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
 
     assert!(matches!(
         service.confirm_refresh(ticket, false).await,
         Err(ServiceError::Declined)
     ));
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 20);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
 
     let ticket = match service.refresh(&source.id).await.unwrap() {
         RefreshOutcome::ConfirmationRequired(ticket) => ticket,
         RefreshOutcome::Committed(_) => panic!("must confirm"),
     };
     service.confirm_refresh(ticket, true).await.unwrap();
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 4);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        4
+    );
 
     service.toggle_source(&source.id, false).await.unwrap();
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 0);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        0
+    );
     service.toggle_source(&source.id, true).await.unwrap();
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 4);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        4
+    );
 }
 
 #[tokio::test]
@@ -141,19 +175,26 @@ async fn malformed_reimport_does_not_create_or_replace_catalogue() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(b"#EXT-X-VERSION:3\n".to_vec()).await;
     let service = &test.service;
-    let failed = service.add_url(
-        "Invalid", server.url("/list"), 0, SourceDefaults::default()
-    ).await;
+    let failed = service
+        .add_url("Invalid", server.url("/list"), 0, SourceDefaults::default())
+        .await;
     assert!(matches!(failed, Err(ServiceError::Parse(_))));
     assert!(service.list_sources().await.unwrap().is_empty());
 
     server.replace(playlist(2));
-    let source = service.add_url(
-        "Valid", server.url("/list"), 0, SourceDefaults::default()
-    ).await.unwrap();
+    let source = service
+        .add_url("Valid", server.url("/list"), 0, SourceDefaults::default())
+        .await
+        .unwrap();
     server.replace(b"#EXT-X-STREAM-INF:BANDWIDTH=1000\n".to_vec());
-    assert!(matches!(service.refresh(&source.id).await, Err(ServiceError::Parse(_))));
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 2);
+    assert!(matches!(
+        service.refresh(&source.id).await,
+        Err(ServiceError::Parse(_))
+    ));
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        2
+    );
 }
 
 #[tokio::test]
@@ -161,9 +202,10 @@ async fn cancellation_and_newer_refresh_invalidate_old_confirmations() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(20)).await;
     let service = &test.service;
-    let source = service.add_url(
-        "Race", server.url("/list"), 0, SourceDefaults::default()
-    ).await.unwrap();
+    let source = service
+        .add_url("Race", server.url("/list"), 0, SourceDefaults::default())
+        .await
+        .unwrap();
     server.replace(playlist(4));
     let ticket = match service.refresh(&source.id).await.unwrap() {
         RefreshOutcome::ConfirmationRequired(ticket) => ticket,
@@ -174,7 +216,10 @@ async fn cancellation_and_newer_refresh_invalidate_old_confirmations() {
         service.confirm_refresh(ticket, true).await,
         Err(ServiceError::Cancelled)
     ));
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 20);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
 
     let old = match service.refresh(&source.id).await.unwrap() {
         RefreshOutcome::ConfirmationRequired(ticket) => ticket,
@@ -187,7 +232,10 @@ async fn cancellation_and_newer_refresh_invalidate_old_confirmations() {
         service.confirm_refresh(old, true).await,
         Err(ServiceError::Cancelled)
     ));
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 18);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        18
+    );
 }
 
 #[tokio::test]
@@ -195,9 +243,15 @@ async fn superseded_network_operation_cannot_overwrite_successor() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(20)).await;
     let service = test.service.clone();
-    let source = service.add_url(
-        "Overlapping", server.url("/slow"), 0, SourceDefaults::default()
-    ).await.unwrap();
+    let source = service
+        .add_url(
+            "Overlapping",
+            server.url("/slow"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
     server.replace(playlist(7));
     let first = {
         let service = service.clone();
@@ -209,38 +263,61 @@ async fn superseded_network_operation_cannot_overwrite_successor() {
     let second = service.refresh(&source.id).await.unwrap();
     assert!(matches!(second, RefreshOutcome::Committed(_)));
     assert!(matches!(first.await.unwrap(), Err(ServiceError::Cancelled)));
-    assert_eq!(service.query(ChannelQuery::default()).await.unwrap().total, 19);
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        19
+    );
 }
 
 #[test]
 fn local_gio_reselect_preserves_cached_channels_until_atomic_replacement() {
     let context = glib::MainContext::new();
-    context.with_thread_default(|| {
-        context.block_on(async {
-            let test = Fixture::new().await;
-            let first_path = test.path.parent().unwrap().join("original.m3u");
-            let second_path = test.path.parent().unwrap().join("reselected.m3u");
-            fs::write(&first_path, playlist(2)).unwrap();
-            fs::write(&second_path, playlist(3)).unwrap();
-            let original = gio::File::for_path(&first_path);
-            let source = test.service.add_local(
-                "Selected", original, 0, SourceDefaults::default()
-            ).await.unwrap();
-            fs::remove_file(&first_path).unwrap();
+    context
+        .with_thread_default(|| {
+            context.block_on(async {
+                let test = Fixture::new().await;
+                let first_path = test.path.parent().unwrap().join("original.m3u");
+                let second_path = test.path.parent().unwrap().join("reselected.m3u");
+                fs::write(&first_path, playlist(2)).unwrap();
+                fs::write(&second_path, playlist(3)).unwrap();
+                let original = gio::File::for_path(&first_path);
+                let source = test
+                    .service
+                    .add_local("Selected", original, 0, SourceDefaults::default())
+                    .await
+                    .unwrap();
+                fs::remove_file(&first_path).unwrap();
 
-            assert!(matches!(
-                test.service.refresh(&source.id).await,
-                Err(ServiceError::NeedsReauthorization)
-            ));
-            assert_eq!(test.service.query(ChannelQuery::default()).await.unwrap().total, 2);
-            let chosen = gio::File::for_path(&second_path);
-            let replaced = test.service.replace_origin(
-                &source.id, SourceSelection::Local(chosen),
-            ).await.unwrap();
-            assert!(matches!(replaced, RefreshOutcome::Committed(_)));
-            let updated = test.service.source(&source.id).await.unwrap();
-            assert_ne!(updated.origin.locator, source.origin.locator);
-            assert_eq!(test.service.query(ChannelQuery::default()).await.unwrap().total, 3);
+                assert!(matches!(
+                    test.service.refresh(&source.id).await,
+                    Err(ServiceError::NeedsReauthorization)
+                ));
+                assert_eq!(
+                    test.service
+                        .query(ChannelQuery::default())
+                        .await
+                        .unwrap()
+                        .total,
+                    2
+                );
+                let chosen = gio::File::for_path(&second_path);
+                let replaced = test
+                    .service
+                    .replace_origin(&source.id, SourceSelection::Local(chosen))
+                    .await
+                    .unwrap();
+                assert!(matches!(replaced, RefreshOutcome::Committed(_)));
+                let updated = test.service.source(&source.id).await.unwrap();
+                assert_ne!(updated.origin.locator, source.origin.locator);
+                assert_eq!(
+                    test.service
+                        .query(ChannelQuery::default())
+                        .await
+                        .unwrap()
+                        .total,
+                    3
+                );
+            })
         })
-    }).unwrap();
+        .unwrap();
 }
