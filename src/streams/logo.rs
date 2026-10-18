@@ -643,7 +643,10 @@ mod tests {
         assert!(download(&url).await.is_none());
         // A hostname that resolves locally is rejected by the actual
         // connector resolver, not by a detached DNS preflight.
-        let hostname_url = format!("http://localhost:{}/logo.png", listener.local_addr().unwrap().port());
+        let hostname_url = format!(
+            "http://localhost:{}/logo.png",
+            listener.local_addr().unwrap().port()
+        );
         assert!(matches!(
             tokio::time::timeout(Duration::from_secs(3), download(&hostname_url)).await,
             Ok(None)
