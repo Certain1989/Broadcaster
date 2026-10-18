@@ -766,13 +766,12 @@ mod playback_navigation_tests {
         window.set_default_size(1280, 720);
         window.present();
         let streams = &window.imp().streams_view;
-        streams.imp().results_stack.set_visible_child_name("results");
         for _ in 0..48 {
             if !glib::MainContext::default().iteration(false) {
                 break;
             }
         }
-        assert!(streams.imp().results_list.grab_focus());
+        assert!(streams.show_and_focus_test_results());
         assert!(streams.contains_results_focus(
             &window.focused_widget().expect("list should hold focus")
         ));
@@ -780,7 +779,7 @@ mod playback_navigation_tests {
         assert!(!streams.contains_results_focus(
             &window.focused_widget().expect("tabs should hold focus")
         ));
-        assert!(streams.imp().results_list.grab_focus());
+        assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
             glib::Propagation::Stop
@@ -788,9 +787,9 @@ mod playback_navigation_tests {
         assert!(!streams.contains_results_focus(
             &window.focused_widget().expect("Escape should focus tabs")
         ));
-        assert!(streams.imp().search_entry.grab_focus());
+        streams.focus_search();
         assert!(!window.focus_boundary_key(gtk::gdk::Key::Left));
-        assert!(streams.imp().results_list.grab_focus());
+        assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Back, gtk::gdk::ModifierType::empty()),
             glib::Propagation::Stop
