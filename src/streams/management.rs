@@ -335,7 +335,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
             let new_defaults = match defaults.collect() {
                 Ok(v) => v,
                 Err(text) => {
-                    status.set_text(text);
+                    status.set_text(&text);
                     return;
                 }
             };
