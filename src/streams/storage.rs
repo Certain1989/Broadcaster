@@ -329,7 +329,7 @@ fn ensure_private_parent(path: &Path) -> StorageResult<()> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let meta = fs::symlink_metadata(parent).map_err(|_| StorageError::PermissionDenied)?;
         if !meta.file_type().is_dir() || meta.permissions().mode() & 0o077 != 0
-            || meta.uid() != unsafe { libc_geteuid() }
+            || meta.uid() != unsafe { geteuid() }
         {
             return Err(StorageError::PermissionDenied);
         }
@@ -337,21 +337,16 @@ fn ensure_private_parent(path: &Path) -> StorageResult<()> {
     Ok(())
 }
 #[cfg(unix)]
-fn libc_geteuid_safe() -> u32 {
-    // No libc dependency needed: path owner check is delegated to OS access controls.
-    // Private permissions and ownership of already-created file are checked below.
-    0
-}
-#[cfg(unix)]
-unsafe fn libc_geteuid() -> u32 {
-    // Placeholder replaced before integration build; no system FFI in S1 needed.
-    libc_geteuid_safe()
+extern "C" {
+    fn geteuid() -> u32;
 }
 fn require_private_file(path: &Path) -> StorageResult<()> {
     #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let meta = fs::symlink_metadata(path).map_err(|_| StorageError::PermissionDenied)?;
-        if !meta.file_type().is_file() || meta.permissions().mode() & 0o077 != 0 {
+        if !meta.file_type().is_file() || meta.permissions().mode() & 0o077 != 0
+            || meta.uid() != unsafe { geteuid() }
+        {
             return Err(StorageError::PermissionDenied);
         }
     }
