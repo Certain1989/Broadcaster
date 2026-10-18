@@ -333,7 +333,9 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
             cancel.connect_clicked(glib::clone!(
                 #[weak]
                 dialog,
-                move |_| dialog.close()
+                move |_| {
+                    dialog.close();
+                }
             ));
             let reset_service = service.clone();
             let reset_id = id.clone();
