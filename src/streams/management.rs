@@ -17,8 +17,8 @@ use crate::{
     streams::{
         model::{normalize_facet, FacetDimension, OriginKind, Region, Source, SourceDefaults},
         service::{
-            choose_local_file, RefreshOutcome, RefreshStage, RefreshTicket, ServiceError, ServiceEvent,
-            SourceSelection, StreamsService,
+            choose_local_file, RefreshOutcome, RefreshStage, RefreshTicket, ServiceError,
+            ServiceEvent, SourceSelection, StreamsService,
         },
         storage::ConfirmedSourceDeletion,
         view::TvStreamsView,
@@ -472,7 +472,11 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
                             for source in sources {
                                 let stage = service.stage(&source.id).await;
                                 if !matches!(stage, RefreshStage::Idle) {
-                                    status.set_text(&format!("{}: {}", source.name, stage_name(stage)));
+                                    status.set_text(&format!(
+                                        "{}: {}",
+                                        source.name,
+                                        stage_name(stage)
+                                    ));
                                 }
                             }
                         }
