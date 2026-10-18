@@ -1042,13 +1042,12 @@ impl TvStreamsView {
                     binding.ui.icon.set_visible(true);
                     // A playlist can omit tvg-logo entirely; do not invent a
                     // logo for unrelated channels with similar names.
-                    binding.ui.icon.set_tooltip_text(Some(&gettext(
-                        if logo_url.is_some() {
-                            "Channel logo unavailable"
-                        } else {
-                            "No logo supplied by playlist"
-                        },
-                    )));
+                    let hint = if logo_url.is_some() {
+                        gettext("Channel logo unavailable")
+                    } else {
+                        gettext("No logo supplied by playlist")
+                    };
+                    binding.ui.icon.set_tooltip_text(Some(&hint));
                 }
             }
         }
