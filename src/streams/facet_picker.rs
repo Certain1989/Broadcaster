@@ -572,6 +572,7 @@ pub(crate) struct FacetPicker {
     selected_box: gtk::Box,
     error: gtk::Label,
     chooser: gtk::Expander,
+    manual: Option<(gtk::Entry, gtk::Expander)>,
 }
 
 impl FacetPicker {
@@ -754,7 +755,7 @@ impl FacetPicker {
                 list.invalidate_filter();
             }
         });
-        if kind == FacetDimension::Language {
+        let manual = if kind == FacetDimension::Language {
             let advanced =
                 gtk::Expander::new(Some(&gettext("Advanced: add a language tag manually")));
             let manual_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -801,7 +802,10 @@ impl FacetPicker {
                     }
                 },
             );
-        }
+            Some((entry, advanced))
+        } else {
+            None
+        };
         chooser.set_child(Some(&panel));
         root.append(&chooser);
         root.append(&error);
@@ -814,10 +818,21 @@ impl FacetPicker {
             selected_box,
             error,
             chooser,
+            manual,
         }
     }
 
     pub(crate) fn values(&self, required: bool) -> Result<BTreeSet<String>, String> {
+        if let Some((manual, advanced)) = &self.manual {
+            if !manual.text().trim().is_empty() {
+                let reason = gettext("Add or clear the typed language tag before saving.");
+                self.error.set_text(&reason);
+                self.chooser.set_expanded(true);
+                advanced.set_expanded(true);
+                manual.grab_focus();
+                return Err(reason);
+            }
+        }
         let values = self.selected.borrow().clone();
         if required && values.is_empty() {
             self.error
@@ -860,6 +875,13 @@ impl FacetPicker {
         } else {
             self.selected.borrow_mut().remove(code);
             render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_manual(&self, value: &str) {
+        if let Some((entry, _)) = &self.manual {
+            entry.set_text(value);
         }
     }
 
