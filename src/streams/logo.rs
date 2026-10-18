@@ -18,10 +18,12 @@ use ring::digest::{digest, SHA256};
 use tokio::sync::Semaphore;
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-// A 1920x1080 broadcaster source image may be safely reduced for the row.
-// Still bound raw bytes and decoded memory (at most ~9 MiB per image).
-const MAX_EDGE: u32 = 2048;
-const MAX_PIXELS: u64 = 2_250_000;
+// GDK currently decodes on GTK's main thread, so refuse full-HD
+// broadcaster artwork rather than risk blocking remote input. Keep the
+// raster work at <= 1 MiB decoded per channel until a worker-side
+// downscale path exists. A missing logo is preferable to UI stalls.
+const MAX_EDGE: u32 = 512;
+const MAX_PIXELS: u64 = 512 * 512;
 const MAX_DISK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DISK_ENTRIES: usize = 128;
 
@@ -384,6 +386,9 @@ mod tests {
         assert!(!valid_raster(&png));
         png[16..20].copy_from_slice(&1920u32.to_be_bytes());
         png[20..24].copy_from_slice(&1080u32.to_be_bytes());
+        assert!(!valid_raster(&png)); // No full-HD decode in GTK thread.
+        png[16..20].copy_from_slice(&512u32.to_be_bytes());
+        png[20..24].copy_from_slice(&512u32.to_be_bytes());
         assert!(valid_raster(&png));
         png[16..20].copy_from_slice(&32u32.to_be_bytes());
         png[20..24].copy_from_slice(&16u32.to_be_bytes());
