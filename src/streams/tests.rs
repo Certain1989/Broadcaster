@@ -448,8 +448,233 @@ fn rejected_bad_values_and_sanitized_errors() {
     assert!(edits.validate().is_err());
     assert!(!format!("{}", StorageError::InvalidInput).contains("example.invalid"));
 }
+
 #[test]
-#[ignore = "resource intensive opt-in; record machine/time and RSS manually"]
+fn sql_failure_rolls_back_catalogue_and_new_locator() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("Rollback", 3);
+    let before = f.store.query_channels(&query_all()).unwrap();
+    let revised = snapshot(&source.id, 2);
+    let preview = f.store.preview_refresh(&revised).unwrap();
+    f.conn()
+        .execute_batch(
+            "CREATE TRIGGER deny_catalogue_update
+             BEFORE UPDATE ON iptv_channels
+             BEGIN SELECT RAISE(ABORT, 'synthetic rollback test'); END;",
+        )
+        .unwrap();
+    let changed_origin = SourceOrigin {
+        kind: OriginKind::RemoteUrl,
+        locator: "https://example.invalid/replacement.m3u".into(),
+    };
+    assert_eq!(
+        f.store
+            .replace_source_origin_and_snapshot(
+                &revised,
+                &preview,
+                &RefreshDecision::NotRequired,
+                changed_origin,
+                NOW + 1,
+            )
+            .unwrap_err(),
+        StorageError::StorageFailure
+    );
+    assert_eq!(f.store.get_source(&source.id).unwrap().revision, source.revision);
+    assert_eq!(
+        f.store.get_source(&source.id).unwrap().origin.locator,
+        source.origin.locator
+    );
+    let after = f.store.query_channels(&query_all()).unwrap();
+    assert_eq!(before.total, after.total);
+    assert_eq!(
+        before.items.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        after.items.iter().map(|c| &c.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn recorded_failure_keeps_good_snapshot_and_revision() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("Failure", 2);
+    let before = f.store.query_channels(&query_all()).unwrap();
+    f.store
+        .record_refresh_failure(&source.id, ErrorCode::Reauthorization, NOW + 20)
+        .unwrap();
+    let after = f.store.get_source(&source.id).unwrap();
+    assert_eq!(after.revision, source.revision);
+    assert_eq!(after.origin.locator, source.origin.locator);
+    assert_eq!(after.last_error_code.as_deref(), Some("reauthorization"));
+    assert_eq!(after.last_success_at, source.last_success_at);
+    assert_eq!(f.store.query_channels(&query_all()).unwrap().total, before.total);
+}
+
+#[test]
+fn ninety_day_purge_preserves_user_corrections() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("Retention", 3);
+    let items = f.store.query_channels(&query_all()).unwrap().items;
+    let retained = items[1].id.clone();
+    let removed = items[2].id.clone();
+    let edit = ChannelOverrides {
+        display_name: Some("Keep this corrected channel".into()),
+        ..ChannelOverrides::default()
+    };
+    f.store.set_channel_overrides(&retained, &edit, NOW).unwrap();
+    let one = ValidatedSnapshot::new(source.id.clone(), vec![channel(0)]).unwrap();
+    let preview = f.store.preview_refresh(&one).unwrap();
+    f.store
+        .commit_refresh(&one, &preview, &RefreshDecision::NotRequired, NOW + 1)
+        .unwrap();
+    assert_eq!(
+        f.store.purge_expired_missing(NOW + 1 + 90 * 24 * 3600 - 1).unwrap(),
+        0
+    );
+    assert_eq!(
+        f.store.purge_expired_missing(NOW + 1 + 90 * 24 * 3600).unwrap(),
+        1
+    );
+    assert!(matches!(
+        f.store.get_channel_detail(&removed),
+        Err(StorageError::NotFound)
+    ));
+    assert_eq!(
+        f.store.get_channel_detail(&retained).unwrap().effective.visible_name,
+        "Keep this corrected channel"
+    );
+}
+
+#[test]
+fn stale_manual_facets_never_override_auto_metadata() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("Stale Facets", 1);
+    let defaults = SourceDefaults {
+        languages: ["de".to_owned()].into_iter().collect(),
+        ..SourceDefaults::default()
+    };
+    f.store.set_source_defaults(&source.id, &defaults, NOW + 1).unwrap();
+    let channel_id = f.store.query_channels(&query_all()).unwrap().items[0].id.clone();
+    f.conn()
+        .execute(
+            "INSERT INTO iptv_channel_override_facets(channel_id,facet,value)
+             VALUES(?1,'language','en')",
+            [&channel_id],
+        )
+        .unwrap();
+    let effective = f.store.get_channel_detail(&channel_id).unwrap().effective;
+    assert_eq!(effective.languages, ["de".to_owned()].into_iter().collect());
+    let choices = f
+        .store
+        .query_filter_options(&query_all(), FilterDimension::Language)
+        .unwrap();
+    assert_eq!(
+        choices.choices,
+        vec![FacetChoice {
+            value: FacetValue::Known("de".into()),
+            count: 1,
+        }]
+    );
+    f.store.clear_channel_overrides(&channel_id).unwrap();
+    let stray: i64 = f.conn()
+        .query_row(
+            "SELECT count(*) FROM iptv_channel_override_facets WHERE channel_id=?1",
+            [&channel_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stray, 0);
+}
+
+#[test]
+fn dependent_facets_count_each_channel_once() {
+    let f = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut entries = channels(3);
+    entries[0].languages = ["de".to_owned(), "en".to_owned()].into_iter().collect();
+    entries[1].languages = ["de".to_owned(), "en".to_owned()].into_iter().collect();
+    let snap = ValidatedSnapshot::new(id.clone(), entries).unwrap();
+    f.store
+        .create_source_with_initial_snapshot(&id, &draft("Multiple"), &snap, NOW)
+        .unwrap();
+    let options = f
+        .store
+        .query_filter_options(&query_all(), FilterDimension::Language)
+        .unwrap();
+    assert!(options.choices.contains(&FacetChoice {
+        value: FacetValue::Known("de".into()),
+        count: 2,
+    }));
+    assert!(options.choices.contains(&FacetChoice {
+        value: FacetValue::Known("en".into()),
+        count: 2,
+    }));
+    assert!(options.choices.contains(&FacetChoice {
+        value: FacetValue::Unknown,
+        count: 1,
+    }));
+    let mut query = query_all();
+    query.language = FacetSelection::Value("de".into());
+    query.group = FacetSelection::Value("News".into());
+    let groups = f
+        .store
+        .query_filter_options(&query, FilterDimension::Group)
+        .unwrap();
+    assert_eq!(
+        groups.choices,
+        vec![
+            FacetChoice {
+                value: FacetValue::Known("News".into()),
+                count: 1,
+            },
+            FacetChoice {
+                value: FacetValue::Known("Sports".into()),
+                count: 1,
+            },
+        ]
+    );
+    let mut page = query_all();
+    page.limit = 1;
+    page.offset = 1;
+    let result = f.store.query_channels(&page).unwrap();
+    assert_eq!(result.total, 3);
+    assert_eq!(result.items.len(), 1);
+}
+
+#[test]
+fn source_scoped_identity_and_stale_preview_barrier() {
+    let f = Fixture::new();
+    let (left, _) = f.new_source("Left", 1);
+    let (right, _) = f.new_source("Right", 1);
+    let original = f.store.query_channels(&query_all()).unwrap().items;
+    assert_ne!(original[0].id, original[1].id);
+    let refreshed = snapshot(&left.id, 1);
+    let old_preview = f.store.preview_refresh(&refreshed).unwrap();
+    f.store.rename_source(&left.id, "Changed", NOW + 1).unwrap();
+    assert_eq!(
+        f.store
+            .commit_refresh(
+                &refreshed,
+                &old_preview,
+                &RefreshDecision::NotRequired,
+                NOW + 2,
+            )
+            .unwrap_err(),
+        StorageError::StaleRevision
+    );
+    assert_eq!(f.store.get_source(&right.id).unwrap().revision, right.revision);
+    assert_eq!(f.store.query_channels(&query_all()).unwrap().total, 2);
+}
+
+#[test]
+fn readonly_database_checks_cannot_mutate_alien_files() {
+    let f = Fixture::new();
+    let before = fs::read(&f.path).unwrap();
+    // An initialized database must never be downgraded or reset on reopen.
+    f.store.initialize().unwrap();
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    assert!(ValidatedSnapshot::new(uuid::Uuid::new_v4().to_string(), Vec::new()).is_err());
+}
+
+#[test]
 fn synthetic_100_1000_10000_query_measurements() {
     for n in [100, 1_000, 10_000] {
         let f = Fixture::new();
@@ -470,8 +695,39 @@ fn synthetic_100_1000_10000_query_measurements() {
             options.choices.iter().map(|v| v.count).sum::<u64>(),
             n as u64
         );
-        eprintln!(
-            "synthetic n={n} create={insert_time:?} page={query_time:?} facet={options_time:?}"
+        // The normal test harness captures eprintln. Write directly to the
+        // CI job's stderr to retain actual, synthetic-only timings.
+        let info = format!(
+            "S1-PERF arch={} n={n} create={insert_time:?} page={query_time:?} facet={options_time:?} rss_kib={:?}\\n",
+            std::env::consts::ARCH,
+            current_rss_kib()
         );
+        #[cfg(target_os = "linux")]
+        {
+            use std::io::Write;
+            let mut stderr = fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/stderr")
+                .unwrap();
+            stderr.write_all(info.as_bytes()).unwrap();
+        }
+        #[cfg(not(target_os = "linux"))]
+        eprint!("{info}");
     }
+}
+
+#[cfg(target_os = "linux")]
+fn current_rss_kib() -> Option<u64> {
+    fs::read_to_string("/proc/self/status")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+#[cfg(not(target_os = "linux"))]
+fn current_rss_kib() -> Option<u64> {
+    None
 }
