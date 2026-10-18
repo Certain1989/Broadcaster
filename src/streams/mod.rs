@@ -11,9 +11,9 @@ pub(crate) mod parser;
 mod query;
 mod refresh;
 mod rows;
-pub(crate) mod view;
 pub(crate) mod service;
 pub(crate) mod storage;
+pub(crate) mod view;
 
 #[cfg(test)]
 mod parser_tests;
