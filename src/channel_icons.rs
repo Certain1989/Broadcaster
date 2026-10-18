@@ -93,6 +93,26 @@ fn load_icon(icon_name: &str, size: i32, color_scheme: ColorScheme) -> eyre::Res
         .wrap_err_with(|| format!("failed to load channel logo from {resource}"))
 }
 
+/// Return existing, licensed application artwork for a known imported
+/// broadcaster. Only a small set of generic resolution labels is removed;
+/// no network search, guessed station identity or remote SVG processing.
+pub(crate) fn bundled_streams_logo(name: &str, size: i32) -> Option<gdk::Texture> {
+    let mut base = name.trim();
+    for suffix in [" (1080p)", " (720p)", " (576p)", " (480p)", " (360p)", " HD"] {
+        if let Some(stripped) = base.strip_suffix(suffix) {
+            base = stripped;
+            break;
+        }
+    }
+    let name = find_icon(base)?;
+    load_icon(
+        name,
+        size,
+        ColorScheme::for_style_manager(&adw::StyleManager::default()),
+    )
+    .ok()
+}
+
 /// Use exact identifiers or explicit aliases, not fuzzy prefix matching.
 fn find_icon(channel_id: &str) -> Option<&'static str> {
     if let Some(icon) = ICON_NAMES.get(channel_id.trim()) {
@@ -102,6 +122,7 @@ fn find_icon(channel_id: &str) -> Option<&'static str> {
     match normalized.as_str() {
         "3sat" => Some("3sat.svg"),
         "ard" => Some("ard.svg"),
+        "ard-alpha" | "ard alpha" => Some("ard-alpha.svg"),
         "arte" | "arte.de" | "arte.en" | "arte.es" | "arte.fr" | "arte.it" | "arte.pl" => {
             Some("arte.svg")
         }
@@ -250,6 +271,7 @@ mod tests {
         assert_eq!(find_icon("ARTE.DE"), Some("arte.svg"));
         assert_eq!(find_icon(" arte.de "), Some("arte.svg"));
         assert_eq!(find_icon("3sat"), Some("3sat.svg"));
+        assert_eq!(find_icon("ard-alpha"), Some("ard-alpha.svg"));
         assert_eq!(find_icon("Radio Bremen"), Some("rb.svg"));
         assert_eq!(find_icon("radiobremen"), Some("rb.svg"));
         assert_eq!(find_icon("zdfneo"), Some("zdf-neo.svg"));
@@ -272,6 +294,7 @@ mod tests {
         for logo in [
             "3sat.svg",
             "ard.svg",
+            "ard-alpha.svg",
             "arte.svg",
             "rb.svg",
             "zdf-neo.svg",
