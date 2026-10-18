@@ -33,6 +33,22 @@ template $TvStreamsView: Adw.Bin {
           tooltip-text: _("Filter by group");
         }
 
+        Gtk.DropDown language_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by language");
+        }
+
+        Gtk.DropDown country_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by country");
+        }
+
+        Gtk.DropDown region_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by region");
+          visible: false;
+        }
+
         Gtk.DropDown sort_filter {
           tooltip-text: _("Sort channels");
         }
@@ -47,9 +63,16 @@ template $TvStreamsView: Adw.Bin {
           label: _("Channels");
         }
 
+        Gtk.Button clear_button {
+          label: _("Clear Filters");
+        }
+
+        Gtk.Button manage_button {
+          label: _("Manage Sources");
+        }
+
         Gtk.Button add_button {
-          label: _("Add Playlist (coming next)");
-          tooltip-text: _("Playlist import is available in the next development stage");
+          label: _("Add Playlist");
         }
       }
     }
@@ -82,7 +105,7 @@ template $TvStreamsView: Adw.Bin {
         child: Adw.StatusPage empty_page {
           icon-name: "tv-symbolic";
           title: _("No My Channels Yet");
-          description: _("Add a playlist when import management is available");
+          description: _("Add a playlist or manage existing sources");
         };
       }
 
