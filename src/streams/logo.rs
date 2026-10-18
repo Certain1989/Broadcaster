@@ -22,7 +22,6 @@ const MAX_EDGE: u32 = 1024;
 const MAX_PIXELS: u64 = 1024 * 1024;
 const MAX_DISK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DISK_ENTRIES: usize = 128;
-const MAX_REDIRECTS: usize = 0;
 
 fn client() -> Option<&'static Client> {
     static CLIENT: OnceLock<Option<Client>> = OnceLock::new();
@@ -102,8 +101,18 @@ fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
         }
         if matches!(
             marker,
-            0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7
-                | 0xc9 | 0xca | 0xcb | 0xcd | 0xce | 0xcf
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
         ) {
             if length < 7 {
                 return None;
@@ -129,12 +138,8 @@ fn webp_size(data: &[u8]) -> Option<(u32, u32)> {
                 return None;
             }
             Some((
-                1 + u32::from(data[24])
-                    + (u32::from(data[25]) << 8)
-                    + (u32::from(data[26]) << 16),
-                1 + u32::from(data[27])
-                    + (u32::from(data[28]) << 8)
-                    + (u32::from(data[29]) << 16),
+                1 + u32::from(data[24]) + (u32::from(data[25]) << 8) + (u32::from(data[26]) << 16),
+                1 + u32::from(data[27]) + (u32::from(data[28]) << 8) + (u32::from(data[29]) << 16),
             ))
         }
         b"VP8 " => {
@@ -284,9 +289,6 @@ fn evict(dir: &Path) {
 async fn download(url: &str) -> Option<Vec<u8>> {
     let client = client()?;
     let response = client.get(url).send().await.ok()?;
-    if response.status().is_redirection() && MAX_REDIRECTS == 0 {
-        return None;
-    }
     if !response.status().is_success()
         || response
             .content_length()
@@ -364,9 +366,8 @@ mod tests {
     #[test]
     fn bounded_jpeg_header_parser() {
         let jpeg = [
-            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0,
-            0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x20,
-            0x03, 0x01, 0x11, 0, 0x02, 0x11, 0, 0x03, 0x11, 0,
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x10,
+            0x00, 0x20, 0x03, 0x01, 0x11, 0, 0x02, 0x11, 0, 0x03, 0x11, 0,
         ];
         assert_eq!(jpeg_size(&jpeg), Some((32, 16)));
         assert!(valid_raster(&jpeg));
