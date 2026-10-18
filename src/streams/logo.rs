@@ -5,6 +5,7 @@
 //! playlist-supplied URL: its path, userinfo or query may contain credentials.
 //! This module runs on the Tokio worker and never blocks the GTK main loop.
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -24,8 +25,10 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 // downscale path exists. A missing logo is preferable to UI stalls.
 const MAX_EDGE: u32 = 512;
 const MAX_PIXELS: u64 = 512 * 512;
-const MAX_DISK_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_DISK_ENTRIES: usize = 128;
+// Hundreds of channels are normal for one IPTV source. Keep disk capacity
+// independently generous; small bounded decoded textures still protect GTK.
+const MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DISK_ENTRIES: usize = 2048;
 
 fn client() -> Option<&'static Client> {
     static CLIENT: OnceLock<Option<Client>> = OnceLock::new();
@@ -233,7 +236,9 @@ unsafe extern "C" {
     fn geteuid() -> u32;
 }
 
-fn path_for(dir: &Path, url: &str) -> PathBuf {
+/// Stable, URL-derived filename; neither a channel name nor a credentialed
+/// playlist URL is ever used verbatim as a filesystem component.
+pub(super) fn cache_name(url: &str) -> String {
     let key = digest(&SHA256, url.as_bytes());
     let mut name = String::with_capacity(68);
     for byte in key.as_ref() {
@@ -241,7 +246,11 @@ fn path_for(dir: &Path, url: &str) -> PathBuf {
         let _ = write!(&mut name, "{byte:02x}");
     }
     name.push_str(".img");
-    dir.join(name)
+    name
+}
+
+fn path_for(dir: &Path, url: &str) -> PathBuf {
+    dir.join(cache_name(url))
 }
 
 fn read_cached(file: &Path) -> Option<Vec<u8>> {
@@ -305,6 +314,45 @@ fn evict(dir: &Path) {
         if fs::remove_file(path).is_ok() {
             remaining -= 1;
             total = total.saturating_sub(size);
+        }
+    }
+}
+
+
+/// Best-effort private-cache garbage collection, only after an authoritative
+/// successful source mutation. Referenced names cover ALL present imported
+/// channels across sources, including sources the user temporarily disabled.
+/// A failed database query MUST NOT trigger deletion.
+pub(super) fn prune_unused(referenced: &HashSet<String>) {
+    if let Some(dir) = cache_dir() {
+        prune_unused_in(&dir, referenced);
+    }
+}
+
+fn prune_unused_in(dir: &Path, referenced: &HashSet<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let filename = entry.file_name();
+        let Some(name) = filename.to_str() else {
+            continue;
+        };
+        // Refuse to touch anything except our own 64-hex SHA-256 files.
+        let Some(hash) = name.strip_suffix(".img") else {
+            continue;
+        };
+        if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        if referenced.contains(name) {
+            continue;
+        }
+        let path = entry.path();
+        if fs::symlink_metadata(&path)
+            .is_ok_and(|meta| meta.file_type().is_file())
+        {
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -455,4 +503,36 @@ mod tests {
         assert!(valid_raster(&jpeg));
         assert!(!valid_raster(&jpeg[..8]));
     }
+    #[test]
+    fn disk_cache_keeps_more_than_a_country_playlist() {
+        let dir = std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        for i in 0..325 {
+            let name = cache_name(&format!("https://example.invalid/logo/{i}.png"));
+            fs::write(dir.join(name), [0u8; 16]).unwrap();
+        }
+        evict(&dir);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 325);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prunes_only_orphaned_private_cache_images() {
+        let dir = std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let shared = cache_name("https://example.invalid/shared.png");
+        let removed = cache_name("https://example.invalid/removed.png");
+        fs::write(dir.join(&shared), [1u8; 8]).unwrap();
+        fs::write(dir.join(&removed), [2u8; 8]).unwrap();
+        fs::write(dir.join("unrelated.img"), b"untouched").unwrap();
+        fs::write(dir.join("pending.tmp"), b"untouched").unwrap();
+
+        prune_unused_in(&dir, &HashSet::from([shared.clone()]));
+        assert!(dir.join(shared).exists());
+        assert!(!dir.join(removed).exists());
+        assert!(dir.join("unrelated.img").exists());
+        assert!(dir.join("pending.tmp").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
 }
