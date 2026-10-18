@@ -128,10 +128,12 @@ impl Storage {
     }
 
     pub fn preview_refresh(&self, snapshot: &ValidatedSnapshot) -> StorageResult<RefreshPreview> {
-        let conn = self.connect()?;
-        let source = load_source(&conn,snapshot.source_id())?;
-        let old = load_old(&conn,snapshot.source_id())?;
+        let mut conn = self.connect()?;
+        let tx = conn.transaction().map_err(map_sql)?;
+        let source = load_source(&tx,snapshot.source_id())?;
+        let old = load_old(&tx,snapshot.source_id())?;
         let plan = match_entries(&old,snapshot.entries());
+        tx.commit().map_err(map_sql)?;
         Ok(build_preview(snapshot,&source,&plan))
     }
 
