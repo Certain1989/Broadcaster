@@ -485,7 +485,8 @@ pub(crate) fn assert_synthetic_editor_form() {
     fields.group_mode.set_selected(1);
     fields.group.set_text("News");
     fields.language_mode.set_selected(1);
-    fields.languages.set_text("de, en");
+    fields.languages.choose("de");
+    fields.languages.choose("en");
     fields.country_mode.set_selected(2);
     fields.region_mode.set_selected(2);
     let edited = fields.edits().expect("valid explicit overrides");
@@ -497,11 +498,12 @@ pub(crate) fn assert_synthetic_editor_form() {
     assert_eq!(edited.region.mode, FacetMode::Unknown);
 
     fields.country_mode.set_selected(1);
-    fields.countries.set_text("ZZ");
-    assert!(
-        fields.edits().is_err(),
-        "invalid ISO country cannot be committed"
-    );
+    assert!(fields.edits().is_err(), "empty My values countries must be rejected");
+    fields.countries.choose("DE");
+    fields.countries.choose("AT");
+    let selected = fields.edits().expect("two country overrides");
+    assert_eq!(selected.countries.values.len(), 2);
+    assert!(selected.countries.values.contains("AT"));
 }
 
 #[cfg(test)]
@@ -564,15 +566,14 @@ mod editor_tests {
     #[test]
     fn codes_and_regions_normalize_before_saving() {
         assert_eq!(
-            tokens("de-CH, en, de-CH", FacetDimension::Language).unwrap(),
-            ["de-CH".to_owned(), "en".to_owned()].into_iter().collect()
+            crate::streams::model::normalize_facet("de-CH", FacetDimension::Language).unwrap(),
+            "de-CH"
         );
         assert_eq!(
-            tokens("de, at", FacetDimension::Country).unwrap(),
-            ["DE".to_owned(), "AT".to_owned()].into_iter().collect()
+            crate::streams::model::normalize_facet("at", FacetDimension::Country).unwrap(),
+            "AT"
         );
-        assert!(tokens("unknown", FacetDimension::Country).is_err());
-        assert!(tokens("en, zz-?", FacetDimension::Language).is_err());
+        assert!(crate::streams::model::normalize_facet("de-DE", FacetDimension::Country).is_err());
         assert_eq!(
             filled_region("  DE-BY ", " Bavaria ")
                 .unwrap()
