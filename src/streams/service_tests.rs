@@ -169,7 +169,7 @@ async fn cancellation_and_newer_refresh_invalidate_old_confirmations() {
         RefreshOutcome::ConfirmationRequired(ticket) => ticket,
         _ => panic!("confirmation required"),
     };
-    assert!(service.cancel(&source.id));
+    assert!(service.cancel(&source.id).await);
     assert!(matches!(
         service.confirm_refresh(ticket, true).await,
         Err(ServiceError::Cancelled)
