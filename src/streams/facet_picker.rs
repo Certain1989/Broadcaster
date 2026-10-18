@@ -55,7 +55,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("CA", "Canada", "Kanada"),
     ("CC", "Cocos (Keeling) Islands", "Kokosinseln"),
     ("CD", "Congo - Kinshasa", "Kongo-Kinshasa"),
-    ("CF", "Central African Republic", "Zentralafrikanische Republik"),
+    (
+        "CF",
+        "Central African Republic",
+        "Zentralafrikanische Republik",
+    ),
     ("CG", "Congo - Brazzaville", "Kongo-Brazzaville"),
     ("CH", "Switzerland", "Schweiz"),
     ("CI", "Côte d’Ivoire", "Côte d’Ivoire"),
@@ -86,7 +90,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("ET", "Ethiopia", "Äthiopien"),
     ("FI", "Finland", "Finnland"),
     ("FJ", "Fiji", "Fidschi"),
-    ("FK", "Falkland Islands (Islas Malvinas)", "Falklandinseln (Malwinen)"),
+    (
+        "FK",
+        "Falkland Islands (Islas Malvinas)",
+        "Falklandinseln (Malwinen)",
+    ),
     ("FM", "Micronesia", "Mikronesien"),
     ("FO", "Faroe Islands", "Färöer"),
     ("FR", "France", "Frankreich"),
@@ -104,7 +112,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("GP", "Guadeloupe", "Guadeloupe"),
     ("GQ", "Equatorial Guinea", "Äquatorialguinea"),
     ("GR", "Greece", "Griechenland"),
-    ("GS", "South Georgia & South Sandwich Islands", "Südgeorgien und die Südlichen Sandwichinseln"),
+    (
+        "GS",
+        "South Georgia & South Sandwich Islands",
+        "Südgeorgien und die Südlichen Sandwichinseln",
+    ),
     ("GT", "Guatemala", "Guatemala"),
     ("GU", "Guam", "Guam"),
     ("GW", "Guinea-Bissau", "Guinea-Bissau"),
@@ -120,7 +132,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("IL", "Israel", "Israel"),
     ("IM", "Isle of Man", "Isle of Man"),
     ("IN", "India", "Indien"),
-    ("IO", "British Indian Ocean Territory", "Britisches Territorium im Indischen Ozean"),
+    (
+        "IO",
+        "British Indian Ocean Territory",
+        "Britisches Territorium im Indischen Ozean",
+    ),
     ("IQ", "Iraq", "Irak"),
     ("IR", "Iran", "Iran"),
     ("IS", "Iceland", "Island"),
@@ -230,7 +246,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("SZ", "Eswatini", "Eswatini"),
     ("TC", "Turks & Caicos Islands", "Turks- und Caicosinseln"),
     ("TD", "Chad", "Tschad"),
-    ("TF", "French Southern Territories", "Französische Süd- und Antarktisgebiete"),
+    (
+        "TF",
+        "French Southern Territories",
+        "Französische Süd- und Antarktisgebiete",
+    ),
     ("TG", "Togo", "Togo"),
     ("TH", "Thailand", "Thailand"),
     ("TJ", "Tajikistan", "Tadschikistan"),
@@ -251,7 +271,11 @@ const COUNTRY_NAMES: &[(&str, &str, &str)] = &[
     ("UY", "Uruguay", "Uruguay"),
     ("UZ", "Uzbekistan", "Usbekistan"),
     ("VA", "Vatican City", "Vatikanstadt"),
-    ("VC", "St. Vincent & Grenadines", "St. Vincent und die Grenadinen"),
+    (
+        "VC",
+        "St. Vincent & Grenadines",
+        "St. Vincent und die Grenadinen",
+    ),
     ("VE", "Venezuela", "Venezuela"),
     ("VG", "British Virgin Islands", "Britische Jungferninseln"),
     ("VI", "U.S. Virgin Islands", "Amerikanische Jungferninseln"),
@@ -486,10 +510,13 @@ fn validate_manual_language(raw: &str) -> Result<String, String> {
         !raw.eq_ignore_ascii_case(code)
             && (raw.eq_ignore_ascii_case(en) || raw.eq_ignore_ascii_case(de))
     }) {
-        return Err(gettext("Use the named language chooser; manual entry needs a tag such as de-DE."));
+        return Err(gettext(
+            "Use the named language chooser; manual entry needs a tag such as de-DE.",
+        ));
     }
-    normalize_facet(raw, FacetDimension::Language)
-        .map_err(|_| gettext("Invalid language tag. Use de, en or a tag such as de-DE (not a country)."))
+    normalize_facet(raw, FacetDimension::Language).map_err(|_| {
+        gettext("Invalid language tag. Use de, en or a tag such as de-DE (not a country).")
+    })
 }
 
 fn render_selected(
@@ -572,7 +599,10 @@ impl FacetPicker {
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("boxed-list");
         // Include already persisted uncommon tags; they must remain removable.
-        let mut candidates: Vec<String> = names(kind).iter().map(|(c, _, _)| (*c).to_owned()).collect();
+        let mut candidates: Vec<String> = names(kind)
+            .iter()
+            .map(|(c, _, _)| (*c).to_owned())
+            .collect();
         for code in initial {
             if !candidates.contains(code) {
                 candidates.push(code.clone());
@@ -612,8 +642,13 @@ impl FacetPicker {
         panel.append(&scroller);
         let search_weak = search.downgrade();
         list.set_filter_func(move |row| {
-            let needle = search_weak.upgrade().map(|search| search.text().to_lowercase()).unwrap_or_default();
-            if needle.is_empty() { return true; }
+            let needle = search_weak
+                .upgrade()
+                .map(|search| search.text().to_lowercase())
+                .unwrap_or_default();
+            if needle.is_empty() {
+                return true;
+            }
             row.child()
                 .and_downcast::<gtk::CheckButton>()
                 .and_then(|check| check.label())
@@ -621,10 +656,13 @@ impl FacetPicker {
         });
         let list_weak = list.downgrade();
         search.connect_search_changed(move |_| {
-            if let Some(list) = list_weak.upgrade() { list.invalidate_filter(); }
+            if let Some(list) = list_weak.upgrade() {
+                list.invalidate_filter();
+            }
         });
         if kind == FacetDimension::Language {
-            let advanced = gtk::Expander::new(Some(&gettext("Advanced: add a language tag manually")));
+            let advanced =
+                gtk::Expander::new(Some(&gettext("Advanced: add a language tag manually")));
             let manual_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             let entry = gtk::Entry::new();
             entry.set_placeholder_text(Some(&gettext("Example: de-DE (language tag)")));
@@ -645,14 +683,19 @@ impl FacetPicker {
             let checks = checks.clone();
             let selected_box = selected_box.clone();
             let entry_for_click = entry.clone();
-            add.connect_clicked(move |_| {
-                match validate_manual_language(&entry_for_click.text()) {
-                    Ok(code) if selected.borrow().len() >= 64 && !selected.borrow().contains(&code) =>
-                        manual_error.set_text(&gettext("Choose at most 64 languages.")),
+            add.connect_clicked(
+                move |_| match validate_manual_language(&entry_for_click.text()) {
+                    Ok(code)
+                        if selected.borrow().len() >= 64 && !selected.borrow().contains(&code) =>
+                    {
+                        manual_error.set_text(&gettext("Choose at most 64 languages."))
+                    }
                     Ok(code) => {
                         selected.borrow_mut().insert(code.clone());
                         for (known, button) in checks.borrow().iter() {
-                            if known == &code { button.set_active(true); }
+                            if known == &code {
+                                button.set_active(true);
+                            }
                         }
                         render_selected(&selected_box, kind, &selected, &checks);
                         manual_error.set_text("");
@@ -662,8 +705,8 @@ impl FacetPicker {
                         manual_error.set_text(&error);
                         entry_for_click.grab_focus();
                     }
-                }
-            });
+                },
+            );
         }
         chooser.set_child(Some(&panel));
         root.append(&chooser);
@@ -673,13 +716,22 @@ impl FacetPicker {
         error.add_css_class("error");
         root.append(&error);
         render_selected(&selected_box, kind, &selected, &checks);
-        Self { root, kind, selected, checks, selected_box, error, chooser }
+        Self {
+            root,
+            kind,
+            selected,
+            checks,
+            selected_box,
+            error,
+            chooser,
+        }
     }
 
     pub(crate) fn values(&self, required: bool) -> Result<BTreeSet<String>, String> {
         let values = self.selected.borrow().clone();
         if required && values.is_empty() {
-            self.error.set_text(&gettext("Select at least one value from the named list."));
+            self.error
+                .set_text(&gettext("Select at least one value from the named list."));
             self.chooser.set_expanded(true);
             self.chooser.grab_focus();
             return Err(gettext("Select at least one value."));
@@ -692,7 +744,9 @@ impl FacetPicker {
     pub(crate) fn choose(&self, code: &str) {
         self.selected.borrow_mut().insert(code.to_owned());
         for (known, button) in self.checks.borrow().iter() {
-            if known == code { button.set_active(true); }
+            if known == code {
+                button.set_active(true);
+            }
         }
         render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
     }
@@ -701,7 +755,9 @@ impl FacetPicker {
     pub(crate) fn deselect(&self, code: &str) {
         self.selected.borrow_mut().remove(code);
         for (known, button) in self.checks.borrow().iter() {
-            if known == code { button.set_active(false); }
+            if known == code {
+                button.set_active(false);
+            }
         }
     }
 
@@ -725,9 +781,21 @@ mod tests {
     #[test]
     fn country_coverage_names_and_language_tags() {
         assert_eq!(COUNTRY_NAMES.len(), 249);
-        assert_eq!(human_label(FacetDimension::Country, "DE"), "Germany (DE)".to_string().replace("Germany", if german_ui() { "Deutschland" } else { "Germany" }));
+        assert_eq!(
+            human_label(FacetDimension::Country, "DE"),
+            "Germany (DE)".to_string().replace(
+                "Germany",
+                if german_ui() {
+                    "Deutschland"
+                } else {
+                    "Germany"
+                }
+            )
+        );
         assert!(COUNTRY_NAMES.iter().any(|(code, _, _)| *code == "AT"));
-        assert!(LANGUAGE_NAMES.iter().any(|(code, en, _)| *code == "de" && *en == "German"));
+        assert!(LANGUAGE_NAMES
+            .iter()
+            .any(|(code, en, _)| *code == "de" && *en == "German"));
         assert_eq!(validate_manual_language("de-DE").unwrap(), "de-DE");
         assert!(validate_manual_language("German").is_err());
         assert!(normalize_facet("de-DE", FacetDimension::Country).is_err());
