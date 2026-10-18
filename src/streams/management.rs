@@ -1102,7 +1102,6 @@ mod source_form_tests {
     }
 }
 
-
 #[cfg(test)]
 pub(crate) fn assert_synthetic_source_defaults_form() {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -1114,7 +1113,13 @@ pub(crate) fn assert_synthetic_source_defaults_form() {
     let validated = defaults.collect().expect("source defaults from GTK fields");
     assert_eq!(validated.languages.len(), 2);
     assert_eq!(validated.countries.len(), 2);
-    assert_eq!(validated.region.and_then(|region| region.code).as_deref(), Some("DE-BY"));
+    assert_eq!(
+        validated.region.and_then(|region| region.code).as_deref(),
+        Some("DE-BY")
+    );
     defaults.countries.set_text("ZZ");
-    assert!(defaults.collect().is_err(), "unknown ISO country should be rejected");
+    assert!(
+        defaults.collect().is_err(),
+        "unknown ISO country should be rejected"
+    );
 }
