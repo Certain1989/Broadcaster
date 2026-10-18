@@ -3,7 +3,12 @@
 
 //! Source controls. Never display source locators in status messages or logs.
 //! All I/O and SQLite writes are performed by StreamsService outside GTK.
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    rc::Rc,
+    time::Duration,
+};
 
 use adw::{gio, glib, gtk, prelude::*};
 use gettextrs::gettext;
@@ -12,8 +17,8 @@ use crate::{
     streams::{
         model::{normalize_facet, FacetDimension, OriginKind, Region, Source, SourceDefaults},
         service::{
-            choose_local_file, RefreshOutcome, RefreshTicket, ServiceError, SourceSelection,
-            StreamsService,
+            choose_local_file, RefreshOutcome, RefreshStage, RefreshTicket, ServiceError, ServiceEvent,
+            SourceSelection, StreamsService,
         },
         storage::ConfirmedSourceDeletion,
         view::TvStreamsView,
@@ -414,7 +419,76 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         }
     ));
     load_manager(view, &service, &list, &status);
+    attach_progress(&dialog, &status, service);
     dialog.present(Some(&window));
+}
+
+fn stage_name(stage: RefreshStage) -> String {
+    match stage {
+        RefreshStage::Idle => gettext("Ready"),
+        RefreshStage::Loading => gettext("Loading playlist"),
+        RefreshStage::Parsing => gettext("Reading channels"),
+        RefreshStage::Previewing => gettext("Checking channel changes"),
+        RefreshStage::AwaitingConfirmation => gettext("Waiting for confirmation"),
+        RefreshStage::Committing => gettext("Saving channels"),
+        RefreshStage::Succeeded => gettext("Refresh completed"),
+        RefreshStage::Failed => gettext("Refresh failed"),
+        RefreshStage::Cancelled => gettext("Refresh cancelled"),
+    }
+}
+
+/// The receiver checks current service state rather than relying on the
+/// ordering of delivered events. A timer bounds its lifetime after close.
+fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsService) {
+    let stopped = Rc::new(Cell::new(false));
+    dialog.connect_closed({
+        let stopped = stopped.clone();
+        move |_| stopped.set(true)
+    });
+    let mut events = service.subscribe();
+    spawn(glib::clone!(
+        #[weak]
+        status,
+        async move {
+            loop {
+                if stopped.get() {
+                    break;
+                }
+                let received = futures_util::future::select(
+                    Box::pin(events.recv()),
+                    Box::pin(glib::timeout_future(Duration::from_secs(1))),
+                )
+                .await;
+                let futures_util::future::Either::Left((event, _)) = received else {
+                    continue;
+                };
+                let source_id = match event {
+                    Ok(ServiceEvent::State { source_id, .. })
+                    | Ok(ServiceEvent::Preview { source_id, .. })
+                    | Ok(ServiceEvent::Finished { source_id, .. }) => source_id,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Read current authoritative stage after missed events.
+                        if let Ok(sources) = service.list_sources().await {
+                            for source in sources {
+                                let stage = service.stage(&source.id).await;
+                                if !matches!(stage, RefreshStage::Idle) {
+                                    status.set_text(&format!("{}: {}", source.name, stage_name(stage)));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                let stage = service.stage(&source_id).await;
+                if let Ok(source) = service.source(&source_id).await {
+                    status.set_text(&format!("{}: {}", source.name, stage_name(stage)));
+                } else {
+                    status.set_text(&stage_name(stage));
+                }
+            }
+        }
+    ));
 }
 
 fn load_manager(
