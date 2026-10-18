@@ -1193,6 +1193,12 @@ impl TvStreamsView {
         focused == list || list.is_ancestor(focused)
     }
 
+    #[cfg(test)]
+    pub(crate) fn show_and_focus_test_results(&self) -> bool {
+        self.imp().results_stack.set_visible_child_name("results");
+        self.imp().results_list.grab_focus()
+    }
+
     pub fn focus_search(&self) {
         if !self.imp().search_entry.grab_focus() {
             self.imp().add_button.grab_focus();
