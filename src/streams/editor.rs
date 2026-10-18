@@ -202,11 +202,15 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
         scroll.set_child(Some(&body));
         dialog.set_child(Some(&scroll));
         cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+        let reset_service = service.clone();
+        let reset_id = id.clone();
+        let save_service = service.clone();
+        let save_id = id.clone();
         reset.connect_clicked(glib::clone!(#[weak] view, #[weak] dialog, #[weak] errors,
             #[weak] reset, move |_| {
             reset.set_sensitive(false);
-            let service = service.clone();
-            let id = id.clone();
+            let service = reset_service.clone();
+            let id = reset_id.clone();
             spawn(glib::clone!(#[weak] view, #[weak] dialog, #[weak] errors,
                 #[weak] reset, async move {
                 match service.clear_overrides(&id).await {
@@ -222,8 +226,8 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
                 Err(error) => { errors.set_text(error); return; }
             };
             save.set_sensitive(false);
-            let service = service.clone();
-            let id = id.clone();
+            let service = save_service.clone();
+            let id = save_id.clone();
             spawn(glib::clone!(#[weak] view, #[weak] dialog, #[weak] errors,
                 #[weak] save, async move {
                 match service.set_overrides(&id, value).await {
