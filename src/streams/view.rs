@@ -1115,9 +1115,7 @@ impl TvStreamsView {
                     .values()
                     .filter_map(|binding| binding.connection.as_ref().map(|(slot, _)| slot.clone()))
                     .filter(|slot| {
-                        slot.channel()
-                            .and_then(|item| item.logo_url)
-                            .as_deref()
+                        slot.channel().and_then(|item| item.logo_url).as_deref()
                             == Some(url.as_str())
                     })
                     .collect();
