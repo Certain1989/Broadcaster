@@ -41,6 +41,15 @@ struct BoundRow {
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
 }
 
+struct InstalledFacets {
+    sources: Vec<Source>,
+    source_options: FilterOptions,
+    group_options: FilterOptions,
+    language_options: FilterOptions,
+    country_options: FilterOptions,
+    region_options: FilterOptions,
+}
+
 mod imp {
     use super::*;
 
@@ -464,12 +473,14 @@ impl TvStreamsView {
                     query,
                     generation,
                     page,
-                    sources,
-                    source_options,
-                    group_options,
-                    language_options,
-                    country_options,
-                    region_options,
+                    InstalledFacets {
+                        sources,
+                        source_options,
+                        group_options,
+                        language_options,
+                        country_options,
+                        region_options,
+                    },
                 );
             }
         ));
@@ -480,26 +491,14 @@ impl TvStreamsView {
         query: ChannelQuery,
         generation: u64,
         page: ChannelPage,
-        sources: Vec<Source>,
-        source_options: FilterOptions,
-        group_options: FilterOptions,
-        language_options: FilterOptions,
-        country_options: FilterOptions,
-        region_options: FilterOptions,
+        facets: InstalledFacets,
     ) {
         let imp = self.imp();
         let previously_selected = imp.selected_id.borrow().clone();
         let previous_index = imp.last_index.get();
         imp.suppress_controls.set(true);
-        self.install_facets(
-            &query,
-            &sources,
-            source_options,
-            group_options,
-            language_options,
-            country_options,
-            region_options,
-        );
+        let has_sources = !facets.sources.is_empty();
+        self.install_facets(&query, facets);
         let total = page.total.min(u32::MAX as u64) as u32;
         let rows = imp.rows.get().expect("initialized rows");
         rows.reset(total);
@@ -516,7 +515,7 @@ impl TvStreamsView {
                 || query.region != FacetSelection::Any;
             imp.empty_page.set_title(&if active_filters {
                 gettext("No Matching Channels")
-            } else if sources.is_empty() {
+            } else if !has_sources {
                 gettext("No My Channels Yet")
             } else {
                 gettext("No Enabled Channels")
@@ -549,13 +548,16 @@ impl TvStreamsView {
     fn install_facets(
         &self,
         query: &ChannelQuery,
-        sources: &[Source],
-        source_options: FilterOptions,
-        group_options: FilterOptions,
-        language_options: FilterOptions,
-        country_options: FilterOptions,
-        region_options: FilterOptions,
+        facets: InstalledFacets,
     ) {
+        let InstalledFacets {
+            sources,
+            source_options,
+            group_options,
+            language_options,
+            country_options,
+            region_options,
+        } = facets;
         let imp = self.imp();
         let names: HashMap<&str, &str> = sources
             .iter()
