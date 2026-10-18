@@ -300,6 +300,7 @@ impl TvApplication {
         // location and new tabs in GNOME
         self.set_accels_for_action("window.show-live", &["<alt>1"]);
         self.set_accels_for_action("window.show-mediathek", &["<alt>2"]);
+        self.set_accels_for_action("window.show-streams", &["<alt>3"]);
     }
 
     fn show_about(&self) {
