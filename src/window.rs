@@ -427,8 +427,7 @@ impl TvWindow {
         if !matches!(
             key,
             gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left
-        )
-            || Self::find_mapped_popover(self.upcast_ref()).is_some()
+        ) || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
         }
@@ -612,9 +611,10 @@ impl TvWindow {
                     glib::Propagation::Proceed
                 } else if self.imp().streams_view.collapse_expanded() {
                     glib::Propagation::Stop
-                } else if self.focused_widget().is_some_and(|focused| {
-                    self.imp().streams_view.contains_results_focus(&focused)
-                }) && self.focus_page_switcher()
+                } else if self
+                    .focused_widget()
+                    .is_some_and(|focused| self.imp().streams_view.contains_results_focus(&focused))
+                    && self.focus_page_switcher()
                 {
                     glib::Propagation::Stop
                 } else {
@@ -772,21 +772,18 @@ mod playback_navigation_tests {
             }
         }
         assert!(streams.show_and_focus_test_results());
-        assert!(streams.contains_results_focus(
-            &window.focused_widget().expect("list should hold focus")
-        ));
+        assert!(streams
+            .contains_results_focus(&window.focused_widget().expect("list should hold focus")));
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
-        assert!(!streams.contains_results_focus(
-            &window.focused_widget().expect("tabs should hold focus")
-        ));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
         assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
             glib::Propagation::Stop
         );
-        assert!(!streams.contains_results_focus(
-            &window.focused_widget().expect("Escape should focus tabs")
-        ));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("Escape should focus tabs")));
         streams.focus_search();
         assert!(!window.focus_boundary_key(gtk::gdk::Key::Left));
         assert!(streams.show_and_focus_test_results());
