@@ -197,7 +197,14 @@ pub(crate) fn parse_playlist(
         let metadata = std::mem::take(&mut pending);
         has_extinf = false;
         let hint = group_hint.take();
-        match build_channel(line, candidates as u32, metadata, hint, base.as_ref(), &mut diagnostics) {
+        match build_channel(
+            line,
+            candidates as u32,
+            metadata,
+            hint,
+            base.as_ref(),
+            &mut diagnostics,
+        ) {
             Some(channel) => channels.push(channel),
             None => diagnostics.skip(WarningKind::InvalidStreamUrl),
         }
@@ -481,8 +488,18 @@ fn assign_attribute(
         "tvg-region" | "tvg-region-label" | "region-label" => {
             metadata.region_label = bounded_text(value, 128, diagnostics);
         }
-        "tvg-language" => parse_facets(value, FacetDimension::Language, &mut metadata.languages, diagnostics),
-        "tvg-country" => parse_facets(value, FacetDimension::Country, &mut metadata.countries, diagnostics),
+        "tvg-language" => parse_facets(
+            value,
+            FacetDimension::Language,
+            &mut metadata.languages,
+            diagnostics,
+        ),
+        "tvg-country" => parse_facets(
+            value,
+            FacetDimension::Country,
+            &mut metadata.countries,
+            diagnostics,
+        ),
         "user-agent" | "http-user-agent" => {
             metadata.user_agent = bounded_text(value, 1024, diagnostics);
         }

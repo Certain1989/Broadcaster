@@ -90,11 +90,19 @@ https://example.invalid/watch
     let actual = parsed(fixture);
     let entry = &actual.channels[0];
     assert_eq!(
-        entry.languages.iter().map(String::as_str).collect::<Vec<_>>(),
+        entry
+            .languages
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         vec!["de", "en", "pt-BR", "sr-Latn-RS"]
     );
     assert_eq!(
-        entry.countries.iter().map(String::as_str).collect::<Vec<_>>(),
+        entry
+            .countries
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         vec!["DE", "GB", "US"]
     );
     let region = entry.region.as_ref().expect("region retained");
@@ -127,8 +135,16 @@ fn malformed_metadata_skips_bad_entries_and_recovers() {
 
 #[test]
 fn no_playable_channels_is_a_hard_error() {
-    for fixture in ["", "#EXTM3U", "#EXTM3U\nfile:///etc/passwd", "#EXTM3U\n#EXTINF:-1,none"] {
-        assert_eq!(parse_playlist(fixture.as_bytes(), None).err(), Some(ParseError::NoPlayableChannels));
+    for fixture in [
+        "",
+        "#EXTM3U",
+        "#EXTM3U\nfile:///etc/passwd",
+        "#EXTM3U\n#EXTINF:-1,none",
+    ] {
+        assert_eq!(
+            parse_playlist(fixture.as_bytes(), None).err(),
+            Some(ParseError::NoPlayableChannels)
+        );
     }
 }
 
@@ -155,7 +171,11 @@ fn hls_master_media_variant_and_segment_playlists_are_not_catalogues() {
     ];
     for fixture in cases {
         assert_eq!(
-            parse_playlist(fixture.as_bytes(), Some("https://example.invalid/hls/index.m3u8")).err(),
+            parse_playlist(
+                fixture.as_bytes(),
+                Some("https://example.invalid/hls/index.m3u8")
+            )
+            .err(),
             Some(ParseError::HlsManifest)
         );
     }
@@ -172,7 +192,8 @@ fn remote_relative_paths_and_logos_use_final_http_origin() {
     let actual = parse_playlist(
         fixture.as_bytes(),
         Some("https://example.invalid/group/lists/list.m3u?auth=source-token"),
-    ).expect("relative paths");
+    )
+    .expect("relative paths");
     assert_eq!(
         actual.channels[0].stream_url,
         "https://example.invalid/group/stream/index.m3u8?auth=stream-token"
@@ -207,7 +228,8 @@ fn local_relative_rejected_and_unsafe_schemes_are_skipped() {
     let remote = parse_playlist(
         b"data:text/plain,hi\nhttps://example.invalid/okay\n",
         Some("https://example.invalid/list"),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(remote.channels.len(), 1);
 }
 
@@ -225,7 +247,13 @@ fn absolute_url_query_tokens_preserved_verbatim_and_never_debugged() {
 
 #[test]
 fn invalid_base_is_rejected_without_disclosing_locator() {
-    for origin in ["file:///tmp/list.m3u", "data:text/plain,a", "http:///no", "https://example.invalid/unsafe\\host", "https://example.invalid/a b"] {
+    for origin in [
+        "file:///tmp/list.m3u",
+        "data:text/plain,a",
+        "http:///no",
+        "https://example.invalid/unsafe\\host",
+        "https://example.invalid/a b",
+    ] {
         // Some HTTP triple-slash forms are normalized by URL parsers; reject
         // every explicitly unsupported or syntactically unsafe origin here.
         if origin == "http:///no" {
@@ -254,7 +282,10 @@ fn optional_bad_logo_and_referrer_are_dropped_without_losing_channel() {
 fn selected_headers_are_data_not_arbitrary_player_options() {
     let fixture = "#EXTM3U\n#EXTINF:-1 user-agent=\"Browser Example\" ,Channel\n#EXTVLCOPT:http-referrer=https://example.invalid/ref\n#EXTVLCOPT:network-caching=999999999\n#KODIPROP:inputstream.adaptive.license_key=secret\nhttps://example.invalid/a\n";
     let actual = parsed(fixture);
-    assert_eq!(actual.channels[0].user_agent.as_deref(), Some("Browser Example"));
+    assert_eq!(
+        actual.channels[0].user_agent.as_deref(),
+        Some("Browser Example")
+    );
     assert_eq!(
         actual.channels[0].referer.as_deref(),
         Some("https://example.invalid/ref")
@@ -264,8 +295,18 @@ fn selected_headers_are_data_not_arbitrary_player_options() {
 
 #[test]
 fn source_label_is_bounded_and_optional() {
-    assert_eq!(parsed(&format!("#PLAYLIST:Example TV\n{STREAM}\n")).source_label.as_deref(), Some("Example TV"));
-    assert_eq!(parsed(&format!("#EXTM3U name=\"Example TV\"\n{STREAM}\n")).source_label.as_deref(), Some("Example TV"));
+    assert_eq!(
+        parsed(&format!("#PLAYLIST:Example TV\n{STREAM}\n"))
+            .source_label
+            .as_deref(),
+        Some("Example TV")
+    );
+    assert_eq!(
+        parsed(&format!("#EXTM3U name=\"Example TV\"\n{STREAM}\n"))
+            .source_label
+            .as_deref(),
+        Some("Example TV")
+    );
     let input = format!("#PLAYLIST:{}\n{STREAM}\n", "x".repeat(129));
     let actual = parsed(&input);
     assert!(actual.source_label.is_none());
@@ -316,7 +357,10 @@ fn body_limit_exact_and_over_limit() {
     fixture[..stream.len()].copy_from_slice(stream);
     assert_eq!(parse_playlist(&fixture, None).unwrap().channels.len(), 1);
     fixture.push(b'\n');
-    assert_eq!(parse_playlist(&fixture, None).err(), Some(ParseError::BodyTooLarge));
+    assert_eq!(
+        parse_playlist(&fixture, None).err(),
+        Some(ParseError::BodyTooLarge)
+    );
 }
 
 #[test]
@@ -335,7 +379,10 @@ fn candidate_limit_exact_and_over_limit() {
 
 #[test]
 fn warnings_are_aggregated_and_never_contain_untrusted_content() {
-    let fixture = format!("{}\n{STREAM}\n", "file:///canary-private-token\n".repeat(500));
+    let fixture = format!(
+        "{}\n{STREAM}\n",
+        "file:///canary-private-token\n".repeat(500)
+    );
     let actual = parsed(&fixture);
     assert_eq!(actual.skipped, 500);
     assert_eq!(actual.warnings.len(), 1);
