@@ -115,7 +115,8 @@ async fn fetch_redirects(client: &Client, url: &mut Url) -> Result<Download, Fet
             let header = response.headers().get(LOCATION).ok_or(FetchError::Redirect)?;
             let location = header.to_str().map_err(|_| FetchError::Redirect)?;
             let next = url.join(location).map_err(|_| FetchError::Redirect)?;
-            if !valid_url(&next) || next.as_str().len() > 8192\n                || (url.scheme() == "https" && next.scheme() != "https") {
+            if !valid_url(&next) || next.as_str().len() > 8192
+                || (url.scheme() == "https" && next.scheme() != "https") {
                 return Err(FetchError::Redirect);
             }
             *url = next;
