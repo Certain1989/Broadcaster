@@ -1224,7 +1224,7 @@ impl TvStreamsView {
             imp.results_list.upcast_ref(),
         ];
         for (index, widget) in controls.iter().enumerate() {
-            if *widget != focused && !focused.is_ancestor(widget) {
+            if *widget != focused && !focused.is_ancestor(*widget) {
                 continue;
             }
             if index == controls.len() - 1 {
