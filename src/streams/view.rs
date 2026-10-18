@@ -19,8 +19,8 @@ use crate::{
 
 use super::{
     model::{
-        ChannelId, ChannelPage, ChannelQuery, FacetSelection, FacetValue,
-        FilterDimension, FilterOptions, SortOrder, Source,
+        ChannelId, ChannelPage, ChannelQuery, FacetSelection, FacetValue, FilterDimension,
+        FilterOptions, SortOrder, Source,
     },
     rows::{StreamRows, StreamSlot, PAGE_SIZE},
     service::StreamsService,
@@ -836,20 +836,29 @@ impl TvStreamsView {
     /// channel and a fake player. No network/DB/mpv process is used.
     #[cfg(test)]
     pub(crate) fn assert_fake_player_navigation(&self) {
-        use std::{collections::BTreeSet, time::Instant};
         use super::model::ChannelEffective;
+        use std::{collections::BTreeSet, time::Instant};
         let rows = self.imp().rows.get().expect("rows");
         for count in [100, 1_000, 10_000] {
             let start = Instant::now();
             rows.reset(count);
             assert_eq!(rows.n_items(), count);
-            assert!(rows.created_slots() <= 1, "virtualized model eagerly created slots");
+            assert!(
+                rows.created_slots() <= 1,
+                "virtualized model eagerly created slots"
+            );
             let last = rows.item(count - 1).expect("far channel position");
             let slot = last.downcast::<StreamSlot>().expect("slot object");
             assert_eq!(slot.position(), count - 1);
-            assert!(rows.created_slots() <= 2, "far-position lookup allocated rows");
+            assert!(
+                rows.created_slots() <= 2,
+                "far-position lookup allocated rows"
+            );
             assert_eq!(rows.cached_pages(), 0);
-            eprintln!("S4 synthetic model reset and far item ({count}): {:?}", start.elapsed());
+            eprintln!(
+                "S4 synthetic model reset and far item ({count}): {:?}",
+                start.elapsed()
+            );
         }
         let id = uuid::Uuid::new_v4().to_string();
         let channel = ChannelEffective {
@@ -870,18 +879,40 @@ impl TvStreamsView {
         rows.insert_page(0, vec![channel]);
         self.imp().fake_player_enabled.set(true);
         self.imp().fake_player_calls.set(0);
-        self.imp().results_list.emit_by_name::<()>("activate", &[&0u32]);
-        assert_eq!(self.imp().expanded_id.borrow().as_deref(), Some(id.as_str()));
-        assert_eq!(self.imp().fake_player_calls.get(), 0, "first Enter must never play");
-        self.imp().results_list.emit_by_name::<()>("activate", &[&0u32]);
-        assert_eq!(self.imp().fake_player_calls.get(), 1, "second Enter plays once");
+        self.imp()
+            .results_list
+            .emit_by_name::<()>("activate", &[&0u32]);
+        assert_eq!(
+            self.imp().expanded_id.borrow().as_deref(),
+            Some(id.as_str())
+        );
+        assert_eq!(
+            self.imp().fake_player_calls.get(),
+            0,
+            "first Enter must never play"
+        );
+        self.imp()
+            .results_list
+            .emit_by_name::<()>("activate", &[&0u32]);
+        assert_eq!(
+            self.imp().fake_player_calls.get(),
+            1,
+            "second Enter plays once"
+        );
         self.play_position(0); // The explicit Play button's single callback.
         assert_eq!(self.imp().fake_player_calls.get(), 2);
         assert!(self.collapse_expanded());
         assert!(!self.collapse_expanded());
         self.play_position(0);
-        assert_eq!(self.imp().fake_player_calls.get(), 2, "collapsed row cannot play");
-        assert_eq!(self.imp().selected_id.borrow().as_deref(), Some(id.as_str()));
+        assert_eq!(
+            self.imp().fake_player_calls.get(),
+            2,
+            "collapsed row cannot play"
+        );
+        assert_eq!(
+            self.imp().selected_id.borrow().as_deref(),
+            Some(id.as_str())
+        );
     }
 
     pub fn focus_search(&self) {
