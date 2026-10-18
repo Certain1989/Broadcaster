@@ -29,6 +29,7 @@ use super::{
 #[derive(Clone)]
 struct RowUi {
     title: gtk::Label,
+    icon: gtk::Image,
     summary: gtk::Label,
     details: gtk::Label,
     reveal: gtk::Revealer,
@@ -39,6 +40,41 @@ struct RowUi {
 struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
+}
+
+// Visible textures have a small pixel-budgeted LRU. Only the currently bound
+// GTK rows initiate downloads; no 10k-logo preload is possible.
+#[derive(Default)]
+struct LogoState {
+    textures: HashMap<String, gtk::gdk::Texture>,
+    lru: std::collections::VecDeque<String>,
+    pending: HashSet<String>,
+    pixels: u64,
+}
+
+impl LogoState {
+    fn insert(&mut self, url: String, texture: gtk::gdk::Texture) {
+        if let Some(old) = self.textures.remove(&url) {
+            self.pixels = self.pixels.saturating_sub(
+                old.width() as u64 * old.height() as u64,
+            );
+        }
+        self.lru.retain(|key| key != &url);
+        self.pixels += texture.width() as u64 * texture.height() as u64;
+        self.textures.insert(url.clone(), texture);
+        self.lru.push_back(url);
+        while self.textures.len() > 64 || self.pixels > 4_194_304 {
+            if let Some(key) = self.lru.pop_front() {
+                if let Some(old) = self.textures.remove(&key) {
+                    self.pixels = self.pixels.saturating_sub(
+                        old.width() as u64 * old.height() as u64,
+                    );
+                }
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 struct InstalledFacets {
@@ -109,6 +145,7 @@ mod imp {
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
         pub(super) manager_generation: Cell<u64>,
@@ -820,6 +857,7 @@ impl TvStreamsView {
             BoundRow {
                 ui: RowUi {
                     title,
+                    icon,
                     summary,
                     details,
                     reveal,
@@ -852,10 +890,14 @@ impl TvStreamsView {
             let handler = slot.connect_notify_local(Some("ready"), move |_, _| {
                 if let (Some(view), Some(slot)) = (weak_view.upgrade(), weak_slot.upgrade()) {
                     Self::paint_row(&ui, &slot, view.imp().expanded_id.borrow().as_deref());
+                    view.refresh_logo(&slot);
+                    view.request_logo(&slot);
                 }
             });
             binding.connection = Some((slot.clone(), handler));
         }
+        self.refresh_logo(&slot);
+        self.request_logo(&slot);
         self.request_page(slot.position());
     }
 
@@ -872,6 +914,7 @@ impl TvStreamsView {
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
+            binding.ui.icon.set_icon_name(Some("tv-symbolic"));
             binding.ui.title.set_text("");
             binding.ui.summary.set_text("");
             binding.ui.details.set_text("");
@@ -950,6 +993,77 @@ impl TvStreamsView {
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
         ui.edit.set_sensitive(true);
+    }
+
+    fn refresh_logo(&self, slot: &StreamSlot) {
+        let logo_url = slot.channel().and_then(|channel| channel.logo_url);
+        let imp = self.imp();
+        for binding in imp.bindings.borrow().values() {
+            if binding
+                .connection
+                .as_ref()
+                .is_some_and(|(bound, _)| bound == slot)
+            {
+                if let Some(texture) = logo_url
+                    .as_ref()
+                    .and_then(|url| imp.logos.borrow().textures.get(url).cloned())
+                {
+                    binding.ui.icon.set_from_paintable(Some(&texture));
+                } else {
+                    binding.ui.icon.set_icon_name(Some("tv-symbolic"));
+                }
+            }
+        }
+    }
+
+    fn request_logo(&self, slot: &StreamSlot) {
+        let Some(url) = slot.channel().and_then(|channel| channel.logo_url) else {
+            return;
+        };
+        if !super::logo::allowed_url(&url) {
+            return;
+        }
+        {
+            let mut state = self.imp().logos.borrow_mut();
+            if state.textures.contains_key(&url)
+                || state.pending.contains(&url)
+                || state.pending.len() >= 16
+            {
+                return;
+            }
+            state.pending.insert(url.clone());
+        }
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let request = url.clone();
+                let bytes = crate::utils::tokio(async move {
+                    super::logo::load(request).await
+                })
+                .await;
+                let mut state = view.imp().logos.borrow_mut();
+                state.pending.remove(&url);
+                if let Some(bytes) = bytes {
+                    // Signature/dimension validation was completed before GTK decode.
+                    let data = glib::Bytes::from(bytes.as_slice());
+                    if let Ok(texture) = gtk::gdk::Texture::from_bytes(&data) {
+                        state.insert(url, texture);
+                    }
+                }
+                drop(state);
+                let bound: Vec<StreamSlot> = view
+                    .imp()
+                    .bindings
+                    .borrow()
+                    .values()
+                    .filter_map(|binding| binding.connection.as_ref().map(|(slot, _)| slot.clone()))
+                    .collect();
+                for slot in bound {
+                    view.refresh_logo(&slot);
+                }
+            }
+        ));
     }
 
     fn repaint_bound_rows(&self) {
