@@ -610,7 +610,15 @@ impl FacetPicker {
                 candidates.push(code.clone());
             }
         }
-        candidates.sort_by_key(|code| human_label(kind, code).to_lowercase());
+        // Remote users can reach common choices immediately without typing.
+        let favorites: &[&str] = match kind {
+            FacetDimension::Language => &["de", "en", "fr", "es", "it"],
+            FacetDimension::Country => &["DE", "AT", "CH", "GB", "US"],
+        };
+        candidates.sort_by_key(|code| {
+            (favorites.iter().position(|favorite| *favorite == code).unwrap_or(usize::MAX),
+             human_label(kind, code).to_lowercase())
+        });
         let error = gtk::Label::new(None);
         error.set_wrap(true);
         error.set_xalign(0.0);
@@ -621,6 +629,45 @@ impl FacetPicker {
             check.set_hexpand(true);
             list.append(&check);
             checks.borrow_mut().push((code.clone(), check.clone()));
+            let code_for_keys = code.clone();
+            let key_control = gtk::EventControllerKey::new();
+            let checks_for_keys = Rc::downgrade(&checks);
+            let check_for_keys = check.downgrade();
+            let chooser_for_keys = chooser.downgrade();
+            key_control.connect_key_pressed(move |_, key, _, modifiers| {
+                if !modifiers.is_empty() {
+                    return gtk::glib::Propagation::Proceed;
+                }
+                if matches!(key, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                    if let Some(button) = check_for_keys.upgrade() {
+                        button.set_active(!button.is_active());
+                        return gtk::glib::Propagation::Stop;
+                    }
+                }
+                let direction: i32 = match key {
+                    gtk::gdk::Key::Down => 1,
+                    gtk::gdk::Key::Up => -1,
+                    _ => return gtk::glib::Propagation::Proceed,
+                };
+                if let Some(checks) = checks_for_keys.upgrade() {
+                    let items = checks.borrow();
+                    if let Some(index) = items.iter().position(|(name, _)| name == &code_for_keys) {
+                        let mut next = index as i32 + direction;
+                        while next >= 0 && (next as usize) < items.len() {
+                            let target = &items[next as usize].1;
+                            if target.parent().is_some_and(|row| row.is_visible()) && target.grab_focus() {
+                                return gtk::glib::Propagation::Stop;
+                            }
+                            next += direction;
+                        }
+                        if direction < 0 && chooser_for_keys.upgrade().is_some_and(|w| w.grab_focus()) {
+                            return gtk::glib::Propagation::Stop;
+                        }
+                    }
+                }
+                gtk::glib::Propagation::Proceed
+            });
+            check.add_controller(key_control);
             let selected = selected.clone();
             let checks_weak = Rc::downgrade(&checks);
             let selected_box_weak = selected_box.downgrade();
@@ -648,6 +695,27 @@ impl FacetPicker {
                 }
             });
         }
+        let chooser_key = gtk::EventControllerKey::new();
+        let chooser_weak = chooser.downgrade();
+        let checks_weak = Rc::downgrade(&checks);
+        chooser_key.connect_key_pressed(move |_, key, _, modifiers| {
+            if key == gtk::gdk::Key::Down
+                && modifiers.is_empty()
+                && chooser_weak.upgrade().is_some_and(|widget| widget.has_focus())
+            {
+                if let Some(checks) = checks_weak.upgrade() {
+                    if let Some((_, first)) = checks.borrow().iter().find(|(_, button)| {
+                        button.parent().is_some_and(|row| row.is_visible())
+                    }) {
+                        if first.grab_focus() {
+                            return gtk::glib::Propagation::Stop;
+                        }
+                    }
+                }
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        chooser.add_controller(chooser_key);
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_size_request(-1, 196);
