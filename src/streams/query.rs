@@ -132,10 +132,12 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
 impl Storage {
     pub fn query_channels(&self, query: &ChannelQuery) -> StorageResult<ChannelPage> {
         valid_query(query)?;
-        let conn = self.connect()?;
-        let (ids, total) = query_ids(&conn, query)?;
-        let items = ids.iter().map(|id| load_channel_detail(&conn,id).map(|d| d.effective))
+        let mut conn = self.connect()?;
+        let tx = conn.transaction().map_err(map_sql)?;
+        let (ids, total) = query_ids(&tx, query)?;
+        let items = ids.iter().map(|id| load_channel_detail(&tx,id).map(|d| d.effective))
             .collect::<StorageResult<Vec<_>>>()?;
+        tx.commit().map_err(map_sql)?;
         Ok(ChannelPage {items,total})
     }
 
