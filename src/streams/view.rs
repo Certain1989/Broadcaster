@@ -1182,6 +1182,15 @@ impl TvStreamsView {
             self.imp().selected_id.borrow().as_deref(),
             Some(id.as_str())
         );
+        assert!(self.contains_results_focus(self.imp().results_list.upcast_ref()));
+        assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
+    }
+
+    /// Match the virtualized list and its focused descendants, including
+    /// expanded Play/Edit buttons. Never depend on a recycled row's identity.
+    pub fn contains_results_focus(&self, focused: &gtk::Widget) -> bool {
+        let list = self.imp().results_list.upcast_ref::<gtk::Widget>();
+        focused == list || list.is_ancestor(focused)
     }
 
     pub fn focus_search(&self) {
