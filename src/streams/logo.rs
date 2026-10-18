@@ -641,6 +641,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/logo.png", listener.local_addr().unwrap());
         assert!(download(&url).await.is_none());
+        // A hostname that resolves locally is rejected by the actual
+        // connector resolver, not by a detached DNS preflight.
+        let hostname_url = format!("http://localhost:{}/logo.png", listener.local_addr().unwrap().port());
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), download(&hostname_url)).await,
+            Ok(None)
+        ));
         assert!(
             tokio::time::timeout(Duration::from_millis(100), listener.accept())
                 .await
