@@ -32,7 +32,6 @@ const ISO_3166_ALPHA2: &str = concat!(
     "VN VU WF WS YE YT ZA ZM ZW ",
 );
 
-
 impl std::fmt::Debug for SourceOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SourceOrigin")
