@@ -272,6 +272,7 @@ fn load_manager(view: &TvStreamsView, service: &StreamsService, list: &gtk::List
         if sources.is_empty() { status.set_text(&gettext("No playlists imported")); }
         else { status.set_text(""); }
         for (index, source) in sources.iter().enumerate() {
+            let source: Source = source.clone();
             let panel = gtk::Box::new(gtk::Orientation::Vertical, 5);
             panel.set_margin_top(10);
             panel.set_margin_bottom(10);
@@ -329,20 +330,25 @@ fn load_manager(view: &TvStreamsView, service: &StreamsService, list: &gtk::List
                     }
                 }));
             }));
+            let refresh_id = source.id.clone();
             refresh.connect_clicked(glib::clone!(#[weak] view, move |_| {
-                refresh_source(&view, source.id.clone());
+                refresh_source(&view, refresh_id.clone());
             }));
+            let edit_source = source.clone();
             edit.connect_clicked(glib::clone!(#[weak] view, move |_| {
-                show_source_form(&view, None, Some(source.clone()));
+                show_source_form(&view, None, Some(edit_source.clone()));
             }));
+            let rename_source = source.clone();
             rename.connect_clicked(glib::clone!(#[weak] view, move |_| {
-                rename_source(&view, source.clone());
+                rename_source(&view, rename_source.clone());
             }));
+            let change_source = source.clone();
             change.connect_clicked(glib::clone!(#[weak] view, move |_| {
-                change_source(&view, source.clone());
+                change_source(&view, change_source.clone());
             }));
+            let remove_source = source.clone();
             remove.connect_clicked(glib::clone!(#[weak] view, move |_| {
-                confirm_delete(&view, source.clone());
+                confirm_delete(&view, remove_source.clone());
             }));
             let previous = index.checked_sub(1).and_then(|i| sources.get(i)).cloned();
             let next = sources.get(index + 1).cloned();
@@ -403,11 +409,13 @@ fn change_source(view: &TvStreamsView, source: Source) {
     let (dialog, body, _) = sheet(&gettext("Replace Playlist"));
     let file = button(&gettext("Reselect Local File"), &body);
     let url = button(&gettext("Replace HTTP(S) URL"), &body);
+    let file_source = source.clone();
+    let url_source_id = source.id.clone();
     file.connect_clicked(glib::clone!(#[weak] view, #[weak] dialog, move |_| {
-        dialog.close(); show_file_picker(&view, Some(source.clone()));
+        dialog.close(); show_file_picker(&view, Some(file_source.clone()));
     }));
     url.connect_clicked(glib::clone!(#[weak] view, #[weak] dialog, move |_| {
-        dialog.close(); replace_url_form(&view, source.id.clone());
+        dialog.close(); replace_url_form(&view, url_source_id.clone());
     }));
     dialog.present(Some(&window));
 }
