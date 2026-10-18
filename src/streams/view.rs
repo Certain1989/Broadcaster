@@ -1190,7 +1190,7 @@ impl TvStreamsView {
     /// expanded Play/Edit buttons. Never depend on a recycled row's identity.
     pub fn contains_results_focus(&self, focused: &gtk::Widget) -> bool {
         let list = self.imp().results_list.upcast_ref::<gtk::Widget>();
-        focused == list || list.is_ancestor(focused)
+        focused == list || focused.is_ancestor(list)
     }
 
     #[cfg(test)]
@@ -1224,7 +1224,7 @@ impl TvStreamsView {
             imp.results_list.upcast_ref(),
         ];
         for (index, widget) in controls.iter().enumerate() {
-            if *widget != focused && !widget.is_ancestor(focused) {
+            if *widget != focused && !focused.is_ancestor(widget) {
                 continue;
             }
             if index == controls.len() - 1 {
