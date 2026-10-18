@@ -33,6 +33,7 @@ struct RowUi {
     details: gtk::Label,
     reveal: gtk::Revealer,
     play: gtk::Button,
+    edit: gtk::Button,
 }
 
 struct BoundRow {
@@ -730,6 +731,9 @@ impl TvStreamsView {
         play.add_css_class("suggested-action");
         play.set_halign(gtk::Align::Start);
         actions.append(&play);
+        let edit = gtk::Button::with_label(&gettext("Edit Metadata"));
+        edit.set_halign(gtk::Align::Start);
+        actions.append(&edit);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
         play.connect_clicked(glib::clone!(
@@ -738,6 +742,17 @@ impl TvStreamsView {
             #[weak]
             item,
             move |_| view.play_position(item.position())
+        ));
+        edit.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(item.position())) {
+                    view.edit_selected(channel.id);
+                }
+            }
         ));
         item.set_child(Some(&root));
         self.imp().bindings.borrow_mut().insert(
@@ -749,6 +764,7 @@ impl TvStreamsView {
                     details,
                     reveal,
                     play,
+                    edit,
                 },
                 connection: None,
             },
@@ -801,6 +817,7 @@ impl TvStreamsView {
             binding.ui.details.set_text("");
             binding.ui.reveal.set_reveal_child(false);
             binding.ui.play.set_sensitive(false);
+            binding.ui.edit.set_sensitive(false);
         }
     }
 
@@ -822,6 +839,7 @@ impl TvStreamsView {
             ui.details.set_text("");
             ui.reveal.set_reveal_child(false);
             ui.play.set_sensitive(false);
+            ui.edit.set_sensitive(false);
             return;
         };
         ui.title.set_text(&channel.visible_name);
@@ -871,6 +889,7 @@ impl TvStreamsView {
         ui.reveal
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
+        ui.edit.set_sensitive(true);
     }
 
     fn repaint_bound_rows(&self) {
@@ -898,7 +917,7 @@ impl TvStreamsView {
             .bindings
             .borrow()
             .values()
-            .any(|binding| binding.ui.play.has_focus())
+            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus())
         {
             return;
         }
@@ -943,12 +962,20 @@ impl TvStreamsView {
         spawn(async move { TvApplication::get().play(video).await });
     }
 
+    pub fn show_add(&self) {
+        super::management::show_add_menu(self);
+    }
+
+    pub fn show_manager(&self) {
+        super::management::show_manager(self);
+    }
+
     pub(crate) fn service(&self) -> Option<StreamsService> {
         self.imp().service.borrow().clone()
     }
 
     pub(crate) fn edit_selected(&self, id: ChannelId) {
-        super::management::show_metadata_editor(self, id);
+        super::editor::show_metadata_editor(self, id);
     }
 
     fn show_import_placeholder(&self) {
