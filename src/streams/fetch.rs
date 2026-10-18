@@ -323,8 +323,7 @@ mod tests {
                     "HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\n\r\n"
                         .to_owned()
                 } else if first.starts_with("GET /forbidden ") {
-                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
-                        .to_owned()
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_owned()
                 } else {
                     let path = first
                         .split_ascii_whitespace()
@@ -348,8 +347,7 @@ mod tests {
             ("chain-0", FetchError::Redirect),
             ("forbidden", FetchError::HttpStatus),
         ] {
-            let answer =
-                fetch_remote(&client, &format!("http://{address}/{path}"), &token).await;
+            let answer = fetch_remote(&client, &format!("http://{address}/{path}"), &token).await;
             assert!(matches!(answer, Err(error) if error == expected));
         }
         server.await.unwrap();
@@ -357,7 +355,10 @@ mod tests {
 
     #[tokio::test]
     async fn bounded_total_deadline_and_pre_cancelled_request() {
-        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -365,7 +366,9 @@ mod tests {
             let mut request = [0u8; 1024];
             let _ = socket.read(&mut request).await;
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n").await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await;
         });
         let client = http_client().unwrap();
         let token = Cancellation::new();
@@ -381,21 +384,32 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_streamed_body_without_content_length_above_limit() {
-        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 1024];
             let _ = socket.read(&mut request).await.unwrap();
-            socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
-                .await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .await
+                .unwrap();
             let block = vec![b'a'; 64 * 1024];
             let prefix = format!("{:x}\r\n", block.len());
             for _ in 0..=MAX_PLAYLIST_BYTES / block.len() {
-                if socket.write_all(prefix.as_bytes()).await.is_err() { break; }
-                if socket.write_all(&block).await.is_err() { break; }
-                if socket.write_all(b"\r\n").await.is_err() { break; }
+                if socket.write_all(prefix.as_bytes()).await.is_err() {
+                    break;
+                }
+                if socket.write_all(&block).await.is_err() {
+                    break;
+                }
+                if socket.write_all(b"\r\n").await.is_err() {
+                    break;
+                }
             }
         });
         let client = http_client().unwrap();
@@ -403,9 +417,9 @@ mod tests {
             &client,
             &format!("http://{address}/stream"),
             &Cancellation::new(),
-        ).await;
+        )
+        .await;
         assert!(matches!(result, Err(FetchError::BodyTooLarge)));
         server.await.unwrap();
     }
-
 }
