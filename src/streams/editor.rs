@@ -363,7 +363,8 @@ impl Fields {
             match filled_region(&self.region_code.text(), &self.region_label.text()) {
                 Ok(value) => Some(value),
                 Err(_) => {
-                    let reason = gettext("Enter a valid region name or code, e.g. Bavaria / DE-BY.");
+                    let reason =
+                        gettext("Enter a valid region name or code, e.g. Bavaria / DE-BY.");
                     self.region_error.set_text(&reason);
                     if self.region_label.text().len() > 128 {
                         self.region_label.grab_focus();
@@ -558,7 +559,10 @@ pub(crate) fn assert_synthetic_editor_form() {
     fields.language_mode.set_selected(1);
     fields.languages.choose("de");
     fields.languages.choose("en");
-    fields.languages.enter_manual("de-DE").expect("advanced language tag");
+    fields
+        .languages
+        .enter_manual("de-DE")
+        .expect("advanced language tag");
     assert!(fields.languages.enter_manual("German").is_err());
     fields.country_mode.set_selected(2);
     fields.region_mode.set_selected(2);
