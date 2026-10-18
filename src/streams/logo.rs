@@ -7,14 +7,19 @@
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{self, Write},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Duration,
 };
 
 use adw::glib;
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::{
+    dns::{Addrs, Name, Resolve, Resolving},
+    redirect::Policy,
+    Client, Url,
+};
 use ring::digest::{digest, SHA256};
 use tokio::sync::Semaphore;
 
@@ -35,6 +40,12 @@ fn client() -> Option<&'static Client> {
     CLIENT
         .get_or_init(|| {
             Client::builder()
+                // Imported tvg-logo targets are not user-authorized network
+                // origins. Proxies resolve the final host outside this client's
+                // control, so only direct logo connections can be enforced.
+                // User-configured playlist fetching uses a separate client.
+                .no_proxy()
+                .dns_resolver(PublicLogoDns)
                 .redirect(Policy::custom(|attempt| {
                     // Many legitimate logo hosts use HTTP 301/302 or a CDN.
                     // Follow at most three safe redirects; never follow to
@@ -64,6 +75,78 @@ fn semaphore() -> &'static Semaphore {
     LIMIT.get_or_init(|| Semaphore::new(4))
 }
 
+// Reject special-purpose/non-global IP allocations conservatively. A
+// public-looking DNS name is checked again by PublicLogoDns for EVERY socket
+// resolution. Literal IP hosts are handled here, as hyper need not call DNS.
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => public_ipv4(ip),
+        IpAddr::V6(ip) => public_ipv6(ip),
+    }
+}
+
+fn public_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !matches!(
+        (a, b, c),
+        (0, _, _)                  // this network / unspecified
+            | (10, _, _)            // RFC1918
+            | (100, 64..=127, _)    // shared address space
+            | (127, _, _)           // loopback
+            | (169, 254, _)         // link-local
+            | (172, 16..=31, _)     // RFC1918
+            | (192, 0, 0)           // IETF protocol assignments (conservative)
+            | (192, 0, 2)           // documentation
+            | (192, 88, 99)         // deprecated 6to4 relay
+            | (192, 168, _)         // RFC1918
+            | (198, 18..=19, _)     // benchmark networks
+            | (198, 51, 100)        // documentation
+            | (203, 0, 113)         // documentation
+            | (224..=255, _, _)     // multicast / reserved / broadcast
+    )
+}
+
+fn public_ipv6(ip: Ipv6Addr) -> bool {
+    // IPv4-mapped IPv6 and other transition/translation addresses must not
+    // evade IPv4 or global-unicast restrictions. Be deliberately conservative:
+    // unallocated and special-use prefixes simply fall back to generic icons.
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return public_ipv4(v4);
+    }
+    let segments = ip.segments();
+    let first = segments[0];
+    first & 0xe000 == 0x2000 // currently allocated global unicast 2000::/3
+        && !(first == 0x2001 && segments[1] < 0x0200) // IETF special-use /23
+        && !(first == 0x2001 && segments[1] == 0x0db8) // documentation /32
+        && first != 0x2002 // 6to4 tunneling /16
+        && !(first == 0x3fff && segments[1] & 0xf000 == 0) // documentation /20
+}
+
+// Fail closed for a mixed public/private DNS answer, even if the socket
+// connector would otherwise try only a public candidate first. All returned
+// SocketAddrs are those handed directly to reqwest's dial path: no separate,
+// TOCTOU-prone hostname preflight or subsequent unchecked DNS resolution.
+fn public_addresses(addrs: impl IntoIterator<Item = SocketAddr>) -> Option<Vec<SocketAddr>> {
+    let addresses: Vec<_> = addrs.into_iter().collect();
+    (!addresses.is_empty() && addresses.iter().all(|addr| public_ip(addr.ip())))
+        .then_some(addresses)
+}
+
+struct PublicLogoDns;
+
+impl Resolve for PublicLogoDns {
+    fn resolve(&self, name: Name) -> Resolving {
+        let hostname = name.as_str().to_owned();
+        Box::pin(async move {
+            let answers = tokio::net::lookup_host((hostname.as_str(), 0)).await?;
+            let permitted = public_addresses(answers).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::PermissionDenied, "logo destination blocked")
+            })?;
+            Ok(Box::new(permitted.into_iter()) as Addrs)
+        })
+    }
+}
+
 /// URL checks are deliberately separate from stream and playlist retrieval.
 pub(super) fn allowed_url(raw: &str) -> bool {
     if raw.len() > 8192 {
@@ -74,6 +157,12 @@ pub(super) fn allowed_url(raw: &str) -> bool {
             && url.host().is_some()
             && url.username().is_empty()
             && url.password().is_none()
+            // URL parsing canonicalizes unusual IPv4 forms (e.g. integer or
+            // hexadecimal hosts). Also handle IPv6 bracket spelling.
+            && url.host_str().is_some_and(|host| {
+                let literal = host.trim_start_matches('[').trim_end_matches(']');
+                literal.parse::<IpAddr>().map_or(true, public_ip)
+            })
     })
 }
 
@@ -355,6 +444,9 @@ fn prune_unused_in(dir: &Path, referenced: &HashSet<String>) {
 }
 
 async fn download(url: &str) -> Option<Vec<u8>> {
+    if !allowed_url(url) {
+        return None;
+    }
     let client = client()?;
     let response = client.get(url).send().await.ok()?;
     if !response.status().is_success()
@@ -455,39 +547,106 @@ mod tests {
         assert!(!safe_redirect(&secure, &file));
     }
 
+    #[test]
+    fn rejects_local_literals_and_non_global_ipv4_ipv6() {
+        for host in [
+            "127.0.0.1",
+            "127.25.1.2",
+            "10.1.2.3",
+            "172.16.1.1",
+            "172.31.255.255",
+            "192.168.50.2",
+            "169.254.1.2",
+            "100.64.2.3",
+            "0.0.0.0",
+            "192.0.2.2",
+            "198.18.1.1",
+            "198.51.100.10",
+            "203.0.113.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "[::]",
+            "[::1]",
+            "[fe80::1]",
+            "[fc00::1]",
+            "[fd42::1]",
+            "[ff02::1]",
+            "[2001:db8::42]",
+            "[2002:c0a8:101::]",
+            "[::ffff:127.0.0.1]",
+            "[::ffff:192.168.1.1]",
+            "[3fff::1]",
+        ] {
+            let url = format!("http://{host}/logo.png");
+            assert!(!allowed_url(&url), "{host}");
+        }
+        // url::Url canonicalizes these alternate encodings before our check.
+        for url in [
+            "http://2130706433/logo.png",
+            "http://0x7f000001/logo.png",
+            "http://0177.0.0.1/logo.png",
+        ] {
+            assert!(!allowed_url(url));
+        }
+        for host in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.215.14",
+            "[2606:4700:4700::1111]",
+            "[2001:4860:4860::8888]",
+        ] {
+            assert!(allowed_url(&format!("https://{host}/logo.png")), "{host}");
+        }
+    }
+
+    #[test]
+    fn resolver_denies_private_answers_and_dns_rebinding() {
+        let public_a = "8.8.8.8:80".parse::<SocketAddr>().unwrap();
+        let public_aaaa = "[2606:4700:4700::1111]:80"
+            .parse::<SocketAddr>()
+            .unwrap();
+        let private_a = "192.168.1.1:80".parse::<SocketAddr>().unwrap();
+        let local_aaaa = "[::1]:80".parse::<SocketAddr>().unwrap();
+        assert_eq!(public_addresses([public_a]), Some(vec![public_a]));
+        assert_eq!(
+            public_addresses([public_a, public_aaaa]),
+            Some(vec![public_a, public_aaaa])
+        );
+        // A public-looking DNS name's resolved addresses are not trusted.
+        assert!(public_addresses([private_a]).is_none());
+        assert!(public_addresses([public_a, private_a]).is_none());
+        assert!(public_addresses([local_aaaa, public_aaaa]).is_none());
+        assert!(public_addresses(std::iter::empty()).is_none());
+        // On each re-resolution the connector gets a fresh filtered set.
+        assert!(public_addresses([public_a]).is_some());
+        assert!(public_addresses([private_a]).is_none());
+    }
+
+    #[test]
+    fn redirects_block_local_literals_and_keep_safe_cdn_routes() {
+        let original = Url::parse("https://logos.example.invalid/image.png").unwrap();
+        let cdn = Url::parse("https://cdn.example.invalid/image.png").unwrap();
+        let private = Url::parse("https://[::1]/image.png").unwrap();
+        let integer = Url::parse("http://2130706433/image.png").unwrap();
+        assert!(safe_redirect(&original, &cdn));
+        assert!(!safe_redirect(&original, &private));
+        assert!(!safe_redirect(&original, &integer));
+        assert!(!safe_redirect(&cdn, &Url::parse("http://cdn.example.invalid/x").unwrap()));
+    }
+
     #[tokio::test]
-    async fn same_origin_redirect_loads_image_without_exposing_url() {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-        };
+    async fn blocked_local_logo_never_connects_to_fixture() {
+        use tokio::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            for _ in 0..2 {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0u8; 1024];
-                let count = socket.read(&mut request).await.unwrap();
-                let response = if request[..count].starts_with(b"GET /redirect ") {
-                    "HTTP/1.1 302 Found\r\nLocation: /image\r\nContent-Length: 0\r\n\r\n"
-                        .as_bytes()
-                        .to_vec()
-                } else {
-                    let mut body = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
-                    body.extend_from_slice(&64u32.to_be_bytes());
-                    body.extend_from_slice(&64u32.to_be_bytes());
-                    let mut message =
-                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
-                            .into_bytes();
-                    message.extend_from_slice(&body);
-                    message
-                };
-                socket.write_all(&response).await.unwrap();
-            }
-        });
-        let url = format!("http://{address}/redirect");
-        assert!(download(&url).await.is_some());
-        server.await.unwrap();
+        let url = format!("http://{}/logo.png", listener.local_addr().unwrap());
+        assert!(download(&url).await.is_none());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "rejected logo caused a local connection"
+        );
     }
 
     #[test]
