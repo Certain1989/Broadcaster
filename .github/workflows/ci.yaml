@@ -145,6 +145,9 @@ jobs:
           run-tests: true
           arch: ${{ matrix.variant.arch }}
           verbose: true
+          # PR builds remain downloadable for manual testing; published releases
+          # already provide installable bundles, so main push uploads are redundant.
+          upload-artifact: ${{ github.event_name == 'pull_request' }}
       - name: Verify exported development desktop metadata and icon
         run: |
           app=io.github.Certain1989.Broadcaster.Devel
