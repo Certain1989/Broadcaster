@@ -39,6 +39,7 @@ src/preferences/mpv_arguments.blp
 src/preferences/mpv_arguments.rs
 src/settings.rs
 src/streams/editor.rs
+src/streams/facet_picker.rs
 src/streams/management.rs
 src/streams/view.blp
 src/streams/view.rs
