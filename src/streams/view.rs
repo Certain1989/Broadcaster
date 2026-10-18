@@ -1219,7 +1219,10 @@ impl TvStreamsView {
             imp.manage_button.upcast_ref(),
             imp.add_button.upcast_ref(),
         ] {
-            assert!(control.is_ancestor(&toolbar), "toolbar control outside focus styling");
+            assert!(
+                control.is_ancestor(&toolbar),
+                "toolbar control outside focus styling"
+            );
         }
     }
 
