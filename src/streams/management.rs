@@ -370,7 +370,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            view.reload();
+                            view.source_mutated();
                             message(&view, &gettext("Playlist saved"));
                         }
                         Err(e) => {
@@ -418,7 +418,13 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
             dialog.close();
         }
     ));
-    load_manager(view, &service, &list, &status);
+    view.remember_source_manager(&list, &status);
+    view.refresh_source_manager();
+    dialog.connect_closed(glib::clone!(
+        #[weak]
+        view,
+        move |_| view.forget_source_manager()
+    ));
     attach_progress(&dialog, &status, service);
     dialog.present(Some(&window));
 }
@@ -495,13 +501,14 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
     ));
 }
 
-fn load_manager(
+pub(crate) fn load_manager(
     view: &TvStreamsView,
     service: &StreamsService,
     list: &gtk::ListBox,
     status: &gtk::Label,
 ) {
     let service = service.clone();
+    let generation = view.next_manager_generation();
     spawn(glib::clone!(
         #[weak]
         view,
@@ -523,6 +530,9 @@ fn load_manager(
                     .map(|source| service.source_counts(&source.id)),
             )
             .await;
+            if view.manager_generation() != generation {
+                return;
+            }
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -599,10 +609,6 @@ fn load_manager(
                 enabled.connect_active_notify(glib::clone!(
                     #[weak]
                     view,
-                    #[weak]
-                    list,
-                    #[weak]
-                    status,
                     move |switch| {
                         let target = switch.is_active();
                         let service = svc.clone();
@@ -610,19 +616,12 @@ fn load_manager(
                         spawn(glib::clone!(
                             #[weak]
                             view,
-                            #[weak]
-                            list,
-                            #[weak]
-                            status,
                             async move {
                                 match service.toggle_source(&id, target).await {
-                                    Ok(()) => {
-                                        view.reload();
-                                        load_manager(&view, &service, &list, &status);
-                                    }
+                                    Ok(()) => view.source_mutated(),
                                     Err(error) => {
                                         fail(&view, error);
-                                        load_manager(&view, &service, &list, &status);
+                                        view.refresh_source_manager();
                                     }
                                 }
                             }
@@ -675,26 +674,15 @@ fn load_manager(
                     control.connect_clicked(glib::clone!(
                         #[weak]
                         view,
-                        #[weak]
-                        list,
-                        #[weak]
-                        status,
                         move |_| {
                             let service = service.clone();
                             let id = id.clone();
                             spawn(glib::clone!(
                                 #[weak]
                                 view,
-                                #[weak]
-                                list,
-                                #[weak]
-                                status,
                                 async move {
                                     match service.move_source(&id, direction).await {
-                                        Ok(()) => {
-                                            view.reload();
-                                            load_manager(&view, &service, &list, &status);
-                                        }
+                                        Ok(()) => view.source_mutated(),
                                         Err(error) => fail(&view, error),
                                     }
                                 }
@@ -756,7 +744,7 @@ fn rename_source(view: &TvStreamsView, source: Source) {
                     match service.rename_source(&id, &value).await {
                         Ok(()) => {
                             dialog.close();
-                            view.reload();
+                            view.source_mutated();
                             message(&view, &gettext("Source renamed"));
                         }
                         Err(error) => {
@@ -931,7 +919,7 @@ fn reauthorize(view: &TvStreamsView, id: String) {
 fn handle_refresh(view: &TvStreamsView, service: &StreamsService, outcome: RefreshOutcome) {
     match outcome {
         RefreshOutcome::Committed(_) => {
-            view.reload();
+            view.source_mutated();
             message(view, &gettext("Playlist refreshed"));
         }
         RefreshOutcome::ConfirmationRequired(ticket) => {
@@ -993,7 +981,7 @@ fn confirm_preview(view: &TvStreamsView, service: StreamsService, ticket: Refres
                     async move {
                         match service.confirm_refresh(ticket, true).await {
                             Ok(_) => {
-                                view.reload();
+                                view.source_mutated();
                                 message(&view, &gettext("Playlist replaced"));
                             }
                             Err(error) => fail(&view, error),
@@ -1066,7 +1054,7 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
                     match service.delete_source(confirmation).await {
                         Ok(()) => {
                             dialog.close();
-                            view.reload();
+                            view.source_mutated();
                             message(&view, &gettext("Source deleted"));
                         }
                         Err(error) => {
