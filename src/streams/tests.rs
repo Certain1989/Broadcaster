@@ -439,6 +439,7 @@ fn rejected_bad_values_and_sanitized_errors() {
         "DE"
     );
     assert!(normalize_facet("Deutschland", FacetDimension::Country).is_err());
+    assert!(normalize_facet("ZZ", FacetDimension::Country).is_err());
     assert!(normalize_facet("a-bad_bad", FacetDimension::Language).is_err());
     let mut bad = channel(0);
     bad.stream_url = "file:///etc/passwd".into();
@@ -479,7 +480,10 @@ fn sql_failure_rolls_back_catalogue_and_new_locator() {
             .unwrap_err(),
         StorageError::StorageFailure
     );
-    assert_eq!(f.store.get_source(&source.id).unwrap().revision, source.revision);
+    assert_eq!(
+        f.store.get_source(&source.id).unwrap().revision,
+        source.revision
+    );
     assert_eq!(
         f.store.get_source(&source.id).unwrap().origin.locator,
         source.origin.locator
@@ -505,7 +509,10 @@ fn recorded_failure_keeps_good_snapshot_and_revision() {
     assert_eq!(after.origin.locator, source.origin.locator);
     assert_eq!(after.last_error_code.as_deref(), Some("reauthorization"));
     assert_eq!(after.last_success_at, source.last_success_at);
-    assert_eq!(f.store.query_channels(&query_all()).unwrap().total, before.total);
+    assert_eq!(
+        f.store.query_channels(&query_all()).unwrap().total,
+        before.total
+    );
 }
 
 #[test]
@@ -519,18 +526,24 @@ fn ninety_day_purge_preserves_user_corrections() {
         display_name: Some("Keep this corrected channel".into()),
         ..ChannelOverrides::default()
     };
-    f.store.set_channel_overrides(&retained, &edit, NOW).unwrap();
+    f.store
+        .set_channel_overrides(&retained, &edit, NOW)
+        .unwrap();
     let one = ValidatedSnapshot::new(source.id.clone(), vec![channel(0)]).unwrap();
     let preview = f.store.preview_refresh(&one).unwrap();
     f.store
         .commit_refresh(&one, &preview, &RefreshDecision::NotRequired, NOW + 1)
         .unwrap();
     assert_eq!(
-        f.store.purge_expired_missing(NOW + 1 + 90 * 24 * 3600 - 1).unwrap(),
+        f.store
+            .purge_expired_missing(NOW + 1 + 90 * 24 * 3600 - 1)
+            .unwrap(),
         0
     );
     assert_eq!(
-        f.store.purge_expired_missing(NOW + 1 + 90 * 24 * 3600).unwrap(),
+        f.store
+            .purge_expired_missing(NOW + 1 + 90 * 24 * 3600)
+            .unwrap(),
         1
     );
     assert!(matches!(
@@ -538,7 +551,11 @@ fn ninety_day_purge_preserves_user_corrections() {
         Err(StorageError::NotFound)
     ));
     assert_eq!(
-        f.store.get_channel_detail(&retained).unwrap().effective.visible_name,
+        f.store
+            .get_channel_detail(&retained)
+            .unwrap()
+            .effective
+            .visible_name,
         "Keep this corrected channel"
     );
 }
@@ -551,8 +568,12 @@ fn stale_manual_facets_never_override_auto_metadata() {
         languages: ["de".to_owned()].into_iter().collect(),
         ..SourceDefaults::default()
     };
-    f.store.set_source_defaults(&source.id, &defaults, NOW + 1).unwrap();
-    let channel_id = f.store.query_channels(&query_all()).unwrap().items[0].id.clone();
+    f.store
+        .set_source_defaults(&source.id, &defaults, NOW + 1)
+        .unwrap();
+    let channel_id = f.store.query_channels(&query_all()).unwrap().items[0]
+        .id
+        .clone();
     f.conn()
         .execute(
             "INSERT INTO iptv_channel_override_facets(channel_id,facet,value)
@@ -574,7 +595,8 @@ fn stale_manual_facets_never_override_auto_metadata() {
         }]
     );
     f.store.clear_channel_overrides(&channel_id).unwrap();
-    let stray: i64 = f.conn()
+    let stray: i64 = f
+        .conn()
         .query_row(
             "SELECT count(*) FROM iptv_channel_override_facets WHERE channel_id=?1",
             [&channel_id],
@@ -660,7 +682,10 @@ fn source_scoped_identity_and_stale_preview_barrier() {
             .unwrap_err(),
         StorageError::StaleRevision
     );
-    assert_eq!(f.store.get_source(&right.id).unwrap().revision, right.revision);
+    assert_eq!(
+        f.store.get_source(&right.id).unwrap().revision,
+        right.revision
+    );
     assert_eq!(f.store.query_channels(&query_all()).unwrap().total, 2);
 }
 
@@ -698,7 +723,7 @@ fn synthetic_100_1000_10000_query_measurements() {
         // The normal test harness captures eprintln. Write directly to the
         // CI job's stderr to retain actual, synthetic-only timings.
         let info = format!(
-            "S1-PERF arch={} n={n} create={insert_time:?} page={query_time:?} facet={options_time:?} rss_kib={:?}\\n",
+            "S1-PERF arch={} n={n} create={insert_time:?} page={query_time:?} facet={options_time:?} rss_kib={:?}\n",
             std::env::consts::ARCH,
             current_rss_kib()
         );
