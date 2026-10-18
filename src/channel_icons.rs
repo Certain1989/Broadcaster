@@ -98,7 +98,9 @@ fn load_icon(icon_name: &str, size: i32, color_scheme: ColorScheme) -> eyre::Res
 /// no network search, guessed station identity or remote SVG processing.
 pub(crate) fn bundled_streams_logo(name: &str, size: i32) -> Option<gdk::Texture> {
     let mut base = name.trim();
-    for suffix in [" (1080p)", " (720p)", " (576p)", " (480p)", " (360p)", " HD"] {
+    for suffix in [
+        " (1080p)", " (720p)", " (576p)", " (480p)", " (360p)", " HD",
+    ] {
         if let Some(stripped) = base.strip_suffix(suffix) {
             base = stripped;
             break;
