@@ -783,7 +783,14 @@ fn channel_rank_uses_same_effective_filters_and_sort_as_paged_query() {
     q.group = FacetSelection::Unknown;
     assert_eq!(f.store.channel_position(&q, &last.id).unwrap(), None);
     q.group = FacetSelection::Any;
-    f.store.set_source_enabled(&source.id, false, NOW + 1).unwrap();
+    f.store
+        .set_source_enabled(&source.id, false, NOW + 1)
+        .unwrap();
     assert_eq!(f.store.channel_position(&q, &last.id).unwrap(), None);
-    assert_eq!(f.store.channel_position(&q, &uuid::Uuid::new_v4().to_string()).unwrap(), None);
+    assert_eq!(
+        f.store
+            .channel_position(&q, &uuid::Uuid::new_v4().to_string())
+            .unwrap(),
+        None
+    );
 }
