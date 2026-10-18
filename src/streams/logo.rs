@@ -35,9 +35,11 @@ fn client() -> Option<&'static Client> {
                     // Follow at most three safe redirects; never follow to
                     // local files, embedded credentials or an HTTPS downgrade.
                     if attempt.previous().len() >= 3
-                        || attempt.previous().last().is_some_and(|previous| {
-                            !safe_redirect(previous, attempt.url())
-                        })
+                        || !allowed_url(attempt.url().as_str())
+                        || attempt
+                            .previous()
+                            .last()
+                            .is_some_and(|previous| !safe_redirect(previous, attempt.url()))
                     {
                         attempt.stop()
                     } else {
@@ -71,8 +73,7 @@ pub(super) fn allowed_url(raw: &str) -> bool {
 }
 
 fn safe_redirect(previous: &Url, next: &Url) -> bool {
-    allowed_url(next.as_str())
-        && !(previous.scheme() == "https" && next.scheme() != "https")
+    allowed_url(next.as_str()) && !(previous.scheme() == "https" && next.scheme() != "https")
 }
 
 fn allowed_dimensions(width: u32, height: u32) -> bool {
@@ -394,7 +395,8 @@ mod tests {
         let secure = Url::parse("https://example.invalid/a.png").unwrap();
         let insecure = Url::parse("http://example.invalid/a.png").unwrap();
         let hosted = Url::parse("https://cdn.example.invalid/a.png").unwrap();
-        let credentialed = Url::parse("https://user:SECRET-CANARY@cdn.example.invalid/a.png").unwrap();
+        let credentialed =
+            Url::parse("https://user:SECRET-CANARY@cdn.example.invalid/a.png").unwrap();
         let file = Url::parse("file:///etc/passwd").unwrap();
         assert!(safe_redirect(&secure, &hosted));
         assert!(safe_redirect(&insecure, &hosted));
@@ -405,7 +407,10 @@ mod tests {
 
     #[tokio::test]
     async fn same_origin_redirect_loads_image_without_exposing_url() {
-        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
