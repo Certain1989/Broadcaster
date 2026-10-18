@@ -206,6 +206,16 @@ async fn malformed_reimport_does_not_create_or_replace_catalogue() {
         .add_url("Valid", server.url("/list"), 0, SourceDefaults::default())
         .await
         .unwrap();
+    server.replace(b"#EXTM3U\n".to_vec());
+    assert!(matches!(
+        service.refresh(&source.id).await,
+        Err(ServiceError::Parse(_))
+    ));
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        2
+    );
+
     server.replace(b"#EXT-X-STREAM-INF:BANDWIDTH=1000\n".to_vec());
     assert!(matches!(
         service.refresh(&source.id).await,
