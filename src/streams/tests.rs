@@ -838,3 +838,60 @@ fn channel_rank_uses_same_effective_filters_and_sort_as_paged_query() {
         None
     );
 }
+
+
+#[test]
+fn logo_references_protect_other_and_disabled_sources() {
+    let f = Fixture::new();
+    let (first, _) = f.new_source("First playlist", 2);
+    let (second, _) = f.new_source("Other playlist", 1);
+    let shared = "https://example.invalid/shared.png";
+    let unique = "https://example.invalid/unique.png";
+    {
+        let conn = f.conn();
+        conn.execute(
+            "UPDATE iptv_channels SET logo_url=?1 WHERE source_id=?2",
+            rusqlite::params![shared, second.id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE iptv_channels SET logo_url=?1 WHERE source_id=?2 AND playlist_order=0",
+            rusqlite::params![shared, first.id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE iptv_channels SET logo_url=?1 WHERE source_id=?2 AND playlist_order=1",
+            rusqlite::params![unique, first.id],
+        )
+        .unwrap();
+    }
+    let shared_key = super::logo::cache_name(shared);
+    let unique_key = super::logo::cache_name(unique);
+    assert_eq!(
+        f.store.referenced_logo_cache_names().unwrap(),
+        std::collections::HashSet::from([shared_key.clone(), unique_key.clone()])
+    );
+
+    // Disabling/hiding a source does not unsubscribe it or delete its logos.
+    f.store.set_source_enabled(&second.id, false, NOW + 1).unwrap();
+    assert!(f.store.referenced_logo_cache_names().unwrap().contains(&shared_key));
+
+    // Only the unique logo may be removed when the first source is deleted.
+    f.store
+        .delete_source_confirmed(&ConfirmedSourceDeletion::after_user_confirmation(&first))
+        .unwrap();
+    assert_eq!(
+        f.store.referenced_logo_cache_names().unwrap(),
+        std::collections::HashSet::from([shared_key.clone()])
+    );
+
+    // A channel omitted from a committed snapshot becomes non-present.
+    // Retained tombstone metadata must not indefinitely pin its logo.
+    f.conn()
+        .execute(
+            "UPDATE iptv_channels SET is_present=0, missing_since=?1 WHERE source_id=?2",
+            rusqlite::params![NOW + 2, second.id],
+        )
+        .unwrap();
+    assert!(f.store.referenced_logo_cache_names().unwrap().is_empty());
+}
