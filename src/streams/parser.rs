@@ -245,9 +245,14 @@ fn unsafe_url_text(s: &str) -> bool {
 
 /// Do not let WHATWG URL normalization repair malformed HTTP authorities.
 fn explicit_http_authority(raw: &str) -> bool {
-    (raw.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
-        || raw.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://")))
-        && raw.split_once("://").is_some_and(|(_, host)| !host.starts_with('/'))
+    (raw.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || raw
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://")))
+        && raw
+            .split_once("://")
+            .is_some_and(|(_, host)| !host.starts_with('/'))
 }
 
 fn allowed_url(url: &Url) -> bool {
