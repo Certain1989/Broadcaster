@@ -839,7 +839,6 @@ fn channel_rank_uses_same_effective_filters_and_sort_as_paged_query() {
     );
 }
 
-
 #[test]
 fn logo_references_protect_other_and_disabled_sources() {
     let f = Fixture::new();
@@ -873,8 +872,14 @@ fn logo_references_protect_other_and_disabled_sources() {
     );
 
     // Disabling/hiding a source does not unsubscribe it or delete its logos.
-    f.store.set_source_enabled(&second.id, false, NOW + 1).unwrap();
-    assert!(f.store.referenced_logo_cache_names().unwrap().contains(&shared_key));
+    f.store
+        .set_source_enabled(&second.id, false, NOW + 1)
+        .unwrap();
+    assert!(f
+        .store
+        .referenced_logo_cache_names()
+        .unwrap()
+        .contains(&shared_key));
 
     // Only the unique logo may be removed when the first source is deleted.
     f.store
