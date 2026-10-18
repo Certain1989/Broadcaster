@@ -240,13 +240,23 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         gettext("Edit Source Defaults")
     });
     let name = entry(&initial_name);
+    let name_error = gtk::Label::new(None);
+    name_error.set_wrap(true);
+    name_error.set_xalign(0.0);
+    name_error.add_css_class("error");
     if is_new {
         row(&gettext("Unique source name"), &name, &body);
+        body.append(&name_error);
     }
+    let url_error = gtk::Label::new(None);
+    url_error.set_wrap(true);
+    url_error.set_xalign(0.0);
+    url_error.add_css_class("error");
     let url = if is_new && file.is_none() {
         let field = entry("");
         field.set_input_purpose(gtk::InputPurpose::Url);
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
+        body.append(&url_error);
         Some(field)
     } else {
         None
@@ -264,16 +274,6 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     scroll.set_child(Some(&body));
     dialog.set_content_height(620);
     dialog.set_child(Some(&scroll));
-    let name_error = gtk::Label::new(None);
-    name_error.set_wrap(true);
-    name_error.set_xalign(0.0);
-    name_error.add_css_class("error");
-    if is_new { body.append(&name_error); }
-    let url_error = gtk::Label::new(None);
-    url_error.set_wrap(true);
-    url_error.set_xalign(0.0);
-    url_error.add_css_class("error");
-    if url.is_some() { body.append(&url_error); }
     let buttons = line(&body);
     let cancel = button(&gettext("Cancel"), &buttons);
     let save = button(&gettext("Save"), &buttons);
