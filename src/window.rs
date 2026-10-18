@@ -609,12 +609,10 @@ impl TvWindow {
                 // the tabs while the remote Back key still goes to Mediathek.
                 if Self::find_mapped_popover(self.upcast_ref()).is_some() {
                     glib::Propagation::Proceed
-                } else if self.imp().streams_view.collapse_expanded() {
-                    glib::Propagation::Stop
-                } else if self
-                    .focused_widget()
-                    .is_some_and(|focused| self.imp().streams_view.contains_results_focus(&focused))
-                    && self.focus_page_switcher()
+                } else if self.imp().streams_view.collapse_expanded()
+                    || (self.focused_widget().is_some_and(|focused| {
+                        self.imp().streams_view.contains_results_focus(&focused)
+                    }) && self.focus_page_switcher())
                 {
                     glib::Propagation::Stop
                 } else {
