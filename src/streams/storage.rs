@@ -107,6 +107,7 @@ impl Storage {
             if id != APPLICATION_ID || version != SCHEMA_VERSION {
                 return Err(StorageError::IncompatibleDatabase);
             }
+            validate_v1_schema_shape(&probe)?;
             validate_integrity(&probe)?;
         } else {
             #[cfg(unix)]
@@ -135,6 +136,7 @@ impl Storage {
                 let _ = conn.execute_batch("ROLLBACK");
                 StorageError::StorageFailure
             })?;
+            validate_v1_schema_shape(&conn)?;
             validate_integrity(&conn)?;
         }
         Ok(())
@@ -156,6 +158,7 @@ impl Storage {
         if id != APPLICATION_ID || version != SCHEMA_VERSION {
             return Err(StorageError::IncompatibleDatabase);
         }
+        validate_v1_schema_shape(&conn)?;
         Ok(conn)
     }
 
@@ -422,6 +425,47 @@ fn configure(conn: &Connection) -> StorageResult<()> {
     }
     Ok(())
 }
+fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
+    const TABLES: &[&str] = &[
+        "iptv_channel_imported_facets",
+        "iptv_channel_override_facets",
+        "iptv_channel_overrides",
+        "iptv_channels",
+        "iptv_source_default_facets",
+        "iptv_sources",
+    ];
+    const INDEXES: &[&str] = &[
+        "idx_iptv_channels_missing",
+        "idx_iptv_channels_source_group",
+        "idx_iptv_channels_source_present_order",
+        "idx_iptv_channels_source_tvgid",
+        "idx_iptv_imported_facet_filter",
+        "idx_iptv_override_facet_filter",
+        "idx_iptv_source_default_facet_filter",
+        "idx_iptv_sources_enabled_order",
+    ];
+    for (kind, prefix, expected) in [
+        ("table", "iptv_%", TABLES),
+        ("index", "idx_iptv_%", INDEXES),
+    ] {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type=?1 AND name LIKE ?2 ORDER BY name",
+            )
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        let actual = stmt
+            .query_map(params![kind, prefix], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::IncompatibleDatabase)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        if !actual.iter().map(String::as_str).eq(expected.iter().copied()) {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    Ok(())
+}
+
 fn validate_integrity(conn: &Connection) -> StorageResult<()> {
     let integrity: String = conn
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))

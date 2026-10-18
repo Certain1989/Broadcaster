@@ -149,7 +149,12 @@ fn exact_migration_v1_with_fk_and_d6_constraints() {
 }
 #[test]
 fn reject_nonempty_alien_future_and_corrupt_database() {
-    for (id, version) in [(0, 0), (APPLICATION_ID, 2), (APPLICATION_ID, 0)] {
+    for (id, version) in [
+        (0, 0),
+        (APPLICATION_ID, 2),
+        (APPLICATION_ID, 0),
+        (APPLICATION_ID, 1),
+    ] {
         let dir = std::env::temp_dir().join(format!("broadcaster-alien-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         #[cfg(unix)]
