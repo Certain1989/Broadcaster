@@ -560,3 +560,63 @@ msgstr "Die externe Anwendung konnte nicht überprüft werden."
 #: Broadcaster v0.1.1 security and error handling
 msgid "Invalid programme website URL"
 msgstr "Ungültige URL der Sendungswebseite"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "My Channels"
+msgstr "Eigene Sender"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Search My Channels"
+msgstr "Eigene Sender suchen"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "All sources"
+msgstr "Alle Quellen"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "All groups"
+msgstr "Alle Gruppen"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Filter by source"
+msgstr "Nach Quelle filtern"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Filter by group"
+msgstr "Nach Gruppe filtern"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Sort channels"
+msgstr "Sender sortieren"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Playlist order"
+msgstr "Reihenfolge der Wiedergabeliste"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Add Playlist (coming next)"
+msgstr "Wiedergabeliste hinzufügen (folgt)"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Playlist import is available in the next development stage"
+msgstr "Der Import von Wiedergabelisten folgt im nächsten Entwicklungsschritt"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "No My Channels Yet"
+msgstr "Noch keine eigenen Sender"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Could Not Load My Channels"
+msgstr "Eigene Sender konnten nicht geladen werden"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "No Enabled Channels"
+msgstr "Keine aktivierten Sender"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "Loading channel…"
+msgstr "Sender wird geladen…"
+
+#: Broadcaster v0.2.0 S4 interim strings
+msgid "channels"
+msgstr "Sender"
