@@ -55,9 +55,9 @@ struct LogoState {
 impl LogoState {
     fn insert(&mut self, url: String, texture: gtk::gdk::Texture) {
         if let Some(old) = self.textures.remove(&url) {
-            self.pixels = self.pixels.saturating_sub(
-                old.width() as u64 * old.height() as u64,
-            );
+            self.pixels = self
+                .pixels
+                .saturating_sub(old.width() as u64 * old.height() as u64);
         }
         self.lru.retain(|key| key != &url);
         self.pixels += texture.width() as u64 * texture.height() as u64;
@@ -66,9 +66,9 @@ impl LogoState {
         while self.textures.len() > 64 || self.pixels > 4_194_304 {
             if let Some(key) = self.lru.pop_front() {
                 if let Some(old) = self.textures.remove(&key) {
-                    self.pixels = self.pixels.saturating_sub(
-                        old.width() as u64 * old.height() as u64,
-                    );
+                    self.pixels = self
+                        .pixels
+                        .saturating_sub(old.width() as u64 * old.height() as u64);
                 }
             } else {
                 break;
@@ -1038,10 +1038,8 @@ impl TvStreamsView {
             self,
             async move {
                 let request = url.clone();
-                let bytes = crate::utils::tokio(async move {
-                    super::logo::load(request).await
-                })
-                .await;
+                let bytes =
+                    crate::utils::tokio(async move { super::logo::load(request).await }).await;
                 let mut state = view.imp().logos.borrow_mut();
                 state.pending.remove(&url);
                 if let Some(bytes) = bytes {
