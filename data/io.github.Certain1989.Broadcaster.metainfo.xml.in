@@ -10,6 +10,9 @@
     Mediathek archives and plays programmes using mpv. Livestreams from the
     MediathekView Zapp service are available as well. The fullscreen interface
     supports directional television remotes alongside mouse and keyboard.</p>
+    <p>My Channels adds user-managed local and HTTP(S) M3U playlists,
+    channel search and metadata filters, manual refresh and editable channel
+    information. Available raster logos are loaded on demand.</p>
     <p>Broadcaster was substantially developed with the assistance of large
     language models. It is a personal project distributed as-is, without a
     guaranteed response to issues or a regular maintenance commitment.</p>
