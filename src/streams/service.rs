@@ -315,7 +315,7 @@ impl StreamsService {
             let registry = self.inner.clone();
             let expected_id = id.clone();
             self.db(move |store| {
-                let map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
+                let mut map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
                 if !map.get(&expected_id).is_some_and(|r| {
                     r.generation == generation && !r.token.is_cancelled()
                 }) {
@@ -325,9 +325,15 @@ impl StreamsService {
                 let committed = store.create_source_with_initial_snapshot(
                     &expected_id, &draft, &snapshot, now(),
                 );
-                // Preserve the actual result across a cancellation race
-                // immediately after the blocking transaction.
-                drop(map);
+                // Preserve the authoritative result before any later
+                // cancellation can acquire this same commit barrier.
+                if let Some(running) = map.get_mut(&expected_id) {
+                    running.stage = if committed.is_ok() {
+                        RefreshStage::Succeeded
+                    } else {
+                        RefreshStage::Failed
+                    };
+                }
                 committed.map_err(ServiceError::Storage)
             }).await
         }.await;
