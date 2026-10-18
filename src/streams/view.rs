@@ -838,31 +838,27 @@ impl TvStreamsView {
     pub(crate) fn assert_fake_player_navigation(&self) {
         use super::model::ChannelEffective;
         use std::{collections::BTreeSet, time::Instant};
-        let rows = self.imp().rows.get().expect("rows");
+        // An *unallocated/unmapped* GtkListView has no viewport and may
+        // request every row while measuring its natural size. Benchmark the
+        // lazy data model detached from that GTK size-request artifact;
+        // real mapped viewport/TV performance still needs device validation.
+        let model = StreamRows::new();
         for count in [100, 1_000, 10_000] {
             let start = Instant::now();
-            rows.reset(count);
-            assert_eq!(rows.n_items(), count);
-            // GTK SingleSelection and the still-attached ListView may
-            // legitimately request a small number of visible slots on reset.
-            // Require bounded visible-item allocation, not exactly zero.
-            let before = rows.created_slots();
-            if count >= 1_000 {
-                assert!(before < 256, "GTK materialized too many channel slots");
-            }
-            let last = rows.item(count - 1).expect("far channel position");
+            model.reset(count);
+            assert_eq!(model.n_items(), count);
+            assert_eq!(model.created_slots(), 0, "model allocated all slots");
+            let last = model.item(count - 1).expect("far channel position");
             let slot = last.downcast::<StreamSlot>().expect("slot object");
             assert_eq!(slot.position(), count - 1);
-            let after = rows.created_slots();
-            if count >= 1_000 {
-                assert!(after < 256, "far-position lookup allocated too many slots");
-            }
-            assert_eq!(rows.cached_pages(), 0);
+            assert_eq!(model.created_slots(), 1, "far lookup allocated more than one");
+            assert_eq!(model.cached_pages(), 0);
             eprintln!(
-                "S4 synthetic model {count} positions: before={before}, after={after}, duration={:?}",
+                "S4 detached lazy model {count} positions: 1 slot, duration={:?}",
                 start.elapsed()
             );
         }
+        let rows = self.imp().rows.get().expect("rows");
         let id = uuid::Uuid::new_v4().to_string();
         let channel = ChannelEffective {
             id: id.clone(),
