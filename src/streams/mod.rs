@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Pure playlist parsing and SQLite persistence; integration runs these off GTK's main loop.
-//! No streams UI or playback integration is registered here.
+//! Bounded IPTV retrieval, parsing, async orchestration, and SQLite persistence.
+//! No streams tab, logos, or playback integration is registered here.
 #![allow(dead_code)]
 
 pub(crate) mod model;
 pub(crate) mod parser;
+mod fetch;
+pub(crate) mod service;
 mod query;
 mod refresh;
 pub(crate) mod storage;
