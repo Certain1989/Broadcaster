@@ -294,6 +294,7 @@ impl TvStreamsView {
             self,
             move |_| {
                 view.imp().suppress_controls.set(true);
+                view.imp().search_serial.set(view.imp().search_serial.get().wrapping_add(1));
                 *view.imp().query.borrow_mut() = ChannelQuery::default();
                 view.imp().search_entry.set_text("");
                 view.imp().suppress_controls.set(false);
