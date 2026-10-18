@@ -764,3 +764,272 @@ msgstr "Wiedergabeliste hinzufügen"
 #: src/shortcuts-dialog.blp src/window.blp
 msgid "Manage Sources"
 msgstr "Quellen verwalten"
+
+# Broadcaster v0.2.0 source-management and channel-view strings
+msgid "Active / retained channels"
+msgstr "Aktive / aufbewahrte Sender"
+
+msgid "Add a playlist or manage existing sources"
+msgstr "Wiedergabeliste hinzufügen oder vorhandene Quellen verwalten"
+
+msgid "Added"
+msgstr "Hinzugefügt"
+
+msgid "All countries"
+msgstr "Alle Länder"
+
+msgid "All languages"
+msgstr "Alle Sprachen"
+
+msgid "All regions"
+msgstr "Alle Regionen"
+
+msgid "Automatic"
+msgstr "Automatisch"
+
+msgid "Change or clear the search and filters"
+msgstr "Suche und Filter ändern oder zurücksetzen"
+
+msgid "Channels"
+msgstr "Sender"
+
+msgid "Checking channel changes"
+msgstr "Senderänderungen werden geprüft"
+
+msgid "Choose Local M3U File"
+msgstr "Lokale M3U-Datei auswählen"
+
+msgid "Clear Filters"
+msgstr "Filter zurücksetzen"
+
+msgid "Close"
+msgstr "Schließen"
+
+msgid "Confirm Major Channel Reduction"
+msgstr "Starke Verringerung der Senderzahl bestätigen"
+
+msgid "Country"
+msgstr "Land"
+
+msgid "Defaults"
+msgstr "Standardwerte"
+
+msgid "Delete"
+msgstr "Löschen"
+
+msgid "Delete Permanently"
+msgstr "Endgültig löschen"
+
+msgid "Delete Source?"
+msgstr "Quelle löschen?"
+
+msgid "Edit Channel Metadata"
+msgstr "Sendermetadaten bearbeiten"
+
+msgid "Edit Metadata"
+msgstr "Metadaten bearbeiten"
+
+msgid "Edit Source Defaults"
+msgstr "Standardwerte der Quelle bearbeiten"
+
+msgid "Effective"
+msgstr "Wirksam"
+
+msgid "Enable or disable source"
+msgstr "Quelle aktivieren oder deaktivieren"
+
+msgid "Enter Playlist URL"
+msgstr "Playlist-URL eingeben"
+
+msgid "Filter by country"
+msgstr "Nach Land filtern"
+
+msgid "Filter by language"
+msgstr "Nach Sprache filtern"
+
+msgid "Filter by region"
+msgstr "Nach Region filtern"
+
+msgid "Group"
+msgstr "Gruppe"
+
+msgid "Imported"
+msgstr "Importiert"
+
+msgid "Imported name"
+msgstr "Importierter Name"
+
+msgid "Keep Existing"
+msgstr "Bisherige Sender behalten"
+
+msgid "Keep Source"
+msgstr "Quelle behalten"
+
+msgid "Language"
+msgstr "Sprache"
+
+msgid "Last attempt"
+msgstr "Letzter Versuch"
+
+msgid "Last success"
+msgstr "Letzter Erfolg"
+
+msgid "Loading playlist"
+msgstr "Wiedergabeliste wird geladen"
+
+msgid "Local Playlist Permission Expired"
+msgstr "Zugriff auf lokale Wiedergabeliste abgelaufen"
+
+msgid "Local file"
+msgstr "Lokale Datei"
+
+msgid "Many existing channels would disappear. Keep existing is the safe default."
+msgstr "Viele vorhandene Sender würden verschwinden. Die bisherigen Sender zu behalten ist die sichere Wahl."
+
+msgid "Matched"
+msgstr "Zugeordnet"
+
+msgid "Missing"
+msgstr "Fehlend"
+
+msgid "My values"
+msgstr "Eigene Werte"
+
+msgid "Name"
+msgstr "Name"
+
+msgid "Name origin"
+msgstr "Herkunft des Namens"
+
+msgid "Never"
+msgstr "Nie"
+
+msgid "New HTTP(S) URL (not shown in status messages)"
+msgstr "Neue HTTP(S)-Adresse (wird nicht in Statusmeldungen angezeigt)"
+
+msgid "No playlists imported"
+msgstr "Noch keine Wiedergabelisten importiert"
+
+msgid "No recorded error"
+msgstr "Kein Fehler gespeichert"
+
+msgid "Playlist HTTP(S) URL"
+msgstr "HTTP(S)-Adresse der Wiedergabeliste"
+
+msgid "Playlist operation failed"
+msgstr "Aktion für die Wiedergabeliste fehlgeschlagen"
+
+msgid "Playlist refreshed"
+msgstr "Wiedergabeliste aktualisiert"
+
+msgid "Playlist replaced"
+msgstr "Wiedergabeliste ersetzt"
+
+msgid "Playlist saved"
+msgstr "Wiedergabeliste gespeichert"
+
+msgid "Previous group"
+msgstr "Vorherige Gruppe"
+
+msgid "Previous selection"
+msgstr "Vorherige Auswahl"
+
+msgid "Reading channels"
+msgstr "Sender werden eingelesen"
+
+msgid "Ready"
+msgstr "Bereit"
+
+msgid "Refresh"
+msgstr "Aktualisieren"
+
+msgid "Refresh cancelled"
+msgstr "Aktualisierung abgebrochen"
+
+msgid "Refresh completed"
+msgstr "Aktualisierung abgeschlossen"
+
+msgid "Refresh failed"
+msgstr "Aktualisierung fehlgeschlagen"
+
+msgid "Region"
+msgstr "Region"
+
+msgid "Region code"
+msgstr "Regionscode"
+
+msgid "Region label"
+msgstr "Regionsname"
+
+msgid "Remote playlist"
+msgstr "Online-Wiedergabeliste"
+
+msgid "Remove this source and all of its imported channels? This cannot be undone."
+msgstr "Diese Quelle und alle importierten Sender löschen? Dies kann nicht rückgängig gemacht werden."
+
+msgid "Rename"
+msgstr "Umbenennen"
+
+msgid "Rename Source"
+msgstr "Quelle umbenennen"
+
+msgid "Replace"
+msgstr "Ersetzen"
+
+msgid "Replace Channels"
+msgstr "Sender ersetzen"
+
+msgid "Replace HTTP(S) URL"
+msgstr "HTTP(S)-Adresse ersetzen"
+
+msgid "Replace Playlist"
+msgstr "Wiedergabeliste ersetzen"
+
+msgid "Replace Playlist URL"
+msgstr "Playlist-URL ersetzen"
+
+msgid "Reselect File"
+msgstr "Datei erneut auswählen"
+
+msgid "Reselect Local File"
+msgstr "Lokale Datei erneut auswählen"
+
+msgid "Reset to Automatic"
+msgstr "Auf automatisch zurücksetzen"
+
+msgid "Save"
+msgstr "Speichern"
+
+msgid "Saving channels"
+msgstr "Sender werden gespeichert"
+
+msgid "Source default"
+msgstr "Quellstandard"
+
+msgid "Source deleted"
+msgstr "Quelle gelöscht"
+
+msgid "Source name"
+msgstr "Quellname"
+
+msgid "Source renamed"
+msgstr "Quelle umbenannt"
+
+msgid "Toggle Fullscreen"
+msgstr "Vollbild umschalten"
+
+msgid "Unique source name"
+msgstr "Eindeutiger Quellname"
+
+msgid "Unknown"
+msgstr "Unbekannt"
+
+msgid "Use my display name"
+msgstr "Eigenen Anzeigenamen verwenden"
+
+msgid "Use source management to enable channels or add a playlist"
+msgstr "Aktivieren Sie Sender in der Quellenverwaltung oder fügen Sie eine Wiedergabeliste hinzu"
+
+msgid "Waiting for confirmation"
+msgstr "Warte auf Bestätigung"
+
