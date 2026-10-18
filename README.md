@@ -8,32 +8,42 @@
 
 **English | [Deutsch](README.de.md)**
 
-Broadcaster is a lightweight, native Linux application for watching German public-service television: search Mediathek archives, browse live channels and play programmes with mpv. Its GTK4/libadwaita interface works with a mouse and keyboard or a directional television remote, including on Wayland/KDE Plasma Bigscreen.
+Broadcaster is a lightweight, native Linux application for German public-service live TV, on-demand Mediathek programmes and your own M3U/IPTV channels, all played with mpv. Its GTK4/libadwaita interface works with a mouse and keyboard or a directional television remote, including on Wayland/KDE Plasma Bigscreen.
 
 ## What it does
 
 - **Mediathek:** search German-language broadcaster catalogues through MediathekViewWeb. Filter by channel or duration, sort results, choose stream quality, and open programme details.
 - **Live TV:** browse current programmes from the Zapp service, read programme descriptions, and select which live channels appear and in what order.
-- **My Channels (v0.2.0, in development):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
+- **My Channels (new in v0.2.0):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
 - **TV controls:** fullscreen startup, remote-friendly navigation, and a dedicated mpv overlay for play/pause, seeking, playback speed, audio tracks and subtitles. Labels reflect available stream metadata.
 - **Desktop integration:** native GTK4 interface, English and German text, optional external player and downloader, and Flatpak builds for x86-64 and ARM64.
+
+## Screenshots
+
+<img width="760" alt="Mediathek search results and filters" src="https://github.com/user-attachments/assets/0aa04dc6-f0ec-4ebf-a146-9b3825bd3d59" />
+
+<img width="760" alt="Live TV channel list with programme progress" src="https://github.com/user-attachments/assets/a03f6228-35df-466e-8292-4d958ba27155" />
+
+<img width="760" alt="My Channels imported M3U playlist and channel filters" src="https://github.com/user-attachments/assets/b42b2e26-524c-49fd-824e-233e6f4014c5" />
+
+See the [v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) for more screenshots, including playlist setup and playback controls.
 
 To find playlists for **My Channels**, browse [IPTV-org's country, language and category playlists](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). The Add Playlist dialog links to the same third-party directory; nothing is subscribed automatically. Imported logos are cached on disk (up to 2,048 images or 256 MiB) and unreferenced images are removed after successful playlist refreshes or source deletion; memory textures remain deliberately small to keep remote input responsive.
 
 Broadcaster neither hosts nor supplies media. Stream availability, channel metadata, subtitles, regional restrictions and service uptime are controlled by broadcasters and external catalogue providers. Remote key mapping depends on your desktop and hardware; Fedora KDE Plasma Bigscreen/Wayland is the primary tested TV environment. Other Linux desktops may work but are not guaranteed.
 
-## Install v0.1.1
+## Install v0.2.0
 
-Download the `broadcaster-0.1.1-x86_64.flatpak` bundle for Intel/AMD PCs or `broadcaster-0.1.1-aarch64.flatpak` for ARM64 systems, **together with `SHA256SUMS`**, from the [v0.1.1 GitHub release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.1.1). Run the following in the download directory (substitute `aarch64` everywhere for ARM64):
+Download the `broadcaster-0.2.0-x86_64.flatpak` bundle for Intel/AMD PCs or `broadcaster-0.2.0-aarch64.flatpak` for ARM64 systems, **together with `SHA256SUMS`**, from the [v0.2.0 GitHub release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0). Run the following in the download directory (substitute `aarch64` everywhere for ARM64):
 
 ```bash
-sha256sum -c SHA256SUMS
+grep 'broadcaster-0.2.0-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.1.1-x86_64.flatpak
+flatpak install --user ./broadcaster-0.2.0-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
-The checksum command checks both named files, so download **both** architectures or, if you downloaded only your own, use `grep 'broadcaster-0.1.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -` (replace `x86_64` with `aarch64` as appropriate). For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install system-wide for a separate TV account, use the equivalent `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.1.1-x86_64.flatpak`, and `sudo flatpak uninstall --system ...` operations; start the app without sudo.
+The checksum command verifies the downloaded x86_64 bundle against `SHA256SUMS`. For ARM64, replace `x86_64` with `aarch64` in both the checksum check and installation command. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install system-wide for a separate TV account, use the equivalent `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.0-x86_64.flatpak`, and `sudo flatpak uninstall --system ...` operations; start the app without sudo.
 
 Broadcaster requires the GNOME Platform 51 runtime, which Flatpak can download from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable ID above is distinct from `io.github.Certain1989.Broadcaster.Devel` used for CI development builds.
 

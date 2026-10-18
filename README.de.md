@@ -8,28 +8,38 @@
 
 **[English](README.md) | Deutsch**
 
-Broadcaster ist eine schlanke, native Linux-Anwendung für deutschsprachiges öffentlich-rechtliches Fernsehen: Mediatheken durchsuchen, Livestreams auswählen und Sendungen mit mpv wiedergeben. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus und Tastatur sowie mit Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
+Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtliches Live-TV, Mediathek-Sendungen und eigene M3U-/IPTV-Sender. Die Wiedergabe erfolgt mit mpv. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus und Tastatur sowie mit Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
 
 ## Funktionen
 
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
-- **Eigene Sender (v0.2.0, in Entwicklung):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
+- **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
 - **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
+
+## Screenshots
+
+<img width="760" alt="Mediathek-Suche mit Ergebnisliste und Filtern" src="https://github.com/user-attachments/assets/0aa04dc6-f0ec-4ebf-a146-9b3825bd3d59" />
+
+<img width="760" alt="Live-TV mit Sendungsinformationen und Fortschrittsbalken" src="https://github.com/user-attachments/assets/a03f6228-35df-466e-8292-4d958ba27155" />
+
+<img width="760" alt="Eigene Sender aus einer M3U-Wiedergabeliste mit Filtern" src="https://github.com/user-attachments/assets/b42b2e26-524c-49fd-824e-233e6f4014c5" />
+
+Weitere Bilder, etwa zum Hinzufügen von Playlists und zur Wiedergabesteuerung, zeigt das [Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0).
 
 Öffentlich verfügbare Wiedergabelisten für **Eigene Sender** bietet [IPTV-org nach Land, Sprache und Kategorie](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). Der Dialog „Wiedergabeliste hinzufügen“ verlinkt dasselbe externe Verzeichnis; Broadcaster abonniert nichts automatisch. Heruntergeladene Senderlogos werden lokal zwischengespeichert (bis zu 2.048 Bilder oder 256 MiB). Nach erfolgreicher Aktualisierung einer Wiedergabeliste oder dem Löschen einer Quelle werden nicht mehr verwendete Logos entfernt; der kleinere Arbeitsspeicher-Cache bleibt für eine flüssige Fernbedienung begrenzt.
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-## Installation von v0.1.1
+## Installation von v0.2.0
 
-Aus dem [GitHub-Release v0.1.1](https://github.com/Certain1989/Broadcaster/releases/tag/v0.1.1) `broadcaster-0.1.1-x86_64.flatpak` für Intel-/AMD-PCs oder `broadcaster-0.1.1-aarch64.flatpak` für ARM64 zusammen mit `SHA256SUMS` herunterladen. Im Download-Verzeichnis ausführen (auf ARM64 `x86_64` durch `aarch64` ersetzen):
+Aus dem [GitHub-Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) `broadcaster-0.2.0-x86_64.flatpak` für Intel-/AMD-PCs oder `broadcaster-0.2.0-aarch64.flatpak` für ARM64 zusammen mit `SHA256SUMS` herunterladen. Im Download-Verzeichnis ausführen (auf ARM64 `x86_64` durch `aarch64` ersetzen):
 
 ```bash
-grep 'broadcaster-0.1.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.2.0-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.1.1-x86_64.flatpak
+flatpak install --user ./broadcaster-0.2.0-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 

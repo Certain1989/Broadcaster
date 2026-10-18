@@ -1,11 +1,11 @@
 <!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Broadcaster v0.2.0 — candidate feature notes
+# Broadcaster v0.2.0 — feature and packaging notes
 
-These notes describe the v0.2.0 development candidate, not an available release.
-Until a release is published, the install instructions in the README describe
-the current stable v0.1.1 build.
+v0.2.0 was released on October 18, 2026. Download verified Flatpak bundles and
+`SHA256SUMS` from the [v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0).
+The README contains the current installation instructions.
 
 ## My Channels
 
@@ -33,5 +33,6 @@ the current stable v0.1.1 build.
   application data directory; existing application preferences remain intact.
 - Importing playlists cannot guarantee that their streams are reachable or
   licensed for viewing. Broadcaster does not supply channel subscriptions.
-- This is a pre-release description, not evidence of device tests or a claim
-  that a v0.2.0 package has been released.
+- The published release includes production Flatpak bundles for x86_64 and
+  aarch64. Release automation passed, but this is not a claim of comprehensive
+  testing across all TV remotes, compositors or devices.
