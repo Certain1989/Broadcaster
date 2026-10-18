@@ -775,9 +775,8 @@ mod playback_navigation_tests {
         // Up from the first row must reach the toolbar. A reversed GTK
         // ancestry test used to trap the remote within GtkListView children.
         assert!(streams.focus_vertical_navigation(&focused, gtk::gdk::Key::Up));
-        assert!(!streams.contains_results_focus(
-            &window.focused_widget().expect("toolbar should hold focus")
-        ));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("toolbar should hold focus")));
         assert!(streams.show_and_focus_test_results());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert!(!streams
