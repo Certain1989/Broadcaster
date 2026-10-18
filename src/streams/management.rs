@@ -252,7 +252,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         .unwrap_or_else(|| {
             file.as_ref()
                 .and_then(|f| f.basename())
-                .map(|s| s.to_string())
+                .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
     let initial_defaults = defaults_for
@@ -285,7 +285,9 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     save.connect_clicked(glib::clone!(
         #[weak]
@@ -407,7 +409,9 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     close.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     load_manager(view, &service, &list, &status);
     dialog.present(Some(&window));
@@ -540,20 +544,20 @@ fn load_manager(
                         show_source_form(&view, None, Some(edit_source.clone()));
                     }
                 ));
-                let rename_source = source.clone();
+                let source_for_rename = source.clone();
                 rename.connect_clicked(glib::clone!(
                     #[weak]
                     view,
                     move |_| {
-                        rename_source(&view, rename_source.clone());
+                        rename_source(&view, source_for_rename.clone());
                     }
                 ));
-                let change_source = source.clone();
+                let source_for_change = source.clone();
                 change.connect_clicked(glib::clone!(
                     #[weak]
                     view,
                     move |_| {
-                        change_source(&view, change_source.clone());
+                        change_source(&view, source_for_change.clone());
                     }
                 ));
                 let remove_source = source.clone();
@@ -627,7 +631,9 @@ fn rename_source(view: &TvStreamsView, source: Source) {
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     save.connect_clicked(glib::clone!(
         #[weak]
@@ -726,7 +732,9 @@ fn replace_url_form(view: &TvStreamsView, id: String) {
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     save.connect_clicked(glib::clone!(
         #[weak]
@@ -801,7 +809,9 @@ fn reauthorize(view: &TvStreamsView, id: String) {
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     choose.connect_clicked(glib::clone!(
         #[weak]
@@ -870,7 +880,9 @@ fn confirm_preview(view: &TvStreamsView, service: StreamsService, ticket: Refres
     decline.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     approve.connect_clicked(glib::clone!(
         #[weak]
@@ -932,7 +944,9 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     delete.connect_clicked(glib::clone!(
         #[weak]
