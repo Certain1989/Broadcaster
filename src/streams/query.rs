@@ -143,11 +143,7 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
             |r| r.get(0),
         )
         .map_err(map_sql)?;
-    let order = match q.sort {
-        SortOrder::PlaylistOrder => "source_order,playlist_order,id",
-        SortOrder::Name => "lower(display_name),source_order,playlist_order,id",
-        SortOrder::Group => "lower(COALESCE(eff_group,'')),source_order,playlist_order,id",
-    };
+    let order = ordering(q.sort);
     let sql = format!("{CORE} SELECT id FROM matched ORDER BY {order} LIMIT ?11 OFFSET ?12");
     let mut stmt = conn.prepare(&sql).map_err(map_sql)?;
     let ids = stmt
@@ -164,7 +160,50 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
     Ok((ids, total as u64))
 }
 
+fn ordering(sort: SortOrder) -> &'static str {
+    match sort {
+        SortOrder::PlaylistOrder => "source_order,playlist_order,id",
+        SortOrder::Name => "lower(display_name),source_order,playlist_order,id",
+        SortOrder::Group => "lower(COALESCE(eff_group,'')),source_order,playlist_order,id",
+    }
+}
+
 impl Storage {
+    /// Zero-based rank of a stable channel ID in the *full* effective query.
+    /// Paging bounds are deliberately ignored; ranking uses the exact same
+    /// matched CTE and ordering as query_channels.
+    pub fn channel_position(
+        &self,
+        query: &ChannelQuery,
+        id: &ChannelId,
+    ) -> StorageResult<Option<u64>> {
+        valid_query(query)?;
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Err(StorageError::InvalidInput);
+        }
+        let conn = self.connect()?;
+        let (search, source, group, language, country, region) = args(query);
+        let sql = format!(
+            "{CORE} SELECT position FROM (
+               SELECT id, ROW_NUMBER() OVER (ORDER BY {}) - 1 AS position FROM matched
+             ) WHERE id=?11",
+            ordering(query.sort)
+        );
+        use rusqlite::OptionalExtension;
+        let rank: Option<i64> = conn
+            .query_row(
+                &sql,
+                params![
+                    search, source, group.0, group.1, language.0, language.1,
+                    country.0, country.1, region.0, region.1, id,
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(map_sql)?;
+        rank.map(|value| u64::try_from(value).map_err(|_| StorageError::CorruptDatabase))
+            .transpose()
+    }
     pub fn query_channels(&self, query: &ChannelQuery) -> StorageResult<ChannelPage> {
         valid_query(query)?;
         let mut conn = self.connect()?;
