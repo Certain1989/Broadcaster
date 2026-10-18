@@ -545,11 +545,7 @@ impl TvStreamsView {
         }
     }
 
-    fn install_facets(
-        &self,
-        query: &ChannelQuery,
-        facets: InstalledFacets,
-    ) {
+    fn install_facets(&self, query: &ChannelQuery, facets: InstalledFacets) {
         let InstalledFacets {
             sources,
             source_options,
