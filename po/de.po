@@ -752,3 +752,15 @@ msgstr "Bitte eine gültige HTTP(S)-Playlistadresse eingeben"
 
 msgid "Add or clear the typed language tag before saving."
 msgstr "Vor dem Speichern das eingegebene Sprachkennzeichen hinzufügen oder das Feld leeren."
+
+#: src/shortcuts-dialog.blp
+msgid "Show My Channels"
+msgstr "Eigene Sender anzeigen"
+
+#: src/shortcuts-dialog.blp src/window.blp
+msgid "Add Playlist"
+msgstr "Wiedergabeliste hinzufügen"
+
+#: src/shortcuts-dialog.blp src/window.blp
+msgid "Manage Sources"
+msgstr "Quellen verwalten"
