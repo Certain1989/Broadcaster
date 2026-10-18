@@ -1021,7 +1021,8 @@ impl TvStreamsView {
     }
 
     fn refresh_logo(&self, slot: &StreamSlot) {
-        let logo_url = slot.channel().and_then(|channel| channel.logo_url);
+        let channel = slot.channel();
+        let logo_url = channel.as_ref().and_then(|item| item.logo_url.as_ref());
         let imp = self.imp();
         for binding in imp.bindings.borrow().values() {
             if binding
@@ -1029,10 +1030,30 @@ impl TvStreamsView {
                 .as_ref()
                 .is_some_and(|(bound, _)| bound == slot)
             {
-                if let Some(texture) = logo_url
-                    .as_ref()
-                    .and_then(|url| imp.logos.borrow().textures.get(url).cloned())
-                {
+                let texture = {
+                    let mut logos = imp.logos.borrow_mut();
+                    logo_url
+                        .and_then(|url| logos.textures.get(url).cloned())
+                        .or_else(|| {
+                            // Packaged, licensed broadcaster artwork is a
+                            // safe fallback for *exact* known channel names.
+                            // Remote playlist artwork still takes precedence.
+                            let item = channel.as_ref()?;
+                            let scale = binding.ui.icon.scale_factor();
+                            let dark = adw::StyleManager::default().is_dark();
+                            let key = format!("bundled:{}:{scale}:{dark}", item.visible_name);
+                            if let Some(texture) = logos.textures.get(&key).cloned() {
+                                return Some(texture);
+                            }
+                            let texture = crate::channel_icons::bundled_streams_logo(
+                                &item.visible_name,
+                                72 * scale,
+                            )?;
+                            logos.insert(key, texture.clone());
+                            Some(texture)
+                        })
+                };
+                if let Some(texture) = texture {
                     binding.ui.logo.set_paintable(Some(&texture));
                     binding.ui.logo.set_visible(true);
                     binding.ui.icon.set_visible(false);
@@ -1040,8 +1061,6 @@ impl TvStreamsView {
                     binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
                     binding.ui.logo.set_visible(false);
                     binding.ui.icon.set_visible(true);
-                    // A playlist can omit tvg-logo entirely; do not invent a
-                    // logo for unrelated channels with similar names.
                     let hint = if logo_url.is_some() {
                         gettext("Channel logo unavailable")
                     } else {
