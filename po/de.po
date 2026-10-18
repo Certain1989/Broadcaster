@@ -728,3 +728,24 @@ msgstr "Sprachen"
 msgid "Countries"
 msgstr "Länder"
 
+
+msgid "Open the list and use arrow keys and Enter/Space to select or deselect; typing is optional."
+msgstr "Liste öffnen und mit den Pfeiltasten und Enter/Leertaste auswählen oder abwählen; Tippen ist optional."
+
+msgid "These defaults are used only when channel metadata is missing from the playlist."
+msgstr "Diese Standardwerte werden nur verwendet, wenn entsprechende Senderinformationen in der Playlist fehlen."
+
+msgid "Choose at most 64 values."
+msgstr "Bitte höchstens 64 Einträge auswählen."
+
+msgid "Enter a valid region name or code, e.g. Bavaria / DE-BY."
+msgstr "Bitte einen gültigen Regionsnamen oder Code angeben, z. B. Bayern / DE-BY."
+
+msgid "Invalid channel override"
+msgstr "Ungültige manuelle Senderinformationen"
+
+msgid "Enter a source name (1–128 bytes)"
+msgstr "Bitte einen Quellnamen eingeben (1–128 Byte)"
+
+msgid "Enter a valid HTTP(S) playlist URL"
+msgstr "Bitte eine gültige HTTP(S)-Playlistadresse eingeben"
