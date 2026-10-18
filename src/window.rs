@@ -738,6 +738,7 @@ mod playback_navigation_tests {
         stack.set_visible_child_name("streams");
         assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
         window.imp().streams_view.assert_fake_player_navigation();
+        crate::streams::assert_s5_form_controls();
         let streams_token = window.begin_playback();
         window.finish_playback(streams_token);
         assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
