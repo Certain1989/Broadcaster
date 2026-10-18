@@ -429,8 +429,5 @@ pub(crate) fn bounded_optional(value: &Option<String>, max: usize) -> StorageRes
     Ok(())
 }
 fn optional_with_empty(value: &Option<String>, max: usize) -> StorageResult<()> {
-    if let Some(s) = value {
-        if s.len() > max || s.chars().any(char::is_control) { return Err(StorageError::InvalidInput); }
-    }
-    Ok(())
+    bounded_optional(value, max)
 }
