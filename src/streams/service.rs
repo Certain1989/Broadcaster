@@ -712,6 +712,16 @@ impl StreamsService {
         self.db(move |s| s.query_channels(&query).map_err(Into::into))
             .await
     }
+    pub(crate) async fn channel_position(
+        &self,
+        query: ChannelQuery,
+        id: &str,
+    ) -> Result<Option<u64>, ServiceError> {
+        let id = id.to_owned();
+        self.db(move |store| store.channel_position(&query, &id).map_err(Into::into))
+            .await
+    }
+
     pub(crate) async fn filter_options(
         &self,
         query: ChannelQuery,

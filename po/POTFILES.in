@@ -38,6 +38,8 @@ src/preferences/mod.rs
 src/preferences/mpv_arguments.blp
 src/preferences/mpv_arguments.rs
 src/settings.rs
+src/streams/view.blp
+src/streams/view.rs
 src/utils.rs
 src/window.blp
 src/window.rs
