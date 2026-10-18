@@ -749,3 +749,6 @@ msgstr "Bitte einen Quellnamen eingeben (1–128 Byte)"
 
 msgid "Enter a valid HTTP(S) playlist URL"
 msgstr "Bitte eine gültige HTTP(S)-Playlistadresse eingeben"
+
+msgid "Add or clear the typed language tag before saving."
+msgstr "Vor dem Speichern das eingegebene Sprachkennzeichen hinzufügen oder das Feld leeren."
