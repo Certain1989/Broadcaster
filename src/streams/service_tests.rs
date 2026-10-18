@@ -253,16 +253,17 @@ async fn superseded_network_operation_cannot_overwrite_successor() {
         .await
         .unwrap();
     server.replace(playlist(7));
-    let first = {
-        let service = service.clone();
-        let id = source.id.clone();
-        tokio::spawn(async move { service.refresh(&id).await })
+    // GIO-backed refresh futures are intentionally !Send: run both on the
+    // current executor thread instead of sending one to a Tokio worker.
+    let first = service.refresh(&source.id);
+    let second = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        server.replace(playlist(19));
+        service.refresh(&source.id).await
     };
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    server.replace(playlist(19));
-    let second = service.refresh(&source.id).await.unwrap();
-    assert!(matches!(second, RefreshOutcome::Committed(_)));
-    assert!(matches!(first.await.unwrap(), Err(ServiceError::Cancelled)));
+    let (first, second) = tokio::join!(first, second);
+    assert!(matches!(second.unwrap(), RefreshOutcome::Committed(_)));
+    assert!(matches!(first, Err(ServiceError::Cancelled)));
     assert_eq!(
         service.query(ChannelQuery::default()).await.unwrap().total,
         19
