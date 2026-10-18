@@ -44,19 +44,20 @@ fn load_old(conn: &Connection, source_id: &str) -> StorageResult<Vec<Existing>> 
          FROM iptv_channels WHERE source_id=?1 ORDER BY id",
         )
         .map_err(map_sql)?;
-    let result = stmt.query_map([source_id], |r| {
-        Ok(Existing {
-            id: r.get(0)?,
-            tvg: r.get(1)?,
-            url: r.get(2)?,
-            group: r.get(3)?,
-            name: r.get(4)?,
-            present: r.get::<_, i32>(5)? != 0,
+    let result = stmt
+        .query_map([source_id], |r| {
+            Ok(Existing {
+                id: r.get(0)?,
+                tvg: r.get(1)?,
+                url: r.get(2)?,
+                group: r.get(3)?,
+                name: r.get(4)?,
+                present: r.get::<_, i32>(5)? != 0,
+            })
         })
-    })
-    .map_err(map_sql)?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(map_sql);
+        .map_err(map_sql)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sql);
     result
 }
 fn match_entries(old: &[Existing], new: &[IncomingChannel]) -> Plan {
