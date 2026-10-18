@@ -175,6 +175,60 @@ impl Storage {
         ids.iter().map(|id| load_source(&conn, id)).collect()
     }
 
+    /// Counts include cached missing rows, while present counts only the active snapshot.
+    pub fn source_counts(&self, id: &str) -> StorageResult<(u64, u64)> {
+        let conn = self.connect()?;
+        let (present, retained): (i64, i64) = conn
+            .query_row(
+                "SELECT COALESCE(SUM(is_present), 0), COUNT(*) FROM iptv_channels WHERE source_id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(map_sql)?;
+        Ok((present as u64, retained as u64))
+    }
+
+    /// Move exactly one source relative to its current neighbour. The complete
+    /// order is normalized atomically, so duplicate or adjacent prior order
+    /// values can never make an Up/Down control silently do nothing.
+    pub fn move_source(&self, id: &str, direction: i32, at: i64) -> StorageResult<()> {
+        if direction != -1 && direction != 1 {
+            return Err(StorageError::InvalidInput);
+        }
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sql)?;
+        let mut stmt = tx
+            .prepare("SELECT id FROM iptv_sources ORDER BY source_order, id")
+            .map_err(map_sql)?;
+        let mut ids = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(map_sql)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(map_sql)?;
+        drop(stmt);
+        let old = ids
+            .iter()
+            .position(|item| item == id)
+            .ok_or(StorageError::NotFound)?;
+        let target = if direction < 0 {
+            old.checked_sub(1)
+        } else {
+            old.checked_add(1).filter(|n| *n < ids.len())
+        };
+        if let Some(target) = target {
+            ids.swap(old, target);
+        }
+        for (ordinal, source_id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE iptv_sources SET source_order=?1, revision=revision+1, updated_at=?2 WHERE id=?3 AND source_order != ?1",
+                params![ordinal as u32, at, source_id],
+            ).map_err(map_sql)?;
+        }
+        tx.commit().map_err(map_sql)
+    }
+
     pub fn get_source(&self, id: &str) -> StorageResult<Source> {
         let conn = self.connect()?;
         load_source(&conn, id)

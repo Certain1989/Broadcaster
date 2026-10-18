@@ -255,6 +255,50 @@ fn source_crud_revision_and_cascade() {
     assert_eq!(count, 0);
 }
 #[test]
+fn source_count_and_atomic_dense_source_move() {
+    let f = Fixture::new();
+    let (alpha, _) = f.new_source("Alpha", 3);
+    let (bravo, _) = f.new_source("Bravo", 2);
+    let (charlie, _) = f.new_source("Charlie", 1);
+    // All three fixture sources have source_order=0, so the move must
+    // normalize a tie without moving unrelated channels across sources.
+    assert_eq!(f.store.source_counts(&alpha.id).unwrap(), (3, 3));
+    assert_eq!(f.store.source_counts(&bravo.id).unwrap(), (2, 2));
+    assert_eq!(f.store.source_counts(&charlie.id).unwrap(), (1, 1));
+    let initial: Vec<_> = f
+        .store
+        .list_sources()
+        .unwrap()
+        .into_iter()
+        .map(|source| source.id)
+        .collect();
+    assert_eq!(initial.len(), 3);
+    let moved = initial[0].clone();
+    f.store.move_source(&moved, 1, NOW + 1).unwrap();
+    let reordered = f.store.list_sources().unwrap();
+    assert_eq!(reordered[0].id, initial[1]);
+    assert_eq!(reordered[1].id, initial[0]);
+    assert_eq!(reordered[2].id, initial[2]);
+    assert_eq!(
+        reordered
+            .iter()
+            .map(|source| source.order)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    assert_eq!(f.store.source_counts(&alpha.id).unwrap(), (3, 3));
+    assert_eq!(f.store.query_channels(&query_all()).unwrap().total, 6);
+    assert!(matches!(
+        f.store.move_source(&moved, 0, NOW + 2),
+        Err(StorageError::InvalidInput)
+    ));
+    assert!(matches!(
+        f.store.move_source("missing", -1, NOW + 2),
+        Err(StorageError::NotFound)
+    ));
+}
+
+#[test]
 fn source_defaults_multi_facet_manual_unknown_and_editor_provenance() {
     let f = Fixture::new();
     let (source, _) = f.new_source("News", 1);

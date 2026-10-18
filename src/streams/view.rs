@@ -33,11 +33,21 @@ struct RowUi {
     details: gtk::Label,
     reveal: gtk::Revealer,
     play: gtk::Button,
+    edit: gtk::Button,
 }
 
 struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
+}
+
+struct InstalledFacets {
+    sources: Vec<Source>,
+    source_options: FilterOptions,
+    group_options: FilterOptions,
+    language_options: FilterOptions,
+    country_options: FilterOptions,
+    region_options: FilterOptions,
 }
 
 mod imp {
@@ -51,9 +61,23 @@ mod imp {
         #[template_child]
         pub(super) filter_bar: TemplateChild<gtk::Box>,
         #[template_child]
+        pub(super) advanced_filter_bar: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub(super) actions_bar: TemplateChild<gtk::Box>,
+        #[template_child]
         pub(super) source_filter: TemplateChild<gtk::DropDown>,
         #[template_child]
         pub(super) group_filter: TemplateChild<gtk::DropDown>,
+        #[template_child]
+        pub(super) language_filter: TemplateChild<gtk::DropDown>,
+        #[template_child]
+        pub(super) country_filter: TemplateChild<gtk::DropDown>,
+        #[template_child]
+        pub(super) region_filter: TemplateChild<gtk::DropDown>,
+        #[template_child]
+        pub(super) clear_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub(super) manage_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub(super) sort_filter: TemplateChild<gtk::DropDown>,
         #[template_child]
@@ -78,10 +102,16 @@ mod imp {
         pub(super) in_flight: RefCell<HashSet<u32>>,
         pub(super) source_values: RefCell<Vec<Option<String>>>,
         pub(super) group_values: RefCell<Vec<FacetSelection>>,
+        pub(super) language_values: RefCell<Vec<FacetSelection>>,
+        pub(super) country_values: RefCell<Vec<FacetSelection>>,
+        pub(super) region_values: RefCell<Vec<FacetSelection>>,
         pub(super) selected_id: RefCell<Option<ChannelId>>,
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
+        pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
+        pub(super) manager_generation: Cell<u64>,
         #[cfg(test)]
         pub(super) fake_player_enabled: Cell<bool>,
         #[cfg(test)]
@@ -121,11 +151,14 @@ mod imp {
                 "compact" => {
                     let compact = value.get::<bool>().expect("compact is a boolean");
                     self.compact.set(compact);
-                    self.filter_bar.set_orientation(if compact {
+                    let orientation = if compact {
                         gtk::Orientation::Vertical
                     } else {
                         gtk::Orientation::Horizontal
-                    });
+                    };
+                    self.filter_bar.set_orientation(orientation);
+                    self.advanced_filter_bar.set_orientation(orientation);
+                    self.actions_bar.set_orientation(orientation);
                 }
                 _ => unreachable!("unknown streams property"),
             }
@@ -183,8 +216,14 @@ impl TvStreamsView {
 
         imp.source_values.replace(vec![None]);
         imp.group_values.replace(vec![FacetSelection::Any]);
+        imp.language_values.replace(vec![FacetSelection::Any]);
+        imp.country_values.replace(vec![FacetSelection::Any]);
+        imp.region_values.replace(vec![FacetSelection::Any]);
         self.update_dropdown(&imp.source_filter, &[gettext("All sources")], 0);
         self.update_dropdown(&imp.group_filter, &[gettext("All groups")], 0);
+        self.update_dropdown(&imp.language_filter, &[gettext("All languages")], 0);
+        self.update_dropdown(&imp.country_filter, &[gettext("All countries")], 0);
+        self.update_dropdown(&imp.region_filter, &[gettext("All regions")], 0);
         self.update_dropdown(
             &imp.sort_filter,
             &[gettext("Playlist order"), gettext("Name"), gettext("Group")],
@@ -218,6 +257,48 @@ impl TvStreamsView {
                 }
             }
         ));
+        imp.language_filter.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |dropdown| {
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
+                let index = dropdown.selected() as usize;
+                if let Some(selected) = view.imp().language_values.borrow().get(index).cloned() {
+                    view.imp().query.borrow_mut().language = selected;
+                    view.reload();
+                }
+            }
+        ));
+        imp.country_filter.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |dropdown| {
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
+                let index = dropdown.selected() as usize;
+                if let Some(selected) = view.imp().country_values.borrow().get(index).cloned() {
+                    view.imp().query.borrow_mut().country = selected;
+                    view.reload();
+                }
+            }
+        ));
+        imp.region_filter.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |dropdown| {
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
+                let index = dropdown.selected() as usize;
+                if let Some(selected) = view.imp().region_values.borrow().get(index).cloned() {
+                    view.imp().query.borrow_mut().region = selected;
+                    view.reload();
+                }
+            }
+        ));
         imp.sort_filter.connect_selected_notify(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -233,10 +314,27 @@ impl TvStreamsView {
                 view.reload();
             }
         ));
+        imp.clear_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| {
+                view.imp().suppress_controls.set(true);
+                view.imp()
+                    .search_serial
+                    .set(view.imp().search_serial.get().wrapping_add(1));
+                *view.imp().query.borrow_mut() = ChannelQuery::default();
+                view.imp().search_entry.set_text("");
+                view.imp().suppress_controls.set(false);
+                view.reload();
+            }
+        ));
         imp.search_entry.connect_search_changed(glib::clone!(
             #[weak(rename_to = view)]
             self,
             move |_| {
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let serial = view.imp().search_serial.get().wrapping_add(1);
                 view.imp().search_serial.set(serial);
                 glib::timeout_add_local_once(
@@ -285,9 +383,14 @@ impl TvStreamsView {
         imp.add_button.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
-            move |_| view.show_import_placeholder()
+            move |_| super::management::show_add_menu(&view)
         ));
 
+        imp.manage_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| super::management::show_manager(&view)
+        ));
         imp.results_stack.set_visible_child_name("loading");
         #[cfg(not(test))]
         spawn(glib::clone!(
@@ -328,17 +431,43 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             async move {
-                let (page, sources, source_options, group_options) = futures_util::join!(
+                let (
+                    page,
+                    sources,
+                    source_options,
+                    group_options,
+                    language_options,
+                    country_options,
+                    region_options,
+                ) = futures_util::join!(
                     service.query(query.clone()),
                     service.list_sources(),
                     service.filter_options(query.clone(), FilterDimension::Source),
                     service.filter_options(query.clone(), FilterDimension::Group),
+                    service.filter_options(query.clone(), FilterDimension::Language),
+                    service.filter_options(query.clone(), FilterDimension::Country),
+                    service.filter_options(query.clone(), FilterDimension::Region),
                 );
                 if view.imp().generation.get() != generation {
                     return;
                 }
-                let (Ok(page), Ok(sources), Ok(source_options), Ok(group_options)) =
-                    (page, sources, source_options, group_options)
+                let (
+                    Ok(page),
+                    Ok(sources),
+                    Ok(source_options),
+                    Ok(group_options),
+                    Ok(language_options),
+                    Ok(country_options),
+                    Ok(region_options),
+                ) = (
+                    page,
+                    sources,
+                    source_options,
+                    group_options,
+                    language_options,
+                    country_options,
+                    region_options,
+                )
                 else {
                     view.imp().results_stack.set_visible_child_name("error");
                     return;
@@ -347,9 +476,14 @@ impl TvStreamsView {
                     query,
                     generation,
                     page,
-                    sources,
-                    source_options,
-                    group_options,
+                    InstalledFacets {
+                        sources,
+                        source_options,
+                        group_options,
+                        language_options,
+                        country_options,
+                        region_options,
+                    },
                 );
             }
         ));
@@ -360,15 +494,14 @@ impl TvStreamsView {
         query: ChannelQuery,
         generation: u64,
         page: ChannelPage,
-        sources: Vec<Source>,
-        source_options: FilterOptions,
-        group_options: FilterOptions,
+        facets: InstalledFacets,
     ) {
         let imp = self.imp();
         let previously_selected = imp.selected_id.borrow().clone();
         let previous_index = imp.last_index.get();
         imp.suppress_controls.set(true);
-        self.install_facets(&query, &sources, source_options, group_options);
+        let has_sources = !facets.sources.is_empty();
+        self.install_facets(&query, facets);
         let total = page.total.min(u32::MAX as u64) as u32;
         let rows = imp.rows.get().expect("initialized rows");
         rows.reset(total);
@@ -379,10 +512,13 @@ impl TvStreamsView {
             imp.expanded_id.replace(None);
             let active_filters = query.search.is_some()
                 || query.source_id.is_some()
-                || query.group != FacetSelection::Any;
+                || query.group != FacetSelection::Any
+                || query.language != FacetSelection::Any
+                || query.country != FacetSelection::Any
+                || query.region != FacetSelection::Any;
             imp.empty_page.set_title(&if active_filters {
                 gettext("No Matching Channels")
-            } else if sources.is_empty() {
+            } else if !has_sources {
                 gettext("No My Channels Yet")
             } else {
                 gettext("No Enabled Channels")
@@ -412,13 +548,15 @@ impl TvStreamsView {
         }
     }
 
-    fn install_facets(
-        &self,
-        query: &ChannelQuery,
-        sources: &[Source],
-        source_options: FilterOptions,
-        group_options: FilterOptions,
-    ) {
+    fn install_facets(&self, query: &ChannelQuery, facets: InstalledFacets) {
+        let InstalledFacets {
+            sources,
+            source_options,
+            group_options,
+            language_options,
+            country_options,
+            region_options,
+        } = facets;
         let imp = self.imp();
         let names: HashMap<&str, &str> = sources
             .iter()
@@ -474,11 +612,54 @@ impl TvStreamsView {
         imp.group_values.replace(group_values);
         self.update_dropdown(&imp.source_filter, &source_labels, source_index);
         self.update_dropdown(&imp.group_filter, &group_labels, group_index);
+        let (language_labels, language_values, language_index) =
+            Self::facet_dropdown(&gettext("All languages"), &query.language, language_options);
+        let (country_labels, country_values, country_index) =
+            Self::facet_dropdown(&gettext("All countries"), &query.country, country_options);
+        let (region_labels, region_values, region_index) =
+            Self::facet_dropdown(&gettext("All regions"), &query.region, region_options);
+        let show_region = region_values
+            .iter()
+            .any(|value| matches!(value, FacetSelection::Value(_)))
+            || query.region != FacetSelection::Any;
+        imp.region_filter.set_visible(show_region);
+        imp.language_values.replace(language_values);
+        imp.country_values.replace(country_values);
+        imp.region_values.replace(region_values);
+        self.update_dropdown(&imp.language_filter, &language_labels, language_index);
+        self.update_dropdown(&imp.country_filter, &country_labels, country_index);
+        self.update_dropdown(&imp.region_filter, &region_labels, region_index);
         imp.sort_filter.set_selected(match query.sort {
             SortOrder::PlaylistOrder => 0,
             SortOrder::Name => 1,
             SortOrder::Group => 2,
         });
+    }
+
+    fn facet_dropdown(
+        all: &str,
+        selected: &FacetSelection,
+        options: FilterOptions,
+    ) -> (Vec<String>, Vec<FacetSelection>, u32) {
+        let mut labels = vec![all.to_owned()];
+        let mut values = vec![FacetSelection::Any];
+        for choice in options.choices {
+            let (label, value) = match choice.value {
+                FacetValue::Known(value) => (value.clone(), FacetSelection::Value(value)),
+                FacetValue::Unknown => (gettext("Unknown"), FacetSelection::Unknown),
+            };
+            labels.push(format!("{label} ({})", choice.count));
+            values.push(value);
+        }
+        if !values.contains(selected) {
+            labels.push(format!("{} (0)", gettext("Previous selection")));
+            values.push(selected.clone());
+        }
+        let index = values
+            .iter()
+            .position(|value| value == selected)
+            .unwrap_or(0) as u32;
+        (labels, values, index)
     }
 
     fn select_channel_id(
@@ -605,6 +786,9 @@ impl TvStreamsView {
         play.add_css_class("suggested-action");
         play.set_halign(gtk::Align::Start);
         actions.append(&play);
+        let edit = gtk::Button::with_label(&gettext("Edit Metadata"));
+        edit.set_halign(gtk::Align::Start);
+        actions.append(&edit);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
         play.connect_clicked(glib::clone!(
@@ -613,6 +797,22 @@ impl TvStreamsView {
             #[weak]
             item,
             move |_| view.play_position(item.position())
+        ));
+        edit.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|r| r.channel(item.position()))
+                {
+                    view.edit_selected(channel.id);
+                }
+            }
         ));
         item.set_child(Some(&root));
         self.imp().bindings.borrow_mut().insert(
@@ -624,6 +824,7 @@ impl TvStreamsView {
                     details,
                     reveal,
                     play,
+                    edit,
                 },
                 connection: None,
             },
@@ -676,6 +877,7 @@ impl TvStreamsView {
             binding.ui.details.set_text("");
             binding.ui.reveal.set_reveal_child(false);
             binding.ui.play.set_sensitive(false);
+            binding.ui.edit.set_sensitive(false);
         }
     }
 
@@ -697,6 +899,7 @@ impl TvStreamsView {
             ui.details.set_text("");
             ui.reveal.set_reveal_child(false);
             ui.play.set_sensitive(false);
+            ui.edit.set_sensitive(false);
             return;
         };
         ui.title.set_text(&channel.visible_name);
@@ -746,6 +949,7 @@ impl TvStreamsView {
         ui.reveal
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
+        ui.edit.set_sensitive(true);
     }
 
     fn repaint_bound_rows(&self) {
@@ -773,7 +977,7 @@ impl TvStreamsView {
             .bindings
             .borrow()
             .values()
-            .any(|binding| binding.ui.play.has_focus())
+            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus())
         {
             return;
         }
@@ -816,6 +1020,68 @@ impl TvStreamsView {
             uri: channel.stream_url,
         };
         spawn(async move { TvApplication::get().play(video).await });
+    }
+
+    pub fn show_add(&self) {
+        super::management::show_add_menu(self);
+    }
+
+    pub fn show_manager(&self) {
+        super::management::show_manager(self);
+    }
+
+    pub(crate) fn remember_source_manager(&self, list: &gtk::ListBox, status: &gtk::Label) {
+        let imp = self.imp();
+        imp.manager_list.replace(Some(list.downgrade()));
+        imp.manager_status.replace(Some(status.downgrade()));
+    }
+
+    pub(crate) fn forget_source_manager(&self) {
+        let imp = self.imp();
+        imp.manager_list.replace(None);
+        imp.manager_status.replace(None);
+        self.next_manager_generation();
+    }
+
+    pub(crate) fn next_manager_generation(&self) -> u64 {
+        let imp = self.imp();
+        let generation = imp.manager_generation.get().wrapping_add(1);
+        imp.manager_generation.set(generation);
+        generation
+    }
+
+    pub(crate) fn manager_generation(&self) -> u64 {
+        self.imp().manager_generation.get()
+    }
+
+    pub(crate) fn refresh_source_manager(&self) {
+        let imp = self.imp();
+        let list = imp
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade);
+        let status = imp
+            .manager_status
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade);
+        if let (Some(list), Some(status), Some(service)) = (list, status, self.service()) {
+            super::management::load_manager(self, &service, &list, &status);
+        }
+    }
+
+    pub(crate) fn source_mutated(&self) {
+        self.reload();
+        self.refresh_source_manager();
+    }
+
+    pub(crate) fn service(&self) -> Option<StreamsService> {
+        self.imp().service.borrow().clone()
+    }
+
+    pub(crate) fn edit_selected(&self, id: ChannelId) {
+        super::editor::show_metadata_editor(self, id);
     }
 
     fn show_import_placeholder(&self) {
@@ -916,6 +1182,48 @@ impl TvStreamsView {
             self.imp().selected_id.borrow().as_deref(),
             Some(id.as_str())
         );
+        assert!(self.contains_results_focus(self.imp().results_list.upcast_ref()));
+        assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
+    }
+
+    /// Match the virtualized list and its focused descendants, including
+    /// expanded Play/Edit buttons. Never depend on a recycled row's identity.
+    pub fn contains_results_focus(&self, focused: &gtk::Widget) -> bool {
+        let list = self.imp().results_list.upcast_ref::<gtk::Widget>();
+        focused == list || focused.is_ancestor(list)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn show_and_focus_test_results(&self) -> bool {
+        self.imp().results_stack.set_visible_child_name("results");
+        self.imp().results_list.grab_focus()
+    }
+
+    /// Check the real widget that receives Up from row zero, and confirm it
+    /// lives under the scoped CSS focus styling used by this toolbar. A
+    /// successful grab_focus alone does not imply a visible TV indicator.
+    #[cfg(test)]
+    pub(crate) fn assert_remote_toolbar_focus_styled(&self) {
+        let imp = self.imp();
+        let toolbar = imp.search_entry.parent().expect("search toolbar");
+        assert!(toolbar.has_css_class("tv-streams-controls"));
+        assert!(imp.add_button.has_focus(), "Up must focus Add Playlist");
+        for control in [
+            imp.search_entry.upcast_ref::<gtk::Widget>(),
+            imp.source_filter.upcast_ref(),
+            imp.group_filter.upcast_ref(),
+            imp.sort_filter.upcast_ref(),
+            imp.language_filter.upcast_ref(),
+            imp.country_filter.upcast_ref(),
+            imp.clear_button.upcast_ref(),
+            imp.manage_button.upcast_ref(),
+            imp.add_button.upcast_ref(),
+        ] {
+            assert!(
+                control.is_ancestor(&toolbar),
+                "toolbar control outside focus styling"
+            );
+        }
     }
 
     pub fn focus_search(&self) {
@@ -929,35 +1237,48 @@ impl TvStreamsView {
             return false;
         }
         let imp = self.imp();
-        let controls: [&gtk::Widget; 6] = [
+        let controls: [&gtk::Widget; 11] = [
             imp.search_entry.upcast_ref(),
             imp.source_filter.upcast_ref(),
             imp.group_filter.upcast_ref(),
+            imp.language_filter.upcast_ref(),
+            imp.country_filter.upcast_ref(),
+            imp.region_filter.upcast_ref(),
             imp.sort_filter.upcast_ref(),
+            imp.clear_button.upcast_ref(),
+            imp.manage_button.upcast_ref(),
             imp.add_button.upcast_ref(),
             imp.results_list.upcast_ref(),
         ];
         for (index, widget) in controls.iter().enumerate() {
-            if *widget != focused && !widget.is_ancestor(focused) {
+            if *widget != focused && !focused.is_ancestor(*widget) {
                 continue;
             }
-            if index == 5 {
+            if index == controls.len() - 1 {
                 // GTK owns row-to-row movement. Only escape from the first row.
                 if key == gtk::gdk::Key::Up
                     && imp.selection.get().is_some_and(|s| s.selected() == 0)
                 {
-                    return controls[4].grab_focus();
+                    return controls[controls.len() - 2].grab_focus();
                 }
                 return false;
             }
             if key == gtk::gdk::Key::Up {
-                return index > 0 && controls[index - 1].grab_focus();
+                return controls[..index]
+                    .iter()
+                    .rev()
+                    .find(|w| w.is_visible() && w.is_sensitive())
+                    .is_some_and(|w| w.grab_focus());
             }
             let next = index + 1;
-            if next == 5 && imp.rows.get().is_some_and(|rows| rows.n_items() == 0) {
+            if next == controls.len() - 1 && imp.rows.get().is_some_and(|rows| rows.n_items() == 0)
+            {
                 return imp.add_button.grab_focus();
             }
-            return controls[next].grab_focus();
+            return controls[next..]
+                .iter()
+                .find(|w| w.is_visible() && w.is_sensitive())
+                .is_some_and(|w| w.grab_focus());
         }
         false
     }

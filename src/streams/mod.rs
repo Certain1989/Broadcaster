@@ -5,7 +5,10 @@
 //! A lazy GTK catalogue is registered alongside the off-main backend.
 #![allow(dead_code)]
 
+mod editor;
+mod facet_picker;
 mod fetch;
+mod management;
 pub(crate) mod model;
 pub(crate) mod parser;
 mod query;
@@ -21,3 +24,9 @@ mod parser_tests;
 mod service_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn assert_s5_form_controls() {
+    editor::assert_synthetic_editor_form();
+    management::assert_synthetic_source_defaults_form();
+}

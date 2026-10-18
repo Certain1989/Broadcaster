@@ -91,6 +91,14 @@ mod imp {
                 slf.imp().stack.set_visible_child_name("streams");
                 slf.imp().streams_view.focus_search();
             });
+            klass.install_action("window.add-playlist", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_add();
+            });
+            klass.install_action("window.manage-sources", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_manager();
+            });
             // Explicit escape hatch for TV remotes as well as desktop users.
             // The existing fullscreened settings binding persists this choice.
             klass.install_action("window.toggle-fullscreen", None, |slf, _, _| {
@@ -416,8 +424,10 @@ impl TvWindow {
     /// switcher. Interior row navigation, editing, dropdowns, dialogs and
     /// mpv keep their own native key handling.
     fn focus_boundary_key(&self, key: gtk::gdk::Key) -> bool {
-        if !matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down)
-            || Self::find_mapped_popover(self.upcast_ref()).is_some()
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left
+        ) || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
         }
@@ -434,6 +444,13 @@ impl TvWindow {
 
         if Self::is_within(&focused, page) {
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                // Escape from any virtualized row using one remote key, no
+                // matter where the selection is in a large playlist.
+                // GTK keeps Left/Right ownership in filters and editors.
+                if key == gtk::gdk::Key::Left {
+                    return self.imp().streams_view.contains_results_focus(&focused)
+                        && self.focus_page_switcher();
+                }
                 if key == gtk::gdk::Key::Up
                     && search
                         .as_ref()
@@ -587,7 +604,16 @@ impl TvWindow {
             gtk::gdk::Key::Escape
                 if self.imp().stack.visible_child_name().as_deref() == Some("streams") =>
             {
-                if self.imp().streams_view.collapse_expanded() {
+                // Give an open GTK popover its native Escape behavior first.
+                // Expanded rows collapse; otherwise Escape exits the list to
+                // the tabs while the remote Back key still goes to Mediathek.
+                if Self::find_mapped_popover(self.upcast_ref()).is_some() {
+                    glib::Propagation::Proceed
+                } else if self.imp().streams_view.collapse_expanded()
+                    || (self.focused_widget().is_some_and(|focused| {
+                        self.imp().streams_view.contains_results_focus(&focused)
+                    }) && self.focus_page_switcher())
+                {
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
@@ -730,6 +756,48 @@ mod playback_navigation_tests {
         stack.set_visible_child_name("streams");
         assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
         window.imp().streams_view.assert_fake_player_navigation();
+        crate::streams::assert_s5_form_controls();
+
+        // S5: exercise the actual mapped virtualized ListView and window
+        // focus router on GTK/Xvfb. Physical Wayland remote validation remains
+        // a separate owner/device check.
+        window.set_default_size(1280, 720);
+        window.present();
+        let streams = &window.imp().streams_view;
+        for _ in 0..48 {
+            if !glib::MainContext::default().iteration(false) {
+                break;
+            }
+        }
+        assert!(streams.show_and_focus_test_results());
+        let focused = window.focused_widget().expect("list should hold focus");
+        assert!(streams.contains_results_focus(&focused));
+        // Up from the first row must reach the toolbar. A reversed GTK
+        // ancestry test used to trap the remote within GtkListView children.
+        assert!(streams.focus_vertical_navigation(&focused, gtk::gdk::Key::Up));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("toolbar should hold focus")));
+        streams.assert_remote_toolbar_focus_styled();
+        assert!(streams.show_and_focus_test_results());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("Escape should focus tabs")));
+        streams.focus_search();
+        assert!(!window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Back, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
+        stack.set_visible_child_name("streams");
         let streams_token = window.begin_playback();
         window.finish_playback(streams_token);
         assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));

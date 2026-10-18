@@ -666,6 +666,18 @@ impl StreamsService {
     pub(crate) async fn list_sources(&self) -> Result<Vec<Source>, ServiceError> {
         self.db(|s| s.list_sources().map_err(Into::into)).await
     }
+    pub(crate) async fn source_counts(&self, id: &str) -> Result<(u64, u64), ServiceError> {
+        let id = id.to_owned();
+        self.db(move |store| store.source_counts(&id).map_err(Into::into))
+            .await
+    }
+
+    pub(crate) async fn move_source(&self, id: &str, direction: i32) -> Result<(), ServiceError> {
+        let id = id.to_owned();
+        self.db(move |store| store.move_source(&id, direction, now()).map_err(Into::into))
+            .await
+    }
+
     pub(crate) async fn source(&self, id: &str) -> Result<Source, ServiceError> {
         let id = id.to_owned();
         self.db(move |s| s.get_source(&id).map_err(Into::into))

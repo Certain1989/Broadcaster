@@ -620,3 +620,147 @@ msgstr "Sender wird geladen…"
 #: Broadcaster v0.2.0 S4 interim strings
 msgid "channels"
 msgstr "Sender"
+
+msgid "Enter a language tag, for example de-DE."
+msgstr "Bitte ein Sprachkennzeichen eingeben, zum Beispiel de-DE."
+
+
+msgid "Use the named language chooser; manual entry needs a tag such as de-DE."
+msgstr "Bitte die Sprache aus der Namensliste wählen; die manuelle Eingabe erwartet ein Kennzeichen wie de-DE."
+
+
+msgid "Invalid language tag. Use de, en or a tag such as de-DE (not a country)."
+msgstr "Ungültiges Sprachkennzeichen. Bitte de, en oder beispielsweise de-DE eingeben (kein Ländercode)."
+
+
+msgid "None selected (optional)"
+msgstr "Keine Auswahl (optional)"
+
+
+msgid "Remove"
+msgstr "Entfernen"
+
+
+msgid "Choose languages by name"
+msgstr "Sprachen nach Namen auswählen"
+
+
+msgid "Choose countries by name"
+msgstr "Länder nach Namen auswählen"
+
+
+msgid "Search names or codes (optional)"
+msgstr "Namen oder Codes suchen (optional)"
+
+
+msgid "Advanced: add a language tag manually"
+msgstr "Erweitert: Sprachkennzeichen manuell hinzufügen"
+
+
+msgid "Example: de-DE (language tag)"
+msgstr "Beispiel: de-DE (Sprachkennzeichen)"
+
+
+msgid "Add tag"
+msgstr "Kennzeichen hinzufügen"
+
+
+msgid "Choose at most 64 languages."
+msgstr "Bitte höchstens 64 Sprachen auswählen."
+
+
+msgid "Select at least one value from the named list."
+msgstr "Bitte mindestens einen Eintrag aus der Namensliste auswählen."
+
+
+msgid "Select at least one value."
+msgstr "Bitte mindestens einen Eintrag auswählen."
+
+
+msgid "Default languages (optional)"
+msgstr "Standardsprachen (optional)"
+
+
+msgid "Default countries (optional)"
+msgstr "Standardländer (optional)"
+
+
+msgid "Optional: DE-BY"
+msgstr "Optional: DE-BY"
+
+
+msgid "Optional: Bavaria"
+msgstr "Optional: Bayern"
+
+
+msgid "Default region code (optional)"
+msgstr "Standard-Regionscode (optional)"
+
+
+msgid "Default region name (optional)"
+msgstr "Standard-Regionsname (optional)"
+
+
+msgid "Invalid region: use a name or code (e.g. Bavaria / DE-BY), max 128/64 bytes."
+msgstr "Ungültige Region: Name oder Code angeben (z. B. Bayern / DE-BY), höchstens 128/64 Byte."
+
+
+msgid "Invalid metadata defaults"
+msgstr "Ungültige Metadaten-Standards"
+
+
+msgid "Advanced · Source metadata defaults (optional)"
+msgstr "Erweitert · Standard-Metadaten der Quelle (optional)"
+
+
+msgid "Enter a valid display name (1–512 bytes)."
+msgstr "Bitte einen gültigen Anzeigenamen eingeben (1–512 Byte)."
+
+
+msgid "Enter a valid group name (1–256 bytes)."
+msgstr "Bitte einen gültigen Gruppennamen eingeben (1–256 Byte)."
+
+
+msgid "Languages"
+msgstr "Sprachen"
+
+
+msgid "Countries"
+msgstr "Länder"
+
+
+msgid "Open the list and use arrow keys and Enter/Space to select or deselect; typing is optional."
+msgstr "Liste öffnen und mit den Pfeiltasten und Enter/Leertaste auswählen oder abwählen; Tippen ist optional."
+
+msgid "These defaults are used only when channel metadata is missing from the playlist."
+msgstr "Diese Standardwerte werden nur verwendet, wenn entsprechende Senderinformationen in der Playlist fehlen."
+
+msgid "Choose at most 64 values."
+msgstr "Bitte höchstens 64 Einträge auswählen."
+
+msgid "Enter a valid region name or code, e.g. Bavaria / DE-BY."
+msgstr "Bitte einen gültigen Regionsnamen oder Code angeben, z. B. Bayern / DE-BY."
+
+msgid "Invalid channel override"
+msgstr "Ungültige manuelle Senderinformationen"
+
+msgid "Enter a source name (1–128 bytes)"
+msgstr "Bitte einen Quellnamen eingeben (1–128 Byte)"
+
+msgid "Enter a valid HTTP(S) playlist URL"
+msgstr "Bitte eine gültige HTTP(S)-Playlistadresse eingeben"
+
+msgid "Add or clear the typed language tag before saving."
+msgstr "Vor dem Speichern das eingegebene Sprachkennzeichen hinzufügen oder das Feld leeren."
+
+#: src/shortcuts-dialog.blp
+msgid "Show My Channels"
+msgstr "Eigene Sender anzeigen"
+
+#: src/shortcuts-dialog.blp src/window.blp
+msgid "Add Playlist"
+msgstr "Wiedergabeliste hinzufügen"
+
+#: src/shortcuts-dialog.blp src/window.blp
+msgid "Manage Sources"
+msgstr "Quellen verwalten"
