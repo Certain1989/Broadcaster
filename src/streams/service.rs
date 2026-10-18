@@ -10,13 +10,13 @@
 use std::{
     collections::HashMap,
     fmt,
-    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use adw::{gio, gtk};
 use reqwest::Client;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 use super::{
     fetch::{self, Cancellation, FetchError},
@@ -154,15 +154,15 @@ impl StreamsService {
         self.inner.events.subscribe()
     }
 
-    pub(crate) fn stage(&self, id: &str) -> RefreshStage {
-        self.inner.generations.lock().unwrap_or_else(|e| e.into_inner())
+    pub(crate) async fn stage(&self, id: &str) -> RefreshStage {
+        self.inner.generations.lock().await
             .get(id).map_or(RefreshStage::Idle, |r| r.stage)
     }
 
     /// Idempotent for terminal states. An outstanding confirmation is cancelled
     /// just like a running HTTP or GIO load.
-    pub(crate) fn cancel(&self, id: &str) -> bool {
-        let mut map = self.inner.generations.lock().unwrap_or_else(|e| e.into_inner());
+    pub(crate) async fn cancel(&self, id: &str) -> bool {
+        let mut map = self.inner.generations.lock().await;
         let Some(running) = map.get_mut(id) else { return false; };
         if matches!(running.stage, RefreshStage::Succeeded | RefreshStage::Failed | RefreshStage::Cancelled) {
             return false;
@@ -179,8 +179,8 @@ impl StreamsService {
         true
     }
 
-    fn begin(&self, id: &str) -> (u64, Cancellation) {
-        let mut map = self.inner.generations.lock().unwrap_or_else(|e| e.into_inner());
+    async fn begin(&self, id: &str) -> (u64, Cancellation) {
+        let mut map = self.inner.generations.lock().await;
         if let Some(previous) = map.get(id) {
             previous.token.cancel();
         }
@@ -202,13 +202,13 @@ impl StreamsService {
         let _ = self.inner.events.send(event);
     }
 
-    fn is_current(&self, id: &str, generation: u64) -> bool {
-        self.inner.generations.lock().unwrap_or_else(|e| e.into_inner())
+    async fn is_current(&self, id: &str, generation: u64) -> bool {
+        self.inner.generations.lock().await
             .get(id).is_some_and(|r| r.generation == generation && !r.token.is_cancelled())
     }
 
-    fn progress(&self, id: &str, generation: u64, stage: RefreshStage) -> Result<(), ServiceError> {
-        let mut map = self.inner.generations.lock().unwrap_or_else(|e| e.into_inner());
+    async fn progress(&self, id: &str, generation: u64, stage: RefreshStage) -> Result<(), ServiceError> {
+        let mut map = self.inner.generations.lock().await;
         let Some(running) = map.get_mut(id) else { return Err(ServiceError::Cancelled); };
         if running.generation != generation || running.token.is_cancelled() {
             return Err(ServiceError::Cancelled);
@@ -221,14 +221,14 @@ impl StreamsService {
         Ok(())
     }
 
-    fn finish(&self, id: &str, generation: u64, result: &Result<(), ServiceError>) {
+    async fn finish(&self, id: &str, generation: u64, result: &Result<(), ServiceError>) {
         let stage = match result {
             Ok(()) => RefreshStage::Succeeded,
             Err(ServiceError::Cancelled | ServiceError::Declined) => RefreshStage::Cancelled,
             Err(_) => RefreshStage::Failed,
         };
         // Do not overwrite a later refresh's state with a stale completion.
-        if self.progress(id, generation, stage).is_ok() {
+        if self.progress(id, generation, stage).await.is_ok() {
             self.event(ServiceEvent::Finished {
                 source_id: id.to_owned(), generation, outcome: *result,
             });
@@ -302,20 +302,20 @@ impl StreamsService {
         order: u32, defaults: SourceDefaults,
     ) -> Result<Source, ServiceError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let (generation, cancellation) = self.begin(&id);
+        let (generation, cancellation) = self.begin(&id).await;
         let result = async {
             let (bytes, base, origin) = self.load(selection, &cancellation).await?;
-            self.progress(&id, generation, RefreshStage::Parsing)?;
+            self.progress(&id, generation, RefreshStage::Parsing).await?;
             let snapshot = self.parse(id.clone(), bytes, base).await?;
             let draft = SourceDraft {
                 name: name.to_owned(), origin, enabled: true, order, defaults,
             };
             draft.validate()?;
-            self.progress(&id, generation, RefreshStage::Committing)?;
+            self.progress(&id, generation, RefreshStage::Committing).await?;
             let registry = self.inner.clone();
             let expected_id = id.clone();
             self.db(move |store| {
-                let mut map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
+                let mut map = registry.generations.blocking_lock();
                 if !map.get(&expected_id).is_some_and(|r| {
                     r.generation == generation && !r.token.is_cancelled()
                 }) {
@@ -337,13 +337,13 @@ impl StreamsService {
                 committed.map_err(ServiceError::Storage)
             }).await
         }.await;
-        self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e));
+        self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e)).await;
         result
     }
 
     pub(crate) async fn refresh(&self, id: &str) -> Result<RefreshOutcome, ServiceError> {
         let id = id.to_owned();
-        let (generation, cancellation) = self.begin(&id);
+        let (generation, cancellation) = self.begin(&id).await;
         let result = async {
             let key = id.clone();
             let source = self.db(move |store| store.get_source(&key).map_err(Into::into)).await?;
@@ -378,7 +378,7 @@ impl StreamsService {
         &self, id: &str, selection: SourceSelection,
     ) -> Result<RefreshOutcome, ServiceError> {
         let id = id.to_owned();
-        let (generation, cancellation) = self.begin(&id);
+        let (generation, cancellation) = self.begin(&id).await;
         let result = async {
             let (bytes, base, origin) = self.load(selection, &cancellation).await?;
             self.preview(id.clone(), generation, bytes, base, Some(origin)).await
@@ -393,14 +393,14 @@ impl StreamsService {
         &self, id: String, generation: u64, bytes: Vec<u8>,
         base: Option<String>, replacement: Option<SourceOrigin>,
     ) -> Result<RefreshOutcome, ServiceError> {
-        self.progress(&id, generation, RefreshStage::Parsing)?;
+        self.progress(&id, generation, RefreshStage::Parsing).await?;
         let snapshot = self.parse(id.clone(), bytes, base).await?;
-        self.progress(&id, generation, RefreshStage::Previewing)?;
+        self.progress(&id, generation, RefreshStage::Previewing).await?;
         let candidate = snapshot.clone();
         let review = self.db(move |store| {
             store.preview_refresh(&candidate).map_err(ServiceError::Storage)
         }).await?;
-        self.progress(&id, generation, RefreshStage::Previewing)?;
+        self.progress(&id, generation, RefreshStage::Previewing).await?;
         self.event(ServiceEvent::Preview {
             source_id: id.clone(), generation, preview: review.clone(),
         });
@@ -408,7 +408,7 @@ impl StreamsService {
             preview: review, generation, snapshot, replacement,
         };
         if ticket.preview.requires_confirmation {
-            self.progress(&id, generation, RefreshStage::AwaitingConfirmation)?;
+            self.progress(&id, generation, RefreshStage::AwaitingConfirmation).await?;
             Ok(RefreshOutcome::ConfirmationRequired(ticket))
         } else {
             let source = self.confirm_refresh(ticket, true).await?;
@@ -424,17 +424,17 @@ impl StreamsService {
         let id = ticket.preview.source_id.clone();
         let generation = ticket.generation;
         if !approved {
-            self.finish(&id, generation, &Err(ServiceError::Declined));
+            self.finish(&id, generation, &Err(ServiceError::Declined)).await;
             return Err(ServiceError::Declined);
         }
-        self.progress(&id, generation, RefreshStage::Committing)?;
+        self.progress(&id, generation, RefreshStage::Committing).await?;
         let registry = self.inner.clone();
         let preview = ticket.preview;
         let snapshot = ticket.snapshot;
         let replacement = ticket.replacement;
         let commit_id = id.clone();
         let result = self.db(move |store| {
-            let mut map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
+            let mut map = registry.generations.blocking_lock();
             if !map.get(&commit_id).is_some_and(|r| {
                 r.generation == generation && !r.token.is_cancelled()
             }) {
@@ -465,12 +465,12 @@ impl StreamsService {
             }
             committed.map_err(ServiceError::Storage)
         }).await;
-        self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e));
+        self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e)).await;
         result
     }
 
     async fn failed(&self, id: &str, generation: u64, error: ServiceError) {
-        if !self.is_current(id, generation) { return; }
+        if !self.is_current(id, generation).await { return; }
         if !matches!(error, ServiceError::Cancelled | ServiceError::Declined) {
             let id_owned = id.to_owned();
             let registry = self.inner.clone();
@@ -482,7 +482,7 @@ impl StreamsService {
                 _ => ErrorCode::Network,
             };
             let _ = self.db(move |store| {
-                let map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
+                let map = registry.generations.blocking_lock();
                 if !map.get(&id_owned).is_some_and(|r| {
                     r.generation == generation && !r.token.is_cancelled()
                 }) {
@@ -491,7 +491,7 @@ impl StreamsService {
                 store.record_refresh_failure(&id_owned, code, now()).map_err(Into::into)
             }).await;
         }
-        self.finish(id, generation, &Err(error));
+        self.finish(id, generation, &Err(error)).await;
     }
 
     // Source CRUD and query facades always use an off-main worker.
