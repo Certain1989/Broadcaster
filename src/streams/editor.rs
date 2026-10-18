@@ -11,8 +11,8 @@ use gettextrs::gettext;
 use crate::{
     streams::{
         model::{
-            normalize_facet, ChannelDetail, ChannelOverrides, FacetDimension, FacetMode, FieldOrigin,
-            GroupOverride, Region, RegionOverride, SetOverride,
+            normalize_facet, ChannelDetail, ChannelOverrides, FacetDimension, FacetMode,
+            FieldOrigin, GroupOverride, Region, RegionOverride, SetOverride,
         },
         view::TvStreamsView,
     },
@@ -76,7 +76,8 @@ fn origin_text(origin: FieldOrigin) -> String {
 }
 
 fn value_text(value: Option<&str>) -> String {
-    value.filter(|value| !value.trim().is_empty())
+    value
+        .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| gettext("Unknown"))
 }
@@ -90,21 +91,23 @@ fn set_text(set: &BTreeSet<String>) -> String {
 }
 
 fn region_text(region: Option<&Region>) -> String {
-    region.map_or_else(|| gettext("Unknown"), |region| {
-        let code = region.code.as_deref().unwrap_or("");
-        let label = region.label.as_deref().unwrap_or("");
-        if code.is_empty() { label.to_owned() }
-        else if label.is_empty() { code.to_owned() }
-        else { format!("{code} ({label})") }
-    })
+    region.map_or_else(
+        || gettext("Unknown"),
+        |region| {
+            let code = region.code.as_deref().unwrap_or("");
+            let label = region.label.as_deref().unwrap_or("");
+            if code.is_empty() {
+                label.to_owned()
+            } else if label.is_empty() {
+                code.to_owned()
+            } else {
+                format!("{code} ({label})")
+            }
+        },
+    )
 }
 
-fn values_detail(
-    body: &gtk::Box,
-    imported: String,
-    default: Option<String>,
-    effective: String,
-) {
+fn values_detail(body: &gtk::Box, imported: String, default: Option<String>, effective: String) {
     label(&format!("{}: {}", gettext("Imported"), imported), body);
     if let Some(default) = default {
         label(&format!("{}: {}", gettext("Source default"), default), body);
@@ -162,7 +165,11 @@ impl Fields {
             body,
         );
         label(
-            &format!("{}: {}", gettext("Name origin"), origin_text(detail.provenance.name)),
+            &format!(
+                "{}: {}",
+                gettext("Name origin"),
+                origin_text(detail.provenance.name)
+            ),
             body,
         );
         let use_name = gtk::CheckButton::with_label(&gettext("Use my display name"));
@@ -497,21 +504,29 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
     ));
 }
 
-
 #[cfg(test)]
 mod editor_tests {
     use super::*;
 
     #[test]
     fn codes_and_regions_normalize_before_saving() {
-        assert_eq!(tokens("de-CH, en, de-CH", FacetDimension::Language).unwrap(),
-                   ["de-CH".to_owned(), "en".to_owned()].into_iter().collect());
-        assert_eq!(tokens("de, at", FacetDimension::Country).unwrap(),
-                   ["DE".to_owned(), "AT".to_owned()].into_iter().collect());
+        assert_eq!(
+            tokens("de-CH, en, de-CH", FacetDimension::Language).unwrap(),
+            ["de-CH".to_owned(), "en".to_owned()].into_iter().collect()
+        );
+        assert_eq!(
+            tokens("de, at", FacetDimension::Country).unwrap(),
+            ["DE".to_owned(), "AT".to_owned()].into_iter().collect()
+        );
         assert!(tokens("unknown", FacetDimension::Country).is_err());
         assert!(tokens("en, zz-?", FacetDimension::Language).is_err());
-        assert_eq!(filled_region("  DE-BY ", " Bavaria ").unwrap().code.as_deref(),
-                   Some("DE-BY"));
+        assert_eq!(
+            filled_region("  DE-BY ", " Bavaria ")
+                .unwrap()
+                .code
+                .as_deref(),
+            Some("DE-BY")
+        );
         assert!(filled_region(" ", " ").is_err());
         assert!(filled_region(&"x".repeat(65), "Label").is_err());
     }
