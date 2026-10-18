@@ -33,6 +33,15 @@ template $TvStreamsView: Adw.Bin {
           tooltip-text: _("Filter by group");
         }
 
+        Gtk.DropDown sort_filter {
+          tooltip-text: _("Sort channels");
+        }
+      }
+
+      Gtk.Box advanced_filter_bar {
+        orientation: horizontal;
+        spacing: 6;
+
         Gtk.DropDown language_filter {
           hexpand: true;
           tooltip-text: _("Filter by language");
@@ -48,13 +57,10 @@ template $TvStreamsView: Adw.Bin {
           tooltip-text: _("Filter by region");
           visible: false;
         }
-
-        Gtk.DropDown sort_filter {
-          tooltip-text: _("Sort channels");
-        }
       }
 
-      Gtk.Box {
+      Gtk.Box actions_bar {
+        orientation: horizontal;
         spacing: 8;
 
         Gtk.Label count_label {
