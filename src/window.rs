@@ -435,11 +435,16 @@ impl TvWindow {
         if Self::is_within(&focused, page) {
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
                 if key == gtk::gdk::Key::Up
-                    && search.as_ref().is_some_and(|entry| Self::is_within(&focused, entry))
+                    && search
+                        .as_ref()
+                        .is_some_and(|entry| Self::is_within(&focused, entry))
                 {
                     return self.focus_page_switcher();
                 }
-                return self.imp().streams_view.focus_vertical_navigation(&focused, key);
+                return self
+                    .imp()
+                    .streams_view
+                    .focus_vertical_navigation(&focused, key);
             }
             if self.imp().stack.visible_child_name().as_deref() == Some("mediathek") {
                 // Mediathek owns its full Search <-> Channel <-> Duration
