@@ -4,6 +4,11 @@
 
 name: REUSE
 
+# Only the latest check for a ref is useful during rapid iteration.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
   push:
