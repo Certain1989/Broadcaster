@@ -171,6 +171,21 @@ async fn import_refresh_rejects_shrink_without_approval_and_keeps_offline_cache(
 }
 
 #[tokio::test]
+async fn relative_streams_resolve_against_final_remote_playlist_address() {
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(
+        b"#EXTM3U\n#EXTINF:-1,Relative\n../stream.m3u8\n".to_vec()
+    ).await;
+    let source = test.service.add_url(
+        "Relative fixture", server.url("/lists/import.m3u"), 0, SourceDefaults::default()
+    ).await.unwrap();
+    let page = test.service.query(ChannelQuery::default()).await.unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].source_id, source.id);
+    assert_eq!(page.items[0].stream_url, server.url("/stream.m3u8"));
+}
+
+#[tokio::test]
 async fn malformed_reimport_does_not_create_or_replace_catalogue() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(b"#EXT-X-VERSION:3\n".to_vec()).await;
