@@ -12,7 +12,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("broadcaster-s1-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("broadcaster-iptv-{}", uuid::Uuid::new_v4()));
         let path = dir.join("broadcaster-iptv.sqlite3");
         let store = Storage::at(&path);
         store.initialize().expect("init");
@@ -723,7 +723,7 @@ fn synthetic_100_1000_10000_query_measurements() {
         // The normal test harness captures eprintln. Write directly to the
         // CI job's stderr to retain actual, synthetic-only timings.
         let info = format!(
-            "S1-PERF arch={} n={n} create={insert_time:?} page={query_time:?} facet={options_time:?} rss_kib={:?}\n",
+            "IPTV-STORAGE-PERF arch={} n={n} create={insert_time:?} page={query_time:?} facet={options_time:?} rss_kib={:?}\n",
             std::env::consts::ARCH,
             current_rss_kib()
         );

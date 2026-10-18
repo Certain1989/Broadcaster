@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! SQLite repository. All methods are synchronous; only call them on a blocking worker.
-//! S3 must wrap these methods in tokio::task::spawn_blocking (never on GTK MainContext).
+//! Async consumers must use tokio::task::spawn_blocking (never GTK MainContext).
 use std::{
     collections::BTreeSet,
     fs,
@@ -333,7 +333,7 @@ impl Storage {
         self.set_channel_overrides(id, &ChannelOverrides::default(), 0)
     }
 
-    /// S3 records fixed, sanitized codes only; a status write never bumps the CAS revision.
+    /// Only fixed, sanitized codes are stored; status writes do not bump the CAS revision.
     pub fn record_refresh_failure(&self, id: &str, code: ErrorCode, at: i64) -> StorageResult<()> {
         let conn = self.connect()?;
         if conn

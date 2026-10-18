@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Source-scoped, unambiguous identity reconciliation and transactional refresh.
-//! Cancellation/supersession is checked by S3 immediately BEFORE invoking the
+//! The async caller checks cancellation/supersession immediately BEFORE invoking the
 //! blocking commit. Once BEGIN IMMEDIATE is entered, success is authoritative.
 use super::{
     model::*,

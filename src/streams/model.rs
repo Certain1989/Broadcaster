@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Typed IPTV persistence boundaries. Parser (S2) and service (S3) consume these types.
+//! Typed IPTV persistence values shared by the parser and asynchronous service.
 use std::collections::BTreeSet;
 
 use ring::digest::{digest, SHA256};
