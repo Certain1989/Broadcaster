@@ -9,3 +9,6 @@ pub(crate) mod model;
 mod query;
 mod refresh;
 pub(crate) mod storage;
+
+#[cfg(test)]
+mod tests;
