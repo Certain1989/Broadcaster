@@ -194,8 +194,8 @@ impl Storage {
             .query_row(
                 &sql,
                 params![
-                    search, source, group.0, group.1, language.0, language.1,
-                    country.0, country.1, region.0, region.1, id,
+                    search, source, group.0, group.1, language.0, language.1, country.0, country.1,
+                    region.0, region.1, id,
                 ],
                 |row| row.get(0),
             )
