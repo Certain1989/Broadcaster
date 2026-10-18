@@ -9,7 +9,7 @@ use adw::{gio, glib, gtk, prelude::*, subclass::prelude::*};
 
 use crate::{
     application::TvApplication, config::PROFILE, live::TvLiveView, mediathek::TvMediathekView,
-    settings::TvSettings,
+    settings::TvSettings, streams::view::TvStreamsView,
 };
 
 /// Return state is scoped to a specific managed mpv process. It is not a
@@ -44,6 +44,8 @@ mod imp {
         pub(super) live_view: TemplateChild<TvLiveView>,
         #[template_child]
         pub(super) mediathek_view: TemplateChild<TvMediathekView>,
+        #[template_child]
+        pub(super) streams_view: TemplateChild<TvStreamsView>,
         // An AdwDialog may own the keyboard grab. Track all still-live
         // dialogs: dismissing nested dialogs can reveal an earlier one.
         pub(super) remote_dialogs: RefCell<Vec<glib::WeakRef<adw::Dialog>>>,
@@ -66,6 +68,7 @@ mod imp {
                 match slf.stack.visible_child_name().as_deref() {
                     Some("live") => slf.live_view.reload(),
                     Some("mediathek") => slf.mediathek_view.reload(),
+                    Some("streams") => slf.streams_view.reload(),
                     _ => (),
                 }
             });
@@ -74,6 +77,7 @@ mod imp {
                 match slf.stack.visible_child_name().as_deref() {
                     Some("live") => slf.live_view.focus_search(),
                     Some("mediathek") => slf.mediathek_view.focus_search(),
+                    Some("streams") => slf.streams_view.focus_search(),
                     _ => (),
                 }
             });
@@ -82,6 +86,18 @@ mod imp {
             });
             klass.install_action("window.show-mediathek", None, |slf, _, _| {
                 slf.imp().stack.set_visible_child_name("mediathek")
+            });
+            klass.install_action("window.show-streams", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.focus_search();
+            });
+            klass.install_action("window.add-playlist", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_add();
+            });
+            klass.install_action("window.manage-sources", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_manager();
             });
             // Explicit escape hatch for TV remotes as well as desktop users.
             // The existing fullscreened settings binding persists this choice.
@@ -341,6 +357,11 @@ impl TvWindow {
         }
 
         imp.stack.set_visible_child_name(&context.page);
+        // Recycled ListView row widgets are never a durable playback focus.
+        if context.page == "streams" {
+            imp.streams_view.restore_selection_by_id();
+            return;
+        }
         if let Some(widget) = context.focus.and_then(|weak| weak.upgrade()) {
             if widget.is_mapped() && widget.is_sensitive() && widget.grab_focus() {
                 return;
@@ -403,8 +424,10 @@ impl TvWindow {
     /// switcher. Interior row navigation, editing, dropdowns, dialogs and
     /// mpv keep their own native key handling.
     fn focus_boundary_key(&self, key: gtk::gdk::Key) -> bool {
-        if !matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down)
-            || Self::find_mapped_popover(self.upcast_ref()).is_some()
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left
+        ) || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
         }
@@ -414,11 +437,32 @@ impl TvWindow {
         let page = match self.imp().stack.visible_child_name().as_deref() {
             Some("live") => self.imp().live_view.upcast_ref::<gtk::Widget>(),
             Some("mediathek") => self.imp().mediathek_view.upcast_ref::<gtk::Widget>(),
+            Some("streams") => self.imp().streams_view.upcast_ref::<gtk::Widget>(),
             _ => return false,
         };
         let search = Self::find_descendant(page, &|widget| widget.is::<gtk::SearchEntry>());
 
         if Self::is_within(&focused, page) {
+            if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                // Escape from any virtualized row using one remote key, no
+                // matter where the selection is in a large playlist.
+                // GTK keeps Left/Right ownership in filters and editors.
+                if key == gtk::gdk::Key::Left {
+                    return self.imp().streams_view.contains_results_focus(&focused)
+                        && self.focus_page_switcher();
+                }
+                if key == gtk::gdk::Key::Up
+                    && search
+                        .as_ref()
+                        .is_some_and(|entry| Self::is_within(&focused, entry))
+                {
+                    return self.focus_page_switcher();
+                }
+                return self
+                    .imp()
+                    .streams_view
+                    .focus_vertical_navigation(&focused, key);
+            }
             if self.imp().stack.visible_child_name().as_deref() == Some("mediathek") {
                 // Mediathek owns its full Search <-> Channel <-> Duration
                 // <-> Sort <-> Results focus path. The old generic handler
@@ -542,7 +586,11 @@ impl TvWindow {
                     return glib::Propagation::Stop;
                 }
 
-                if self.imp().stack.visible_child_name().as_deref() == Some("live") {
+                if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                    if !self.imp().streams_view.collapse_expanded() {
+                        self.go_home();
+                    }
+                } else if self.imp().stack.visible_child_name().as_deref() == Some("live") {
                     self.go_home();
                 } else if !self
                     .imp()
@@ -552,6 +600,24 @@ impl TvWindow {
                     self.imp().mediathek_view.focus_browse();
                 }
                 glib::Propagation::Stop
+            }
+            gtk::gdk::Key::Escape
+                if self.imp().stack.visible_child_name().as_deref() == Some("streams") =>
+            {
+                // Give an open GTK popover its native Escape behavior first.
+                // Expanded rows collapse; otherwise Escape exits the list to
+                // the tabs while the remote Back key still goes to Mediathek.
+                if Self::find_mapped_popover(self.upcast_ref()).is_some() {
+                    glib::Propagation::Proceed
+                } else if self.imp().streams_view.collapse_expanded()
+                    || (self.focused_widget().is_some_and(|focused| {
+                        self.imp().streams_view.contains_results_focus(&focused)
+                    }) && self.focus_page_switcher())
+                {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
             }
             gtk::gdk::Key::HomePage => {
                 self.dismiss_open_popover();
@@ -685,6 +751,56 @@ mod playback_navigation_tests {
         };
         window.finish_playback(mediathek_token);
         assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
+
+        // S4: actual third page and fake GTK ListView activation protocol.
+        stack.set_visible_child_name("streams");
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        window.imp().streams_view.assert_fake_player_navigation();
+        crate::streams::assert_s5_form_controls();
+
+        // S5: exercise the actual mapped virtualized ListView and window
+        // focus router on GTK/Xvfb. Physical Wayland remote validation remains
+        // a separate owner/device check.
+        window.set_default_size(1280, 720);
+        window.present();
+        let streams = &window.imp().streams_view;
+        for _ in 0..48 {
+            if !glib::MainContext::default().iteration(false) {
+                break;
+            }
+        }
+        assert!(streams.show_and_focus_test_results());
+        let focused = window.focused_widget().expect("list should hold focus");
+        assert!(streams.contains_results_focus(&focused));
+        // Up from the first row must reach the toolbar. A reversed GTK
+        // ancestry test used to trap the remote within GtkListView children.
+        assert!(streams.focus_vertical_navigation(&focused, gtk::gdk::Key::Up));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("toolbar should hold focus")));
+        streams.assert_remote_toolbar_focus_styled();
+        assert!(streams.show_and_focus_test_results());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert!(!streams
+            .contains_results_focus(&window.focused_widget().expect("Escape should focus tabs")));
+        streams.focus_search();
+        assert!(!window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Back, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
+        stack.set_visible_child_name("streams");
+        let streams_token = window.begin_playback();
+        window.finish_playback(streams_token);
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
 
         // Later user navigation must win over playback-return restoration.
         stack.set_visible_child_name("live");

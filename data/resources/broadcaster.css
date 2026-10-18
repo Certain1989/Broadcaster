@@ -73,6 +73,24 @@ headerbar.tv-header button:focus-visible {
   border-radius: 10px;
 }
 
+/* My Channels has a separate toolbar from Mediathek. Highlight actual
+ * keyboard/remote focus on every upper control, including GtkDropDown's
+ * focused internal child, without changing the unfocused toolbar styling.
+ * In particular, Up from the first GtkListView row lands on Add Playlist. */
+.tv-streams-controls button:focus,
+.tv-streams-controls button:focus-within,
+.tv-streams-controls button:focus-visible,
+.tv-streams-controls dropdown:focus,
+.tv-streams-controls dropdown:focus-within,
+.tv-streams-controls dropdown:focus-visible,
+.tv-streams-controls entry.search:focus,
+.tv-streams-controls entry.search:focus-within,
+.tv-streams-controls entry.search:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: 1px;
+  border-radius: 10px;
+}
+
 label.channel-fallback {
   border: 1px solid @accent_color;
   border-radius: 10px;
@@ -81,4 +99,20 @@ label.channel-fallback {
   font-weight: 700;
   font-size: 12px;
   padding: 6px;
+}
+
+/* My Channels uses virtual GtkListView rows, but the text and icon footprint
+ * should match the TV-distance readability of Live and Mediathek. Larger
+ * spacing changes only the visible factory rows, never the 10k data model. */
+.tv-stream-channel-row {
+  min-height: 98px;
+}
+
+.tv-stream-channel-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.tv-stream-channel-summary {
+  font-size: 14px;
 }

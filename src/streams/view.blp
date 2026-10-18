@@ -1,0 +1,136 @@
+// SPDX-FileCopyrightText: 2026 Broadcaster contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+using Gtk 4.0;
+using Adw 1;
+
+template $TvStreamsView: Adw.Bin {
+  Adw.ToolbarView {
+    [top]
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 6;
+      margin-top: 8;
+      margin-bottom: 8;
+      margin-start: 12;
+      margin-end: 12;
+      styles [
+        "tv-streams-controls"
+      ]
+
+      Gtk.SearchEntry search_entry {
+        placeholder-text: _("Search My Channels");
+        hexpand: true;
+      }
+
+      Gtk.Box filter_bar {
+        orientation: horizontal;
+        spacing: 6;
+
+        Gtk.DropDown source_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by source");
+        }
+
+        Gtk.DropDown group_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by group");
+        }
+
+        Gtk.DropDown sort_filter {
+          tooltip-text: _("Sort channels");
+        }
+      }
+
+      Gtk.Box advanced_filter_bar {
+        orientation: horizontal;
+        spacing: 6;
+
+        Gtk.DropDown language_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by language");
+        }
+
+        Gtk.DropDown country_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by country");
+        }
+
+        Gtk.DropDown region_filter {
+          hexpand: true;
+          tooltip-text: _("Filter by region");
+          visible: false;
+        }
+      }
+
+      Gtk.Box actions_bar {
+        orientation: horizontal;
+        spacing: 8;
+
+        Gtk.Label count_label {
+          xalign: 0;
+          hexpand: true;
+          label: _("Channels");
+        }
+
+        Gtk.Button clear_button {
+          label: _("Clear Filters");
+        }
+
+        Gtk.Button manage_button {
+          label: _("Manage Sources");
+        }
+
+        Gtk.Button add_button {
+          label: _("Add Playlist");
+        }
+      }
+    }
+
+    Gtk.Stack results_stack {
+      Gtk.StackPage {
+        name: "loading";
+        child: Adw.Spinner {
+          valign: center;
+          halign: center;
+          width-request: 40;
+          height-request: 40;
+        };
+      }
+
+      Gtk.StackPage {
+        name: "results";
+        child: Gtk.ScrolledWindow {
+          Gtk.ListView results_list {
+            single-click-activate: false;
+            vexpand: true;
+            margin-start: 8;
+            margin-end: 8;
+          }
+        };
+      }
+
+      Gtk.StackPage {
+        name: "empty";
+        child: Adw.StatusPage empty_page {
+          icon-name: "tv-symbolic";
+          title: _("No My Channels Yet");
+          description: _("Add a playlist or manage existing sources");
+        };
+      }
+
+      Gtk.StackPage {
+        name: "error";
+        child: Adw.StatusPage {
+          icon-name: "error-symbolic";
+          title: _("Could Not Load My Channels");
+
+          child: Gtk.Button {
+            label: _("Retry");
+            halign: center;
+            action-name: "window.reload";
+          };
+        };
+      }
+    }
+  }
+}

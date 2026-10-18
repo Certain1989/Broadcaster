@@ -102,6 +102,7 @@ fn find_icon(channel_id: &str) -> Option<&'static str> {
     match normalized.as_str() {
         "3sat" => Some("3sat.svg"),
         "ard" => Some("ard.svg"),
+        "ard-alpha" | "ard alpha" => Some("ard-alpha.svg"),
         "arte" | "arte.de" | "arte.en" | "arte.es" | "arte.fr" | "arte.it" | "arte.pl" => {
             Some("arte.svg")
         }
@@ -250,6 +251,7 @@ mod tests {
         assert_eq!(find_icon("ARTE.DE"), Some("arte.svg"));
         assert_eq!(find_icon(" arte.de "), Some("arte.svg"));
         assert_eq!(find_icon("3sat"), Some("3sat.svg"));
+        assert_eq!(find_icon("ard-alpha"), Some("ard-alpha.svg"));
         assert_eq!(find_icon("Radio Bremen"), Some("rb.svg"));
         assert_eq!(find_icon("radiobremen"), Some("rb.svg"));
         assert_eq!(find_icon("zdfneo"), Some("zdf-neo.svg"));
@@ -272,6 +274,7 @@ mod tests {
         for logo in [
             "3sat.svg",
             "ard.svg",
+            "ard-alpha.svg",
             "arte.svg",
             "rb.svg",
             "zdf-neo.svg",
