@@ -57,7 +57,14 @@ fn channel(i: usize) -> IncomingChannel {
         stream_url: format!("https://example.invalid/live/{i}?fake=1"),
         tvg_id: Some(format!("channel-{i}")),
         tvg_name: None,
-        group_title: Some(if i.is_multiple_of(2) { "News" } else { "Sports" }.into()),
+        group_title: Some(
+            if i.is_multiple_of(2) {
+                "News"
+            } else {
+                "Sports"
+            }
+            .into(),
+        ),
         logo_url: None,
         channel_number: None,
         region: None,
