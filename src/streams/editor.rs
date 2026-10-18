@@ -10,11 +10,11 @@ use gettextrs::gettext;
 
 use crate::{
     streams::{
-        model::{
-            ChannelDetail, ChannelOverrides, FacetDimension, FacetMode,
-            FieldOrigin, GroupOverride, Region, RegionOverride, SetOverride,
-        },
         facet_picker::FacetPicker,
+        model::{
+            ChannelDetail, ChannelOverrides, FacetDimension, FacetMode, FieldOrigin, GroupOverride,
+            Region, RegionOverride, SetOverride,
+        },
         view::TvStreamsView,
     },
     utils::spawn,
@@ -203,15 +203,29 @@ impl Fields {
             &detail.effective.languages
         };
         let languages = FacetPicker::new(FacetDimension::Language, initial_languages);
-        label(&format!("{} · {}", gettext("Languages"), origin_text(detail.provenance.languages)), body);
+        label(
+            &format!(
+                "{} · {}",
+                gettext("Languages"),
+                origin_text(detail.provenance.languages)
+            ),
+            body,
+        );
         body.append(&language_mode);
         body.append(&languages.root);
-        languages.root.set_sensitive(mode(&language_mode) == FacetMode::Replace);
+        languages
+            .root
+            .set_sensitive(mode(&language_mode) == FacetMode::Replace);
         let language_root = languages.root.clone();
         language_mode.connect_selected_notify(move |picker| {
             language_root.set_sensitive(mode(picker) == FacetMode::Replace);
         });
-        values_detail(body, set_text(&detail.imported.languages), Some(set_text(&detail.source_defaults.languages)), set_text(&detail.effective.languages));
+        values_detail(
+            body,
+            set_text(&detail.imported.languages),
+            Some(set_text(&detail.source_defaults.languages)),
+            set_text(&detail.effective.languages),
+        );
 
         let country_mode = mode_picker(detail.overrides.countries.mode);
         let initial_countries = if detail.overrides.countries.mode == FacetMode::Replace {
@@ -220,15 +234,29 @@ impl Fields {
             &detail.effective.countries
         };
         let countries = FacetPicker::new(FacetDimension::Country, initial_countries);
-        label(&format!("{} · {}", gettext("Countries"), origin_text(detail.provenance.countries)), body);
+        label(
+            &format!(
+                "{} · {}",
+                gettext("Countries"),
+                origin_text(detail.provenance.countries)
+            ),
+            body,
+        );
         body.append(&country_mode);
         body.append(&countries.root);
-        countries.root.set_sensitive(mode(&country_mode) == FacetMode::Replace);
+        countries
+            .root
+            .set_sensitive(mode(&country_mode) == FacetMode::Replace);
         let country_root = countries.root.clone();
         country_mode.connect_selected_notify(move |picker| {
             country_root.set_sensitive(mode(picker) == FacetMode::Replace);
         });
-        values_detail(body, set_text(&detail.imported.countries), Some(set_text(&detail.source_defaults.countries)), set_text(&detail.effective.countries));
+        values_detail(
+            body,
+            set_text(&detail.imported.countries),
+            Some(set_text(&detail.source_defaults.countries)),
+            set_text(&detail.effective.countries),
+        );
         let region_mode = mode_picker(detail.overrides.region.mode);
         let region = detail
             .overrides
@@ -293,11 +321,15 @@ impl Fields {
         let language_mode = mode(&self.language_mode);
         let languages = if language_mode == FacetMode::Replace {
             self.languages.values(true)?
-        } else { BTreeSet::new() };
+        } else {
+            BTreeSet::new()
+        };
         let country_mode = mode(&self.country_mode);
         let countries = if country_mode == FacetMode::Replace {
             self.countries.values(true)?
-        } else { BTreeSet::new() };
+        } else {
+            BTreeSet::new()
+        };
         let region_mode = mode(&self.region_mode);
         let region = if region_mode == FacetMode::Replace {
             Some(filled_region(
@@ -326,7 +358,9 @@ impl Fields {
                 values: countries,
             },
         };
-        value.validate().map_err(|_| gettext("Invalid channel override"))?;
+        value
+            .validate()
+            .map_err(|_| gettext("Invalid channel override"))?;
         Ok(value)
     }
 }
@@ -498,7 +532,10 @@ pub(crate) fn assert_synthetic_editor_form() {
     assert_eq!(edited.region.mode, FacetMode::Unknown);
 
     fields.country_mode.set_selected(1);
-    assert!(fields.edits().is_err(), "empty My values countries must be rejected");
+    assert!(
+        fields.edits().is_err(),
+        "empty My values countries must be rejected"
+    );
     fields.countries.choose("DE");
     fields.countries.choose("AT");
     let selected = fields.edits().expect("two country overrides");
