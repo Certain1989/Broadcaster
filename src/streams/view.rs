@@ -1021,53 +1021,38 @@ impl TvStreamsView {
     }
 
     fn refresh_logo(&self, slot: &StreamSlot) {
-        let channel = slot.channel();
-        let logo_url = channel.as_ref().and_then(|item| item.logo_url.as_ref());
+        let logo_url = slot.channel().and_then(|item| item.logo_url);
         let imp = self.imp();
         for binding in imp.bindings.borrow().values() {
-            if binding
+            if !binding
                 .connection
                 .as_ref()
                 .is_some_and(|(bound, _)| bound == slot)
             {
-                let texture = {
-                    let mut logos = imp.logos.borrow_mut();
-                    logo_url
-                        .and_then(|url| logos.textures.get(url).cloned())
-                        .or_else(|| {
-                            // Packaged, licensed broadcaster artwork is a
-                            // safe fallback for *exact* known channel names.
-                            // Remote playlist artwork still takes precedence.
-                            let item = channel.as_ref()?;
-                            let scale = binding.ui.icon.scale_factor();
-                            let dark = adw::StyleManager::default().is_dark();
-                            let key = format!("bundled:{}:{scale}:{dark}", item.visible_name);
-                            if let Some(texture) = logos.textures.get(&key).cloned() {
-                                return Some(texture);
-                            }
-                            let texture = crate::channel_icons::bundled_streams_logo(
-                                &item.visible_name,
-                                72 * scale,
-                            )?;
-                            logos.insert(key, texture.clone());
-                            Some(texture)
-                        })
-                };
-                if let Some(texture) = texture {
-                    binding.ui.logo.set_paintable(Some(&texture));
-                    binding.ui.logo.set_visible(true);
-                    binding.ui.icon.set_visible(false);
+                continue;
+            }
+
+            // Never decode bundled SVG assets in the My Channels GTK bind
+            // path: glycin-svg is synchronous there and can leave a large
+            // playlist apparently frozen. Retain the same TV-sized frame.
+            // The only image source is a previously validated raster texture.
+            let texture = logo_url
+                .as_ref()
+                .and_then(|url| imp.logos.borrow().textures.get(url).cloned());
+            if let Some(texture) = texture {
+                binding.ui.logo.set_paintable(Some(&texture));
+                binding.ui.logo.set_visible(true);
+                binding.ui.icon.set_visible(false);
+            } else {
+                binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
+                binding.ui.logo.set_visible(false);
+                binding.ui.icon.set_visible(true);
+                let hint = if logo_url.is_some() {
+                    gettext("Channel logo unavailable")
                 } else {
-                    binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
-                    binding.ui.logo.set_visible(false);
-                    binding.ui.icon.set_visible(true);
-                    let hint = if logo_url.is_some() {
-                        gettext("Channel logo unavailable")
-                    } else {
-                        gettext("No logo supplied by playlist")
-                    };
-                    binding.ui.icon.set_tooltip_text(Some(&hint));
-                }
+                    gettext("No logo supplied by playlist")
+                };
+                binding.ui.icon.set_tooltip_text(Some(&hint));
             }
         }
     }
@@ -1119,18 +1104,25 @@ impl TvStreamsView {
                     state.failed.clear();
                 }
                 drop(state);
+                // Repaint only rows still bound to this exact URL. A
+                // completed download must never cascade into more requests
+                // for every visible row: that caused image-cache churn and
+                // flickering when a playlist had many large logos.
                 let bound: Vec<StreamSlot> = view
                     .imp()
                     .bindings
                     .borrow()
                     .values()
                     .filter_map(|binding| binding.connection.as_ref().map(|(slot, _)| slot.clone()))
+                    .filter(|slot| {
+                        slot.channel()
+                            .and_then(|item| item.logo_url)
+                            .as_deref()
+                            == Some(url.as_str())
+                    })
                     .collect();
                 for slot in bound {
                     view.refresh_logo(&slot);
-                    // Requests skipped during a burst of rapid scrolling may
-                    // now use an available slot without ever rebinding.
-                    view.request_logo(&slot);
                 }
             }
         ));
