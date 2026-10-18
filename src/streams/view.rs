@@ -1008,7 +1008,7 @@ impl TvStreamsView {
                     .as_ref()
                     .and_then(|url| imp.logos.borrow().textures.get(url).cloned())
                 {
-                    binding.ui.icon.set_from_paintable(Some(&texture));
+                    binding.ui.icon.set_paintable(Some(&texture));
                 } else {
                     binding.ui.icon.set_icon_name(Some("tv-symbolic"));
                 }
