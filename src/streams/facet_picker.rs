@@ -616,8 +616,13 @@ impl FacetPicker {
             FacetDimension::Country => &["DE", "AT", "CH", "GB", "US"],
         };
         candidates.sort_by_key(|code| {
-            (favorites.iter().position(|favorite| *favorite == code).unwrap_or(usize::MAX),
-             human_label(kind, code).to_lowercase())
+            (
+                favorites
+                    .iter()
+                    .position(|favorite| *favorite == code)
+                    .unwrap_or(usize::MAX),
+                human_label(kind, code).to_lowercase(),
+            )
         });
         let error = gtk::Label::new(None);
         error.set_wrap(true);
@@ -655,12 +660,16 @@ impl FacetPicker {
                         let mut next = index as i32 + direction;
                         while next >= 0 && (next as usize) < items.len() {
                             let target = &items[next as usize].1;
-                            if target.parent().is_some_and(|row| row.is_visible()) && target.grab_focus() {
+                            if target.parent().is_some_and(|row| row.is_visible())
+                                && target.grab_focus()
+                            {
                                 return gtk::glib::Propagation::Stop;
                             }
                             next += direction;
                         }
-                        if direction < 0 && chooser_for_keys.upgrade().is_some_and(|w| w.grab_focus()) {
+                        if direction < 0
+                            && chooser_for_keys.upgrade().is_some_and(|w| w.grab_focus())
+                        {
                             return gtk::glib::Propagation::Stop;
                         }
                     }
@@ -701,12 +710,16 @@ impl FacetPicker {
         chooser_key.connect_key_pressed(move |_, key, _, modifiers| {
             if key == gtk::gdk::Key::Down
                 && modifiers.is_empty()
-                && chooser_weak.upgrade().is_some_and(|widget| widget.has_focus())
+                && chooser_weak
+                    .upgrade()
+                    .is_some_and(|widget| widget.has_focus())
             {
                 if let Some(checks) = checks_weak.upgrade() {
-                    if let Some((_, first)) = checks.borrow().iter().find(|(_, button)| {
-                        button.parent().is_some_and(|row| row.is_visible())
-                    }) {
+                    if let Some((_, first)) = checks
+                        .borrow()
+                        .iter()
+                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_visible()))
+                    {
                         if first.grab_focus() {
                             return gtk::glib::Propagation::Stop;
                         }
