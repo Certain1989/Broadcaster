@@ -469,7 +469,7 @@ fn german_ui() -> bool {
 
 fn human_label(kind: FacetDimension, code: &str) -> String {
     match names(kind).iter().find(|(value, _, _)| *value == code) {
-        Some((_, en, de)) if german_ui() && *de != code => format!("{de} ({code})"),
+        Some((_, _en, de)) if german_ui() && *de != code => format!("{de} ({code})"),
         Some((_, en, _)) if *en != code => format!("{en} ({code})"),
         _ => code.to_owned(), // Preserve legacy/unrecognized tag, do not guess.
     }
@@ -537,12 +537,12 @@ fn render_selected(
 
 pub(crate) struct FacetPicker {
     pub(crate) root: gtk::Box,
+    kind: FacetDimension,
     selected: Rc<RefCell<BTreeSet<String>>>,
     checks: Rc<RefCell<Vec<(String, gtk::CheckButton)>>>,
     selected_box: gtk::Box,
     error: gtk::Label,
     chooser: gtk::Expander,
-    manual: Option<gtk::Entry>,
 }
 
 impl FacetPicker {
@@ -586,9 +586,8 @@ impl FacetPicker {
             list.append(&check);
             checks.borrow_mut().push((code.clone(), check.clone()));
             let selected = selected.clone();
-            let checks = checks.clone();
-            let selected_box = selected_box.clone();
-            let error_weak = Rc::new(RefCell::new(None::<gtk::Label>));
+            let checks_weak = Rc::downgrade(&checks);
+            let selected_box_weak = selected_box.downgrade();
             check.connect_toggled(move |button| {
                 if button.is_active() {
                     if selected.borrow().len() >= 64 && !selected.borrow().contains(&code) {
@@ -599,8 +598,11 @@ impl FacetPicker {
                 } else {
                     selected.borrow_mut().remove(&code);
                 }
-                let _ = &error_weak;
-                render_selected(&selected_box, kind, &selected, &checks);
+                if let (Some(selected_box), Some(checks)) =
+                    (selected_box_weak.upgrade(), checks_weak.upgrade())
+                {
+                    render_selected(&selected_box, kind, &selected, &checks);
+                }
             });
         }
         let scroller = gtk::ScrolledWindow::new();
@@ -608,17 +610,20 @@ impl FacetPicker {
         scroller.set_size_request(-1, 196);
         scroller.set_child(Some(&list));
         panel.append(&scroller);
-        let search_for_filter = search.clone();
+        let search_weak = search.downgrade();
         list.set_filter_func(move |row| {
-            let needle = search_for_filter.text().to_lowercase();
+            let needle = search_weak.upgrade().map(|search| search.text().to_lowercase()).unwrap_or_default();
             if needle.is_empty() { return true; }
             row.child()
                 .and_downcast::<gtk::CheckButton>()
                 .and_then(|check| check.label())
                 .is_some_and(|label| label.to_lowercase().contains(&needle))
         });
-        search.connect_search_changed(move |_| list.invalidate_filter());
-        let manual = if kind == FacetDimension::Language {
+        let list_weak = list.downgrade();
+        search.connect_search_changed(move |_| {
+            if let Some(list) = list_weak.upgrade() { list.invalidate_filter(); }
+        });
+        if kind == FacetDimension::Language {
             let advanced = gtk::Expander::new(Some(&gettext("Advanced: add a language tag manually")));
             let manual_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             let entry = gtk::Entry::new();
@@ -659,8 +664,7 @@ impl FacetPicker {
                     }
                 }
             });
-            Some(entry)
-        } else { None };
+        }
         chooser.set_child(Some(&panel));
         root.append(&chooser);
         let error = gtk::Label::new(None);
@@ -669,7 +673,7 @@ impl FacetPicker {
         error.add_css_class("error");
         root.append(&error);
         render_selected(&selected_box, kind, &selected, &checks);
-        Self { root, selected, checks, selected_box, error, chooser, manual }
+        Self { root, kind, selected, checks, selected_box, error, chooser }
     }
 
     pub(crate) fn values(&self, required: bool) -> Result<BTreeSet<String>, String> {
@@ -690,7 +694,7 @@ impl FacetPicker {
         for (known, button) in self.checks.borrow().iter() {
             if known == code { button.set_active(true); }
         }
-        render_selected(&self.selected_box, FacetDimension::Language, &self.selected, &self.checks);
+        render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
     }
 
     #[cfg(test)]
