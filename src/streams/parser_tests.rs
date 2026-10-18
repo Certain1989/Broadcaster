@@ -218,6 +218,9 @@ fn local_relative_rejected_and_unsafe_schemes_are_skipped() {
         "rtsp://example.invalid/stream",
         "https://example.invalid/path\\evil",
         "http://example.invalid/a b",
+        "http:///example.invalid/path",
+        "https://example.invalid/$(danger)",
+        "https://example.invalid/`danger`",
     ];
     for raw in invalid {
         let fixture = format!("{raw}\n{STREAM}\n");
@@ -253,12 +256,8 @@ fn invalid_base_is_rejected_without_disclosing_locator() {
         "http:///no",
         "https://example.invalid/unsafe\\host",
         "https://example.invalid/a b",
+        "https://example.invalid/${EXPAND}",
     ] {
-        // Some HTTP triple-slash forms are normalized by URL parsers; reject
-        // every explicitly unsupported or syntactically unsafe origin here.
-        if origin == "http:///no" {
-            continue;
-        }
         assert_eq!(
             parse_playlist(STREAM.as_bytes(), Some(origin)).err(),
             Some(ParseError::InvalidOrigin)

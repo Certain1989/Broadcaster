@@ -225,7 +225,7 @@ pub(crate) fn parse_playlist(
 }
 
 fn validate_base(raw: &str) -> Result<Url, ParseError> {
-    if raw.len() > MAX_URL_BYTES || unsafe_url_text(raw) {
+    if raw.len() > MAX_URL_BYTES || unsafe_url_text(raw) || !explicit_http_authority(raw) {
         return Err(ParseError::InvalidOrigin);
     }
     let url = Url::parse(raw).map_err(|_| ParseError::InvalidOrigin)?;
@@ -236,7 +236,18 @@ fn validate_base(raw: &str) -> Result<Url, ParseError> {
 }
 
 fn unsafe_url_text(s: &str) -> bool {
-    s.is_empty() || s.bytes().any(|b| b <= b' ' || b == b'\\' || b == 0x7f)
+    s.is_empty()
+        || s.bytes().any(|b| b <= b' ' || b == b'\\' || b == 0x7f)
+        || s.contains("$(")
+        || s.contains("${")
+        || s.contains('`')
+}
+
+/// Do not let WHATWG URL normalization repair malformed HTTP authorities.
+fn explicit_http_authority(raw: &str) -> bool {
+    (raw.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+        || raw.get(..8).is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://")))
+        && raw.split_once("://").is_some_and(|(_, host)| !host.starts_with('/'))
 }
 
 fn allowed_url(url: &Url) -> bool {
@@ -251,11 +262,11 @@ fn media_url(raw: &str, base: Option<&Url>) -> Option<String> {
     if let Ok(url) = Url::parse(raw) {
         // Keep the original absolute string, including every auth query token;
         // parsing/normalizing it for storage could alter S1's identity key.
-        return allowed_url(&url).then(|| raw.to_owned());
+        return (allowed_url(&url) && explicit_http_authority(raw)).then(|| raw.to_owned());
     }
     let base = base?;
     let url = base.join(raw).ok()?;
-    (allowed_url(&url) && url.as_str().len() <= MAX_URL_BYTES).then(|| url.into())
+    (allowed_url(&url) && url.as_str().len() <= MAX_URL_BYTES).then(|| url.to_string())
 }
 
 fn build_channel(
