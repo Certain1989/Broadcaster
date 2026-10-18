@@ -120,18 +120,38 @@ struct DefaultsForm {
 impl DefaultsForm {
     fn new(box_: &gtk::Box, defaults: &SourceDefaults) -> Self {
         let languages = FacetPicker::new(FacetDimension::Language, &defaults.languages);
-        row(&gettext("Default languages (optional)"), &languages.root, box_);
+        row(
+            &gettext("Default languages (optional)"),
+            &languages.root,
+            box_,
+        );
         let countries = FacetPicker::new(FacetDimension::Country, &defaults.countries);
-        row(&gettext("Default countries (optional)"), &countries.root, box_);
+        row(
+            &gettext("Default countries (optional)"),
+            &countries.root,
+            box_,
+        );
         let explanation = gtk::Label::new(Some(&gettext(
             "These defaults are used only when channel metadata is missing from the playlist.",
         )));
         explanation.set_wrap(true);
         explanation.set_xalign(0.0);
         box_.append(&explanation);
-        let code = entry(defaults.region.as_ref().and_then(|r| r.code.as_deref()).unwrap_or(""));
+        let code = entry(
+            defaults
+                .region
+                .as_ref()
+                .and_then(|r| r.code.as_deref())
+                .unwrap_or(""),
+        );
         code.set_placeholder_text(Some(&gettext("Optional: DE-BY")));
-        let label = entry(defaults.region.as_ref().and_then(|r| r.label.as_deref()).unwrap_or(""));
+        let label = entry(
+            defaults
+                .region
+                .as_ref()
+                .and_then(|r| r.label.as_deref())
+                .unwrap_or(""),
+        );
         label.set_placeholder_text(Some(&gettext("Optional: Bavaria")));
         row(&gettext("Default region code (optional)"), &code, box_);
         row(&gettext("Default region name (optional)"), &label, box_);
@@ -140,7 +160,13 @@ impl DefaultsForm {
         region_error.set_xalign(0.0);
         region_error.add_css_class("error");
         box_.append(&region_error);
-        Self { languages, countries, code, label, region_error }
+        Self {
+            languages,
+            countries,
+            code,
+            label,
+            region_error,
+        }
     }
 
     fn collect(&self) -> Result<SourceDefaults, String> {
@@ -152,14 +178,22 @@ impl DefaultsForm {
                 region
             }
             Err(_) => {
-                let reason = gettext("Invalid region: use a name or code (e.g. Bavaria / DE-BY), max 128/64 bytes.");
+                let reason = gettext(
+                    "Invalid region: use a name or code (e.g. Bavaria / DE-BY), max 128/64 bytes.",
+                );
                 self.region_error.set_text(&reason);
                 self.code.grab_focus();
                 return Err(reason);
             }
         };
-        let defaults = SourceDefaults { languages, countries, region };
-        defaults.validate().map_err(|_| gettext("Invalid metadata defaults"))?;
+        let defaults = SourceDefaults {
+            languages,
+            countries,
+            region,
+        };
+        defaults
+            .validate()
+            .map_err(|_| gettext("Invalid metadata defaults"))?;
         Ok(defaults)
     }
 }
@@ -262,7 +296,9 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         None
     };
     // Ordinary imports need no metadata defaults.
-    let advanced = gtk::Expander::new(Some(&gettext("Advanced · Source metadata defaults (optional)")));
+    let advanced = gtk::Expander::new(Some(&gettext(
+        "Advanced · Source metadata defaults (optional)",
+    )));
     advanced.set_expanded(!is_new);
     let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let defaults = DefaultsForm::new(&advanced_body, &initial_defaults);
@@ -318,7 +354,9 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                 });
                 if !valid {
                     url_error.set_text(&gettext("Enter a valid HTTP(S) playlist URL"));
-                    if let Some(url) = &url { url.grab_focus(); }
+                    if let Some(url) = &url {
+                        url.grab_focus();
+                    }
                     return;
                 }
             }
@@ -1093,8 +1131,14 @@ mod source_form_tests {
 
     #[test]
     fn source_default_codes_and_optional_region_validate() {
-        assert_eq!(crate::streams::model::normalize_facet("de", FacetDimension::Language).unwrap(), "de");
-        assert_eq!(crate::streams::model::normalize_facet("at", FacetDimension::Country).unwrap(), "AT");
+        assert_eq!(
+            crate::streams::model::normalize_facet("de", FacetDimension::Language).unwrap(),
+            "de"
+        );
+        assert_eq!(
+            crate::streams::model::normalize_facet("at", FacetDimension::Country).unwrap(),
+            "AT"
+        );
         assert!(crate::streams::model::normalize_facet("de-DE", FacetDimension::Country).is_err());
         assert!(region("", "").unwrap().is_none());
         assert!(region("DE-BY", "Bavaria").unwrap().is_some());
