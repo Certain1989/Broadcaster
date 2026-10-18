@@ -93,28 +93,6 @@ fn load_icon(icon_name: &str, size: i32, color_scheme: ColorScheme) -> eyre::Res
         .wrap_err_with(|| format!("failed to load channel logo from {resource}"))
 }
 
-/// Return existing, licensed application artwork for a known imported
-/// broadcaster. Only a small set of generic resolution labels is removed;
-/// no network search, guessed station identity or remote SVG processing.
-pub(crate) fn bundled_streams_logo(name: &str, size: i32) -> Option<gdk::Texture> {
-    let mut base = name.trim();
-    for suffix in [
-        " (1080p)", " (720p)", " (576p)", " (480p)", " (360p)", " HD",
-    ] {
-        if let Some(stripped) = base.strip_suffix(suffix) {
-            base = stripped;
-            break;
-        }
-    }
-    let name = find_icon(base)?;
-    load_icon(
-        name,
-        size,
-        ColorScheme::for_style_manager(&adw::StyleManager::default()),
-    )
-    .ok()
-}
-
 /// Use exact identifiers or explicit aliases, not fuzzy prefix matching.
 fn find_icon(channel_id: &str) -> Option<&'static str> {
     if let Some(icon) = ICON_NAMES.get(channel_id.trim()) {
