@@ -160,15 +160,16 @@ impl Storage {
             FilterDimension::Language | FilterDimension::Country => {
                 let facet = if dimension == FilterDimension::Language { "language" } else { "country" };
                 format!("{CORE}
-                 SELECT value,COUNT(DISTINCT channel_id) AS n FROM facets
-                 WHERE facet='{facet}' AND channel_id IN (SELECT id FROM matched)
-                 GROUP BY value
-                 UNION ALL
-                 SELECT NULL,COUNT(*) FROM matched m
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM facets f WHERE f.facet='{facet}' AND f.channel_id=m.id
-                 ) HAVING COUNT(*)>0
-                 ORDER BY value IS NULL,value COLLATE NOCASE")
+                 SELECT v,n FROM (
+                    SELECT value AS v,COUNT(DISTINCT channel_id) AS n FROM facets
+                    WHERE facet='{facet}' AND channel_id IN (SELECT id FROM matched)
+                    GROUP BY value
+                    UNION ALL
+                    SELECT NULL AS v,COUNT(*) AS n FROM matched m
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM facets f WHERE f.facet='{facet}' AND f.channel_id=m.id
+                    ) HAVING COUNT(*)>0
+                 ) ORDER BY v IS NULL,v COLLATE NOCASE")
             }
         };
         let mut stmt = conn.prepare(&sql).map_err(map_sql)?;
