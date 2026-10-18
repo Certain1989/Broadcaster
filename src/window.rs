@@ -424,7 +424,10 @@ impl TvWindow {
     /// switcher. Interior row navigation, editing, dropdowns, dialogs and
     /// mpv keep their own native key handling.
     fn focus_boundary_key(&self, key: gtk::gdk::Key) -> bool {
-        if !matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down)
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left
+        )
             || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
@@ -442,6 +445,13 @@ impl TvWindow {
 
         if Self::is_within(&focused, page) {
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                // Escape from any virtualized row using one remote key, no
+                // matter where the selection is in a large playlist.
+                // GTK keeps Left/Right ownership in filters and editors.
+                if key == gtk::gdk::Key::Left {
+                    return self.imp().streams_view.contains_results_focus(&focused)
+                        && self.focus_page_switcher();
+                }
                 if key == gtk::gdk::Key::Up
                     && search
                         .as_ref()
@@ -595,7 +605,17 @@ impl TvWindow {
             gtk::gdk::Key::Escape
                 if self.imp().stack.visible_child_name().as_deref() == Some("streams") =>
             {
-                if self.imp().streams_view.collapse_expanded() {
+                // Give an open GTK popover its native Escape behavior first.
+                // Expanded rows collapse; otherwise Escape exits the list to
+                // the tabs while the remote Back key still goes to Mediathek.
+                if Self::find_mapped_popover(self.upcast_ref()).is_some() {
+                    glib::Propagation::Proceed
+                } else if self.imp().streams_view.collapse_expanded() {
+                    glib::Propagation::Stop
+                } else if self.focused_widget().is_some_and(|focused| {
+                    self.imp().streams_view.contains_results_focus(&focused)
+                }) && self.focus_page_switcher()
+                {
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed
