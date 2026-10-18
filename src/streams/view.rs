@@ -1199,6 +1199,30 @@ impl TvStreamsView {
         self.imp().results_list.grab_focus()
     }
 
+    /// Check the real widget that receives Up from row zero, and confirm it
+    /// lives under the scoped CSS focus styling used by this toolbar. A
+    /// successful grab_focus alone does not imply a visible TV indicator.
+    #[cfg(test)]
+    pub(crate) fn assert_remote_toolbar_focus_styled(&self) {
+        let imp = self.imp();
+        let toolbar = imp.search_entry.parent().expect("search toolbar");
+        assert!(toolbar.has_css_class("tv-streams-controls"));
+        assert!(imp.add_button.has_focus(), "Up must focus Add Playlist");
+        for control in [
+            imp.search_entry.upcast_ref::<gtk::Widget>(),
+            imp.source_filter.upcast_ref(),
+            imp.group_filter.upcast_ref(),
+            imp.sort_filter.upcast_ref(),
+            imp.language_filter.upcast_ref(),
+            imp.country_filter.upcast_ref(),
+            imp.clear_button.upcast_ref(),
+            imp.manage_button.upcast_ref(),
+            imp.add_button.upcast_ref(),
+        ] {
+            assert!(control.is_ancestor(&toolbar), "toolbar control outside focus styling");
+        }
+    }
+
     pub fn focus_search(&self) {
         if !self.imp().search_entry.grab_focus() {
             self.imp().add_button.grab_focus();
