@@ -18,8 +18,10 @@ use ring::digest::{digest, SHA256};
 use tokio::sync::Semaphore;
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
-const MAX_EDGE: u32 = 1024;
-const MAX_PIXELS: u64 = 1024 * 1024;
+// A 1920x1080 broadcaster source image may be safely reduced for the row.
+// Still bound raw bytes and decoded memory (at most ~9 MiB per image).
+const MAX_EDGE: u32 = 2048;
+const MAX_PIXELS: u64 = 2_250_000;
 const MAX_DISK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_DISK_ENTRIES: usize = 128;
 
@@ -28,9 +30,22 @@ fn client() -> Option<&'static Client> {
     CLIENT
         .get_or_init(|| {
             Client::builder()
-                .redirect(Policy::none())
+                .redirect(Policy::custom(|attempt| {
+                    // Many legitimate logo hosts use HTTP 301/302 or a CDN.
+                    // Follow at most three safe redirects; never follow to
+                    // local files, embedded credentials or an HTTPS downgrade.
+                    if attempt.previous().len() >= 3
+                        || attempt.previous().last().is_some_and(|previous| {
+                            !safe_redirect(previous, attempt.url())
+                        })
+                    {
+                        attempt.stop()
+                    } else {
+                        attempt.follow()
+                    }
+                }))
                 .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(8))
+                .timeout(Duration::from_secs(12))
                 .build()
                 .ok()
         })
@@ -53,6 +68,11 @@ pub(super) fn allowed_url(raw: &str) -> bool {
             && url.username().is_empty()
             && url.password().is_none()
     })
+}
+
+fn safe_redirect(previous: &Url, next: &Url) -> bool {
+    allowed_url(next.as_str())
+        && !(previous.scheme() == "https" && next.scheme() != "https")
 }
 
 fn allowed_dimensions(width: u32, height: u32) -> bool {
@@ -322,7 +342,10 @@ pub(super) async fn load(url: String) -> Option<Vec<u8>> {
     if let Some(bytes) = path.as_deref().and_then(read_cached) {
         return Some(bytes);
     }
-    let bytes = download(&url).await?;
+    // One deadline covers every redirect plus the complete decoded body.
+    let bytes = tokio::time::timeout(Duration::from_secs(12), download(&url))
+        .await
+        .ok()??;
     if let Some(path) = &path {
         write_cached(path, &bytes);
         if let Some(dir) = directory.as_deref() {
@@ -358,9 +381,58 @@ mod tests {
         png.extend_from_slice(&2048u32.to_be_bytes());
         png.extend_from_slice(&2048u32.to_be_bytes());
         assert!(!valid_raster(&png));
+        png[16..20].copy_from_slice(&1920u32.to_be_bytes());
+        png[20..24].copy_from_slice(&1080u32.to_be_bytes());
+        assert!(valid_raster(&png));
         png[16..20].copy_from_slice(&32u32.to_be_bytes());
         png[20..24].copy_from_slice(&16u32.to_be_bytes());
         assert!(valid_raster(&png));
+    }
+
+    #[test]
+    fn redirect_urls_never_gain_authority_or_downgrade_https() {
+        let secure = Url::parse("https://example.invalid/a.png").unwrap();
+        let insecure = Url::parse("http://example.invalid/a.png").unwrap();
+        let hosted = Url::parse("https://cdn.example.invalid/a.png").unwrap();
+        let credentialed = Url::parse("https://user:SECRET-CANARY@cdn.example.invalid/a.png").unwrap();
+        let file = Url::parse("file:///etc/passwd").unwrap();
+        assert!(safe_redirect(&secure, &hosted));
+        assert!(safe_redirect(&insecure, &hosted));
+        assert!(!safe_redirect(&secure, &insecure));
+        assert!(!safe_redirect(&secure, &credentialed));
+        assert!(!safe_redirect(&secure, &file));
+    }
+
+    #[tokio::test]
+    async fn same_origin_redirect_loads_image_without_exposing_url() {
+        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 1024];
+                let count = socket.read(&mut request).await.unwrap();
+                let response = if request[..count].starts_with(b"GET /redirect ") {
+                    "HTTP/1.1 302 Found\r\nLocation: /image\r\nContent-Length: 0\r\n\r\n"
+                        .as_bytes()
+                        .to_vec()
+                } else {
+                    let mut body = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR".to_vec();
+                    body.extend_from_slice(&64u32.to_be_bytes());
+                    body.extend_from_slice(&64u32.to_be_bytes());
+                    let mut message =
+                        format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len())
+                            .into_bytes();
+                    message.extend_from_slice(&body);
+                    message
+                };
+                socket.write_all(&response).await.unwrap();
+            }
+        });
+        let url = format!("http://{address}/redirect");
+        assert!(download(&url).await.is_some());
+        server.await.unwrap();
     }
 
     #[test]
