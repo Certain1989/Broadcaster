@@ -463,7 +463,7 @@ impl VideoInfo {
         match self {
             VideoInfo::Live { uri, .. } | VideoInfo::Stream { uri, .. } => {
                 (!uri.is_empty()).then_some(uri.as_str())
-            },
+            }
             VideoInfo::Mediathek {
                 preferred_quality,
                 uri_high,
