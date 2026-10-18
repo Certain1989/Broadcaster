@@ -770,8 +770,19 @@ mod playback_navigation_tests {
             }
         }
         assert!(streams.show_and_focus_test_results());
-        assert!(streams
-            .contains_results_focus(&window.focused_widget().expect("list should hold focus")));
+        let focused = window.focused_widget().expect("list should hold focus");
+        let mut focus_path = Vec::new();
+        let mut node = Some(focused.clone());
+        while let Some(widget) = node {
+            focus_path.push(widget.type_().name().to_string());
+            node = widget.parent();
+        }
+        eprintln!(
+            "S5 focus diagnostic: page={:?}, widget ancestry={}",
+            stack.visible_child_name(),
+            focus_path.join(" > ")
+        );
+        assert!(streams.contains_results_focus(&focused));
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert!(!streams
             .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
