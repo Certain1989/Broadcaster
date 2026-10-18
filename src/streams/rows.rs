@@ -34,11 +34,8 @@ mod slot_imp {
     impl ObjectImpl for StreamSlot {
         fn properties() -> &'static [glib::ParamSpec] {
             static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
-            PROPERTIES.get_or_init(|| {
-                vec![glib::ParamSpecBoolean::builder("ready")
-                    .read_only()
-                    .build()]
-            })
+            PROPERTIES
+                .get_or_init(|| vec![glib::ParamSpecBoolean::builder("ready").read_only().build()])
         }
 
         fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
