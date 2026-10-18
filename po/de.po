@@ -1033,3 +1033,10 @@ msgstr "Aktivieren Sie Sender in der Quellenverwaltung oder fügen Sie eine Wied
 msgid "Waiting for confirmation"
 msgstr "Warte auf Bestätigung"
 
+#: src/streams/view.rs
+msgid "Channel logo unavailable"
+msgstr "Senderlogo nicht verfügbar"
+
+#: src/streams/view.rs
+msgid "No logo supplied by playlist"
+msgstr "Wiedergabeliste enthält kein Logo für diesen Sender"
