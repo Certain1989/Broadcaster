@@ -52,6 +52,10 @@ mod imp {
         #[template_child]
         pub(super) filter_bar: TemplateChild<gtk::Box>,
         #[template_child]
+        pub(super) advanced_filter_bar: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub(super) actions_bar: TemplateChild<gtk::Box>,
+        #[template_child]
         pub(super) source_filter: TemplateChild<gtk::DropDown>,
         #[template_child]
         pub(super) group_filter: TemplateChild<gtk::DropDown>,
@@ -135,11 +139,14 @@ mod imp {
                 "compact" => {
                     let compact = value.get::<bool>().expect("compact is a boolean");
                     self.compact.set(compact);
-                    self.filter_bar.set_orientation(if compact {
+                    let orientation = if compact {
                         gtk::Orientation::Vertical
                     } else {
                         gtk::Orientation::Horizontal
-                    });
+                    };
+                    self.filter_bar.set_orientation(orientation);
+                    self.advanced_filter_bar.set_orientation(orientation);
+                    self.actions_bar.set_orientation(orientation);
                 }
                 _ => unreachable!("unknown streams property"),
             }
