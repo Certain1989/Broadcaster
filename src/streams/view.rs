@@ -51,7 +51,7 @@ struct LogoState {
     lru: std::collections::VecDeque<String>,
     pending: HashSet<String>,
     // Avoid repeatedly downloading invalid/offline images during row recycling.
-    failed: HashSet<String>,
+    failed: HashMap<String, std::time::Instant>,
     pixels: u64,
 }
 
@@ -1064,11 +1064,15 @@ impl TvStreamsView {
             let mut state = self.imp().logos.borrow_mut();
             if state.textures.contains_key(&url)
                 || state.pending.contains(&url)
-                || state.failed.contains(&url)
+                || state
+                    .failed
+                    .get(&url)
+                    .is_some_and(|last| last.elapsed() < Duration::from_secs(90))
                 || state.pending.len() >= 16
             {
                 return;
             }
+            state.failed.remove(&url);
             state.pending.insert(url.clone());
         }
         spawn(glib::clone!(
@@ -1086,10 +1090,10 @@ impl TvStreamsView {
                     if let Ok(texture) = gtk::gdk::Texture::from_bytes(&data) {
                         state.insert(url.clone(), texture);
                     } else {
-                        state.failed.insert(url);
+                        state.failed.insert(url, std::time::Instant::now());
                     }
                 } else {
-                    state.failed.insert(url);
+                    state.failed.insert(url, std::time::Instant::now());
                 }
                 // Negative cache remains bounded independently of the 10k list.
                 if state.failed.len() > 256 {
