@@ -1030,11 +1030,7 @@ impl TvStreamsView {
         super::management::show_manager(self);
     }
 
-    pub(crate) fn remember_source_manager(
-        &self,
-        list: &gtk::ListBox,
-        status: &gtk::Label,
-    ) {
+    pub(crate) fn remember_source_manager(&self, list: &gtk::ListBox, status: &gtk::Label) {
         let imp = self.imp();
         imp.manager_list.replace(Some(list.downgrade()));
         imp.manager_status.replace(Some(status.downgrade()));
@@ -1060,8 +1056,16 @@ impl TvStreamsView {
 
     pub(crate) fn refresh_source_manager(&self) {
         let imp = self.imp();
-        let list = imp.manager_list.borrow().as_ref().and_then(glib::WeakRef::upgrade);
-        let status = imp.manager_status.borrow().as_ref().and_then(glib::WeakRef::upgrade);
+        let list = imp
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade);
+        let status = imp
+            .manager_status
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade);
         if let (Some(list), Some(status), Some(service)) = (list, status, self.service()) {
             super::management::load_manager(self, &service, &list, &status);
         }
