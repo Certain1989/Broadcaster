@@ -521,12 +521,15 @@ pub(crate) fn assert_synthetic_editor_form() {
     fields.language_mode.set_selected(1);
     fields.languages.choose("de");
     fields.languages.choose("en");
+    fields.languages.enter_manual("de-DE").expect("advanced language tag");
+    assert!(fields.languages.enter_manual("German").is_err());
     fields.country_mode.set_selected(2);
     fields.region_mode.set_selected(2);
     let edited = fields.edits().expect("valid explicit overrides");
     assert_eq!(edited.display_name.as_deref(), Some("Custom channel"));
     assert_eq!(edited.group.value.as_deref(), Some("News"));
-    assert_eq!(edited.languages.values.len(), 2);
+    assert_eq!(edited.languages.values.len(), 3);
+    assert!(edited.languages.values.contains("de-DE"));
     assert_eq!(edited.countries.mode, FacetMode::Unknown);
     assert!(edited.countries.values.is_empty());
     assert_eq!(edited.region.mode, FacetMode::Unknown);
