@@ -102,7 +102,7 @@ fn public_ipv4(ip: Ipv4Addr) -> bool {
             | (198, 18..=19, _)     // benchmark networks
             | (198, 51, 100)        // documentation
             | (203, 0, 113)         // documentation
-            | (224..=255, _, _)     // multicast / reserved / broadcast
+            | (224..=255, _, _) // multicast / reserved / broadcast
     )
 }
 
@@ -603,9 +603,7 @@ mod tests {
     #[test]
     fn resolver_denies_private_answers_and_dns_rebinding() {
         let public_a = "8.8.8.8:80".parse::<SocketAddr>().unwrap();
-        let public_aaaa = "[2606:4700:4700::1111]:80"
-            .parse::<SocketAddr>()
-            .unwrap();
+        let public_aaaa = "[2606:4700:4700::1111]:80".parse::<SocketAddr>().unwrap();
         let private_a = "192.168.1.1:80".parse::<SocketAddr>().unwrap();
         let local_aaaa = "[::1]:80".parse::<SocketAddr>().unwrap();
         assert_eq!(public_addresses([public_a]), Some(vec![public_a]));
@@ -632,7 +630,10 @@ mod tests {
         assert!(safe_redirect(&original, &cdn));
         assert!(!safe_redirect(&original, &private));
         assert!(!safe_redirect(&original, &integer));
-        assert!(!safe_redirect(&cdn, &Url::parse("http://cdn.example.invalid/x").unwrap()));
+        assert!(!safe_redirect(
+            &cdn,
+            &Url::parse("http://cdn.example.invalid/x").unwrap()
+        ));
     }
 
     #[tokio::test]
