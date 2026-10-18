@@ -1040,3 +1040,10 @@ msgstr "Senderlogo nicht verfügbar"
 #: src/streams/view.rs
 msgid "No logo supplied by playlist"
 msgstr "Wiedergabeliste enthält kein Logo für diesen Sender"
+
+# Broadcaster v0.2.0 external source directory
+msgid "Find public IPTV playlists (IPTV-org)"
+msgstr "Öffentliche IPTV-Wiedergabelisten finden (IPTV-org)"
+
+msgid "External directory; stream availability and regional access vary."
+msgstr "Externes Verzeichnis; Verfügbarkeit und regionale Zugriffsbeschränkungen können variieren."
