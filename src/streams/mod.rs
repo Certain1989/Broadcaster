@@ -5,7 +5,9 @@
 //! A lazy GTK catalogue is registered alongside the off-main backend.
 #![allow(dead_code)]
 
+mod editor;
 mod fetch;
+mod management;
 pub(crate) mod model;
 pub(crate) mod parser;
 mod query;
