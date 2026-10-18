@@ -496,3 +496,23 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
         }
     ));
 }
+
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+
+    #[test]
+    fn codes_and_regions_normalize_before_saving() {
+        assert_eq!(tokens("de-CH, en, de-CH", FacetDimension::Language).unwrap(),
+                   ["de-CH".to_owned(), "en".to_owned()].into_iter().collect());
+        assert_eq!(tokens("de, at", FacetDimension::Country).unwrap(),
+                   ["DE".to_owned(), "AT".to_owned()].into_iter().collect());
+        assert!(tokens("unknown", FacetDimension::Country).is_err());
+        assert!(tokens("en, zz-?", FacetDimension::Language).is_err());
+        assert_eq!(filled_region("  DE-BY ", " Bavaria ").unwrap().code.as_deref(),
+                   Some("DE-BY"));
+        assert!(filled_region(" ", " ").is_err());
+        assert!(filled_region(&"x".repeat(65), "Label").is_err());
+    }
+}
