@@ -819,7 +819,10 @@ impl FacetPicker {
 
     #[cfg(test)]
     pub(crate) fn choose(&self, code: &str) {
-        let check = self.checks.borrow().iter()
+        let check = self
+            .checks
+            .borrow()
+            .iter()
             .find(|(known, _)| known == code)
             .map(|(_, check)| check.clone());
         if let Some(check) = check {
@@ -833,7 +836,10 @@ impl FacetPicker {
 
     #[cfg(test)]
     pub(crate) fn deselect(&self, code: &str) {
-        let check = self.checks.borrow().iter()
+        let check = self
+            .checks
+            .borrow()
+            .iter()
             .find(|(known, _)| known == code)
             .map(|(_, check)| check.clone());
         if let Some(check) = check {
