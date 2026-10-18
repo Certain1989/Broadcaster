@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use adw::{gio, glib, gtk, prelude::*, subclass::prelude::*};
+use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use gettextrs::gettext;
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     model::{
-        ChannelEffective, ChannelId, ChannelPage, ChannelQuery, FacetSelection, FacetValue,
+        ChannelId, ChannelPage, ChannelQuery, FacetSelection, FacetValue,
         FilterDimension, FilterOptions, SortOrder, Source,
     },
     rows::{StreamRows, StreamSlot, PAGE_SIZE},
