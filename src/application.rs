@@ -295,6 +295,8 @@ impl TvApplication {
         self.set_accels_for_action("window.close", &["<primary>w"]);
         self.set_accels_for_action("window.reload", &["<primary>r", "F5", "Reload"]);
         self.set_accels_for_action("window.search", &["<primary>f"]);
+        self.set_accels_for_action("window.add-playlist", &["<primary>o"]);
+        self.set_accels_for_action("window.manage-sources", &["<primary><shift>m"]);
         self.set_accels_for_action("window.toggle-fullscreen", &["F11"]);
         // like switching tabs, Ctrl+L and Ctrl+T are reserved for the
         // location and new tabs in GNOME
