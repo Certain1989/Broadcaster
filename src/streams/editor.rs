@@ -532,7 +532,6 @@ mod editor_tests {
     }
 }
 
-
 #[cfg(test)]
 pub(crate) fn assert_synthetic_editor_form() {
     use self::model_for_test::*;
@@ -560,15 +559,18 @@ pub(crate) fn assert_synthetic_editor_form() {
 
     fields.country_mode.set_selected(1);
     fields.countries.set_text("ZZ");
-    assert!(fields.edits().is_err(), "invalid ISO country cannot be committed");
+    assert!(
+        fields.edits().is_err(),
+        "invalid ISO country cannot be committed"
+    );
 }
 
 #[cfg(test)]
 mod model_for_test {
+    use super::*;
     use crate::streams::model::{
         ChannelEffective, EditProvenance, FieldOrigin, IncomingChannel, SourceDefaults,
     };
-    use super::*;
 
     pub(super) fn sample_detail() -> ChannelDetail {
         let imported = IncomingChannel {
