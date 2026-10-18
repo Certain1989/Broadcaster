@@ -133,6 +133,9 @@ fn filled_region(code: &str, label: &str) -> Result<Region, &'static str> {
 struct Fields {
     use_name: gtk::CheckButton,
     name: gtk::Entry,
+    name_error: gtk::Label,
+    group_error: gtk::Label,
+    region_error: gtk::Label,
     group_mode: gtk::DropDown,
     group: gtk::Entry,
     language_mode: gtk::DropDown,
@@ -173,6 +176,11 @@ impl Fields {
                 .unwrap_or(&detail.effective.visible_name),
         );
         body.append(&name);
+        let name_error = gtk::Label::new(None);
+        name_error.set_xalign(0.0);
+        name_error.set_wrap(true);
+        name_error.add_css_class("error");
+        body.append(&name_error);
         let group_mode = mode_picker(detail.overrides.group.mode);
         let group = text(
             detail
@@ -190,6 +198,11 @@ impl Fields {
             &group_mode,
             &group,
         );
+        let group_error = gtk::Label::new(None);
+        group_error.set_xalign(0.0);
+        group_error.set_wrap(true);
+        group_error.add_css_class("error");
+        body.append(&group_error);
         values_detail(
             body,
             value_text(detail.imported.group_title.as_deref()),
@@ -275,6 +288,11 @@ impl Fields {
         label(&gettext("Region label"), body);
         let region_label = text(region.and_then(|r| r.label.as_deref()).unwrap_or(""));
         body.append(&region_label);
+        let region_error = gtk::Label::new(None);
+        region_error.set_xalign(0.0);
+        region_error.set_wrap(true);
+        region_error.add_css_class("error");
+        body.append(&region_error);
         values_detail(
             body,
             region_text(detail.imported.region.as_ref()),
@@ -284,6 +302,9 @@ impl Fields {
         Self {
             use_name,
             name,
+            name_error,
+            group_error,
+            region_error,
             group_mode,
             group,
             language_mode,
@@ -297,11 +318,16 @@ impl Fields {
     }
 
     fn edits(&self) -> Result<ChannelOverrides, String> {
+        self.name_error.set_text("");
+        self.group_error.set_text("");
+        self.region_error.set_text("");
         let display_name = if self.use_name.is_active() {
             let name = self.name.text().trim().to_owned();
             if name.is_empty() || name.len() > 512 {
+                let reason = gettext("Enter a valid display name (1–512 bytes).");
+                self.name_error.set_text(&reason);
                 self.name.grab_focus();
-                return Err(gettext("Enter a valid display name (1–512 bytes)."));
+                return Err(reason);
             }
             Some(name)
         } else {
@@ -311,8 +337,10 @@ impl Fields {
         let group = if group_mode == FacetMode::Replace {
             let value = self.group.text().trim().to_owned();
             if value.is_empty() || value.len() > 256 {
+                let reason = gettext("Enter a valid group name (1–256 bytes).");
+                self.group_error.set_text(&reason);
                 self.group.grab_focus();
-                return Err(gettext("Enter a valid group name (1–256 bytes)."));
+                return Err(reason);
             }
             Some(value)
         } else {
@@ -332,10 +360,19 @@ impl Fields {
         };
         let region_mode = mode(&self.region_mode);
         let region = if region_mode == FacetMode::Replace {
-            Some(filled_region(
-                &self.region_code.text(),
-                &self.region_label.text(),
-            )?)
+            match filled_region(&self.region_code.text(), &self.region_label.text()) {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    let reason = gettext("Enter a valid region name or code, e.g. Bavaria / DE-BY.");
+                    self.region_error.set_text(&reason);
+                    if self.region_label.text().len() > 128 {
+                        self.region_label.grab_focus();
+                    } else {
+                        self.region_code.grab_focus();
+                    }
+                    return Err(reason);
+                }
+            }
         } else {
             None
         };
