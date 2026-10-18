@@ -182,19 +182,25 @@ pub(crate) async fn fetch_local(
     if cancellation.is_cancelled() {
         return Err(FetchError::Cancelled);
     }
-    let stream = file
-        .read_future(glib::Priority::DEFAULT)
-        .await
-        .map_err(|_| FetchError::LocalAccess)?;
+    let stream = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(FetchError::Cancelled),
+        result = file.read_future(glib::Priority::DEFAULT) => {
+            result.map_err(|_| FetchError::LocalAccess)?
+        }
+    };
     let mut contents = Vec::new();
     loop {
         if cancellation.is_cancelled() {
             return Err(FetchError::Cancelled);
         }
-        let chunk = stream
-            .read_bytes_future(64 * 1024, glib::Priority::DEFAULT)
-            .await
-            .map_err(|_| FetchError::LocalAccess)?;
+        let chunk = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(FetchError::Cancelled),
+            result = stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT) => {
+                result.map_err(|_| FetchError::LocalAccess)?
+            }
+        };
         if chunk.is_empty() {
             break;
         }
