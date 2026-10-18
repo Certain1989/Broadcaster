@@ -48,7 +48,7 @@ mod slot_imp {
 }
 
 glib::wrapper! {
-    pub(super) struct StreamSlot(ObjectSubclass<slot_imp::StreamSlot>);
+    pub struct StreamSlot(ObjectSubclass<slot_imp::StreamSlot>);
 }
 
 impl StreamSlot {
@@ -78,7 +78,7 @@ mod rows_imp {
 
     #[derive(Default)]
     pub struct StreamRows {
-        pub slots: RefCell<Vec<Option<StreamSlot>>>,
+        pub(super) slots: RefCell<Vec<Option<StreamSlot>>>,
         pub pages: RefCell<BTreeMap<u32, Vec<ChannelEffective>>>,
         pub recency: RefCell<VecDeque<u32>>,
     }
@@ -120,7 +120,7 @@ mod rows_imp {
 }
 
 glib::wrapper! {
-    pub(super) struct StreamRows(ObjectSubclass<rows_imp::StreamRows>)
+    pub struct StreamRows(ObjectSubclass<rows_imp::StreamRows>)
         @implements gio::ListModel;
 }
 
