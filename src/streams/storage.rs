@@ -88,6 +88,11 @@ impl Storage {
         Self { path: path.into() }
     }
 
+    /// Test repositories must never run orphan pruning on the real user cache.
+    pub(crate) fn uses_default_database(&self) -> bool {
+        self.path == Self::new().path
+    }
+
     pub fn initialize(&self) -> StorageResult<()> {
         let path = &self.path;
         ensure_private_parent(path)?;
