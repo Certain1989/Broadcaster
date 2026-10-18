@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 mod editor;
+mod facet_picker;
 mod fetch;
 mod management;
 pub(crate) mod model;
