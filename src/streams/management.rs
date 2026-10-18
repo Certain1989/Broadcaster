@@ -439,6 +439,9 @@ fn load_manager(
                     return;
                 }
             };
+            let counts = futures_util::future::join_all(
+                sources.iter().map(|source| service.source_counts(&source.id))
+            ).await;
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -467,7 +470,19 @@ fn load_manager(
                     .last_error_code
                     .as_ref()
                     .map_or_else(|| gettext("No recorded error"), |code| code.clone());
-                let summary = gtk::Label::new(Some(&format!("{origin} · {state}")));
+                let (present, retained) = counts.get(index)
+                    .and_then(|result| result.as_ref().ok().copied())
+                    .unwrap_or((0, 0));
+                let last_attempt = source.last_attempt_at.map_or_else(
+                    || gettext("Never"), |at| at.to_string());
+                let last_success = source.last_success_at.map_or_else(
+                    || gettext("Never"), |at| at.to_string());
+                let summary = gtk::Label::new(Some(&format!(
+                    "{origin} · {state} · {}: {present} / {retained}\n{}: {last_success} · {}: {last_attempt}",
+                    gettext("Active / retained channels"),
+                    gettext("Last success"),
+                    gettext("Last attempt"),
+                )));
                 summary.set_xalign(0.0);
                 summary.set_wrap(true);
                 summary.add_css_class("dim-label");
@@ -483,8 +498,7 @@ fn load_manager(
                 let rename = button(&gettext("Rename"), &actions);
                 let change = button(&gettext("Replace"), &actions);
                 let remove = button(&gettext("Delete"), &actions);
-                // Equal-order entries are possible in old data; the source-specific
-                // operation remains SQLite owned, with a deterministic list reload.
+                // Atomic order swaps handle equal and dense source_order values.
                 let up = button("↑", &actions);
                 let down = button("↓", &actions);
                 up.set_sensitive(index != 0);
@@ -568,10 +582,7 @@ fn load_manager(
                         confirm_delete(&view, remove_source.clone());
                     }
                 ));
-                let previous = index.checked_sub(1).and_then(|i| sources.get(i)).cloned();
-                let next = sources.get(index + 1).cloned();
-                for (control, other, is_up) in [(up, previous, true), (down, next, false)] {
-                    let Some(other) = other else { continue };
+                for (control, direction) in [(up, -1), (down, 1)] {
                     let service = service.clone();
                     let id = source.id.clone();
                     control.connect_clicked(glib::clone!(
@@ -584,7 +595,6 @@ fn load_manager(
                         move |_| {
                             let service = service.clone();
                             let id = id.clone();
-                            let other = other.clone();
                             spawn(glib::clone!(
                                 #[weak]
                                 view,
@@ -593,14 +603,7 @@ fn load_manager(
                                 #[weak]
                                 status,
                                 async move {
-                                    // Assign a position beyond the neighbour; all ordering
-                                    // changes remain controlled by the S1 storage API.
-                                    let order = if is_up {
-                                        other.order.saturating_sub(1)
-                                    } else {
-                                        other.order.saturating_add(1)
-                                    };
-                                    match service.reorder_source(&id, order).await {
+                                    match service.move_source(&id, direction).await {
                                         Ok(()) => {
                                             view.reload();
                                             load_manager(&view, &service, &list, &status);
