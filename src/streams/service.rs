@@ -23,6 +23,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use super::{
     fetch::{self, Cancellation, FetchError},
+    logo,
     model::{
         ChannelDetail, ChannelOverrides, ChannelPage, ChannelQuery, FilterDimension, FilterOptions,
         OriginKind, RefreshDecision, RefreshPreview, Source, SourceDefaults, SourceDraft, SourceId,
@@ -318,6 +319,23 @@ impl StreamsService {
                 .map_err(|_| ServiceError::WorkerFailed)?
         })
         .await
+    }
+
+    /// Run file-cache cleanup outside GTK and only for the real installed
+    /// database. A failed reference query cannot lead to deleting user logos.
+    async fn prune_unused_logos(&self) {
+        if !self.inner.storage.uses_default_database() {
+            return;
+        }
+        let _ = self
+            .db(|store| {
+                let referenced = store
+                    .referenced_logo_cache_names()
+                    .map_err(ServiceError::Storage)?;
+                logo::prune_unused(&referenced);
+                Ok(())
+            })
+            .await;
     }
 
     async fn parse(
@@ -621,6 +639,11 @@ impl StreamsService {
                 committed.map_err(ServiceError::Storage)
             })
             .await;
+        if result.is_ok() {
+            // Source snapshots are authoritative only after commit. Never
+            // remove cached images on cancelled/declined/failed previews.
+            self.prune_unused_logos().await;
+        }
         self.finish(
             &id,
             generation,
@@ -705,8 +728,13 @@ impl StreamsService {
         &self,
         confirmed: ConfirmedSourceDeletion,
     ) -> Result<(), ServiceError> {
-        self.db(move |s| s.delete_source_confirmed(&confirmed).map_err(Into::into))
-            .await
+        let result = self
+            .db(move |s| s.delete_source_confirmed(&confirmed).map_err(Into::into))
+            .await;
+        if result.is_ok() {
+            self.prune_unused_logos().await;
+        }
+        result
     }
     pub(crate) async fn set_source_defaults(
         &self,
