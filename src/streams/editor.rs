@@ -531,3 +531,87 @@ mod editor_tests {
         assert!(filled_region(&"x".repeat(65), "Label").is_err());
     }
 }
+
+
+#[cfg(test)]
+pub(crate) fn assert_synthetic_editor_form() {
+    use super::model_for_test::*;
+
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let detail = sample_detail();
+    let fields = Fields::new(&detail, &body);
+    assert!(!fields.edits().expect("automatic defaults").has_values());
+
+    fields.use_name.set_active(true);
+    fields.name.set_text("Custom channel");
+    fields.group_mode.set_selected(1);
+    fields.group.set_text("News");
+    fields.language_mode.set_selected(1);
+    fields.languages.set_text("de, en");
+    fields.country_mode.set_selected(2);
+    fields.region_mode.set_selected(2);
+    let edited = fields.edits().expect("valid explicit overrides");
+    assert_eq!(edited.display_name.as_deref(), Some("Custom channel"));
+    assert_eq!(edited.group.value.as_deref(), Some("News"));
+    assert_eq!(edited.languages.values.len(), 2);
+    assert_eq!(edited.countries.mode, FacetMode::Unknown);
+    assert!(edited.countries.values.is_empty());
+    assert_eq!(edited.region.mode, FacetMode::Unknown);
+
+    fields.country_mode.set_selected(1);
+    fields.countries.set_text("ZZ");
+    assert!(fields.edits().is_err(), "invalid ISO country cannot be committed");
+}
+
+#[cfg(test)]
+mod model_for_test {
+    use crate::streams::model::{
+        ChannelEffective, EditProvenance, FieldOrigin, IncomingChannel, SourceDefaults,
+    };
+    use super::*;
+
+    pub(super) fn sample_detail() -> ChannelDetail {
+        let imported = IncomingChannel {
+            order: 0,
+            imported_name: "Synthetic Channel".into(),
+            stream_url: "https://example.invalid/synthetic.m3u8".into(),
+            tvg_id: None,
+            tvg_name: None,
+            group_title: Some("Sport".into()),
+            logo_url: None,
+            channel_number: None,
+            region: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            user_agent: None,
+            referer: None,
+        };
+        let effective = ChannelEffective {
+            id: "fabricated-channel".into(),
+            source_id: "fabricated-source".into(),
+            source_name: "Fabricated".into(),
+            visible_name: imported.imported_name.clone(),
+            stream_url: imported.stream_url.clone(),
+            group: imported.group_title.clone(),
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            region: None,
+            logo_url: None,
+            channel_number: None,
+            has_user_overrides: false,
+        };
+        ChannelDetail {
+            effective,
+            imported,
+            source_defaults: SourceDefaults::default(),
+            overrides: ChannelOverrides::default(),
+            provenance: EditProvenance {
+                name: FieldOrigin::Imported,
+                group: FieldOrigin::Imported,
+                languages: FieldOrigin::Unknown,
+                countries: FieldOrigin::Unknown,
+                region: FieldOrigin::Unknown,
+            },
+        }
+    }
+}
