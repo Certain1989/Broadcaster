@@ -459,7 +459,11 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
             .map_err(|_| StorageError::IncompatibleDatabase)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| StorageError::IncompatibleDatabase)?;
-        if !actual.iter().map(String::as_str).eq(expected.iter().copied()) {
+        if !actual
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied())
+        {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
