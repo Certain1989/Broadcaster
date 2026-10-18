@@ -1094,10 +1094,10 @@ impl TvStreamsView {
                     if let Ok(texture) = gtk::gdk::Texture::from_bytes(&data) {
                         state.insert(url.clone(), texture);
                     } else {
-                        state.failed.insert(url, std::time::Instant::now());
+                        state.failed.insert(url.clone(), std::time::Instant::now());
                     }
                 } else {
-                    state.failed.insert(url, std::time::Instant::now());
+                    state.failed.insert(url.clone(), std::time::Instant::now());
                 }
                 // Negative cache remains bounded independently of the 10k list.
                 if state.failed.len() > 256 {
