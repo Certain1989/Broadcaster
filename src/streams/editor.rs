@@ -11,7 +11,7 @@ use gettextrs::gettext;
 use crate::{
     streams::{
         model::{
-            normalize_facet, ChannelDetail, ChannelOverrides, FacetDimension, FacetMode,
+            normalize_facet, ChannelDetail, ChannelOverrides, FacetDimension, FacetMode, FieldOrigin,
             GroupOverride, Region, RegionOverride, SetOverride,
         },
         view::TvStreamsView,
@@ -66,6 +66,52 @@ fn label(value: &str, target: &gtk::Box) {
     target.append(&label);
 }
 
+fn origin_text(origin: FieldOrigin) -> String {
+    match origin {
+        FieldOrigin::Manual => gettext("My values"),
+        FieldOrigin::Imported => gettext("Imported"),
+        FieldOrigin::SourceFallback => gettext("Source default"),
+        FieldOrigin::Unknown => gettext("Unknown"),
+    }
+}
+
+fn value_text(value: Option<&str>) -> String {
+    value.filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| gettext("Unknown"))
+}
+
+fn set_text(set: &BTreeSet<String>) -> String {
+    if set.is_empty() {
+        gettext("Unknown")
+    } else {
+        set.iter().cloned().collect::<Vec<_>>().join(", ")
+    }
+}
+
+fn region_text(region: Option<&Region>) -> String {
+    region.map_or_else(|| gettext("Unknown"), |region| {
+        let code = region.code.as_deref().unwrap_or("");
+        let label = region.label.as_deref().unwrap_or("");
+        if code.is_empty() { label.to_owned() }
+        else if label.is_empty() { code.to_owned() }
+        else { format!("{code} ({label})") }
+    })
+}
+
+fn values_detail(
+    body: &gtk::Box,
+    imported: String,
+    default: Option<String>,
+    effective: String,
+) {
+    label(&format!("{}: {}", gettext("Imported"), imported), body);
+    if let Some(default) = default {
+        label(&format!("{}: {}", gettext("Source default"), default), body);
+    }
+    label(&format!("{}: {}", gettext("Effective"), effective), body);
+}
+
 fn editor_row(
     box_: &gtk::Box,
     title: &str,
@@ -116,7 +162,7 @@ impl Fields {
             body,
         );
         label(
-            &format!("{}: {:?}", gettext("Name origin"), detail.provenance.name),
+            &format!("{}: {}", gettext("Name origin"), origin_text(detail.provenance.name)),
             body,
         );
         let use_name = gtk::CheckButton::with_label(&gettext("Use my display name"));
@@ -143,9 +189,15 @@ impl Fields {
         editor_row(
             body,
             &gettext("Group"),
-            &format!("{:?}", detail.provenance.group),
+            &origin_text(detail.provenance.group),
             &group_mode,
             &group,
+        );
+        values_detail(
+            body,
+            value_text(detail.imported.group_title.as_deref()),
+            None,
+            value_text(detail.effective.group.as_deref()),
         );
         let language_mode = mode_picker(detail.overrides.languages.mode);
         let languages = text(
@@ -160,9 +212,15 @@ impl Fields {
         editor_row(
             body,
             &gettext("Languages (comma separated)"),
-            &format!("{:?}", detail.provenance.languages),
+            &origin_text(detail.provenance.languages),
             &language_mode,
             &languages,
+        );
+        values_detail(
+            body,
+            set_text(&detail.imported.languages),
+            Some(set_text(&detail.source_defaults.languages)),
+            set_text(&detail.effective.languages),
         );
         let country_mode = mode_picker(detail.overrides.countries.mode);
         let countries = text(
@@ -177,9 +235,15 @@ impl Fields {
         editor_row(
             body,
             &gettext("Countries (ISO codes, comma separated)"),
-            &format!("{:?}", detail.provenance.countries),
+            &origin_text(detail.provenance.countries),
             &country_mode,
             &countries,
+        );
+        values_detail(
+            body,
+            set_text(&detail.imported.countries),
+            Some(set_text(&detail.source_defaults.countries)),
+            set_text(&detail.effective.countries),
         );
         let region_mode = mode_picker(detail.overrides.region.mode);
         let region = detail
@@ -192,13 +256,19 @@ impl Fields {
         editor_row(
             body,
             &gettext("Region code"),
-            &format!("{:?}", detail.provenance.region),
+            &origin_text(detail.provenance.region),
             &region_mode,
             &region_code,
         );
         label(&gettext("Region label"), body);
         let region_label = text(region.and_then(|r| r.label.as_deref()).unwrap_or(""));
         body.append(&region_label);
+        values_detail(
+            body,
+            region_text(detail.imported.region.as_ref()),
+            Some(region_text(detail.source_defaults.region.as_ref())),
+            region_text(detail.effective.region.as_ref()),
+        );
         Self {
             use_name,
             name,
