@@ -107,7 +107,7 @@ pub(crate) async fn fetch_remote(
 
 async fn fetch_redirects(client: &Client, url: &mut Url) -> Result<Download, FetchError> {
     for redirects in 0..=3 {
-        let mut response = client.get(url.clone()).send().await.map_err(|_| FetchError::Network)?;
+        let mut response = client.get(url.clone()).send().await.map_err(|e| if e.is_timeout() { FetchError::Timeout } else { FetchError::Network })?;
         if response.status().is_redirection() {
             if redirects == 3 {
                 return Err(FetchError::Redirect);
@@ -115,7 +115,7 @@ async fn fetch_redirects(client: &Client, url: &mut Url) -> Result<Download, Fet
             let header = response.headers().get(LOCATION).ok_or(FetchError::Redirect)?;
             let location = header.to_str().map_err(|_| FetchError::Redirect)?;
             let next = url.join(location).map_err(|_| FetchError::Redirect)?;
-            if !valid_url(&next) || next.as_str().len() > 8192 {
+            if !valid_url(&next) || next.as_str().len() > 8192\n                || (url.scheme() == "https" && next.scheme() != "https") {
                 return Err(FetchError::Redirect);
             }
             *url = next;
@@ -128,7 +128,7 @@ async fn fetch_redirects(client: &Client, url: &mut Url) -> Result<Download, Fet
             return Err(FetchError::BodyTooLarge);
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| FetchError::Network)? {
+        while let Some(chunk) = response.chunk().await.map_err(|e| if e.is_timeout() { FetchError::Timeout } else { FetchError::Network })? {
             if chunk.len() > MAX_PLAYLIST_BYTES.saturating_sub(bytes.len()) {
                 return Err(FetchError::BodyTooLarge);
             }
