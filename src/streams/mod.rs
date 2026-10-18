@@ -9,6 +9,7 @@ mod editor;
 mod facet_picker;
 mod fetch;
 mod management;
+mod logo;
 pub(crate) mod model;
 pub(crate) mod parser;
 mod query;
