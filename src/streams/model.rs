@@ -378,16 +378,12 @@ impl ChannelOverrides {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum FacetSelection {
+    #[default]
     Any,
     Value(String),
     Unknown,
-}
-impl Default for FacetSelection {
-    fn default() -> Self {
-        Self::Any
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortOrder {

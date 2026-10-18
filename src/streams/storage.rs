@@ -64,9 +64,14 @@ pub(crate) fn map_sql(err: rusqlite::Error) -> StorageError {
     StorageError::StorageFailure
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Storage {
     path: PathBuf,
+}
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage").field("path", &"<redacted>").finish()
+    }
 }
 impl Storage {
     pub fn new() -> Self {

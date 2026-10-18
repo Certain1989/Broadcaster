@@ -57,7 +57,7 @@ fn channel(i: usize) -> IncomingChannel {
         stream_url: format!("https://example.invalid/live/{i}?fake=1"),
         tvg_id: Some(format!("channel-{i}")),
         tvg_name: None,
-        group_title: Some(if i % 2 == 0 { "News" } else { "Sports" }.into()),
+        group_title: Some(if i.is_multiple_of(2) { "News" } else { "Sports" }.into()),
         logo_url: None,
         channel_number: None,
         region: None,
@@ -265,20 +265,22 @@ fn source_defaults_multi_facet_manual_unknown_and_editor_provenance() {
     assert_eq!(detail.effective.languages.len(), 2);
     assert_eq!(detail.effective.countries.len(), 2);
     assert_eq!(detail.effective.region, defaults.region);
-    let mut overrides = ChannelOverrides::default();
-    overrides.languages = SetOverride {
-        mode: FacetMode::Replace,
-        values: ["fr".to_owned(), "de".to_owned()].into_iter().collect(),
+    let overrides = ChannelOverrides {
+        languages: SetOverride {
+            mode: FacetMode::Replace,
+            values: ["fr".to_owned(), "de".to_owned()].into_iter().collect(),
+        },
+        countries: SetOverride {
+            mode: FacetMode::Unknown,
+            values: BTreeSet::new(),
+        },
+        group: GroupOverride {
+            mode: FacetMode::Unknown,
+            value: None,
+        },
+        display_name: Some("User Channel".into()),
+        ..ChannelOverrides::default()
     };
-    overrides.countries = SetOverride {
-        mode: FacetMode::Unknown,
-        values: BTreeSet::new(),
-    };
-    overrides.group = GroupOverride {
-        mode: FacetMode::Unknown,
-        value: None,
-    };
-    overrides.display_name = Some("User Channel".into());
     f.store
         .set_channel_overrides(&id, &overrides, NOW + 2)
         .unwrap();

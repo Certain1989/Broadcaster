@@ -112,16 +112,15 @@ fn valid_query(q: &ChannelQuery) -> StorageResult<()> {
     }
     Ok(())
 }
-fn args<'a>(
-    q: &'a ChannelQuery,
-) -> (
+type QueryArgs<'a> = (
     Option<&'a str>,
     Option<&'a str>,
     (i32, Option<&'a str>),
     (i32, Option<&'a str>),
     (i32, Option<&'a str>),
     (i32, Option<&'a str>),
-) {
+);
+fn args(q: &ChannelQuery) -> QueryArgs<'_> {
     (
         q.search.as_deref().filter(|s| !s.is_empty()),
         q.source_id.as_deref(),
