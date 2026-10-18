@@ -549,7 +549,7 @@ fn render_selected(
         box_.append(&item);
         let selected = selected.clone();
         let checks = checks.clone();
-        let box_ = box_.clone();
+        let box_weak = box_.downgrade();
         remove.connect_clicked(move |_| {
             selected.borrow_mut().remove(&code);
             for (known, button) in checks.borrow().iter() {
@@ -557,7 +557,9 @@ fn render_selected(
                     button.set_active(false);
                 }
             }
-            render_selected(&box_, kind, &selected, &checks);
+            if let Some(box_) = box_weak.upgrade() {
+                render_selected(&box_, kind, &selected, &checks);
+            }
         });
     }
 }
@@ -799,5 +801,12 @@ mod tests {
         assert_eq!(validate_manual_language("de-DE").unwrap(), "de-DE");
         assert!(validate_manual_language("German").is_err());
         assert!(normalize_facet("de-DE", FacetDimension::Country).is_err());
+        for (code, _, _) in COUNTRY_NAMES {
+            assert_eq!(
+                normalize_facet(code, FacetDimension::Country).unwrap(),
+                *code,
+                "all available countries are selectable"
+            );
+        }
     }
 }
