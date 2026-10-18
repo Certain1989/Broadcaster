@@ -8,8 +8,8 @@
 mod editor;
 mod facet_picker;
 mod fetch;
-mod management;
 mod logo;
+mod management;
 pub(crate) mod model;
 pub(crate) mod parser;
 mod query;
