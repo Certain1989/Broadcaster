@@ -271,8 +271,11 @@ impl Storage {
     }
 
     pub fn get_channel_detail(&self, id: &str) -> StorageResult<ChannelDetail> {
-        let conn = self.connect()?;
-        load_channel_detail(&conn, id)
+        let mut conn = self.connect()?;
+        let tx = conn.transaction().map_err(map_sql)?;
+        let detail = load_channel_detail(&tx, id)?;
+        tx.commit().map_err(map_sql)?;
+        Ok(detail)
     }
 }
 impl Default for Storage { fn default() -> Self { Self::new() } }
