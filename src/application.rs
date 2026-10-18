@@ -426,6 +426,10 @@ pub enum VideoInfo {
         title: String,
         uri: String,
     },
+    Stream {
+        title: String,
+        uri: String,
+    },
     Mediathek {
         title: String,
         preferred_quality: VideoQuality,
@@ -439,14 +443,16 @@ pub enum VideoInfo {
 impl VideoInfo {
     pub fn subtitle_url(&self) -> Option<&str> {
         match self {
-            VideoInfo::Live { .. } => None,
+            VideoInfo::Live { .. } | VideoInfo::Stream { .. } => None,
             VideoInfo::Mediathek { subtitle_url, .. } => subtitle_url.as_deref(),
         }
     }
 
     pub fn title(&self) -> &str {
         match self {
-            VideoInfo::Live { title, .. } | VideoInfo::Mediathek { title, .. } => title,
+            VideoInfo::Live { title, .. }
+            | VideoInfo::Stream { title, .. }
+            | VideoInfo::Mediathek { title, .. } => title,
         }
     }
 
@@ -454,7 +460,9 @@ impl VideoInfo {
     /// available alternative. Do not panic on missing backend video URLs.
     pub fn uri(&self) -> Option<&str> {
         match self {
-            VideoInfo::Live { uri, .. } => (!uri.is_empty()).then_some(uri.as_str()),
+            VideoInfo::Live { uri, .. } | VideoInfo::Stream { uri, .. } => {
+                (!uri.is_empty()).then_some(uri.as_str())
+            },
             VideoInfo::Mediathek {
                 preferred_quality,
                 uri_high,
@@ -479,6 +487,22 @@ impl VideoInfo {
 #[cfg(test)]
 mod tests {
     use super::{VideoInfo, VideoQuality};
+
+    #[test]
+    fn imported_stream_keeps_existing_player_contract() {
+        let video = VideoInfo::Stream {
+            title: "Fabricated Example".into(),
+            uri: "https://example.invalid/demo.m3u8".into(),
+        };
+        assert_eq!(video.title(), "Fabricated Example");
+        assert_eq!(video.uri(), Some("https://example.invalid/demo.m3u8"));
+        assert_eq!(video.subtitle_url(), None);
+        let empty = VideoInfo::Stream {
+            title: "Empty".into(),
+            uri: String::new(),
+        };
+        assert_eq!(empty.uri(), None);
+    }
 
     #[test]
     fn missing_preferred_quality_falls_back_to_an_available_stream() {
