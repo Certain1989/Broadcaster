@@ -70,7 +70,9 @@ pub struct Storage {
 }
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Storage").field("path", &"<redacted>").finish()
+        f.debug_struct("Storage")
+            .field("path", &"<redacted>")
+            .finish()
     }
 }
 impl Storage {
