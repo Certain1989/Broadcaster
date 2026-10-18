@@ -137,6 +137,9 @@ pub(crate) fn parse_playlist(
         if line.is_empty() {
             continue;
         }
+        if line.starts_with("#EXT-X-") {
+            return Err(ParseError::HlsManifest);
+        }
         if line.len() > MAX_LINE_BYTES {
             // An overlong line is not retained or echoed, even in a warning.
             diagnostics.skip(WarningKind::OversizedLine);
@@ -144,9 +147,6 @@ pub(crate) fn parse_playlist(
             has_extinf = false;
             group_hint = None;
             continue;
-        }
-        if line.starts_with("#EXT-X-") {
-            return Err(ParseError::HlsManifest);
         }
         if let Some(body) = line.strip_prefix("#EXTINF:") {
             if has_extinf {
@@ -178,7 +178,11 @@ pub(crate) fn parse_playlist(
         if let Some(option) = line.strip_prefix("#EXTVLCOPT:") {
             if let Some((key, value)) = option.split_once('=') {
                 // Only recognized headers are retained as data. No mpv flag passthrough.
-                assign_attribute(key.trim(), value.trim(), &mut pending, &mut diagnostics);
+                if key.len() <= 64 && value.len() <= MAX_ATTRIBUTE_BYTES {
+                    assign_attribute(key.trim(), value.trim(), &mut pending, &mut diagnostics);
+                } else {
+                    diagnostics.warn(WarningKind::OversizedAttribute);
+                }
             }
             continue;
         }
@@ -409,16 +413,16 @@ fn parse_attributes(
                     && (data[pos + 1] == b'"' || data[pos + 1] == b'\\')
                 {
                     pos += 1;
-                    let ch = data[pos];
+                    let ch = char::from(data[pos]);
                     pos += 1;
                     ch
                 } else {
-                    let ch = data[pos];
-                    pos += 1;
+                    let ch = input[pos..].chars().next().expect("valid UTF-8");
+                    pos += ch.len_utf8();
                     ch
                 };
-                if value.len() < MAX_ATTRIBUTE_BYTES {
-                    value.push(char::from(ch));
+                if value.len() + ch.len_utf8() <= MAX_ATTRIBUTE_BYTES {
+                    value.push(ch);
                 } else {
                     oversized = true;
                 }
