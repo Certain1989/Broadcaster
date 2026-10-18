@@ -761,3 +761,29 @@ fn current_rss_kib() -> Option<u64> {
 fn current_rss_kib() -> Option<u64> {
     None
 }
+
+#[test]
+fn channel_rank_uses_same_effective_filters_and_sort_as_paged_query() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("Rank fixtures", 10_000);
+    let mut q = query_all();
+    // Rank is global even if the caller holds only a tiny/late page.
+    q.limit = 1;
+    q.offset = 9_999;
+    let last = f.store.query_channels(&q).unwrap().items.pop().unwrap();
+    assert_eq!(f.store.channel_position(&q, &last.id).unwrap(), Some(9_999));
+    q.sort = SortOrder::Name;
+    let ranked = f.store.channel_position(&q, &last.id).unwrap().unwrap();
+    q.offset = u32::try_from(ranked).unwrap();
+    assert_eq!(f.store.query_channels(&q).unwrap().items[0].id, last.id);
+    q.group = FacetSelection::Value("News".into());
+    let rank_in_group = f.store.channel_position(&q, &last.id).unwrap();
+    // Even-numbered entries are News; odd entries are Sports.
+    assert_eq!(rank_in_group, None);
+    q.group = FacetSelection::Unknown;
+    assert_eq!(f.store.channel_position(&q, &last.id).unwrap(), None);
+    q.group = FacetSelection::Any;
+    f.store.set_source_enabled(&source.id, false, NOW + 1).unwrap();
+    assert_eq!(f.store.channel_position(&q, &last.id).unwrap(), None);
+    assert_eq!(f.store.channel_position(&q, &uuid::Uuid::new_v4().to_string()).unwrap(), None);
+}
