@@ -109,6 +109,9 @@ mod imp {
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
+        pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
+        pub(super) manager_generation: Cell<u64>,
         #[cfg(test)]
         pub(super) fake_player_enabled: Cell<bool>,
         #[cfg(test)]
@@ -1025,6 +1028,48 @@ impl TvStreamsView {
 
     pub fn show_manager(&self) {
         super::management::show_manager(self);
+    }
+
+    pub(crate) fn remember_source_manager(
+        &self,
+        list: &gtk::ListBox,
+        status: &gtk::Label,
+    ) {
+        let imp = self.imp();
+        imp.manager_list.replace(Some(list.downgrade()));
+        imp.manager_status.replace(Some(status.downgrade()));
+    }
+
+    pub(crate) fn forget_source_manager(&self) {
+        let imp = self.imp();
+        imp.manager_list.replace(None);
+        imp.manager_status.replace(None);
+        self.next_manager_generation();
+    }
+
+    pub(crate) fn next_manager_generation(&self) -> u64 {
+        let imp = self.imp();
+        let generation = imp.manager_generation.get().wrapping_add(1);
+        imp.manager_generation.set(generation);
+        generation
+    }
+
+    pub(crate) fn manager_generation(&self) -> u64 {
+        self.imp().manager_generation.get()
+    }
+
+    pub(crate) fn refresh_source_manager(&self) {
+        let imp = self.imp();
+        let list = imp.manager_list.borrow().as_ref().and_then(glib::WeakRef::upgrade);
+        let status = imp.manager_status.borrow().as_ref().and_then(glib::WeakRef::upgrade);
+        if let (Some(list), Some(status), Some(service)) = (list, status, self.service()) {
+            super::management::load_manager(self, &service, &list, &status);
+        }
+    }
+
+    pub(crate) fn source_mutated(&self) {
+        self.reload();
+        self.refresh_source_manager();
     }
 
     pub(crate) fn service(&self) -> Option<StreamsService> {
