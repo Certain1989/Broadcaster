@@ -249,7 +249,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let index = dropdown.selected() as usize;
                 if let Some(selected) = view.imp().language_values.borrow().get(index).cloned() {
                     view.imp().query.borrow_mut().language = selected;
@@ -261,7 +263,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let index = dropdown.selected() as usize;
                 if let Some(selected) = view.imp().country_values.borrow().get(index).cloned() {
                     view.imp().query.borrow_mut().country = selected;
@@ -273,7 +277,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let index = dropdown.selected() as usize;
                 if let Some(selected) = view.imp().region_values.borrow().get(index).cloned() {
                     view.imp().query.borrow_mut().region = selected;
@@ -301,7 +307,9 @@ impl TvStreamsView {
             self,
             move |_| {
                 view.imp().suppress_controls.set(true);
-                view.imp().search_serial.set(view.imp().search_serial.get().wrapping_add(1));
+                view.imp()
+                    .search_serial
+                    .set(view.imp().search_serial.get().wrapping_add(1));
                 *view.imp().query.borrow_mut() = ChannelQuery::default();
                 view.imp().search_entry.set_text("");
                 view.imp().suppress_controls.set(false);
@@ -312,7 +320,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |_| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let serial = view.imp().search_serial.get().wrapping_add(1);
                 view.imp().search_serial.set(serial);
                 glib::timeout_add_local_once(
@@ -409,7 +419,15 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             async move {
-                let (page, sources, source_options, group_options, language_options, country_options, region_options) = futures_util::join!(
+                let (
+                    page,
+                    sources,
+                    source_options,
+                    group_options,
+                    language_options,
+                    country_options,
+                    region_options,
+                ) = futures_util::join!(
                     service.query(query.clone()),
                     service.list_sources(),
                     service.filter_options(query.clone(), FilterDimension::Source),
@@ -421,8 +439,23 @@ impl TvStreamsView {
                 if view.imp().generation.get() != generation {
                     return;
                 }
-                let (Ok(page), Ok(sources), Ok(source_options), Ok(group_options), Ok(language_options), Ok(country_options), Ok(region_options)) =
-                    (page, sources, source_options, group_options, language_options, country_options, region_options)
+                let (
+                    Ok(page),
+                    Ok(sources),
+                    Ok(source_options),
+                    Ok(group_options),
+                    Ok(language_options),
+                    Ok(country_options),
+                    Ok(region_options),
+                ) = (
+                    page,
+                    sources,
+                    source_options,
+                    group_options,
+                    language_options,
+                    country_options,
+                    region_options,
+                )
                 else {
                     view.imp().results_stack.set_visible_child_name("error");
                     return;
@@ -458,7 +491,15 @@ impl TvStreamsView {
         let previously_selected = imp.selected_id.borrow().clone();
         let previous_index = imp.last_index.get();
         imp.suppress_controls.set(true);
-        self.install_facets(&query, &sources, source_options, group_options, language_options, country_options, region_options);
+        self.install_facets(
+            &query,
+            &sources,
+            source_options,
+            group_options,
+            language_options,
+            country_options,
+            region_options,
+        );
         let total = page.total.min(u32::MAX as u64) as u32;
         let rows = imp.rows.get().expect("initialized rows");
         rows.reset(total);
@@ -576,7 +617,9 @@ impl TvStreamsView {
             Self::facet_dropdown(&gettext("All countries"), &query.country, country_options);
         let (region_labels, region_values, region_index) =
             Self::facet_dropdown(&gettext("All regions"), &query.region, region_options);
-        let show_region = region_values.iter().any(|value| matches!(value, FacetSelection::Value(_)))
+        let show_region = region_values
+            .iter()
+            .any(|value| matches!(value, FacetSelection::Value(_)))
             || query.region != FacetSelection::Any;
         imp.region_filter.set_visible(show_region);
         imp.language_values.replace(language_values);
@@ -611,7 +654,10 @@ impl TvStreamsView {
             labels.push(format!("{} (0)", gettext("Previous selection")));
             values.push(selected.clone());
         }
-        let index = values.iter().position(|value| value == selected).unwrap_or(0) as u32;
+        let index = values
+            .iter()
+            .position(|value| value == selected)
+            .unwrap_or(0) as u32;
         (labels, values, index)
     }
 
@@ -757,7 +803,12 @@ impl TvStreamsView {
             #[weak]
             item,
             move |_| {
-                if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(item.position())) {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|r| r.channel(item.position()))
+                {
                     view.edit_selected(channel.id);
                 }
             }
@@ -1124,15 +1175,19 @@ impl TvStreamsView {
                 return false;
             }
             if key == gtk::gdk::Key::Up {
-                return controls[..index].iter().rev()
+                return controls[..index]
+                    .iter()
+                    .rev()
                     .find(|w| w.is_visible() && w.is_sensitive())
                     .is_some_and(|w| w.grab_focus());
             }
             let next = index + 1;
-            if next == controls.len() - 1 && imp.rows.get().is_some_and(|rows| rows.n_items() == 0) {
+            if next == controls.len() - 1 && imp.rows.get().is_some_and(|rows| rows.n_items() == 0)
+            {
                 return imp.add_button.grab_focus();
             }
-            return controls[next..].iter()
+            return controls[next..]
+                .iter()
                 .find(|w| w.is_visible() && w.is_sensitive())
                 .is_some_and(|w| w.grab_focus());
         }
