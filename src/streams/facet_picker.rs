@@ -611,6 +611,10 @@ impl FacetPicker {
             }
         }
         candidates.sort_by_key(|code| human_label(kind, code).to_lowercase());
+        let error = gtk::Label::new(None);
+        error.set_wrap(true);
+        error.set_xalign(0.0);
+        error.add_css_class("error");
         for code in candidates {
             let check = gtk::CheckButton::with_label(&human_label(kind, &code));
             check.set_active(initial.contains(&code));
@@ -620,15 +624,22 @@ impl FacetPicker {
             let selected = selected.clone();
             let checks_weak = Rc::downgrade(&checks);
             let selected_box_weak = selected_box.downgrade();
+            let error_weak = error.downgrade();
             check.connect_toggled(move |button| {
                 if button.is_active() {
                     if selected.borrow().len() >= 64 && !selected.borrow().contains(&code) {
+                        if let Some(error) = error_weak.upgrade() {
+                            error.set_text(&gettext("Choose at most 64 values."));
+                        }
                         button.set_active(false);
                         return;
                     }
                     selected.borrow_mut().insert(code.clone());
-                } else {
-                    selected.borrow_mut().remove(&code);
+                } else if !selected.borrow_mut().remove(&code) {
+                    return;
+                }
+                if let Some(error) = error_weak.upgrade() {
+                    error.set_text("");
                 }
                 if let (Some(selected_box), Some(checks)) =
                     (selected_box_weak.upgrade(), checks_weak.upgrade())
@@ -712,10 +723,6 @@ impl FacetPicker {
         }
         chooser.set_child(Some(&panel));
         root.append(&chooser);
-        let error = gtk::Label::new(None);
-        error.set_wrap(true);
-        error.set_xalign(0.0);
-        error.add_css_class("error");
         root.append(&error);
         render_selected(&selected_box, kind, &selected, &checks);
         Self {
@@ -744,22 +751,28 @@ impl FacetPicker {
 
     #[cfg(test)]
     pub(crate) fn choose(&self, code: &str) {
-        self.selected.borrow_mut().insert(code.to_owned());
-        for (known, button) in self.checks.borrow().iter() {
-            if known == code {
-                button.set_active(true);
-            }
+        let check = self.checks.borrow().iter()
+            .find(|(known, _)| known == code)
+            .map(|(_, check)| check.clone());
+        if let Some(check) = check {
+            // Exercise the same toggled signal as keyboard/remote selection.
+            check.set_active(true);
+        } else {
+            self.selected.borrow_mut().insert(code.to_owned());
+            render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
         }
-        render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
     }
 
     #[cfg(test)]
     pub(crate) fn deselect(&self, code: &str) {
-        self.selected.borrow_mut().remove(code);
-        for (known, button) in self.checks.borrow().iter() {
-            if known == code {
-                button.set_active(false);
-            }
+        let check = self.checks.borrow().iter()
+            .find(|(known, _)| known == code)
+            .map(|(_, check)| check.clone());
+        if let Some(check) = check {
+            check.set_active(false);
+        } else {
+            self.selected.borrow_mut().remove(code);
+            render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
         }
     }
 
