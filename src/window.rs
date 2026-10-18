@@ -91,6 +91,14 @@ mod imp {
                 slf.imp().stack.set_visible_child_name("streams");
                 slf.imp().streams_view.focus_search();
             });
+            klass.install_action("window.add-playlist", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_add();
+            });
+            klass.install_action("window.manage-sources", None, |slf, _, _| {
+                slf.imp().stack.set_visible_child_name("streams");
+                slf.imp().streams_view.show_manager();
+            });
             // Explicit escape hatch for TV remotes as well as desktop users.
             // The existing fullscreened settings binding persists this choice.
             klass.install_action("window.toggle-fullscreen", None, |slf, _, _| {
