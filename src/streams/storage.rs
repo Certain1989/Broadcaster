@@ -208,9 +208,15 @@ impl Storage {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(map_sql)?;
         drop(stmt);
-        let old = ids.iter().position(|item| item == id).ok_or(StorageError::NotFound)?;
-        let target = if direction < 0 { old.checked_sub(1) }
-            else { old.checked_add(1).filter(|n| *n < ids.len()) };
+        let old = ids
+            .iter()
+            .position(|item| item == id)
+            .ok_or(StorageError::NotFound)?;
+        let target = if direction < 0 {
+            old.checked_sub(1)
+        } else {
+            old.checked_add(1).filter(|n| *n < ids.len())
+        };
         if let Some(target) = target {
             ids.swap(old, target);
         }
