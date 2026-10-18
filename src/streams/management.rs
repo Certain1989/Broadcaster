@@ -1082,27 +1082,6 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
 }
 
 #[cfg(test)]
-mod source_form_tests {
-    use super::*;
-
-    #[test]
-    fn source_default_codes_and_optional_region_validate() {
-        assert_eq!(
-            csv("en, de, en", FacetDimension::Language).unwrap().len(),
-            2
-        );
-        assert_eq!(
-            csv("de, at", FacetDimension::Country).unwrap(),
-            ["AT".to_owned(), "DE".to_owned()].into_iter().collect()
-        );
-        assert!(csv("not-a-country", FacetDimension::Country).is_err());
-        assert!(region("", "").unwrap().is_none());
-        assert!(region("DE-BY", "Bavaria").unwrap().is_some());
-        assert!(region(" ", &"R".repeat(129)).is_err());
-    }
-}
-
-#[cfg(test)]
 pub(crate) fn assert_synthetic_source_defaults_form() {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let defaults = DefaultsForm::new(&body, &SourceDefaults::default());
@@ -1122,4 +1101,25 @@ pub(crate) fn assert_synthetic_source_defaults_form() {
         defaults.collect().is_err(),
         "unknown ISO country should be rejected"
     );
+}
+
+#[cfg(test)]
+mod source_form_tests {
+    use super::*;
+
+    #[test]
+    fn source_default_codes_and_optional_region_validate() {
+        assert_eq!(
+            csv("en, de, en", FacetDimension::Language).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            csv("de, at", FacetDimension::Country).unwrap(),
+            ["AT".to_owned(), "DE".to_owned()].into_iter().collect()
+        );
+        assert!(csv("not-a-country", FacetDimension::Country).is_err());
+        assert!(region("", "").unwrap().is_none());
+        assert!(region("DE-BY", "Bavaria").unwrap().is_some());
+        assert!(region(" ", &"R".repeat(129)).is_err());
+    }
 }
