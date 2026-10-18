@@ -535,7 +535,7 @@ mod editor_tests {
 
 #[cfg(test)]
 pub(crate) fn assert_synthetic_editor_form() {
-    use super::model_for_test::*;
+    use self::model_for_test::*;
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let detail = sample_detail();
