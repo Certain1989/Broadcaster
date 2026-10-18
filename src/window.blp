@@ -17,6 +17,7 @@ template $TvWindow: Adw.ApplicationWindow {
       switcher_bar.reveal: true;
       header_bar.title-widget: null;
       mediathek_view.compact: true;
+      streams_view.compact: true;
     }
   }
 
@@ -66,6 +67,13 @@ template $TvWindow: Adw.ApplicationWindow {
           child: $TvMediathekView mediathek_view {};
         }
 
+        Adw.ViewStackPage {
+          name: "streams";
+          title: _("My Channels");
+          icon-name: "tv-symbolic";
+
+          child: $TvStreamsView streams_view {};
+        }
       }
     }
 
