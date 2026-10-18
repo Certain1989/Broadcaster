@@ -102,9 +102,7 @@ mod imp {
         fn properties() -> &'static [glib::ParamSpec] {
             use std::sync::OnceLock;
             static PROPS: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
-            PROPS.get_or_init(|| {
-                vec![glib::ParamSpecBoolean::builder("compact").build()]
-            })
+            PROPS.get_or_init(|| vec![glib::ParamSpecBoolean::builder("compact").build()])
         }
 
         fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
@@ -185,18 +183,16 @@ impl TvStreamsView {
         self.update_dropdown(&imp.group_filter, &[gettext("All groups")], 0);
         self.update_dropdown(
             &imp.sort_filter,
-            &[
-                gettext("Playlist order"),
-                gettext("Name"),
-                gettext("Group"),
-            ],
+            &[gettext("Playlist order"), gettext("Name"), gettext("Group")],
             0,
         );
         imp.source_filter.connect_selected_notify(glib::clone!(
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let selected = dropdown.selected() as usize;
                 if let Some(source) = view.imp().source_values.borrow().get(selected).cloned() {
                     view.imp().query.borrow_mut().source_id = source;
@@ -208,7 +204,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let selected = dropdown.selected() as usize;
                 if let Some(group) = view.imp().group_values.borrow().get(selected).cloned() {
                     view.imp().query.borrow_mut().group = group;
@@ -220,7 +218,9 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             move |dropdown| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 view.imp().query.borrow_mut().sort = match dropdown.selected() {
                     1 => SortOrder::Name,
                     2 => SortOrder::Group,
@@ -235,26 +235,36 @@ impl TvStreamsView {
             move |_| {
                 let serial = view.imp().search_serial.get().wrapping_add(1);
                 view.imp().search_serial.set(serial);
-                glib::timeout_add_local_once(Duration::from_millis(250), glib::clone!(
-                    #[weak] view,
-                    move || {
-                        if view.imp().search_serial.get() != serial { return; }
-                        let text = view.imp().search_entry.text().to_string();
-                        let text: String = text.chars().take(256).collect();
-                        view.imp().query.borrow_mut().search =
-                            (!text.is_empty()).then_some(text);
-                        view.reload();
-                    }
-                ));
+                glib::timeout_add_local_once(
+                    Duration::from_millis(250),
+                    glib::clone!(
+                        #[weak]
+                        view,
+                        move || {
+                            if view.imp().search_serial.get() != serial {
+                                return;
+                            }
+                            let text = view.imp().search_entry.text().to_string();
+                            let text: String = text.chars().take(256).collect();
+                            view.imp().query.borrow_mut().search =
+                                (!text.is_empty()).then_some(text);
+                            view.reload();
+                        }
+                    ),
+                );
             }
         ));
         selection.connect_selected_notify(glib::clone!(
             #[weak(rename_to = view)]
             self,
             move |selection| {
-                if view.imp().suppress_controls.get() { return; }
+                if view.imp().suppress_controls.get() {
+                    return;
+                }
                 let index = selection.selected();
-                if index == gtk::INVALID_LIST_POSITION { return; }
+                if index == gtk::INVALID_LIST_POSITION {
+                    return;
+                }
                 view.imp().last_index.set(index);
                 if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(index)) {
                     view.imp().selected_id.replace(Some(channel.id));
@@ -299,7 +309,9 @@ impl TvStreamsView {
 
     pub fn reload(&self) {
         let imp = self.imp();
-        let Some(service) = imp.service.borrow().clone() else { return; };
+        let Some(service) = imp.service.borrow().clone() else {
+            return;
+        };
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
         imp.in_flight.borrow_mut().clear();
@@ -317,14 +329,23 @@ impl TvStreamsView {
                     service.filter_options(query.clone(), FilterDimension::Source),
                     service.filter_options(query.clone(), FilterDimension::Group),
                 );
-                if view.imp().generation.get() != generation { return; }
+                if view.imp().generation.get() != generation {
+                    return;
+                }
                 let (Ok(page), Ok(sources), Ok(source_options), Ok(group_options)) =
                     (page, sources, source_options, group_options)
                 else {
                     view.imp().results_stack.set_visible_child_name("error");
                     return;
                 };
-                view.apply_results(query, generation, page, sources, source_options, group_options);
+                view.apply_results(
+                    query,
+                    generation,
+                    page,
+                    sources,
+                    source_options,
+                    group_options,
+                );
             }
         ));
     }
@@ -370,7 +391,10 @@ impl TvStreamsView {
         } else {
             imp.results_stack.set_visible_child_name("results");
             let fallback = previous_index.min(total - 1);
-            imp.selection.get().expect("selection").set_selected(fallback);
+            imp.selection
+                .get()
+                .expect("selection")
+                .set_selected(fallback);
         }
         imp.suppress_controls.set(false);
         if total != 0 {
@@ -409,7 +433,10 @@ impl TvStreamsView {
             if !source_values.iter().any(|value| value.as_ref() == Some(id)) {
                 source_labels.push(format!(
                     "{} (0)",
-                    names.get(id.as_str()).copied().unwrap_or("Unavailable source")
+                    names
+                        .get(id.as_str())
+                        .copied()
+                        .unwrap_or("Unavailable source")
                 ));
                 source_values.push(Some(id.clone()));
             }
@@ -456,36 +483,54 @@ impl TvStreamsView {
         id: ChannelId,
         fallback: u32,
     ) {
-        let Some(service) = self.imp().service.borrow().clone() else { return; };
+        let Some(service) = self.imp().service.borrow().clone() else {
+            return;
+        };
         spawn(glib::clone!(
             #[weak(rename_to = view)]
             self,
             async move {
                 let position = service.channel_position(query, &id).await;
-                if view.imp().generation.get() != generation { return; }
+                if view.imp().generation.get() != generation {
+                    return;
+                }
                 let total = view.imp().rows.get().expect("rows").n_items();
-                if total == 0 { return; }
+                if total == 0 {
+                    return;
+                }
                 let target = match position {
                     Ok(Some(position)) if position < total as u64 => position as u32,
                     Ok(None) => fallback.min(total - 1),
                     _ => return,
                 };
-                view.imp().selection.get().expect("selection").set_selected(target);
+                view.imp()
+                    .selection
+                    .get()
+                    .expect("selection")
+                    .set_selected(target);
                 view.request_page(target);
-                view.imp().results_list.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                view.imp()
+                    .results_list
+                    .scroll_to(target, gtk::ListScrollFlags::NONE, None);
             }
         ));
     }
 
     fn request_page(&self, position: u32) {
         let imp = self.imp();
-        let Some(rows) = imp.rows.get() else { return; };
-        if position >= rows.n_items() { return; }
+        let Some(rows) = imp.rows.get() else {
+            return;
+        };
+        if position >= rows.n_items() {
+            return;
+        }
         let index = position / PAGE_SIZE;
         if rows.has_page(index) || !imp.in_flight.borrow_mut().insert(index) {
             return;
         }
-        let Some(service) = imp.service.borrow().clone() else { return; };
+        let Some(service) = imp.service.borrow().clone() else {
+            return;
+        };
         let generation = imp.generation.get();
         let mut query = imp.query.borrow().clone();
         query.offset = index.saturating_mul(PAGE_SIZE);
@@ -495,13 +540,21 @@ impl TvStreamsView {
             self,
             async move {
                 let response = service.query(query).await;
-                if view.imp().generation.get() != generation { return; }
+                if view.imp().generation.get() != generation {
+                    return;
+                }
                 view.imp().in_flight.borrow_mut().remove(&index);
                 if let Ok(response) = response {
-                    view.imp().rows.get().expect("rows").insert_page(index, response.items);
+                    view.imp()
+                        .rows
+                        .get()
+                        .expect("rows")
+                        .insert_page(index, response.items);
                     let selected = view.imp().selection.get().expect("selection").selected();
                     if selected / PAGE_SIZE == index {
-                        if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(selected)) {
+                        if let Some(channel) =
+                            view.imp().rows.get().and_then(|r| r.channel(selected))
+                        {
                             view.imp().selected_id.replace(Some(channel.id));
                         }
                     }
@@ -511,7 +564,9 @@ impl TvStreamsView {
     }
 
     fn setup_row(&self, item: &glib::Object) {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return; };
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
         root.set_margin_top(5);
         root.set_margin_bottom(5);
@@ -550,26 +605,41 @@ impl TvStreamsView {
         play.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
-            #[weak] item,
+            #[weak]
+            item,
             move |_| view.play_position(item.position())
         ));
         item.set_child(Some(&root));
         self.imp().bindings.borrow_mut().insert(
             item.as_ptr() as usize,
             BoundRow {
-                ui: RowUi { title, summary, details, reveal, play },
+                ui: RowUi {
+                    title,
+                    summary,
+                    details,
+                    reveal,
+                    play,
+                },
                 connection: None,
             },
         );
     }
 
     fn bind_row(&self, item: &glib::Object) {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return; };
-        let Some(slot) = item.item().and_downcast::<StreamSlot>() else { return; };
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(slot) = item.item().and_downcast::<StreamSlot>() else {
+            return;
+        };
         let key = item.as_ptr() as usize;
         self.unbind_row(item.upcast_ref());
         if let Some(binding) = self.imp().bindings.borrow_mut().get_mut(&key) {
-            Self::paint_row(&binding.ui, &slot, self.imp().expanded_id.borrow().as_deref());
+            Self::paint_row(
+                &binding.ui,
+                &slot,
+                self.imp().expanded_id.borrow().as_deref(),
+            );
             let ui = binding.ui.clone();
             let weak_view = self.downgrade();
             let weak_slot = slot.downgrade();
@@ -584,8 +654,15 @@ impl TvStreamsView {
     }
 
     fn unbind_row(&self, item: &glib::Object) {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return; };
-        if let Some(binding) = self.imp().bindings.borrow_mut().get_mut(&(item.as_ptr() as usize)) {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        if let Some(binding) = self
+            .imp()
+            .bindings
+            .borrow_mut()
+            .get_mut(&(item.as_ptr() as usize))
+        {
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
@@ -598,9 +675,14 @@ impl TvStreamsView {
     }
 
     fn teardown_row(&self, item: &glib::Object) {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return; };
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
         self.unbind_row(item.upcast_ref());
-        self.imp().bindings.borrow_mut().remove(&(item.as_ptr() as usize));
+        self.imp()
+            .bindings
+            .borrow_mut()
+            .remove(&(item.as_ptr() as usize));
     }
 
     fn paint_row(ui: &RowUi, slot: &StreamSlot, expanded: Option<&str>) {
@@ -622,19 +704,42 @@ impl TvStreamsView {
         let mut details = Vec::new();
         if !channel.languages.is_empty() {
             details.push(format!(
-                "{}: {}", gettext("Language"), channel.languages.iter().cloned().collect::<Vec<_>>().join(", ")
+                "{}: {}",
+                gettext("Language"),
+                channel
+                    .languages
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if !channel.countries.is_empty() {
             details.push(format!(
-                "{}: {}", gettext("Country"), channel.countries.iter().cloned().collect::<Vec<_>>().join(", ")
+                "{}: {}",
+                gettext("Country"),
+                channel
+                    .countries
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         if let Some(region) = &channel.region {
-            details.push(format!("{}: {}", gettext("Region"), region.label.as_deref().or(region.code.as_deref()).unwrap_or("")));
+            details.push(format!(
+                "{}: {}",
+                gettext("Region"),
+                region
+                    .label
+                    .as_deref()
+                    .or(region.code.as_deref())
+                    .unwrap_or("")
+            ));
         }
         ui.details.set_text(&details.join(" · "));
-        ui.reveal.set_reveal_child(expanded == Some(channel.id.as_str()));
+        ui.reveal
+            .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
     }
 
@@ -648,14 +753,23 @@ impl TvStreamsView {
     }
 
     fn activate_position(&self, position: u32) {
-        let Some(channel) = self.imp().rows.get().and_then(|rows| rows.channel(position)) else {
+        let Some(channel) = self
+            .imp()
+            .rows
+            .get()
+            .and_then(|rows| rows.channel(position))
+        else {
             self.request_page(position);
             return;
         };
         // The explicit Play button owns Return when it has focus.
-        if self.imp().bindings.borrow().values().any(|binding| {
-            binding.ui.play.has_focus()
-        }) {
+        if self
+            .imp()
+            .bindings
+            .borrow()
+            .values()
+            .any(|binding| binding.ui.play.has_focus())
+        {
             return;
         }
         if self.imp().expanded_id.borrow().as_deref() == Some(channel.id.as_str()) {
@@ -668,14 +782,23 @@ impl TvStreamsView {
     }
 
     fn play_position(&self, position: u32) {
-        let Some(channel) = self.imp().rows.get().and_then(|rows| rows.channel(position)) else { return; };
+        let Some(channel) = self
+            .imp()
+            .rows
+            .get()
+            .and_then(|rows| rows.channel(position))
+        else {
+            return;
+        };
         if self.imp().expanded_id.borrow().as_deref() != Some(channel.id.as_str()) {
             return;
         }
         // Storage/parser constrain schemes; enforce it again at the presentation boundary.
         let safe = reqwest::Url::parse(&channel.stream_url)
             .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some());
-        if !safe { return; }
+        if !safe {
+            return;
+        }
         self.imp().selected_id.replace(Some(channel.id));
         let video = VideoInfo::Stream {
             title: channel.visible_name,
@@ -743,7 +866,9 @@ impl TvStreamsView {
     }
 
     pub fn collapse_expanded(&self) -> bool {
-        if self.imp().expanded_id.borrow_mut().take().is_none() { return false; }
+        if self.imp().expanded_id.borrow_mut().take().is_none() {
+            return false;
+        }
         self.repaint_bound_rows();
         self.imp().results_list.grab_focus();
         true
