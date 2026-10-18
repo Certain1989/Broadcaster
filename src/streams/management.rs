@@ -473,10 +473,12 @@ fn load_manager(
                 let (present, retained) = counts.get(index)
                     .and_then(|result| result.as_ref().ok().copied())
                     .unwrap_or((0, 0));
-                let last_attempt = source.last_attempt_at.map_or_else(
-                    || gettext("Never"), |at| at.to_string());
-                let last_success = source.last_success_at.map_or_else(
-                    || gettext("Never"), |at| at.to_string());
+                let last_attempt = source.last_attempt_at
+                    .and_then(crate::utils::format_timestamp_full)
+                    .map_or_else(|| gettext("Never"), |date| date.to_string());
+                let last_success = source.last_success_at
+                    .and_then(crate::utils::format_timestamp_full)
+                    .map_or_else(|| gettext("Never"), |date| date.to_string());
                 let summary = gtk::Label::new(Some(&format!(
                     "{origin} · {state} · {}: {present} / {retained}\n{}: {last_success} · {}: {last_attempt}",
                     gettext("Active / retained channels"),
