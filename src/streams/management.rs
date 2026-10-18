@@ -1119,7 +1119,10 @@ pub(crate) fn assert_synthetic_source_defaults_form() {
     defaults.code.set_text("DE-BY");
     defaults.label.set_text("Bavaria");
     defaults.languages.pending_manual("German");
-    assert!(defaults.collect().is_err(), "unapplied manual text must not be silently ignored");
+    assert!(
+        defaults.collect().is_err(),
+        "unapplied manual text must not be silently ignored"
+    );
     defaults.languages.pending_manual("");
     let validated = defaults.collect().expect("source defaults from GTK fields");
     assert_eq!(validated.languages.len(), 2);
