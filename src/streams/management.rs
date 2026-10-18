@@ -1108,7 +1108,9 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
 pub(crate) fn assert_synthetic_source_defaults_form() {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let defaults = DefaultsForm::new(&body, &SourceDefaults::default());
-    let empty = defaults.collect().expect("optional source defaults may be empty");
+    let empty = defaults
+        .collect()
+        .expect("optional source defaults may be empty");
     assert!(empty.languages.is_empty() && empty.countries.is_empty() && empty.region.is_none());
     defaults.languages.choose("de");
     defaults.languages.choose("en");
