@@ -1101,3 +1101,20 @@ mod source_form_tests {
         assert!(region(" ", &"R".repeat(129)).is_err());
     }
 }
+
+
+#[cfg(test)]
+pub(crate) fn assert_synthetic_source_defaults_form() {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let defaults = DefaultsForm::new(&body, &SourceDefaults::default());
+    defaults.languages.set_text("de, en");
+    defaults.countries.set_text("DE, AT");
+    defaults.code.set_text("DE-BY");
+    defaults.label.set_text("Bavaria");
+    let validated = defaults.collect().expect("source defaults from GTK fields");
+    assert_eq!(validated.languages.len(), 2);
+    assert_eq!(validated.countries.len(), 2);
+    assert_eq!(validated.region.and_then(|region| region.code).as_deref(), Some("DE-BY"));
+    defaults.countries.set_text("ZZ");
+    assert!(defaults.collect().is_err(), "unknown ISO country should be rejected");
+}
