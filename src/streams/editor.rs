@@ -469,7 +469,7 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
                     let value = match fields.edits() {
                         Ok(value) => value,
                         Err(error) => {
-                            errors.set_text(error);
+                            errors.set_text(&error);
                             return;
                         }
                     };
