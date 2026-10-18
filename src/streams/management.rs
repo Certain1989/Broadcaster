@@ -440,8 +440,11 @@ fn load_manager(
                 }
             };
             let counts = futures_util::future::join_all(
-                sources.iter().map(|source| service.source_counts(&source.id))
-            ).await;
+                sources
+                    .iter()
+                    .map(|source| service.source_counts(&source.id)),
+            )
+            .await;
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -470,13 +473,16 @@ fn load_manager(
                     .last_error_code
                     .as_ref()
                     .map_or_else(|| gettext("No recorded error"), |code| code.clone());
-                let (present, retained) = counts.get(index)
+                let (present, retained) = counts
+                    .get(index)
                     .and_then(|result| result.as_ref().ok().copied())
                     .unwrap_or((0, 0));
-                let last_attempt = source.last_attempt_at
+                let last_attempt = source
+                    .last_attempt_at
                     .and_then(crate::utils::format_timestamp_full)
                     .map_or_else(|| gettext("Never"), |date| date.to_string());
-                let last_success = source.last_success_at
+                let last_success = source
+                    .last_success_at
                     .and_then(crate::utils::format_timestamp_full)
                     .map_or_else(|| gettext("Never"), |date| date.to_string());
                 let summary = gtk::Label::new(Some(&format!(
@@ -997,16 +1003,20 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
     dialog.present(Some(&window));
 }
 
-
 #[cfg(test)]
 mod source_form_tests {
     use super::*;
 
     #[test]
     fn source_default_codes_and_optional_region_validate() {
-        assert_eq!(csv("en, de, en", FacetDimension::Language).unwrap().len(), 2);
-        assert_eq!(csv("de, at", FacetDimension::Country).unwrap(),
-                   ["AT".to_owned(), "DE".to_owned()].into_iter().collect());
+        assert_eq!(
+            csv("en, de, en", FacetDimension::Language).unwrap().len(),
+            2
+        );
+        assert_eq!(
+            csv("de, at", FacetDimension::Country).unwrap(),
+            ["AT".to_owned(), "DE".to_owned()].into_iter().collect()
+        );
         assert!(csv("not-a-country", FacetDimension::Country).is_err());
         assert!(region("", "").unwrap().is_none());
         assert!(region("DE-BY", "Bavaria").unwrap().is_some());
