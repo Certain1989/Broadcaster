@@ -5,7 +5,6 @@
 //! All I/O and SQLite writes are performed by StreamsService outside GTK.
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeSet,
     rc::Rc,
     time::Duration,
 };
@@ -15,7 +14,8 @@ use gettextrs::gettext;
 
 use crate::{
     streams::{
-        model::{normalize_facet, FacetDimension, OriginKind, Region, Source, SourceDefaults},
+        facet_picker::FacetPicker,
+        model::{FacetDimension, OriginKind, Region, Source, SourceDefaults},
         service::{
             choose_local_file, RefreshOutcome, RefreshStage, RefreshTicket, ServiceError,
             ServiceEvent, SourceSelection, StreamsService,
@@ -89,21 +89,6 @@ fn fail(view: &TvStreamsView, error: ServiceError) {
     );
 }
 
-fn csv(text: &str, kind: FacetDimension) -> Result<BTreeSet<String>, &'static str> {
-    let mut values = BTreeSet::new();
-    for raw in text
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        values.insert(normalize_facet(raw, kind).map_err(|_| "Invalid language or country code")?);
-    }
-    if values.len() > 64 {
-        return Err("Too many language or country codes");
-    }
-    Ok(values)
-}
-
 fn region(code: &str, label: &str) -> Result<Option<Region>, &'static str> {
     let code = code.trim();
     let label = label.trim();
@@ -125,71 +110,56 @@ fn region(code: &str, label: &str) -> Result<Option<Region>, &'static str> {
 }
 
 struct DefaultsForm {
-    languages: gtk::Entry,
-    countries: gtk::Entry,
+    languages: FacetPicker,
+    countries: FacetPicker,
     code: gtk::Entry,
     label: gtk::Entry,
+    region_error: gtk::Label,
 }
 
 impl DefaultsForm {
     fn new(box_: &gtk::Box, defaults: &SourceDefaults) -> Self {
-        let languages = entry(
-            &defaults
-                .languages
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        let countries = entry(
-            &defaults
-                .countries
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
-        let code = entry(
-            defaults
-                .region
-                .as_ref()
-                .and_then(|r| r.code.as_deref())
-                .unwrap_or(""),
-        );
-        let label = entry(
-            defaults
-                .region
-                .as_ref()
-                .and_then(|r| r.label.as_deref())
-                .unwrap_or(""),
-        );
-        row(
-            &gettext("Default languages (comma separated)"),
-            &languages,
-            box_,
-        );
-        row(
-            &gettext("Default countries (two-letter codes)"),
-            &countries,
-            box_,
-        );
-        row(&gettext("Default region code"), &code, box_);
-        row(&gettext("Default region label"), &label, box_);
-        Self {
-            languages,
-            countries,
-            code,
-            label,
-        }
+        let languages = FacetPicker::new(FacetDimension::Language, &defaults.languages);
+        row(&gettext("Default languages (optional)"), &languages.root, box_);
+        let countries = FacetPicker::new(FacetDimension::Country, &defaults.countries);
+        row(&gettext("Default countries (optional)"), &countries.root, box_);
+        let explanation = gtk::Label::new(Some(&gettext(
+            "These defaults are used only when channel metadata is missing from the playlist.",
+        )));
+        explanation.set_wrap(true);
+        explanation.set_xalign(0.0);
+        box_.append(&explanation);
+        let code = entry(defaults.region.as_ref().and_then(|r| r.code.as_deref()).unwrap_or(""));
+        code.set_placeholder_text(Some(&gettext("Optional: DE-BY")));
+        let label = entry(defaults.region.as_ref().and_then(|r| r.label.as_deref()).unwrap_or(""));
+        label.set_placeholder_text(Some(&gettext("Optional: Bavaria")));
+        row(&gettext("Default region code (optional)"), &code, box_);
+        row(&gettext("Default region name (optional)"), &label, box_);
+        let region_error = gtk::Label::new(None);
+        region_error.set_wrap(true);
+        region_error.set_xalign(0.0);
+        region_error.add_css_class("error");
+        box_.append(&region_error);
+        Self { languages, countries, code, label, region_error }
     }
 
-    fn collect(&self) -> Result<SourceDefaults, &'static str> {
-        let defaults = SourceDefaults {
-            languages: csv(&self.languages.text(), FacetDimension::Language)?,
-            countries: csv(&self.countries.text(), FacetDimension::Country)?,
-            region: region(&self.code.text(), &self.label.text())?,
+    fn collect(&self) -> Result<SourceDefaults, String> {
+        let languages = self.languages.values(false)?;
+        let countries = self.countries.values(false)?;
+        let region = match region(&self.code.text(), &self.label.text()) {
+            Ok(region) => {
+                self.region_error.set_text("");
+                region
+            }
+            Err(_) => {
+                let reason = gettext("Invalid region: use a name or code (e.g. Bavaria / DE-BY), max 128/64 bytes.");
+                self.region_error.set_text(&reason);
+                self.code.grab_focus();
+                return Err(reason);
+            }
         };
-        defaults.validate().map_err(|_| "Invalid source defaults")?;
+        let defaults = SourceDefaults { languages, countries, region };
+        defaults.validate().map_err(|_| gettext("Invalid metadata defaults"))?;
         Ok(defaults)
     }
 }
@@ -281,7 +251,28 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     } else {
         None
     };
-    let defaults = DefaultsForm::new(&body, &initial_defaults);
+    // Ordinary imports need no metadata defaults.
+    let advanced = gtk::Expander::new(Some(&gettext("Advanced · Source metadata defaults (optional)")));
+    advanced.set_expanded(!is_new);
+    let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let defaults = DefaultsForm::new(&advanced_body, &initial_defaults);
+    advanced.set_child(Some(&advanced_body));
+    body.append(&advanced);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_child(Some(&body));
+    dialog.set_content_height(620);
+    dialog.set_child(Some(&scroll));
+    let name_error = gtk::Label::new(None);
+    name_error.set_wrap(true);
+    name_error.set_xalign(0.0);
+    name_error.add_css_class("error");
+    if is_new { body.append(&name_error); }
+    let url_error = gtk::Label::new(None);
+    url_error.set_wrap(true);
+    url_error.set_xalign(0.0);
+    url_error.add_css_class("error");
+    if url.is_some() { body.append(&url_error); }
     let buttons = line(&body);
     let cancel = button(&gettext("Cancel"), &buttons);
     let save = button(&gettext("Save"), &buttons);
@@ -313,19 +304,24 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
             };
             let new_name = name.text().trim().to_owned();
             if is_new && (new_name.is_empty() || new_name.len() > 128) {
-                status.set_text(&gettext("Enter a source name (1–128 bytes)"));
+                let reason = gettext("Enter a source name (1–128 bytes)");
+                name_error.set_text(&reason);
+                name.grab_focus();
                 return;
             }
+            name_error.set_text("");
             let url_value = url.as_ref().map(|url| url.text().to_string());
             if let Some(ref url_value) = url_value {
                 let valid = reqwest::Url::parse(url_value).is_ok_and(|value| {
                     matches!(value.scheme(), "http" | "https") && value.host().is_some()
                 });
                 if !valid {
-                    status.set_text(&gettext("Enter a valid HTTP(S) playlist URL"));
+                    url_error.set_text(&gettext("Enter a valid HTTP(S) playlist URL"));
+                    if let Some(url) = &url { url.grab_focus(); }
                     return;
                 }
             }
+            url_error.set_text("");
             save.set_sensitive(false);
             let service = service.clone();
             let file = file.clone();
@@ -1073,8 +1069,10 @@ fn confirm_delete(view: &TvStreamsView, source: Source) {
 pub(crate) fn assert_synthetic_source_defaults_form() {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let defaults = DefaultsForm::new(&body, &SourceDefaults::default());
-    defaults.languages.set_text("de, en");
-    defaults.countries.set_text("DE, AT");
+    defaults.languages.choose("de");
+    defaults.languages.choose("en");
+    defaults.countries.choose("DE");
+    defaults.countries.choose("AT");
     defaults.code.set_text("DE-BY");
     defaults.label.set_text("Bavaria");
     let validated = defaults.collect().expect("source defaults from GTK fields");
@@ -1084,11 +1082,8 @@ pub(crate) fn assert_synthetic_source_defaults_form() {
         validated.region.and_then(|region| region.code).as_deref(),
         Some("DE-BY")
     );
-    defaults.countries.set_text("ZZ");
-    assert!(
-        defaults.collect().is_err(),
-        "unknown ISO country should be rejected"
-    );
+    defaults.countries.deselect("AT");
+    assert_eq!(defaults.collect().unwrap().countries.len(), 1);
 }
 
 #[cfg(test)]
@@ -1097,15 +1092,9 @@ mod source_form_tests {
 
     #[test]
     fn source_default_codes_and_optional_region_validate() {
-        assert_eq!(
-            csv("en, de, en", FacetDimension::Language).unwrap().len(),
-            2
-        );
-        assert_eq!(
-            csv("de, at", FacetDimension::Country).unwrap(),
-            ["AT".to_owned(), "DE".to_owned()].into_iter().collect()
-        );
-        assert!(csv("not-a-country", FacetDimension::Country).is_err());
+        assert_eq!(crate::streams::model::normalize_facet("de", FacetDimension::Language).unwrap(), "de");
+        assert_eq!(crate::streams::model::normalize_facet("at", FacetDimension::Country).unwrap(), "AT");
+        assert!(crate::streams::model::normalize_facet("de-DE", FacetDimension::Country).is_err());
         assert!(region("", "").unwrap().is_none());
         assert!(region("DE-BY", "Bavaria").unwrap().is_some());
         assert!(region(" ", &"R".repeat(129)).is_err());
