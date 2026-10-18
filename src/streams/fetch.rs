@@ -389,6 +389,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_connect_has_only_sanitized_error_without_userinfo() {
+        let client = http_client().unwrap();
+        let result = fetch_remote(
+            &client,
+            "http://synthetic-user:SECRET-CANARY@127.0.0.1:0/list",
+            &Cancellation::new(),
+        )
+        .await;
+        assert!(matches!(result, Err(FetchError::Network)));
+        let error = result.err().unwrap();
+        assert!(!format!("{error:?}: {error}").contains("SECRET-CANARY"));
+    }
+
+    #[tokio::test]
     async fn rejects_streamed_body_without_content_length_above_limit() {
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
