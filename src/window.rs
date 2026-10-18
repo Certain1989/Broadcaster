@@ -771,18 +771,14 @@ mod playback_navigation_tests {
         }
         assert!(streams.show_and_focus_test_results());
         let focused = window.focused_widget().expect("list should hold focus");
-        let mut focus_path = Vec::new();
-        let mut node = Some(focused.clone());
-        while let Some(widget) = node {
-            focus_path.push(widget.type_().name().to_string());
-            node = widget.parent();
-        }
-        eprintln!(
-            "S5 focus diagnostic: page={:?}, widget ancestry={}",
-            stack.visible_child_name(),
-            focus_path.join(" > ")
-        );
         assert!(streams.contains_results_focus(&focused));
+        // Up from the first row must reach the toolbar. A reversed GTK
+        // ancestry test used to trap the remote within GtkListView children.
+        assert!(streams.focus_vertical_navigation(&focused, gtk::gdk::Key::Up));
+        assert!(!streams.contains_results_focus(
+            &window.focused_widget().expect("toolbar should hold focus")
+        ));
+        assert!(streams.show_and_focus_test_results());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert!(!streams
             .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
