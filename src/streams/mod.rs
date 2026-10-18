@@ -6,9 +6,12 @@
 #![allow(dead_code)]
 
 pub(crate) mod model;
+pub(crate) mod parser;
 mod query;
 mod refresh;
 pub(crate) mod storage;
 
+#[cfg(test)]
+mod parser_tests;
 #[cfg(test)]
 mod tests;
