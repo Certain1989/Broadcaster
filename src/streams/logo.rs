@@ -318,7 +318,6 @@ fn evict(dir: &Path) {
     }
 }
 
-
 /// Best-effort private-cache garbage collection, only after an authoritative
 /// successful source mutation. Referenced names cover ALL present imported
 /// channels across sources, including sources the user temporarily disabled.
@@ -349,9 +348,7 @@ fn prune_unused_in(dir: &Path, referenced: &HashSet<String>) {
             continue;
         }
         let path = entry.path();
-        if fs::symlink_metadata(&path)
-            .is_ok_and(|meta| meta.file_type().is_file())
-        {
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_file()) {
             let _ = fs::remove_file(path);
         }
     }
@@ -505,7 +502,8 @@ mod tests {
     }
     #[test]
     fn disk_cache_keeps_more_than_a_country_playlist() {
-        let dir = std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         for i in 0..325 {
             let name = cache_name(&format!("https://example.invalid/logo/{i}.png"));
@@ -518,7 +516,8 @@ mod tests {
 
     #[test]
     fn prunes_only_orphaned_private_cache_images() {
-        let dir = std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("broadcaster-logo-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         let shared = cache_name("https://example.invalid/shared.png");
         let removed = cache_name("https://example.invalid/removed.png");
@@ -534,5 +533,4 @@ mod tests {
         assert!(dir.join("pending.tmp").exists());
         fs::remove_dir_all(dir).unwrap();
     }
-
 }
