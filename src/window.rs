@@ -726,6 +726,14 @@ mod playback_navigation_tests {
         window.finish_playback(mediathek_token);
         assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
 
+        // S4: actual third page and fake GTK ListView activation protocol.
+        stack.set_visible_child_name("streams");
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        window.imp().streams_view.assert_fake_player_navigation();
+        let streams_token = window.begin_playback();
+        window.finish_playback(streams_token);
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+
         // Later user navigation must win over playback-return restoration.
         stack.set_visible_child_name("live");
         let changed_page_token = window.begin_playback();
