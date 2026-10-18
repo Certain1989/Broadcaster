@@ -322,9 +322,13 @@ impl StreamsService {
                     return Err(ServiceError::Cancelled);
                 }
                 // Commit barrier: lock is held until SQLite returns.
-                store.create_source_with_initial_snapshot(
+                let committed = store.create_source_with_initial_snapshot(
                     &expected_id, &draft, &snapshot, now(),
-                ).map_err(ServiceError::Storage)
+                );
+                // Preserve the actual result across a cancellation race
+                // immediately after the blocking transaction.
+                drop(map);
+                committed.map_err(ServiceError::Storage)
             }).await
         }.await;
         self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e));
@@ -422,9 +426,10 @@ impl StreamsService {
         let preview = ticket.preview;
         let snapshot = ticket.snapshot;
         let replacement = ticket.replacement;
+        let commit_id = id.clone();
         let result = self.db(move |store| {
-            let map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
-            if !map.get(&id).is_some_and(|r| {
+            let mut map = registry.generations.lock().unwrap_or_else(|e| e.into_inner());
+            if !map.get(&commit_id).is_some_and(|r| {
                 r.generation == generation && !r.token.is_cancelled()
             }) {
                 return Err(ServiceError::Cancelled);
@@ -443,9 +448,18 @@ impl StreamsService {
             } else {
                 store.commit_refresh(&snapshot, &preview, &decision, now())
             };
+            // Set terminal state while the commit barrier remains held: a
+            // cancellation arriving *after* commit cannot mark it rolled back.
+            if let Some(running) = map.get_mut(&commit_id) {
+                running.stage = if committed.is_ok() {
+                    RefreshStage::Succeeded
+                } else {
+                    RefreshStage::Failed
+                };
+            }
             committed.map_err(ServiceError::Storage)
         }).await;
-        self.finish(&ticket_id(&result, &preview_id_placeholder()), generation, &Ok(()));
+        self.finish(&id, generation, &result.as_ref().map(|_| ()).map_err(|e| *e));
         result
     }
 
