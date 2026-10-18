@@ -44,7 +44,7 @@ fn load_old(conn: &Connection, source_id: &str) -> StorageResult<Vec<Existing>> 
          FROM iptv_channels WHERE source_id=?1 ORDER BY id",
         )
         .map_err(map_sql)?;
-    stmt.query_map([source_id], |r| {
+    let result = stmt.query_map([source_id], |r| {
         Ok(Existing {
             id: r.get(0)?,
             tvg: r.get(1)?,
@@ -56,7 +56,8 @@ fn load_old(conn: &Connection, source_id: &str) -> StorageResult<Vec<Existing>> 
     })
     .map_err(map_sql)?
     .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(map_sql)
+    .map_err(map_sql);
+    result
 }
 fn match_entries(old: &[Existing], new: &[IncomingChannel]) -> Plan {
     let mut matches = vec![None; new.len()];
@@ -314,7 +315,7 @@ fn apply_snapshot(
     old: &[Existing],
     plan: &Plan,
     at: i64,
-    revision: u64,
+    revision: i64,
 ) -> StorageResult<()> {
     if incoming.is_empty() {
         return Err(StorageError::InvalidInput);

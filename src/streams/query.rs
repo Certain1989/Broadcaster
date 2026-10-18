@@ -134,7 +134,7 @@ fn args<'a>(
 fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>, u64)> {
     let (search, source, group, language, country, region) = args(q);
     let count_sql = format!("{CORE} SELECT count(*) FROM matched");
-    let total: u64 = conn
+    let total: i64 = conn
         .query_row(
             &count_sql,
             params![
@@ -162,7 +162,7 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
         .map_err(map_sql)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(map_sql)?;
-    Ok((ids, total))
+    Ok((ids, total as u64))
 }
 
 impl Storage {
@@ -223,14 +223,14 @@ impl Storage {
                     search, source, group.0, group.1, language.0, language.1, country.0, country.1,
                     region.0, region.1
                 ],
-                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, u64>(1)?)),
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
             )
             .map_err(map_sql)?
             .map(|row| {
                 let (value, count) = row.map_err(map_sql)?;
                 Ok(FacetChoice {
                     value: value.map(FacetValue::Known).unwrap_or(FacetValue::Unknown),
-                    count,
+                    count: count as u64,
                 })
             })
             .collect::<StorageResult<Vec<_>>>()?;

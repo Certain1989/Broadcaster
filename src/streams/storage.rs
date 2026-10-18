@@ -370,7 +370,7 @@ impl Default for Storage {
 #[derive(Clone, Debug)]
 pub struct ConfirmedSourceDeletion {
     id: SourceId,
-    revision: u64,
+    revision: i64,
 }
 impl ConfirmedSourceDeletion {
     pub fn after_user_confirmation(source: &Source) -> Self {
@@ -502,7 +502,7 @@ pub(crate) fn load_source(conn: &Connection, id: &str) -> StorageResult<Source> 
                     r.get::<_, u32>(4)?,
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, Option<String>>(6)?,
-                    r.get::<_, u64>(7)?,
+                    r.get::<_, i64>(7)?,
                     r.get::<_, i64>(8)?,
                     r.get::<_, i64>(9)?,
                     r.get::<_, Option<i64>>(10)?,

@@ -140,7 +140,7 @@ pub struct Source {
     pub enabled: bool,
     pub order: u32,
     pub defaults: SourceDefaults,
-    pub revision: u64,
+    pub revision: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_attempt_at: Option<i64>,
@@ -234,7 +234,7 @@ impl ValidatedSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefreshPreview {
     pub source_id: SourceId,
-    pub expected_revision: u64,
+    pub expected_revision: i64,
     pub fingerprint: String,
     pub old_present: usize,
     pub new_present: usize,
@@ -258,7 +258,7 @@ pub enum RefreshDecision {
     NotRequired,
     ExplicitApproval {
         source_id: SourceId,
-        expected_revision: u64,
+        expected_revision: i64,
         fingerprint: String,
     },
 }

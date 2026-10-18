@@ -115,7 +115,7 @@ fn exact_migration_v1_with_fk_and_d6_constraints() {
             "iptv_sources"
         ]
     );
-    let index_count: usize = conn
+    let index_count: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_iptv_%'",
             [],
