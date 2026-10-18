@@ -851,7 +851,11 @@ impl TvStreamsView {
             let last = model.item(count - 1).expect("far channel position");
             let slot = last.downcast::<StreamSlot>().expect("slot object");
             assert_eq!(slot.position(), count - 1);
-            assert_eq!(model.created_slots(), 1, "far lookup allocated more than one");
+            assert_eq!(
+                model.created_slots(),
+                1,
+                "far lookup allocated more than one"
+            );
             assert_eq!(model.cached_pages(), 0);
             eprintln!(
                 "S4 detached lazy model {count} positions: 1 slot, duration={:?}",
