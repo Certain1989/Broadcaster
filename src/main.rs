@@ -18,6 +18,7 @@ mod mpv;
 mod preferences;
 mod programme_markup;
 mod settings;
+mod streams;
 mod utils;
 mod window;
 mod zapp;
