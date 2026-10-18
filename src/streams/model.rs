@@ -14,20 +14,26 @@ pub type ChannelId = String;
 
 impl std::fmt::Debug for SourceOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SourceOrigin").field("kind", &self.kind)
-            .field("locator", &"<redacted>").finish()
+        f.debug_struct("SourceOrigin")
+            .field("kind", &self.kind)
+            .field("locator", &"<redacted>")
+            .finish()
     }
 }
 impl std::fmt::Debug for IncomingChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IncomingChannel").field("order", &self.order)
-            .field("stream_url", &"<redacted>").finish_non_exhaustive()
+        f.debug_struct("IncomingChannel")
+            .field("order", &self.order)
+            .field("stream_url", &"<redacted>")
+            .finish_non_exhaustive()
     }
 }
 impl std::fmt::Debug for ChannelEffective {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ChannelEffective").field("id", &self.id)
-            .field("stream_url", &"<redacted>").finish_non_exhaustive()
+        f.debug_struct("ChannelEffective")
+            .field("id", &self.id)
+            .field("stream_url", &"<redacted>")
+            .finish_non_exhaustive()
     }
 }
 
@@ -87,7 +93,10 @@ impl Region {
         Ok(())
     }
     pub fn key(&self) -> String {
-        self.code.clone().or_else(|| self.label.clone()).unwrap_or_default()
+        self.code
+            .clone()
+            .or_else(|| self.label.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -205,11 +214,21 @@ impl ValidatedSnapshot {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        Ok(Self { source_id, entries, fingerprint })
+        Ok(Self {
+            source_id,
+            entries,
+            fingerprint,
+        })
     }
-    pub fn source_id(&self) -> &str { &self.source_id }
-    pub fn entries(&self) -> &[IncomingChannel] { &self.entries }
-    pub fn fingerprint(&self) -> &str { &self.fingerprint }
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+    pub fn entries(&self) -> &[IncomingChannel] {
+        &self.entries
+    }
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -244,10 +263,18 @@ pub enum RefreshDecision {
     },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FacetMode { Auto, Replace, Unknown }
+pub enum FacetMode {
+    Auto,
+    Replace,
+    Unknown,
+}
 impl FacetMode {
     pub(crate) fn sql(self) -> &'static str {
-        match self { Self::Auto => "auto", Self::Replace => "replace", Self::Unknown => "unknown" }
+        match self {
+            Self::Auto => "auto",
+            Self::Replace => "replace",
+            Self::Unknown => "unknown",
+        }
     }
     pub(crate) fn from_sql(s: &str) -> StorageResult<Self> {
         match s {
@@ -259,11 +286,20 @@ impl FacetMode {
     }
 }
 #[derive(Clone, Debug)]
-pub struct GroupOverride { pub mode: FacetMode, pub value: Option<String> }
+pub struct GroupOverride {
+    pub mode: FacetMode,
+    pub value: Option<String>,
+}
 #[derive(Clone, Debug)]
-pub struct RegionOverride { pub mode: FacetMode, pub value: Option<Region> }
+pub struct RegionOverride {
+    pub mode: FacetMode,
+    pub value: Option<Region>,
+}
 #[derive(Clone, Debug)]
-pub struct SetOverride { pub mode: FacetMode, pub values: BTreeSet<String> }
+pub struct SetOverride {
+    pub mode: FacetMode,
+    pub values: BTreeSet<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct ChannelOverrides {
@@ -277,10 +313,22 @@ impl Default for ChannelOverrides {
     fn default() -> Self {
         Self {
             display_name: None,
-            group: GroupOverride { mode: FacetMode::Auto, value: None },
-            region: RegionOverride { mode: FacetMode::Auto, value: None },
-            languages: SetOverride { mode: FacetMode::Auto, values: BTreeSet::new() },
-            countries: SetOverride { mode: FacetMode::Auto, values: BTreeSet::new() },
+            group: GroupOverride {
+                mode: FacetMode::Auto,
+                value: None,
+            },
+            region: RegionOverride {
+                mode: FacetMode::Auto,
+                value: None,
+            },
+            languages: SetOverride {
+                mode: FacetMode::Auto,
+                values: BTreeSet::new(),
+            },
+            countries: SetOverride {
+                mode: FacetMode::Auto,
+                values: BTreeSet::new(),
+            },
         }
     }
 }
@@ -288,16 +336,30 @@ impl ChannelOverrides {
     pub fn validate(&self) -> StorageResult<()> {
         bounded_optional(&self.display_name, 512)?;
         match self.group.mode {
-            FacetMode::Replace => bounded(self.group.value.as_deref().ok_or(StorageError::InvalidInput)?, 256)?,
+            FacetMode::Replace => bounded(
+                self.group
+                    .value
+                    .as_deref()
+                    .ok_or(StorageError::InvalidInput)?,
+                256,
+            )?,
             _ if self.group.value.is_some() => return Err(StorageError::InvalidInput),
             _ => {}
         }
         match self.region.mode {
-            FacetMode::Replace => self.region.value.as_ref().ok_or(StorageError::InvalidInput)?.validate()?,
+            FacetMode::Replace => self
+                .region
+                .value
+                .as_ref()
+                .ok_or(StorageError::InvalidInput)?
+                .validate()?,
             _ if self.region.value.is_some() => return Err(StorageError::InvalidInput),
             _ => {}
         }
-        for (set, dimension) in [(&self.languages, FacetDimension::Language), (&self.countries, FacetDimension::Country)] {
+        for (set, dimension) in [
+            (&self.languages, FacetDimension::Language),
+            (&self.countries, FacetDimension::Country),
+        ] {
             if set.mode == FacetMode::Replace && set.values.is_empty()
                 || set.mode != FacetMode::Replace && !set.values.is_empty()
             {
@@ -308,21 +370,31 @@ impl ChannelOverrides {
         Ok(())
     }
     pub fn has_values(&self) -> bool {
-        self.display_name.is_some() ||
-        self.group.mode != FacetMode::Auto ||
-        self.region.mode != FacetMode::Auto ||
-        self.languages.mode != FacetMode::Auto ||
-        self.countries.mode != FacetMode::Auto
+        self.display_name.is_some()
+            || self.group.mode != FacetMode::Auto
+            || self.region.mode != FacetMode::Auto
+            || self.languages.mode != FacetMode::Auto
+            || self.countries.mode != FacetMode::Auto
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FacetSelection { Any, Value(String), Unknown }
+pub enum FacetSelection {
+    Any,
+    Value(String),
+    Unknown,
+}
 impl Default for FacetSelection {
-    fn default() -> Self { Self::Any }
+    fn default() -> Self {
+        Self::Any
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SortOrder { PlaylistOrder, Name, Group }
+pub enum SortOrder {
+    PlaylistOrder,
+    Name,
+    Group,
+}
 #[derive(Clone, Debug)]
 pub struct ChannelQuery {
     pub search: Option<String>,
@@ -337,9 +409,17 @@ pub struct ChannelQuery {
 }
 impl Default for ChannelQuery {
     fn default() -> Self {
-        Self { search: None, source_id: None, group: FacetSelection::Any,
-            language: FacetSelection::Any, country: FacetSelection::Any,
-            region: FacetSelection::Any, sort: SortOrder::PlaylistOrder, limit: 100, offset: 0 }
+        Self {
+            search: None,
+            source_id: None,
+            group: FacetSelection::Any,
+            language: FacetSelection::Any,
+            country: FacetSelection::Any,
+            region: FacetSelection::Any,
+            sort: SortOrder::PlaylistOrder,
+            limit: 100,
+            offset: 0,
+        }
     }
 }
 #[derive(Clone)]
@@ -358,9 +438,17 @@ pub struct ChannelEffective {
     pub has_user_overrides: bool,
 }
 #[derive(Clone, Debug)]
-pub struct ChannelPage { pub items: Vec<ChannelEffective>, pub total: u64 }
+pub struct ChannelPage {
+    pub items: Vec<ChannelEffective>,
+    pub total: u64,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FieldOrigin { Manual, Imported, SourceFallback, Unknown }
+pub enum FieldOrigin {
+    Manual,
+    Imported,
+    SourceFallback,
+    Unknown,
+}
 #[derive(Clone, Debug)]
 pub struct EditProvenance {
     pub name: FieldOrigin,
@@ -378,18 +466,39 @@ pub struct ChannelDetail {
     pub provenance: EditProvenance,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FilterDimension { Source, Group, Language, Country, Region }
+pub enum FilterDimension {
+    Source,
+    Group,
+    Language,
+    Country,
+    Region,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FacetValue { Known(String), Unknown }
+pub enum FacetValue {
+    Known(String),
+    Unknown,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FacetChoice { pub value: FacetValue, pub count: u64 }
+pub struct FacetChoice {
+    pub value: FacetValue,
+    pub count: u64,
+}
 #[derive(Clone, Debug)]
-pub struct FilterOptions { pub dimension: FilterDimension, pub choices: Vec<FacetChoice> }
+pub struct FilterOptions {
+    pub dimension: FilterDimension,
+    pub choices: Vec<FacetChoice>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FacetDimension { Language, Country }
+pub enum FacetDimension {
+    Language,
+    Country,
+}
 impl FacetDimension {
     pub(crate) fn sql(self) -> &'static str {
-        match self { Self::Language => "language", Self::Country => "country" }
+        match self {
+            Self::Language => "language",
+            Self::Country => "country",
+        }
     }
 }
 pub fn normalize_facet(raw: &str, dimension: FacetDimension) -> StorageResult<String> {
@@ -399,17 +508,21 @@ pub fn normalize_facet(raw: &str, dimension: FacetDimension) -> StorageResult<St
     }
     match dimension {
         FacetDimension::Country => {
-            if text.len() != 2 || !text.is_ascii() || !text.bytes().all(|b| b.is_ascii_alphabetic()) {
+            if text.len() != 2 || !text.is_ascii() || !text.bytes().all(|b| b.is_ascii_alphabetic())
+            {
                 return Err(StorageError::InvalidInput);
             }
             Ok(text.to_ascii_uppercase())
         }
         FacetDimension::Language => {
             let parts: Vec<_> = text.split('-').collect();
-            if parts.is_empty() || parts.len() > 8
+            if parts.is_empty()
+                || parts.len() > 8
                 || !(2..=8).contains(&parts[0].len())
                 || !parts[0].bytes().all(|b| b.is_ascii_alphabetic())
-                || parts.iter().skip(1).any(|p| p.is_empty() || p.len() > 8 || !p.bytes().all(|b| b.is_ascii_alphanumeric()))
+                || parts.iter().skip(1).any(|p| {
+                    p.is_empty() || p.len() > 8 || !p.bytes().all(|b| b.is_ascii_alphanumeric())
+                })
             {
                 return Err(StorageError::InvalidInput);
             }
@@ -431,9 +544,13 @@ pub fn normalize_facet(raw: &str, dimension: FacetDimension) -> StorageResult<St
     }
 }
 fn validate_facets(values: &BTreeSet<String>, dimension: FacetDimension) -> StorageResult<()> {
-    if values.len() > 64 { return Err(StorageError::InvalidInput); }
+    if values.len() > 64 {
+        return Err(StorageError::InvalidInput);
+    }
     for item in values {
-        if normalize_facet(item, dimension)? != *item { return Err(StorageError::InvalidInput); }
+        if normalize_facet(item, dimension)? != *item {
+            return Err(StorageError::InvalidInput);
+        }
     }
     Ok(())
 }
@@ -444,7 +561,9 @@ pub(crate) fn bounded(value: &str, max: usize) -> StorageResult<()> {
     Ok(())
 }
 pub(crate) fn bounded_optional(value: &Option<String>, max: usize) -> StorageResult<()> {
-    if let Some(s) = value { bounded(s, max)?; }
+    if let Some(s) = value {
+        bounded(s, max)?;
+    }
     Ok(())
 }
 fn optional_with_empty(value: &Option<String>, max: usize) -> StorageResult<()> {

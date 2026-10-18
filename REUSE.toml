@@ -65,3 +65,10 @@ path = "data/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "NOASSERTION"
 SPDX-License-Identifier = "CC-BY-4.0"
+
+# Exact canonical migration bytes are retained unchanged; attribution lives here.
+[[annotations]]
+path = "src/streams/migrations/001_initial.sql"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Broadcaster contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"

@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! One SQL effective-value algorithm for browsing AND filter option/count queries.
+use super::{
+    model::*,
+    storage::{load_channel_detail, map_sql, Storage, StorageError, StorageResult},
+};
 use rusqlite::{params, Connection};
-use super::{model::*, storage::{map_sql, Storage, StorageError, StorageResult, load_channel_detail}};
 
 // An override facet participates only when the corresponding mode is replace.
 // Imported sets take precedence over source default sets (never a union).
@@ -78,8 +81,11 @@ fn selection(s: &FacetSelection) -> (i32, Option<&str>) {
     }
 }
 fn valid_query(q: &ChannelQuery) -> StorageResult<()> {
-    if q.limit == 0 || q.limit > 500
-        || q.search.as_ref().is_some_and(|s| s.len() > 512 || s.chars().any(char::is_control))
+    if q.limit == 0
+        || q.limit > 500
+        || q.search
+            .as_ref()
+            .is_some_and(|s| s.len() > 512 || s.chars().any(char::is_control))
     {
         return Err(StorageError::InvalidInput);
     }
@@ -88,32 +94,56 @@ fn valid_query(q: &ChannelQuery) -> StorageResult<()> {
         (&q.country, FacetDimension::Country),
     ] {
         if let FacetSelection::Value(value) = field {
-            if normalize_facet(value, facet)? != *value { return Err(StorageError::InvalidInput); }
+            if normalize_facet(value, facet)? != *value {
+                return Err(StorageError::InvalidInput);
+            }
         }
     }
     for sel in [&q.group, &q.region] {
-        if let FacetSelection::Value(s) = sel { bounded(s, 256)?; }
+        if let FacetSelection::Value(s) = sel {
+            bounded(s, 256)?;
+        }
     }
-    if q.source_id.as_ref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err()) {
+    if q.source_id
+        .as_ref()
+        .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+    {
         return Err(StorageError::InvalidInput);
     }
     Ok(())
 }
-fn args<'a>(q: &'a ChannelQuery) -> (Option<&'a str>, Option<&'a str>,
-    (i32, Option<&'a str>), (i32, Option<&'a str>),
-    (i32, Option<&'a str>), (i32, Option<&'a str>))
-{
-    (q.search.as_deref().filter(|s|!s.is_empty()), q.source_id.as_deref(),
-     selection(&q.group), selection(&q.language), selection(&q.country),
-     selection(&q.region))
+fn args<'a>(
+    q: &'a ChannelQuery,
+) -> (
+    Option<&'a str>,
+    Option<&'a str>,
+    (i32, Option<&'a str>),
+    (i32, Option<&'a str>),
+    (i32, Option<&'a str>),
+    (i32, Option<&'a str>),
+) {
+    (
+        q.search.as_deref().filter(|s| !s.is_empty()),
+        q.source_id.as_deref(),
+        selection(&q.group),
+        selection(&q.language),
+        selection(&q.country),
+        selection(&q.region),
+    )
 }
 fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>, u64)> {
     let (search, source, group, language, country, region) = args(q);
     let count_sql = format!("{CORE} SELECT count(*) FROM matched");
-    let total: u64 = conn.query_row(&count_sql, params![
-        search,source,group.0,group.1,language.0,language.1,
-        country.0,country.1,region.0,region.1,
-    ], |r|r.get(0)).map_err(map_sql)?;
+    let total: u64 = conn
+        .query_row(
+            &count_sql,
+            params![
+                search, source, group.0, group.1, language.0, language.1, country.0, country.1,
+                region.0, region.1,
+            ],
+            |r| r.get(0),
+        )
+        .map_err(map_sql)?;
     let order = match q.sort {
         SortOrder::PlaylistOrder => "source_order,playlist_order,id",
         SortOrder::Name => "lower(display_name),source_order,playlist_order,id",
@@ -121,12 +151,18 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
     };
     let sql = format!("{CORE} SELECT id FROM matched ORDER BY {order} LIMIT ?11 OFFSET ?12");
     let mut stmt = conn.prepare(&sql).map_err(map_sql)?;
-    let ids = stmt.query_map(params![
-        search,source,group.0,group.1,language.0,language.1,
-        country.0,country.1,region.0,region.1,q.limit,q.offset,
-    ], |r| r.get::<_,String>(0)).map_err(map_sql)?
-        .collect::<rusqlite::Result<Vec<_>>>().map_err(map_sql)?;
-    Ok((ids,total))
+    let ids = stmt
+        .query_map(
+            params![
+                search, source, group.0, group.1, language.0, language.1, country.0, country.1,
+                region.0, region.1, q.limit, q.offset,
+            ],
+            |r| r.get::<_, String>(0),
+        )
+        .map_err(map_sql)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_sql)?;
+    Ok((ids, total))
 }
 
 impl Storage {
@@ -135,15 +171,21 @@ impl Storage {
         let mut conn = self.connect()?;
         let tx = conn.transaction().map_err(map_sql)?;
         let (ids, total) = query_ids(&tx, query)?;
-        let items = ids.iter().map(|id| load_channel_detail(&tx,id).map(|d| d.effective))
+        let items = ids
+            .iter()
+            .map(|id| load_channel_detail(&tx, id).map(|d| d.effective))
             .collect::<StorageResult<Vec<_>>>()?;
         tx.commit().map_err(map_sql)?;
-        Ok(ChannelPage {items,total})
+        Ok(ChannelPage { items, total })
     }
 
     /// Counts are SQL DISTINCT channel counts, never a 10k-row GTK reduction.
     /// The target facet selection is deliberately ignored.
-    pub fn query_filter_options(&self, query: &ChannelQuery, dimension: FilterDimension) -> StorageResult<FilterOptions> {
+    pub fn query_filter_options(
+        &self,
+        query: &ChannelQuery,
+        dimension: FilterDimension,
+    ) -> StorageResult<FilterOptions> {
         let mut q = query.clone();
         match dimension {
             FilterDimension::Source => q.source_id = None,
@@ -175,18 +217,23 @@ impl Storage {
             }
         };
         let mut stmt = conn.prepare(&sql).map_err(map_sql)?;
-        let choices = stmt.query_map(params![
-            search,source,group.0,group.1,language.0,language.1,
-            country.0,country.1,region.0,region.1
-        ], |r| Ok((r.get::<_,Option<String>>(0)?,r.get::<_,u64>(1)?)))
+        let choices = stmt
+            .query_map(
+                params![
+                    search, source, group.0, group.1, language.0, language.1, country.0, country.1,
+                    region.0, region.1
+                ],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, u64>(1)?)),
+            )
             .map_err(map_sql)?
             .map(|row| {
-                let (value,count) = row.map_err(map_sql)?;
+                let (value, count) = row.map_err(map_sql)?;
                 Ok(FacetChoice {
                     value: value.map(FacetValue::Known).unwrap_or(FacetValue::Unknown),
                     count,
                 })
-            }).collect::<StorageResult<Vec<_>>>()?;
+            })
+            .collect::<StorageResult<Vec<_>>>()?;
         Ok(FilterOptions { dimension, choices })
     }
 }
