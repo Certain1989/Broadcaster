@@ -4,13 +4,13 @@
 //! SQLite repository. All methods are synchronous; only call them on a blocking worker.
 //! Async consumers must use tokio::task::spawn_blocking (never GTK MainContext).
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashSet},
     fs,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use super::model::*;
+use super::{logo, model::*};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub const APPLICATION_ID: i64 = 0x42524354;
@@ -86,6 +86,11 @@ impl Storage {
     /// Worker/test-only explicit location. Call from a blocking task.
     pub fn at(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
+    }
+
+    /// Test repositories must never run orphan pruning on the real user cache.
+    pub(crate) fn uses_default_database(&self) -> bool {
+        self.path == Self::new().path
     }
 
     pub fn initialize(&self) -> StorageResult<()> {
@@ -173,6 +178,28 @@ impl Storage {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(map_sql)?;
         ids.iter().map(|id| load_source(&conn, id)).collect()
+    }
+
+    /// Hash only URLs from current imported channel snapshots. Disabled
+    /// sources still count: hiding one must never erase its offline logos.
+    /// Do not include retained missing/tombstone entries. This runs on a
+    /// SQLite worker and NEVER returns private URLs or tokens to the UI.
+    pub(crate) fn referenced_logo_cache_names(&self) -> StorageResult<HashSet<String>> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT logo_url FROM iptv_channels
+                 WHERE is_present=1 AND logo_url IS NOT NULL AND logo_url != ''",
+            )
+            .map_err(map_sql)?;
+        let mut names = HashSet::new();
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(map_sql)?;
+        for row in rows {
+            names.insert(logo::cache_name(&row.map_err(map_sql)?));
+        }
+        Ok(names)
     }
 
     /// Counts include cached missing rows, while present counts only the active snapshot.

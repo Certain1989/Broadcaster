@@ -205,6 +205,21 @@ pub(crate) fn show_add_menu(view: &TvStreamsView) {
     let (dialog, body, _) = sheet(&gettext("Add Playlist"));
     let file = button(&gettext("Choose Local M3U File"), &body);
     let url = button(&gettext("Enter Playlist URL"), &body);
+    // A navigation-only resource, not an embedded catalogue or a playlist
+    // Broadcaster silently subscribes to. GtkLinkButton is D-pad focusable.
+    let directory = gtk::LinkButton::with_label(
+        "https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md",
+        &gettext("Find public IPTV playlists (IPTV-org)"),
+    );
+    directory.set_halign(gtk::Align::Start);
+    body.append(&directory);
+    let note = gtk::Label::new(Some(&gettext(
+        "External directory; stream availability and regional access vary.",
+    )));
+    note.set_wrap(true);
+    note.set_xalign(0.0);
+    note.add_css_class("dim-label");
+    body.append(&note);
     file.connect_clicked(glib::clone!(
         #[weak]
         view,

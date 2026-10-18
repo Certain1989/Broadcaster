@@ -100,3 +100,19 @@ label.channel-fallback {
   font-size: 12px;
   padding: 6px;
 }
+
+/* My Channels uses virtual GtkListView rows, but the text and icon footprint
+ * should match the TV-distance readability of Live and Mediathek. Larger
+ * spacing changes only the visible factory rows, never the 10k data model. */
+.tv-stream-channel-row {
+  min-height: 98px;
+}
+
+.tv-stream-channel-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.tv-stream-channel-summary {
+  font-size: 14px;
+}

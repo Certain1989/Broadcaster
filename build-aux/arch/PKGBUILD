@@ -17,7 +17,7 @@
 
 pkgname=broadcaster-git
 _pkgname=broadcaster
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Browse German-language public-service broadcaster archives and watch with mpv"
 arch=(x86_64 aarch64)

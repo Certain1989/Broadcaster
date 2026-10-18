@@ -29,6 +29,8 @@ use super::{
 #[derive(Clone)]
 struct RowUi {
     title: gtk::Label,
+    icon: gtk::Image,
+    logo: gtk::Picture,
     summary: gtk::Label,
     details: gtk::Label,
     reveal: gtk::Revealer,
@@ -39,6 +41,43 @@ struct RowUi {
 struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
+}
+
+// Visible textures have a small pixel-budgeted LRU. Only the currently bound
+// GTK rows initiate downloads; no 10k-logo preload is possible.
+#[derive(Default)]
+struct LogoState {
+    textures: HashMap<String, gtk::gdk::Texture>,
+    lru: std::collections::VecDeque<String>,
+    pending: HashSet<String>,
+    // Avoid repeatedly downloading invalid/offline images during row recycling.
+    failed: HashMap<String, std::time::Instant>,
+    pixels: u64,
+}
+
+impl LogoState {
+    fn insert(&mut self, url: String, texture: gtk::gdk::Texture) {
+        if let Some(old) = self.textures.remove(&url) {
+            self.pixels = self
+                .pixels
+                .saturating_sub(old.width() as u64 * old.height() as u64);
+        }
+        self.lru.retain(|key| key != &url);
+        self.pixels += texture.width() as u64 * texture.height() as u64;
+        self.textures.insert(url.clone(), texture);
+        self.lru.push_back(url);
+        while self.textures.len() > 64 || self.pixels > 4_194_304 {
+            if let Some(key) = self.lru.pop_front() {
+                if let Some(old) = self.textures.remove(&key) {
+                    self.pixels = self
+                        .pixels
+                        .saturating_sub(old.width() as u64 * old.height() as u64);
+                }
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 struct InstalledFacets {
@@ -109,6 +148,7 @@ mod imp {
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
         pub(super) manager_generation: Cell<u64>,
@@ -754,24 +794,43 @@ impl TvStreamsView {
             return;
         };
         let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        root.set_margin_top(5);
-        root.set_margin_bottom(5);
-        root.set_margin_start(8);
-        root.set_margin_end(8);
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        root.set_margin_top(10);
+        root.set_margin_bottom(10);
+        root.set_margin_start(12);
+        root.set_margin_end(12);
+        root.add_css_class("tv-stream-channel-row");
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        // The logo overlay does not measure the picture's untrusted intrinsic
+        // dimensions; a large original bitmap must never stretch the list.
+        let logo_area = gtk::Overlay::new();
+        logo_area.set_size_request(76, 72);
+        logo_area.set_valign(gtk::Align::Center);
         let icon = gtk::Image::from_icon_name("tv-symbolic");
-        icon.set_pixel_size(28);
-        header.append(&icon);
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        icon.set_pixel_size(60);
+        icon.set_halign(gtk::Align::Center);
+        icon.set_valign(gtk::Align::Center);
+        logo_area.set_child(Some(&icon));
+        let logo = gtk::Picture::new();
+        logo.set_can_shrink(true);
+        logo.set_content_fit(gtk::ContentFit::Contain);
+        logo.set_halign(gtk::Align::Fill);
+        logo.set_valign(gtk::Align::Fill);
+        logo.set_visible(false);
+        logo_area.add_overlay(&logo);
+        header.append(&logo_area);
+        let text = gtk::Box::new(gtk::Orientation::Vertical, 6);
         text.set_hexpand(true);
+        text.set_valign(gtk::Align::Center);
         let title = gtk::Label::new(None);
         title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.add_css_class("tv-stream-channel-title");
         text.append(&title);
         let summary = gtk::Label::new(None);
         summary.set_xalign(0.0);
         summary.set_ellipsize(gtk::pango::EllipsizeMode::End);
         summary.add_css_class("dim-label");
+        summary.add_css_class("tv-stream-channel-summary");
         text.append(&summary);
         header.append(&text);
         root.append(&header);
@@ -820,6 +879,8 @@ impl TvStreamsView {
             BoundRow {
                 ui: RowUi {
                     title,
+                    icon,
+                    logo,
                     summary,
                     details,
                     reveal,
@@ -852,10 +913,14 @@ impl TvStreamsView {
             let handler = slot.connect_notify_local(Some("ready"), move |_, _| {
                 if let (Some(view), Some(slot)) = (weak_view.upgrade(), weak_slot.upgrade()) {
                     Self::paint_row(&ui, &slot, view.imp().expanded_id.borrow().as_deref());
+                    view.refresh_logo(&slot);
+                    view.request_logo(&slot);
                 }
             });
             binding.connection = Some((slot.clone(), handler));
         }
+        self.refresh_logo(&slot);
+        self.request_logo(&slot);
         self.request_page(slot.position());
     }
 
@@ -872,6 +937,9 @@ impl TvStreamsView {
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
+            binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
+            binding.ui.logo.set_visible(false);
+            binding.ui.icon.set_visible(true);
             binding.ui.title.set_text("");
             binding.ui.summary.set_text("");
             binding.ui.details.set_text("");
@@ -950,6 +1018,112 @@ impl TvStreamsView {
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
         ui.edit.set_sensitive(true);
+    }
+
+    fn refresh_logo(&self, slot: &StreamSlot) {
+        let logo_url = slot.channel().and_then(|item| item.logo_url);
+        let imp = self.imp();
+        for binding in imp.bindings.borrow().values() {
+            if !binding
+                .connection
+                .as_ref()
+                .is_some_and(|(bound, _)| bound == slot)
+            {
+                continue;
+            }
+
+            // Never decode bundled SVG assets in the My Channels GTK bind
+            // path: glycin-svg is synchronous there and can leave a large
+            // playlist apparently frozen. Retain the same TV-sized frame.
+            // The only image source is a previously validated raster texture.
+            let texture = logo_url
+                .as_ref()
+                .and_then(|url| imp.logos.borrow().textures.get(url).cloned());
+            if let Some(texture) = texture {
+                binding.ui.logo.set_paintable(Some(&texture));
+                binding.ui.logo.set_visible(true);
+                binding.ui.icon.set_visible(false);
+            } else {
+                binding.ui.logo.set_paintable(None::<&gtk::gdk::Texture>);
+                binding.ui.logo.set_visible(false);
+                binding.ui.icon.set_visible(true);
+                let hint = if logo_url.is_some() {
+                    gettext("Channel logo unavailable")
+                } else {
+                    gettext("No logo supplied by playlist")
+                };
+                binding.ui.icon.set_tooltip_text(Some(&hint));
+            }
+        }
+    }
+
+    fn request_logo(&self, slot: &StreamSlot) {
+        let Some(url) = slot.channel().and_then(|channel| channel.logo_url) else {
+            return;
+        };
+        if !super::logo::allowed_url(&url) {
+            return;
+        }
+        {
+            let mut state = self.imp().logos.borrow_mut();
+            if state.textures.contains_key(&url)
+                || state.pending.contains(&url)
+                || state
+                    .failed
+                    .get(&url)
+                    .is_some_and(|last| last.elapsed() < Duration::from_secs(90))
+                || state.pending.len() >= 16
+            {
+                return;
+            }
+            state.failed.remove(&url);
+            state.pending.insert(url.clone());
+        }
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let request = url.clone();
+                let bytes =
+                    crate::utils::tokio(async move { super::logo::load(request).await }).await;
+                let mut state = view.imp().logos.borrow_mut();
+                state.pending.remove(&url);
+                if let Some(bytes) = bytes {
+                    // Signature/dimension validation was completed before GTK decode.
+                    let data = glib::Bytes::from(bytes.as_slice());
+                    if let Ok(texture) = gtk::gdk::Texture::from_bytes(&data) {
+                        state.insert(url.clone(), texture);
+                    } else {
+                        state.failed.insert(url.clone(), std::time::Instant::now());
+                    }
+                } else {
+                    state.failed.insert(url.clone(), std::time::Instant::now());
+                }
+                // Negative cache remains bounded independently of the 10k list.
+                if state.failed.len() > 256 {
+                    state.failed.clear();
+                }
+                drop(state);
+                // Repaint only rows still bound to this exact URL. A
+                // completed download must never cascade into more requests
+                // for every visible row: that caused image-cache churn and
+                // flickering when a playlist had many large logos.
+                let bound: Vec<StreamSlot> = view
+                    .imp()
+                    .bindings
+                    .borrow()
+                    .values()
+                    .filter_map(|binding| binding.connection.as_ref().map(|(slot, _)| slot.clone()))
+                    .filter(|slot| {
+                        slot.channel().and_then(|item| item.logo_url).as_deref()
+                            == Some(url.as_str())
+                    })
+                    .collect();
+                for slot in bound {
+                    view.refresh_logo(&slot);
+                }
+            }
+        ));
     }
 
     fn repaint_bound_rows(&self) {
