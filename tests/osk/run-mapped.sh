@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -eu
+cd "$(dirname "$0")/../.."
 command -v xvfb-run >/dev/null
 command -v glib-compile-schemas >/dev/null
 schema_dir=$(mktemp -d)
