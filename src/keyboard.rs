@@ -426,7 +426,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                     return;
                 };
                 match (r, c) {
-                    (5, 6) => dialog.close(),
+                    (5, 6) => { dialog.close(); }
                     (5, 5) => {
                         let Some(widget) = weak_target.upgrade() else {
                             dialog.close();
