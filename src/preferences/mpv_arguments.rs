@@ -171,6 +171,8 @@ mod imp {
                 controller.connect_key_pressed(glib::clone!(
                     #[weak(rename_to = slf)]
                     self,
+                    #[upgrade_or]
+                    glib::Propagation::Proceed,
                     move |_, key, _, modifiers| {
                         if unmodified_arrow(modifiers)
                             && (key == gtk::gdk::Key::Down || key == gtk::gdk::Key::KP_Down)
@@ -262,6 +264,8 @@ mod imp {
                 self,
                 #[weak]
                 row,
+                #[upgrade_or]
+                glib::Propagation::Proceed,
                 move |_, key, _, modifiers| {
                     if unmodified_arrow(modifiers) && slf.focus_vertical(&row, key) {
                         glib::Propagation::Stop
