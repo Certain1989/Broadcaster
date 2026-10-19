@@ -320,3 +320,86 @@ fn osk_mapped_gtk_entry_row_immediate_save_once() {
     prefs.close();
     win.destroy();
 }
+
+#[test]
+#[ignore = "requires mapped GTK and disposable GSettings"]
+fn osk_mapped_gtk_settings_toggle_and_search() {
+    let (win, body) = host();
+    let search = gtk::SearchEntry::new();
+    let button = gtk::Button::with_label("Synthetic keyboard");
+    body.append(&search);
+    body.append(&button);
+    spin();
+
+    let settings = crate::settings::TvSettings::get();
+    assert!(settings.osk_enabled(), "new profiles must default ON");
+    bind_launcher(&button, &search, KeyboardOptions::default());
+    spin();
+    assert!(button.is_mapped(), "enabled launcher is D-pad focusable");
+
+    settings
+        .set_boolean("osk-enabled", false)
+        .expect("test must switch OSK off");
+    spin();
+    assert!(!button.is_visible(), "launcher hides immediately without restart");
+    assert!(!crate::settings::TvSettings::new(crate::config::BASE_APP_ID).osk_enabled());
+
+    settings
+        .set_boolean("osk-enabled", true)
+        .expect("test must switch OSK back on");
+    spin();
+    assert!(button.is_mapped(), "launcher reappears immediately");
+    button.emit_by_name::<()>("clicked", &[]);
+    let dialog = keyboard(&win, &search);
+    click(&dialog, "Cancel");
+    assert_eq!(search.text(), "", "search stays unchanged after Cancel");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires mapped GTK and disposable GSettings"]
+fn osk_mapped_gtk_removed_entry_row_no_ghost_save() {
+    let (win, _) = host();
+    let prefs = adw::PreferencesDialog::new();
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    let row = adw::EntryRow::new();
+    row.set_title("Transient mpv argument");
+    row.set_text("--existing");
+    group.add(&row);
+    page.add(&group);
+    prefs.add(&page);
+    prefs.present(Some(&win));
+    spin();
+
+    let settings = crate::settings::TvSettings::get();
+    settings
+        .set_strv("mpv-arguments", ["--existing"])
+        .expect("prepare isolated fixture");
+    row.connect_changed({
+        let settings = settings.clone();
+        move |row| {
+            settings
+                .set_strv("mpv-arguments", [row.text().to_string()])
+                .expect("fixture immediate-save callback");
+        }
+    });
+
+    show_with_options(&row, KeyboardOptions::default());
+    let dialog = keyboard(&win, &row);
+    find_entry(dialog.upcast_ref())
+        .expect("draft exists")
+        .set_text("--ghost");
+    group.remove(&row); // Remove or Restore/Undo drops this widget instance.
+    spin();
+    if dialog.is_mapped() {
+        click(&dialog, "Done");
+    }
+    assert_eq!(
+        settings.strv("mpv-arguments")[0].as_str(),
+        "--existing",
+        "removed widget must not trigger stale mpv settings save"
+    );
+    prefs.close();
+    win.destroy();
+}
