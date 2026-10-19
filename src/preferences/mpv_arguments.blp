@@ -19,7 +19,7 @@ template $TvMpvArgumentsPage: Adw.NavigationPage {
         header-suffix: Gtk.Box {
           spacing: 6;
 
-          Gtk.Button {
+          Gtk.Button restore_defaults_button {
             icon-name: "edit-undo-symbolic";
             tooltip-text: _("Restore Defaults");
             clicked => $restore_defaults() swapped;
@@ -29,7 +29,7 @@ template $TvMpvArgumentsPage: Adw.NavigationPage {
             ]
           }
 
-          Gtk.Button {
+          Gtk.Button add_argument_button {
             icon-name: "list-add-symbolic";
             tooltip-text: _("Add Argument");
             clicked => $add_argument() swapped;
