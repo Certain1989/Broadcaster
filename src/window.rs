@@ -516,7 +516,9 @@ impl TvWindow {
                     .is_some_and(|entry| Self::is_within(&focused, entry))
                 {
                     return self.imp().live_view.focus_keyboard_prototype()
-                        || list.as_ref().and_then(|list| list.row_at_index(0))
+                        || list
+                            .as_ref()
+                            .and_then(|list| list.row_at_index(0))
                             .is_some_and(|row| row.grab_focus());
                 }
             }
