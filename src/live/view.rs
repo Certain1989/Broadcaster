@@ -274,6 +274,14 @@ impl TvLiveView {
     pub fn focus_search(&self) {
         self.imp().focus_search();
     }
+
+    pub fn focus_keyboard_prototype(&self) -> bool {
+        self.imp().keyboard_prototype_button.grab_focus()
+    }
+
+    pub fn keyboard_prototype_has_focus(&self, widget: &gtk::Widget) -> bool {
+        widget == self.imp().keyboard_prototype_button.upcast_ref::<gtk::Widget>()
+    }
 }
 
 /// Connect GTK's normal row-activation signal (keyboard/remote OK or mouse)
