@@ -65,9 +65,7 @@ where T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static {
     let weak = target.clone().upcast::<gtk::Widget>().downgrade();
     button.connect_clicked(move |_| {
         if let Some(widget) = weak.upgrade() {
-            if let Ok(editable) = widget.downcast::<gtk::Editable>() {
-                show_with_options(&editable, options.clone());
-            }
+            show_widget(&widget, options.clone());
         }
     });
 }
@@ -215,7 +213,12 @@ pub fn show_with_options<T>(target:&T,options:KeyboardOptions)
 where T:IsA<gtk::Widget>+IsA<gtk::Editable>+Clone+'static {
     if !crate::settings::TvSettings::get().osk_enabled() { return; }
     let widget:gtk::Widget=target.clone().upcast();
-    let editable:gtk::Editable=target.clone().upcast();
+    show_widget(&widget,options);
+}
+
+fn show_widget(widget:&gtk::Widget,options:KeyboardOptions) {
+    let widget=widget.clone();
+    let Ok(editable)=widget.clone().downcast::<gtk::Editable>() else { return };
     if !widget.is_mapped() || !widget.is_sensitive() { return; }
     let initial=editable.text().to_string();
     let weak_target=widget.downgrade();
