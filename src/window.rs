@@ -491,7 +491,8 @@ impl TvWindow {
                         if focused != *first_widget {
                             return first.grab_focus();
                         }
-                        return self.imp().live_view.focus_keyboard_prototype();
+                        return self.imp().live_view.focus_keyboard_prototype()
+                            || search.as_ref().is_some_and(|entry| entry.grab_focus());
                     }
                 }
                 if self.imp().live_view.keyboard_prototype_has_focus(&focused) {
@@ -514,7 +515,9 @@ impl TvWindow {
                     .as_ref()
                     .is_some_and(|entry| Self::is_within(&focused, entry))
                 {
-                    return self.imp().live_view.focus_keyboard_prototype();
+                    return self.imp().live_view.focus_keyboard_prototype()
+                        || list.as_ref().and_then(|list| list.row_at_index(0))
+                            .is_some_and(|row| row.grab_focus());
                 }
             }
             return false;
