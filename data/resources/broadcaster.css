@@ -116,3 +116,14 @@ label.channel-fallback {
 .tv-stream-channel-summary {
   font-size: 14px;
 }
+
+/* Remote focus must remain visible across the large OSK key grid. */
+.osk-production button:focus,
+.osk-production button:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.osk-production entry {
+  min-height: 44px;
+}
