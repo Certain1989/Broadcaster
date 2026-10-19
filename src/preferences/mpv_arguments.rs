@@ -159,7 +159,6 @@ mod imp {
             }
         }
 
-
         // A header control is always a visible escape from the first/last row.
         // Down from either header button returns to the first editable row.
         fn install_header_navigation(&self) {
