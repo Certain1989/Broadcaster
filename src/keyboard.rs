@@ -43,9 +43,11 @@ pub enum KeyboardLayout {
 /// Typed K2 registration contract: a caller supplies a *particular editable*,
 /// its intended layout and an optional error-only validator (never log drafts).
 #[derive(Clone)]
+pub type KeyboardValidator = dyn Fn(&str) -> Result<(), String>;
+
 pub struct KeyboardOptions {
     pub layout: KeyboardLayout,
-    pub validate: Option<Rc<dyn Fn(&str) -> Result<(), String>>>,
+    pub validate: Option<Rc<KeyboardValidator>>,
 }
 impl Default for KeyboardOptions {
     fn default() -> Self {
@@ -292,6 +294,7 @@ fn target_live(
             .is_some_and(|entry| entry.text().as_str() == initial)
 }
 
+#[cfg(test)]
 pub fn show<T>(target: &T)
 where
     T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
@@ -299,6 +302,7 @@ where
     show_with_options(target, KeyboardOptions::default());
 }
 
+#[cfg(test)]
 pub fn show_with_options<T>(target: &T, options: KeyboardOptions)
 where
     T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
@@ -311,6 +315,7 @@ where
 }
 
 fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
+    if !crate::settings::TvSettings::get().osk_enabled() { return; }
     let widget = widget.clone();
     let Ok(editable) = widget.clone().downcast::<gtk::Editable>() else {
         return;
