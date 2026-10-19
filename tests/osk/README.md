@@ -1,8 +1,13 @@
+<!--
+SPDX-FileCopyrightText: 2026 Broadcaster contributors
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # Experimental GTK keyboard — manual feasibility protocol
 
 This branch is deliberately **non-shipping**: it wires a GTK-owned D-pad
 prototype to **Live search** and the nested **Add Playlist → HTTP(S) URL**
-field only. It is not K1/K2 all-field integration, persistent Settings, or a
+field only. It is not application-wide integration, persistent Settings, or a
 claim that a compositor touchscreen OSK works with a TV remote.
 
 ## Reproduce with mapped GTK widgets
