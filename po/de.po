@@ -1047,3 +1047,79 @@ msgstr "Öffentliche IPTV-Wiedergabelisten finden (IPTV-org)"
 
 msgid "External directory; stream availability and regional access vary."
 msgstr "Externes Verzeichnis; Verfügbarkeit und regionale Zugriffsbeschränkungen können variieren."
+
+# Keyboard and remote-control entry
+msgid "On-screen keyboard"
+msgstr "Bildschirmtastatur"
+
+# Keyboard and remote-control entry
+msgid "Arrows choose keys; OK types; Back cancels."
+msgstr "Mit den Pfeiltasten wählen, mit OK eingeben, mit Zurück abbrechen."
+
+# Keyboard and remote-control entry
+msgid "Backspace"
+msgstr "Rücktaste"
+
+# Keyboard and remote-control entry
+msgid "Caret left"
+msgstr "Cursor links"
+
+# Keyboard and remote-control entry
+msgid "Space"
+msgstr "Leerzeichen"
+
+# Keyboard and remote-control entry
+msgid "Caret right"
+msgstr "Cursor rechts"
+
+# Keyboard and remote-control entry
+msgid "Clear"
+msgstr "Löschen"
+
+# Keyboard and remote-control entry
+msgid "Done"
+msgstr "Fertig"
+
+# Keyboard and remote-control entry
+msgid "Shift on"
+msgstr "Umschaltung aktiv"
+
+# Keyboard and remote-control entry
+msgid "Shift"
+msgstr "Umschaltung"
+
+# Keyboard and remote-control entry
+msgid "QWERTY"
+msgstr "QWERTY"
+
+# Keyboard and remote-control entry
+msgid "QWERTZ"
+msgstr "QWERTZ"
+
+# Keyboard and remote-control entry
+msgid "Letters"
+msgstr "Buchstaben"
+
+# Keyboard and remote-control entry
+msgid "Symbols"
+msgstr "Sonderzeichen"
+
+# Keyboard and remote-control entry
+msgid "Input"
+msgstr "Eingabe"
+
+# Keyboard and remote-control entry
+msgid "Optional typing with a remote control."
+msgstr "Optionale Texteingabe mit der Fernbedienung."
+
+# Keyboard and remote-control entry
+msgid "Show keyboard buttons next to supported text fields."
+msgstr "Tastaturschaltflächen neben unterstützten Textfeldern anzeigen."
+
+# Keyboard and remote-control entry
+msgid "Edit search with on-screen keyboard"
+msgstr "Suche mit Bildschirmtastatur bearbeiten"
+
+# Keyboard and remote-control entry
+msgid "Keyboard"
+msgstr "Tastatur"
