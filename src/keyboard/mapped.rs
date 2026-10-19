@@ -265,3 +265,58 @@ fn osk_mapped_gtk_preferences_expander_and_popover() {
     popover.unparent();
     win.destroy();
 }
+
+#[test]
+#[ignore = "requires mapped GTK and disposable GSettings"]
+fn osk_mapped_gtk_entry_row_immediate_save_once() {
+    let (win, _) = host();
+    let prefs = adw::PreferencesDialog::new();
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    let row = adw::EntryRow::new();
+    row.set_title("Synthetic mpv argument");
+    row.set_text("--before");
+    group.add(&row);
+    page.add(&group);
+    prefs.add(&page);
+    prefs.present(Some(&win));
+    spin();
+    assert!(row.is_mapped());
+
+    let settings = crate::settings::TvSettings::get();
+    settings
+        .set_strv("mpv-arguments", &["--before"])
+        .expect("synthetic mpv key");
+    let saves = Rc::new(Cell::new(0u32));
+    row.connect_changed({
+        let settings = settings.clone();
+        let saves = saves.clone();
+        move |row| {
+            saves.set(saves.get() + 1);
+            settings
+                .set_strv("mpv-arguments", &[row.text().to_string()])
+                .expect("synthetic save");
+        }
+    });
+
+    show_with_options(&row, KeyboardOptions::default());
+    let dialog = keyboard(&win, &row);
+    let draft = find_entry(dialog.upcast_ref()).expect("nested editable draft");
+    draft.set_text("--canceled");
+    click(&dialog, "Cancel");
+    assert_eq!(row.text(), "--before");
+    assert_eq!(saves.get(), 0);
+    assert_eq!(settings.strv("mpv-arguments")[0].as_str(), "--before");
+
+    show_with_options(&row, KeyboardOptions::default());
+    let dialog = keyboard(&win, &row);
+    let draft = find_entry(dialog.upcast_ref()).expect("nested editable draft");
+    draft.set_text("--committed");
+    click(&dialog, "Done");
+    assert_eq!(row.text(), "--committed");
+    assert_eq!(saves.get(), 1, "one normal row.changed save callback");
+    assert_eq!(settings.strv("mpv-arguments")[0].as_str(), "--committed");
+
+    prefs.close();
+    win.destroy();
+}
