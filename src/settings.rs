@@ -131,6 +131,12 @@ impl TvSettings {
     );
     connect_setting!(connect_video_downloader_id_changed, "video-downloader-id");
 
+    pub fn osk_enabled(&self) -> bool {
+        self.0.boolean("osk-enabled")
+    }
+
+    connect_setting!(connect_osk_enabled_changed, "osk-enabled");
+    bind_setting!(bind_osk_enabled, "osk-enabled");
     bind_setting!(bind_use_external_player, "use-external-player");
     bind_setting!(bind_search_everywhere, "search-everywhere");
     bind_setting!(bind_include_future, "include-future");
