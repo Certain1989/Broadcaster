@@ -22,7 +22,9 @@ const ROWS: &[&[&str]] = &[
     &["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
     &["z", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
     &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_"],
-    &["Delete", "Left", "Space", "Right", "Clear", "Done", "Cancel"],
+    &[
+        "Delete", "Left", "Space", "Right", "Clear", "Done", "Cancel",
+    ],
     &["Switch to QWERTZ"],
 ];
 
@@ -191,7 +193,11 @@ where
             let width = if row_index == ROWS.len() - 1 {
                 160
             } else if row_index == ROWS.len() - 2 {
-                if *label == "Space" { 188 } else { 72 }
+                if *label == "Space" {
+                    188
+                } else {
+                    72
+                }
             } else {
                 51
             };
