@@ -31,6 +31,8 @@ mod imp {
         video_player_row: TemplateChild<adw::ActionRow>,
         #[template_child]
         video_downloader_row: TemplateChild<adw::ActionRow>,
+        #[template_child]
+        osk_enabled_row: TemplateChild<adw::SwitchRow>,
 
         #[property(get, set)]
         use_external_player: Cell<bool>,
@@ -150,6 +152,8 @@ mod imp {
             self.settings
                 .bind_use_external_player(&*self.obj(), "use-external-player")
                 .build();
+
+            self.settings.bind_osk_enabled(&*self.osk_enabled_row, "active").build();
 
             self.mpv_missing.set(!mpv::is_installed());
 
