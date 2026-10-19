@@ -306,13 +306,14 @@ fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
         assert_ne!(signal, 0, "GtkEditable must expose its changed signal");
         let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID;
         let null = std::ptr::null_mut();
+        let opaque: *mut std::ffi::c_void = std::ptr::null_mut();
         glib::gobject_ffi::g_signal_handlers_block_matched(
-            object, mask, signal, 0, null, null, null,
+            object, mask, signal, 0, null, opaque, opaque,
         );
         entry.set_text(value);
         entry.set_position(cursor);
         glib::gobject_ffi::g_signal_handlers_unblock_matched(
-            object, mask, signal, 0, null, null, null,
+            object, mask, signal, 0, null, opaque, opaque,
         );
     }
     entry.emit_by_name::<()>("changed", &[]);
