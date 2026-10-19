@@ -14,22 +14,16 @@ use std::{
 // Rows have native-looking spacing and independent lengths; unlike a flat
 // column-indexed grid, there are no phantom keys in the final action row.
 // QWERTY is the initial layout; QWERTZ remains a one-button switch away.
+// The wide Space key stays in the main action row; layout is a separate,
+// centered row below so the switch never substitutes for the spacebar.
 const ROWS: &[&[&str]] = &[
     &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
     &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "ü"],
     &["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
     &["z", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
     &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_"],
-    &[
-        "Space",
-        "Delete",
-        "Left",
-        "Right",
-        "Clear",
-        "Switch to QWERTZ",
-        "Done",
-        "Cancel",
-    ],
+    &["Delete", "Left", "Space", "Right", "Clear", "Done", "Cancel"],
+    &["Switch to QWERTZ"],
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,16 +35,30 @@ enum Arrow {
 }
 
 fn next_key((row, col): (usize, usize), direction: Arrow) -> (usize, usize) {
+    let toggle_row = ROWS.len() - 1;
+    let action_row = toggle_row - 1;
+    let space_col = 2;
     match direction {
         Arrow::Left => (row, (col + ROWS[row].len() - 1) % ROWS[row].len()),
         Arrow::Right => (row, (col + 1) % ROWS[row].len()),
         Arrow::Up => {
-            let next_row = row.saturating_sub(1);
-            (next_row, col.min(ROWS[next_row].len() - 1))
+            if row == toggle_row {
+                // The lone switch sits beneath the center Space key.
+                (action_row, space_col)
+            } else {
+                let next_row = row.saturating_sub(1);
+                (next_row, col.min(ROWS[next_row].len() - 1))
+            }
         }
         Arrow::Down => {
-            let next_row = (row + 1).min(ROWS.len() - 1);
-            (next_row, col.min(ROWS[next_row].len() - 1))
+            if row == action_row {
+                // Every action has a predictable downward path to the
+                // layout switch; Up returns to the central Space key.
+                (toggle_row, 0)
+            } else {
+                let next_row = (row + 1).min(toggle_row);
+                (next_row, col.min(ROWS[next_row].len() - 1))
+            }
         }
     }
 }
@@ -124,7 +132,7 @@ where
     dialog.add_css_class("osk-feasibility");
     dialog.set_title(&gettext("Keyboard prototype"));
     dialog.set_content_width(735);
-    dialog.set_content_height(430);
+    dialog.set_content_height(490);
     let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
     body.set_margin_top(12);
     body.set_margin_bottom(12);
@@ -170,12 +178,24 @@ where
     for (row_index, labels) in ROWS.iter().enumerate() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.set_halign(gtk::Align::Center);
+        if row_index == ROWS.len() - 1 {
+            row.set_margin_top(8);
+        }
         rows.append(&row);
         let mut button_refs = Vec::new();
         for (col_index, label) in labels.iter().enumerate() {
             let key = gtk::Button::with_label(label);
             key.set_height_request(42);
-            key.set_width_request(if row_index == ROWS.len() - 1 { 74 } else { 51 });
+            // Distinguish typing keys, functional actions, the actual
+            // central spacebar and the isolated layout switch.
+            let width = if row_index == ROWS.len() - 1 {
+                160
+            } else if row_index == ROWS.len() - 2 {
+                if *label == "Space" { 188 } else { 72 }
+            } else {
+                51
+            };
+            key.set_width_request(width);
             row.append(&key);
             let state = selected.clone();
             key.connect_has_focus_notify(move |button| {
@@ -348,7 +368,8 @@ mod tests {
 
         assert_eq!(ROWS[1][5], "y");
         assert_eq!(ROWS[3][0], "z");
-        assert_eq!(ROWS[5][5], "Switch to QWERTZ");
+        assert_eq!(ROWS[5][2], "Space");
+        assert_eq!(ROWS[6], &["Switch to QWERTZ"]);
     }
 
     #[test]
@@ -358,7 +379,12 @@ mod tests {
         assert_eq!(next_key((1, 0), Arrow::Left), (1, 10));
         assert_eq!(next_key((5, ROWS[5].len() - 1), Arrow::Right), (5, 0));
         assert_eq!(next_key((5, 0), Arrow::Left), (5, ROWS[5].len() - 1));
-        assert_eq!(next_key((4, 9), Arrow::Down), (5, 7));
-        assert_eq!(next_key((5, 7), Arrow::Up), (4, 7));
+        assert_eq!(next_key((6, 0), Arrow::Right), (6, 0));
+        assert_eq!(next_key((6, 0), Arrow::Left), (6, 0));
+        assert_eq!(next_key((4, 9), Arrow::Down), (5, 6));
+        assert_eq!(next_key((5, 6), Arrow::Up), (4, 6));
+        assert_eq!(next_key((5, 0), Arrow::Down), (6, 0));
+        assert_eq!(next_key((5, 6), Arrow::Down), (6, 0));
+        assert_eq!(next_key((6, 0), Arrow::Up), (5, 2));
     }
 }

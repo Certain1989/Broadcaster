@@ -23,9 +23,15 @@ claim that a compositor touchscreen OSK works with a TV remote.
 3. Navigate the conventional letter rows (initial **QWERTY**) and compose
    `äöß`. Activate **Switch to QWERTZ** to select **QWERTZ** and confirm that
    Y and Z exchange their familiar positions; switch back using **Switch to QWERTY** and confirm the
-   typed draft is unaffected. On every row, Right from the last key must wrap
-   to that row's first key, and Left from its first to its last. Check the
-   shorter action row and Up/Down from longer letter rows as well.
+   typed draft is unaffected. Confirm the wide **Space** key is centered
+   in the main action row, with Delete, caret controls, Clear, Done and Cancel
+   beside it. The **Switch to QWERTZ/QWERTY** button must be alone on a
+   centered row *beneath* those actions—not in the spacebar position.
+   Confirm that Down from any action reaches that toggle and Up from the
+   toggle returns to Space. On every row, Right from the last key must wrap
+   to that row's first key, and Left from its first to its last (on the
+   single-key toggle row, Left/Right leave focus on the same toggle). Check
+   Up/Down from different-length letter and punctuation rows as well.
    Verify the caret separator sits directly against the text, with no
    character-sized blank before the newly inserted letter. Test caret
    Left/Right, Delete, Clear and Done. Confirm the original search changes
