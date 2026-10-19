@@ -9,6 +9,16 @@ schema_dir=$(mktemp -d)
 trap 'rm -rf "$schema_dir"' EXIT HUP INT TERM
 cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
 glib-compile-schemas "$schema_dir"
-xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
-  GSETTINGS_SCHEMA_DIR="$schema_dir" \
-  cargo test --locked osk_mapped_gtk_ -- --ignored --test-threads=1
+# One GTK initialization per process. The Rust test runner can dispatch
+# sequential --test-threads=1 cases to DIFFERENT OS threads, which violates
+# gtk-rs's single-initialization-thread requirement.
+for case in \
+  osk_mapped_gtk_close_releases_dialog_and_draft \
+  osk_mapped_gtk_input_transaction_and_cancel \
+  osk_mapped_gtk_lifecycle_guards \
+  osk_mapped_gtk_preferences_expander_and_popover
+do
+  xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
+    GSETTINGS_SCHEMA_DIR="$schema_dir" \
+    cargo test --locked "$case" -- --ignored --test-threads=1
+done
