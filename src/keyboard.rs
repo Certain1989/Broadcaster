@@ -294,7 +294,8 @@ fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
     }
 
     use glib::translate::{IntoGlib, ToGlibPtr};
-    let object = entry.to_glib_none().0 as *mut glib::gobject_ffi::GObject;
+    let owned: glib::Object = entry.clone().upcast();
+    let object: *mut glib::gobject_ffi::GObject = owned.to_glib_none().0;
     // SAFETY: the GtkEditable owns a valid GObject for this synchronous call.
     // Both matched operations target only this object's 'changed' signal;
     // the count/flags are from GObject's public signal API. No pointer is kept.
