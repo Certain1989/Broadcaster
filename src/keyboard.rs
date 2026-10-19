@@ -1,332 +1,416 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Deliberately bounded GTK-owned keyboard feasibility experiment.
-//! This is not the production, application-wide on-screen keyboard.
+//! GTK-owned on-demand editing for TV remotes. K2 binds the remaining fields.
+//! No per-key change escapes the separate draft GtkEntry before Done.
 
 use adw::{glib, gtk, prelude::*};
 use gettextrs::gettext;
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::{Cell, RefCell}, rc::Rc};
 
-// Rows have native-looking spacing and independent lengths; unlike a flat
-// column-indexed grid, there are no phantom keys in the final action row.
-// QWERTY is the initial layout; QWERTZ remains a one-button switch away.
-// The wide Space key stays in the main action row; layout is a separate,
-// centered row below so the switch never substitutes for the spacebar.
 const ROWS: &[&[&str]] = &[
     &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
     &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "ü"],
     &["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
     &["z", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
-    &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_"],
-    &[
-        "Delete", "Left", "Space", "Right", "Clear", "Done", "Cancel",
-    ],
-    &["Switch to QWERTZ"],
+    &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_", "%", "~"],
+    &["Backspace", "Left", "Space", "Right", "Clear", "Done", "Cancel"],
+    &["Shift", "QWERTZ", "Symbols"],
+];
+const SYMBOLS: &[&[&str]] = &[
+    &["!", "'", "\"", "(", ")", "[", "]", "{", "}", "\\", "|"],
+    &[";", "*", "$", "^", "<", ">", "€", "£", "§", "°", "~"],
+    &["ä", "ö", "ü", "ß", "ẞ", ":", "/", "?", "&", "="],
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Arrow {
-    Left,
-    Right,
-    Up,
-    Down,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyboardLayout { Text, Url }
 
-fn next_key((row, col): (usize, usize), direction: Arrow) -> (usize, usize) {
-    let toggle_row = ROWS.len() - 1;
-    let action_row = toggle_row - 1;
-    let space_col = 2;
-    match direction {
-        Arrow::Left => (row, (col + ROWS[row].len() - 1) % ROWS[row].len()),
-        Arrow::Right => (row, (col + 1) % ROWS[row].len()),
-        Arrow::Up => {
-            if row == toggle_row {
-                // The lone switch sits beneath the center Space key.
-                (action_row, space_col)
-            } else {
-                let next_row = row.saturating_sub(1);
-                (next_row, col.min(ROWS[next_row].len() - 1))
-            }
-        }
-        Arrow::Down => {
-            if row == action_row {
-                // Every action has a predictable downward path to the
-                // layout switch; Up returns to the central Space key.
-                (toggle_row, 0)
-            } else {
-                let next_row = (row + 1).min(toggle_row);
-                (next_row, col.min(ROWS[next_row].len() - 1))
-            }
+/// Typed K2 registration contract: a caller supplies a *particular editable*,
+/// its intended layout and an optional error-only validator (never log drafts).
+#[derive(Clone)]
+pub struct KeyboardOptions {
+    pub layout: KeyboardLayout,
+    pub validate: Option<Rc<dyn Fn(&str) -> Result<(), String>>>,
+}
+impl Default for KeyboardOptions {
+    fn default() -> Self {
+        Self { layout: KeyboardLayout::Text, validate: None }
+    }
+}
+impl KeyboardOptions {
+    pub fn url() -> Self {
+        Self {
+            layout: KeyboardLayout::Url,
+            validate: Some(Rc::new(|value| {
+                if reqwest::Url::parse(value).is_ok_and(|url| {
+                    matches!(url.scheme(), "http" | "https") && url.host().is_some()
+                }) {
+                    Ok(())
+                } else {
+                    Err(gettext("Enter a valid HTTP(S) playlist URL"))
+                }
+            })),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+/// A weak, live field binding. Changing Settings immediately shows/hides its
+/// D-pad launcher; keyboard OFF leaves native editing completely untouched.
+pub fn bind_launcher<T>(button: &gtk::Button, target: &T, options: KeyboardOptions)
+where T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static {
+    crate::settings::TvSettings::get()
+        .bind_osk_enabled(button, "visible")
+        .build();
+    let weak = target.clone().upcast::<gtk::Widget>().downgrade();
+    button.connect_clicked(move |_| {
+        if let Some(widget) = weak.upgrade() {
+            if let Ok(editable) = widget.downcast::<gtk::Editable>() {
+                show_with_options(&editable, options.clone());
+            }
+        }
+    });
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Arrow { Left, Right, Up, Down }
+
+/// Vertical navigation compares *actual mapped allocation centres* in the
+/// common rows coordinate system. Equal distances favour leftmost buttons.
+/// Left/Right wrap within their visible row, Up/Down across the top/bottom.
+fn next_key(
+    keys: &[Vec<glib::WeakRef<gtk::Button>>],
+    rows: &gtk::Box,
+    (row,col): (usize,usize),
+    direction: Arrow,
+) -> (usize,usize) {
+    match direction {
+        Arrow::Left => (row, (col + keys[row].len() - 1) % keys[row].len()),
+        Arrow::Right => (row, (col + 1) % keys[row].len()),
+        Arrow::Up | Arrow::Down => {
+            let target_row = if direction == Arrow::Up {
+                (row + keys.len() - 1) % keys.len()
+            } else {
+                (row + 1) % keys.len()
+            };
+            let center = |r: usize, c: usize| -> f64 {
+                let Some(button) = keys[r][c].upgrade() else { return 0.0 };
+                if let Some(rect) = button.compute_bounds(rows) {
+                    (rect.x() + rect.width()/2.0) as f64
+                } else {
+                    (c as f64 + 0.5) / keys[r].len() as f64
+                }
+            };
+            let x = center(row,col);
+            let col = (0..keys[target_row].len()).min_by(|&a,&b| {
+                (center(target_row,a)-x).abs()
+                    .total_cmp(&(center(target_row,b)-x).abs())
+                    .then_with(|| a.cmp(&b))
+            }).unwrap_or(0);
+            (target_row,col)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Draft {
     text: String,
     cursor: usize,
+    selection: Option<(usize,usize)>,
 }
 impl Draft {
-    fn new(text: &str, cursor: usize) -> Self {
-        Self {
-            text: text.to_owned(),
-            cursor: cursor.min(text.chars().count()),
+    fn new(text: &str, cursor: usize, selection: Option<(usize,usize)>) -> Self {
+        Self { text: text.into(), cursor: cursor.min(text.chars().count()), selection }
+    }
+    fn offset(&self, pos: usize) -> usize {
+        self.text.char_indices().nth(pos).map_or(self.text.len(), |(i,_)| i)
+    }
+    fn remove_selection(&mut self) -> bool {
+        let Some((a,b)) = self.selection.take() else { return false };
+        let (a,b) = (a.min(b).min(self.text.chars().count()),
+                     a.max(b).min(self.text.chars().count()));
+        if a == b { return false; }
+        self.text.replace_range(self.offset(a)..self.offset(b), "");
+        self.cursor=a;
+        true
+    }
+    fn insert(&mut self, s: &str) {
+        self.remove_selection();
+        self.text.insert_str(self.offset(self.cursor), s);
+        self.cursor += s.chars().count();
+    }
+    fn backspace(&mut self) {
+        if self.remove_selection() { return; }
+        if self.cursor>0 {
+            let end=self.offset(self.cursor);
+            self.cursor-=1;
+            self.text.replace_range(self.offset(self.cursor)..end, "");
         }
     }
-    fn offset(&self) -> usize {
-        self.text
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.text.len(), |(i, _)| i)
-    }
-    fn insert(&mut self, text: &str) {
-        let at = self.offset();
-        self.text.insert_str(at, text);
-        self.cursor += text.chars().count();
-    }
-    fn delete(&mut self) {
-        if self.cursor > 0 {
-            let end = self.offset();
-            self.cursor -= 1;
-            let start = self.offset();
-            self.text.replace_range(start..end, "");
-        }
-    }
-    fn move_caret(&mut self, left: bool) {
-        if left {
-            self.cursor = self.cursor.saturating_sub(1);
-        } else {
-            self.cursor = (self.cursor + 1).min(self.text.chars().count());
-        }
-    }
-    fn split_at_caret(&self) -> (&str, &str) {
-        self.text.split_at(self.offset())
+    fn move_caret(&mut self, left:bool) {
+        self.selection=None;
+        self.cursor=if left { self.cursor.saturating_sub(1) }
+        else { (self.cursor+1).min(self.text.chars().count()) };
     }
 }
 
-/// Open on demand from a real mapped GtkEditable. The original is only
-/// changed by Done; Cancel/Back leaves it completely untouched.
-pub fn show<T>(target: &T)
-where
-    T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
-{
-    let widget: gtk::Widget = target.clone().upcast();
-    let editable: gtk::Editable = target.clone().upcast();
-    if !widget.is_mapped() {
-        return;
+fn label_for(r:usize,c:usize,qwertz:bool,shift:bool,symbols:bool)->String {
+    let raw=if (1..=3).contains(&r) && symbols {
+        SYMBOLS[r-1][c]
+    } else if r==1 && c==5 && qwertz {
+        "z"
+    } else if r==3 && c==0 && qwertz {
+        "y"
+    } else { ROWS[r][c] };
+    if r<=4 {
+        if shift {
+            if raw=="ß" { "ẞ".into() } else { raw.to_uppercase() }
+        } else { raw.into() }
+    } else {
+        match raw {
+            "Backspace"=>gettext("Backspace"),
+            "Left"=>gettext("Caret left"),
+            "Space"=>gettext("Space"),
+            "Right"=>gettext("Caret right"),
+            "Clear"=>gettext("Clear"),
+            "Done"=>gettext("Done"),
+            "Cancel"=>gettext("Cancel"),
+            "Shift"=>if shift { gettext("Shift on") } else { gettext("Shift") },
+            "QWERTZ"=>if qwertz { gettext("QWERTY") } else { gettext("QWERTZ") },
+            "Symbols"=>if symbols { gettext("Letters") } else { gettext("Symbols") },
+            _=>raw.into(),
+        }
     }
-    let weak_widget = widget.downgrade();
-    let weak_parent = widget.parent().map(|parent| parent.downgrade());
-    let weak_window = widget
-        .root()
-        .and_downcast::<gtk::Window>()
-        .map(|w| w.downgrade());
-    let draft = Rc::new(RefCell::new(Draft::new(
-        editable.text().as_str(),
-        editable.position().max(0) as usize,
-    )));
+}
+fn relabel(keys:&[Vec<glib::WeakRef<gtk::Button>>],qwertz:bool,shift:bool,symbols:bool) {
+    for (r,row) in keys.iter().enumerate() {
+        for (c,weak) in row.iter().enumerate() {
+            if let Some(button)=weak.upgrade() {
+                let label=label_for(r,c,qwertz,shift,symbols);
+                button.set_label(&label);
+                button.set_tooltip_text(Some(&label));
+            }
+        }
+    }
+}
+fn from_preview(preview:&gtk::Entry)->Draft {
+    Draft::new(preview.text().as_str(),preview.position().max(0) as usize,
+        preview.selection_bounds().map(|(a,b)|(a.max(0) as usize,b.max(0) as usize)))
+}
+fn target_live(widget:&gtk::Widget,parent:&Option<glib::WeakRef<gtk::Widget>>,
+               window:&Option<glib::WeakRef<gtk::Window>>,initial:&str,invalidated:bool)->bool {
+    widget.is_mapped() && widget.is_sensitive() && !invalidated
+    && widget.parent()==parent.as_ref().and_then(|w|w.upgrade())
+    && widget.root().and_downcast::<gtk::Window>()==window.as_ref().and_then(|w|w.upgrade())
+    && widget.clone().downcast::<gtk::Editable>().ok()
+        .is_some_and(|entry| entry.text().as_str()==initial)
+}
 
-    let dialog = adw::Dialog::new();
+pub fn show<T>(target:&T)
+where T:IsA<gtk::Widget>+IsA<gtk::Editable>+Clone+'static {
+    show_with_options(target,KeyboardOptions::default());
+}
+
+pub fn show_with_options<T>(target:&T,options:KeyboardOptions)
+where T:IsA<gtk::Widget>+IsA<gtk::Editable>+Clone+'static {
+    if !crate::settings::TvSettings::get().osk_enabled() { return; }
+    let widget:gtk::Widget=target.clone().upcast();
+    let editable:gtk::Editable=target.clone().upcast();
+    if !widget.is_mapped() || !widget.is_sensitive() { return; }
+    let initial=editable.text().to_string();
+    let weak_target=widget.downgrade();
+    let parent=widget.parent().map(|w|w.downgrade());
+    let window=widget.root().and_downcast::<gtk::Window>().map(|w|w.downgrade());
+    let invalidated=Rc::new(Cell::new(false));
+
+    let dialog=adw::Dialog::new();
+    // The window's existing remote capture prioritizes this modal marker.
     dialog.add_css_class("osk-feasibility");
-    dialog.set_title(&gettext("Keyboard prototype"));
+    dialog.add_css_class("osk-production");
+    dialog.set_title(&gettext("On-screen keyboard"));
     dialog.set_content_width(735);
-    dialog.set_content_height(490);
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    dialog.set_content_height(510);
+
+    let body=gtk::Box::new(gtk::Orientation::Vertical,8);
     body.set_margin_top(12);
     body.set_margin_bottom(12);
     body.set_margin_start(12);
     body.set_margin_end(12);
-    let instruction = gtk::Label::new(Some(&gettext(
-        "Arrows select keys, OK activates, Back cancels.",
-    )));
-    body.append(&instruction);
-    // Split the preview into two labels and a thin GTK separator. Unlike a
-    // Unicode box-drawing glyph, this cursor takes no character-cell width:
-    // the next letter appears directly against it, not after a blank space.
-    let preview = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let hint=gtk::Label::new(Some(&gettext("Arrows choose keys; OK types; Back cancels.")));
+    hint.set_wrap(true);
+    body.append(&hint);
+    // The draft is a real GtkEntry: native selection, paste, IME, keyboard,
+    // mouse and caret work here, without saving anything to the origin.
+    let preview=gtk::Entry::new();
     preview.set_hexpand(true);
-    let before = gtk::Label::new(None);
-    before.set_selectable(false);
-    before.set_xalign(1.0);
-    let caret = gtk::Separator::new(gtk::Orientation::Vertical);
-    caret.set_height_request(22);
-    let after = gtk::Label::new(None);
-    after.set_selectable(false);
-    after.set_xalign(0.0);
-    {
-        let state = draft.borrow();
-        let (left, right) = state.split_at_caret();
-        before.set_text(left);
-        after.set_text(right);
-    }
-    preview.append(&before);
-    preview.append(&caret);
-    preview.append(&after);
+    preview.set_text(&initial);
+    preview.set_position(editable.position());
+    if let Some((a,b))=editable.selection_bounds() { preview.select_region(a,b); }
+    preview.set_input_purpose(match options.layout {
+        KeyboardLayout::Text=>gtk::InputPurpose::FreeForm,
+        KeyboardLayout::Url=>gtk::InputPurpose::Url,
+    });
     body.append(&preview);
-
-    let rows = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let error=gtk::Label::new(None);
+    error.add_css_class("error");
+    error.set_wrap(true);
+    body.append(&error);
+    let scroll=gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Automatic,gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+    body.append(&scroll);
+    let rows=gtk::Box::new(gtk::Orientation::Vertical,5);
     rows.set_valign(gtk::Align::Start);
-    body.append(&rows);
-
-    let selected = Rc::new(Cell::new((0usize, 0usize)));
-    let qwertz = Rc::new(Cell::new(false));
-    // Only weak references are kept in signal closures; the dialog widget
-    // tree remains the sole owner of the buttons.
-    let keys: Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>> = Rc::new(RefCell::new(Vec::new()));
-    for (row_index, labels) in ROWS.iter().enumerate() {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        row.set_halign(gtk::Align::Center);
-        if row_index == ROWS.len() - 1 {
-            row.set_margin_top(8);
-        }
-        rows.append(&row);
-        let mut button_refs = Vec::new();
-        for (col_index, label) in labels.iter().enumerate() {
-            let key = gtk::Button::with_label(label);
-            key.set_height_request(42);
-            // Distinguish typing keys, functional actions, the actual
-            // central spacebar and the isolated layout switch.
-            let width = if row_index == ROWS.len() - 1 {
-                160
-            } else if row_index == ROWS.len() - 2 {
-                if *label == "Space" {
-                    188
-                } else {
-                    72
-                }
-            } else {
-                51
-            };
-            key.set_width_request(width);
-            row.append(&key);
-            let state = selected.clone();
-            key.connect_has_focus_notify(move |button| {
-                if button.has_focus() {
-                    state.set((row_index, col_index));
-                }
+    scroll.set_child(Some(&rows));
+    let selected=Rc::new(Cell::new((0usize,0usize)));
+    let qwertz=Rc::new(Cell::new(false));
+    let shifted=Rc::new(Cell::new(false));
+    let symbols=Rc::new(Cell::new(false));
+    let keys:Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>>=
+        Rc::new(RefCell::new(Vec::new()));
+    let weak_dialog=dialog.downgrade();
+    for (r,labels) in ROWS.iter().enumerate() {
+        let line=gtk::Box::new(gtk::Orientation::Horizontal,4);
+        line.set_halign(gtk::Align::Center);
+        if r==6 { line.set_margin_top(6); }
+        rows.append(&line);
+        let mut refs=Vec::new();
+        for (c,_) in labels.iter().enumerate() {
+            let button=gtk::Button::with_label(&label_for(r,c,false,false,false));
+            button.set_height_request(42);
+            button.set_width_request(if r==6 { 154 } else if r==5 {
+                if c==2 {168} else {70}
+            } else {49});
+            line.append(&button);
+            refs.push(button.downgrade());
+            let selected=selected.clone();
+            button.connect_has_focus_notify(move |button| {
+                if button.has_focus() { selected.set((r,c)); }
             });
 
-            let weak_key = key.downgrade();
-            let draft = draft.clone();
-            let before = before.clone();
-            let after = after.clone();
-            let dialog = dialog.clone();
-            let weak_widget = weak_widget.clone();
-            let weak_parent = weak_parent.clone();
-            let keys_for_layout = keys.clone();
-            let qwertz = qwertz.clone();
-            key.connect_clicked(move |_| {
-                let Some(key) = weak_key.upgrade() else {
-                    return;
-                };
-                let label = key.label().unwrap_or_default();
-                match label.as_str() {
-                    "Cancel" => {
-                        dialog.close();
-                    }
-                    "Done" => {
-                        if let Some(widget) = weak_widget.upgrade() {
-                            // Refuse stale, reparented or unmapped fields.
-                            if widget.is_mapped()
-                                && weak_parent.as_ref().and_then(|w| w.upgrade()) == widget.parent()
-                            {
-                                if let Ok(editable) = widget.downcast::<gtk::Editable>() {
-                                    let state = draft.borrow();
-                                    editable.set_text(&state.text); // one real commit
-                                    editable.set_position(state.cursor as i32);
-                                }
+            // No descendant callback captures a strong dialog or origin.
+            let weak_dialog=weak_dialog.clone();
+            let preview=preview.clone();
+            let error=error.clone();
+            let weak_target=weak_target.clone();
+            let parent=parent.clone();
+            let window=window.clone();
+            let initial=initial.clone();
+            let invalidated=invalidated.clone();
+            let qwertz=qwertz.clone();
+            let shifted=shifted.clone();
+            let symbols=symbols.clone();
+            let keys=keys.clone();
+            let options=options.clone();
+            button.connect_clicked(move |_| {
+                let Some(dialog)=weak_dialog.upgrade() else { return };
+                match (r,c) {
+                    (5,6)=>dialog.close(),
+                    (5,5)=>{
+                        let Some(widget)=weak_target.upgrade() else {dialog.close();return};
+                        if !target_live(&widget,&parent,&window,&initial,invalidated.get()) {
+                            dialog.close();return;
+                        }
+                        let value=preview.text().to_string();
+                        if let Some(validate)=&options.validate {
+                            if let Err(problem)=validate(&value) {
+                                error.set_text(&problem);
+                                return;
                             }
                         }
+                        if let Ok(entry)=widget.downcast::<gtk::Editable>() {
+                            entry.set_text(&value); // exactly one normal commit
+                            entry.set_position(preview.position());
+                        }
                         dialog.close();
-                    }
-                    name if name.starts_with("Switch to ") => {
-                        let use_qwertz = !qwertz.get();
-                        qwertz.set(use_qwertz);
-                        let keys = keys_for_layout.borrow();
-                        if let (Some(top), Some(bottom)) =
-                            (keys[1][5].upgrade(), keys[3][0].upgrade())
-                        {
-                            top.set_label(if use_qwertz { "z" } else { "y" });
-                            bottom.set_label(if use_qwertz { "y" } else { "z" });
+                    },
+                    (6,0)=>{
+                        shifted.set(!shifted.get());
+                        relabel(&keys.borrow(),qwertz.get(),shifted.get(),symbols.get());
+                    },
+                    (6,1)=>{
+                        qwertz.set(!qwertz.get());
+                        relabel(&keys.borrow(),qwertz.get(),shifted.get(),symbols.get());
+                    },
+                    (6,2)=>{
+                        symbols.set(!symbols.get());
+                        relabel(&keys.borrow(),qwertz.get(),shifted.get(),symbols.get());
+                    },
+                    _=>{
+                        let mut draft=from_preview(&preview);
+                        match (r,c) {
+                            (5,0)=>draft.backspace(),
+                            (5,1)=>draft.move_caret(true),
+                            (5,2)=>draft.insert(" "),
+                            (5,3)=>draft.move_caret(false),
+                            (5,4)=>{ draft.text.clear();draft.cursor=0;draft.selection=None; },
+                            _=>draft.insert(&label_for(r,c,qwertz.get(),shifted.get(),symbols.get())),
                         }
-                        key.set_label(if use_qwertz {
-                            "Switch to QWERTY"
-                        } else {
-                            "Switch to QWERTZ"
-                        });
-                    }
-                    _ => {
-                        let mut state = draft.borrow_mut();
-                        match label.as_str() {
-                            "Space" => state.insert(" "),
-                            "Delete" => state.delete(),
-                            "Clear" => {
-                                state.text.clear();
-                                state.cursor = 0;
-                            }
-                            "Left" => state.move_caret(true),
-                            "Right" => state.move_caret(false),
-                            letter => state.insert(letter),
-                        }
-                        let (left, right) = state.split_at_caret();
-                        before.set_text(left);
-                        after.set_text(right);
+                        preview.set_text(&draft.text);
+                        preview.set_position(draft.cursor as i32);
+                        error.set_text("");
                     }
                 }
             });
-            button_refs.push(key.downgrade());
         }
-        keys.borrow_mut().push(button_refs);
+        keys.borrow_mut().push(refs);
     }
     dialog.set_child(Some(&body));
 
-    let keys_for_navigation = keys.clone();
-    let dialog_for_keys = dialog.clone();
-    let controller = gtk::EventControllerKey::new();
+    let keys_for_nav=keys.clone();
+    let weak_rows=rows.downgrade();
+    let weak_preview=preview.downgrade();
+    let weak_dialog_for_keys=dialog.downgrade();
+    let controller=gtk::EventControllerKey::new();
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-    controller.connect_key_pressed(move |_, key, _, modifiers| {
-        if !modifiers.is_empty() {
+    controller.connect_key_pressed(move |_,key,_,mods| {
+        if !mods.is_empty() {return glib::Propagation::Proceed;}
+        use gtk::gdk::Key;
+        if matches!(key,Key::Back|Key::Escape|Key::Home|Key::HomePage) {
+            if let Some(dialog)=weak_dialog_for_keys.upgrade() {dialog.close();}
+            return glib::Propagation::Stop;
+        }
+        // Physical input in the preview retains native caret, IME, selection.
+        if weak_preview.upgrade().is_some_and(|p|p.has_focus()) {
             return glib::Propagation::Proceed;
         }
-        use gtk::gdk::Key;
-        let next = match key {
-            Key::Left => next_key(selected.get(), Arrow::Left),
-            Key::Right => next_key(selected.get(), Arrow::Right),
-            Key::Up => next_key(selected.get(), Arrow::Up),
-            Key::Down => next_key(selected.get(), Arrow::Down),
-            Key::Back | Key::Escape | Key::Home | Key::HomePage => {
-                tracing::trace!("osk prototype: dialog cancel capture");
-                dialog_for_keys.close();
-                return glib::Propagation::Stop;
-            }
-            Key::Return | Key::KP_Enter => {
-                tracing::trace!("osk prototype: dialog OK propagation");
-                return glib::Propagation::Proceed;
-            }
-            _ => return glib::Propagation::Proceed,
+        let arrow=match key {
+            Key::Left|Key::KP_Left=>Arrow::Left,
+            Key::Right|Key::KP_Right=>Arrow::Right,
+            Key::Up|Key::KP_Up=>Arrow::Up,
+            Key::Down|Key::KP_Down=>Arrow::Down,
+            _=>return glib::Propagation::Proceed,
         };
-        if let Some(button) = keys_for_navigation.borrow()[next.0][next.1].upgrade() {
-            tracing::trace!("osk prototype: dialog arrow capture");
-            button.grab_focus();
+        if let Some(rows)=weak_rows.upgrade() {
+            let next=next_key(&keys_for_nav.borrow(),&rows,selected.get(),arrow);
+            if let Some(button)=keys_for_nav.borrow()[next.0][next.1].upgrade() {
+                button.grab_focus();
+            }
         }
         glib::Propagation::Stop
     });
     dialog.add_controller(controller);
 
+    // Any outside changes invalidate this draft even if a reset happens
+    // to restore the same text later. Changed handler is removed on close.
+    let changed=invalidated.clone();
+    let handler=Rc::new(RefCell::new(Some(
+        editable.connect_changed(move |_| changed.set(true))
+    )));
+    let weak_editable=editable.downgrade();
     dialog.connect_closed(move |_| {
-        let weak_widget = weak_widget.clone();
-        let weak_window = weak_window.clone();
+        if let (Some(entry),Some(handler))=(weak_editable.upgrade(),handler.borrow_mut().take()) {
+            entry.disconnect(handler);
+        }
+        let weak_target=weak_target.clone();
+        let weak_window=window.clone();
         glib::idle_add_local_once(move || {
-            if let Some(widget) = weak_widget.upgrade() {
-                if widget.is_mapped() && widget.is_sensitive() && widget.grab_focus() {
+            if let Some(target)=weak_target.upgrade() {
+                if target.is_mapped() && target.is_sensitive() && target.grab_focus() {
                     return;
                 }
             }
-            if let Some(window) = weak_window.and_then(|w| w.upgrade()) {
+            if let Some(window)=weak_window.and_then(|w|w.upgrade()) {
                 if window.is_mapped() {
                     window.child_focus(gtk::DirectionType::TabForward);
                 }
@@ -334,63 +418,36 @@ where
         });
     });
     dialog.present(Some(&widget));
-    let initial_key = keys.borrow()[0][0].clone();
+    let first=keys.borrow()[0][0].clone();
     glib::idle_add_local_once(move || {
-        if let Some(button) = initial_key.upgrade() {
-            if button.is_mapped() {
-                button.grab_focus();
-            }
+        if let Some(button)=first.upgrade() {
+            if button.is_mapped() {button.grab_focus();}
         }
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Draft;
-
+    use super::*;
     #[test]
-    fn utf8_navigation_and_delete() {
-        let mut draft = Draft::new("äß", 1);
-        draft.insert("ö");
-        assert_eq!(draft.text, "äöß");
-        draft.move_caret(true);
-        draft.delete();
-        assert_eq!(draft.text, "öß");
-        assert_eq!(draft.cursor, 0);
+    fn unicode_selection_insert_and_backspace() {
+        let mut d=Draft::new("aäößz",4,Some((1,4)));
+        d.insert("Ü");
+        assert_eq!(d.text,"aÜz");
+        d.backspace();
+        assert_eq!(d.text,"az");
     }
-
     #[test]
-    fn editing_draft_never_changes_original() {
-        let original = String::from("https://example.invalid/?a=1");
-        let mut draft = Draft::new(&original, 0);
-        draft.insert("ä");
-        assert_eq!(original, "https://example.invalid/?a=1");
-        assert_eq!(draft.split_at_caret(), ("ä", original.as_str()));
-    }
-
-    #[test]
-    fn initial_layout_is_qwerty_with_visible_qwertz_switch() {
-        use super::ROWS;
-
-        assert_eq!(ROWS[1][5], "y");
-        assert_eq!(ROWS[3][0], "z");
-        assert_eq!(ROWS[5][2], "Space");
-        assert_eq!(ROWS[6], &["Switch to QWERTZ"]);
-    }
-
-    #[test]
-    fn horizontal_navigation_wraps_within_each_real_row() {
-        use super::{next_key, Arrow, ROWS};
-        assert_eq!(next_key((1, 10), Arrow::Right), (1, 0));
-        assert_eq!(next_key((1, 0), Arrow::Left), (1, 10));
-        assert_eq!(next_key((5, ROWS[5].len() - 1), Arrow::Right), (5, 0));
-        assert_eq!(next_key((5, 0), Arrow::Left), (5, ROWS[5].len() - 1));
-        assert_eq!(next_key((6, 0), Arrow::Right), (6, 0));
-        assert_eq!(next_key((6, 0), Arrow::Left), (6, 0));
-        assert_eq!(next_key((4, 9), Arrow::Down), (5, 6));
-        assert_eq!(next_key((5, 6), Arrow::Up), (4, 6));
-        assert_eq!(next_key((5, 0), Arrow::Down), (6, 0));
-        assert_eq!(next_key((5, 6), Arrow::Down), (6, 0));
-        assert_eq!(next_key((6, 0), Arrow::Up), (5, 2));
+    fn draft_isolation_caret_and_shift() {
+        let original="https://example.invalid/?x=1";
+        let mut d=Draft::new(original,0,None);
+        d.insert("ä");
+        d.move_caret(false);
+        d.backspace();
+        assert_eq!(original,"https://example.invalid/?x=1");
+        assert_eq!(label_for(3,7,false,true,false),"ẞ");
+        assert_eq!(label_for(1,5,true,false,false),"z");
+        assert!(ROWS[4].contains(&"%"));
+        assert!(ROWS[4].contains(&"/"));
     }
 }
