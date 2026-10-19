@@ -306,7 +306,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         field.set_input_purpose(gtk::InputPurpose::Url);
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
         body.append(&url_error);
-        let keyboard = button(&gettext("Keyboard (prototype)"), &body);
+        let keyboard = button(&gettext("Keyboard"), &body);
         crate::keyboard::bind_launcher(&keyboard, &field,
             crate::keyboard::KeyboardOptions::url());
         // Keep Left/Right in the URL entry for its native caret. The
