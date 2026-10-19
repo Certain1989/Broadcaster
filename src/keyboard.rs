@@ -42,9 +42,9 @@ pub enum KeyboardLayout {
 
 /// Typed K2 registration contract: a caller supplies a *particular editable*,
 /// its intended layout and an optional error-only validator (never log drafts).
-#[derive(Clone)]
 pub type KeyboardValidator = dyn Fn(&str) -> Result<(), String>;
 
+#[derive(Clone)]
 pub struct KeyboardOptions {
     pub layout: KeyboardLayout,
     pub validate: Option<Rc<KeyboardValidator>>,
@@ -315,7 +315,9 @@ where
 }
 
 fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
-    if !crate::settings::TvSettings::get().osk_enabled() { return; }
+    if !crate::settings::TvSettings::get().osk_enabled() {
+        return;
+    }
     let widget = widget.clone();
     let Ok(editable) = widget.clone().downcast::<gtk::Editable>() else {
         return;
