@@ -307,8 +307,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
         body.append(&url_error);
         let keyboard = button(&gettext("Keyboard (prototype)"), &body);
-        let input_for_keyboard = field.clone();
-        keyboard.connect_clicked(move |_| crate::keyboard::show(&input_for_keyboard));
+        crate::keyboard::bind_launcher(&keyboard, &field,
+            crate::keyboard::KeyboardOptions::url());
         // Keep Left/Right in the URL entry for its native caret. The
         // vertical boundary exposes the keyboard to an ordinary D-pad.
         let nav = gtk::EventControllerKey::new();
