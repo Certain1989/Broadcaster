@@ -17,6 +17,9 @@
 		<key name="visible-view" type="s">
 			<default>"mediathek"</default>
 		</key>
+		<key name="osk-enabled" type="b">
+			<default>true</default>
+		</key>
 		<key name="search-everywhere" type="b">
 			<default>false</default>
 		</key>
