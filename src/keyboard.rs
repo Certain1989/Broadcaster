@@ -82,6 +82,7 @@ where
 {
     crate::settings::TvSettings::get()
         .bind_osk_enabled(button, "visible")
+        .flags(adw::gio::SettingsBindFlags::GET)
         .build();
     let weak = target.clone().upcast::<gtk::Widget>().downgrade();
     button.connect_clicked(move |_| {
