@@ -334,18 +334,45 @@ mod tests {
     fn dpad_rows_and_header_boundaries() {
         use VerticalDestination::{AddArgument, RestoreDefaults, Row};
 
-        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Up), Some(RestoreDefaults));
-        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Down), Some(Row(1)));
-        assert_eq!(vertical_destination(1, true, gtk::gdk::Key::Up), Some(Row(0)));
-        assert_eq!(vertical_destination(1, true, gtk::gdk::Key::Down), Some(Row(2)));
-        assert_eq!(vertical_destination(2, false, gtk::gdk::Key::Down), Some(AddArgument));
-        assert_eq!(vertical_destination(0, false, gtk::gdk::Key::Up), Some(RestoreDefaults));
-        assert_eq!(vertical_destination(0, false, gtk::gdk::Key::Down), Some(AddArgument));
+        assert_eq!(
+            vertical_destination(0, true, gtk::gdk::Key::Up),
+            Some(RestoreDefaults)
+        );
+        assert_eq!(
+            vertical_destination(0, true, gtk::gdk::Key::Down),
+            Some(Row(1))
+        );
+        assert_eq!(
+            vertical_destination(1, true, gtk::gdk::Key::Up),
+            Some(Row(0))
+        );
+        assert_eq!(
+            vertical_destination(1, true, gtk::gdk::Key::Down),
+            Some(Row(2))
+        );
+        assert_eq!(
+            vertical_destination(2, false, gtk::gdk::Key::Down),
+            Some(AddArgument)
+        );
+        assert_eq!(
+            vertical_destination(0, false, gtk::gdk::Key::Up),
+            Some(RestoreDefaults)
+        );
+        assert_eq!(
+            vertical_destination(0, false, gtk::gdk::Key::Down),
+            Some(AddArgument)
+        );
         assert_eq!(vertical_destination(-1, false, gtk::gdk::Key::Down), None);
         assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Left), None);
         assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Right), None);
-        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::KP_Up), Some(RestoreDefaults));
-        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::KP_Down), Some(Row(1)));
+        assert_eq!(
+            vertical_destination(0, true, gtk::gdk::Key::KP_Up),
+            Some(RestoreDefaults)
+        );
+        assert_eq!(
+            vertical_destination(0, true, gtk::gdk::Key::KP_Down),
+            Some(Row(1))
+        );
     }
 
     #[test]
