@@ -4,9 +4,12 @@
 //! Deliberately bounded GTK-owned keyboard feasibility experiment.
 //! This is not the production, application-wide on-screen keyboard.
 
-use std::{cell::{Cell, RefCell}, rc::Rc};
 use adw::{glib, gtk, prelude::*};
 use gettextrs::gettext;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 const COLS: usize = 8;
 const ROWS: &[&[&str]] = &[
@@ -27,10 +30,16 @@ struct Draft {
 }
 impl Draft {
     fn new(text: &str, cursor: usize) -> Self {
-        Self { text: text.to_owned(), cursor: cursor.min(text.chars().count()) }
+        Self {
+            text: text.to_owned(),
+            cursor: cursor.min(text.chars().count()),
+        }
     }
     fn offset(&self) -> usize {
-        self.text.char_indices().nth(self.cursor).map_or(self.text.len(), |(i, _)| i)
+        self.text
+            .char_indices()
+            .nth(self.cursor)
+            .map_or(self.text.len(), |(i, _)| i)
     }
     fn insert(&mut self, text: &str) {
         let at = self.offset();
@@ -71,9 +80,13 @@ where
     }
     let weak_widget = widget.downgrade();
     let weak_parent = widget.parent().map(|parent| parent.downgrade());
-    let weak_window = widget.root().and_downcast::<gtk::Window>().map(|w| w.downgrade());
+    let weak_window = widget
+        .root()
+        .and_downcast::<gtk::Window>()
+        .map(|w| w.downgrade());
     let draft = Rc::new(RefCell::new(Draft::new(
-        editable.text().as_str(), editable.position().max(0) as usize,
+        editable.text().as_str(),
+        editable.position().max(0) as usize,
     )));
 
     let dialog = adw::Dialog::new();
@@ -86,7 +99,9 @@ where
     body.set_margin_bottom(12);
     body.set_margin_start(12);
     body.set_margin_end(12);
-    let instruction = gtk::Label::new(Some(&gettext("Arrows select keys, OK activates, Back cancels.")));
+    let instruction = gtk::Label::new(Some(&gettext(
+        "Arrows select keys, OK activates, Back cancels.",
+    )));
     body.append(&instruction);
     let preview = gtk::Label::new(Some(&draft.borrow().preview()));
     preview.set_wrap(true);
@@ -142,7 +157,10 @@ where
                         match label.as_str() {
                             "Space" => state.insert(" "),
                             "Delete" => state.delete(),
-                            "Clear" => { state.text.clear(); state.cursor = 0; },
+                            "Clear" => {
+                                state.text.clear();
+                                state.cursor = 0;
+                            }
                             "Left" => state.move_caret(true),
                             "Right" => state.move_caret(false),
                             literal => state.insert(literal),
