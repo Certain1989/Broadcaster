@@ -8,10 +8,13 @@ use super::*;
 
 fn spin() {
     let context = glib::MainContext::default();
-    for _ in 0..10 {
+    // GTK maps dialog descendants on a frame tick, not necessarily on the
+    // same idle turn in which present() was called.
+    for _ in 0..8 {
         while context.pending() {
             context.iteration(false);
         }
+        std::thread::sleep(std::time::Duration::from_millis(15));
     }
 }
 
@@ -59,7 +62,9 @@ fn find_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
 
 fn click(dialog: &adw::Dialog, name: &str) {
     let button = find_button(dialog.upcast_ref(), name).expect("mapped keyboard key");
-    assert!(button.is_mapped());
+    button.grab_focus();
+    spin();
+    assert!(button.is_mapped(), "keyboard key {name} did not map");
     button.emit_by_name::<()>("clicked", &[]);
     spin();
 }
