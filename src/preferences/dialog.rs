@@ -153,7 +153,9 @@ mod imp {
                 .bind_use_external_player(&*self.obj(), "use-external-player")
                 .build();
 
-            self.settings.bind_osk_enabled(&*self.osk_enabled_row, "active").build();
+            self.settings
+                .bind_osk_enabled(&*self.osk_enabled_row, "active")
+                .build();
 
             self.mpv_missing.set(!mpv::is_installed());
 
