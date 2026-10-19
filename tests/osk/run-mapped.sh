@@ -18,7 +18,9 @@ for case in \
   osk_mapped_gtk_input_transaction_and_cancel \
   osk_mapped_gtk_lifecycle_guards \
   osk_mapped_gtk_preferences_expander_and_popover \
-  osk_mapped_gtk_entry_row_immediate_save_once
+  osk_mapped_gtk_entry_row_immediate_save_once \
+  osk_mapped_gtk_settings_toggle_and_search \
+  osk_mapped_gtk_removed_entry_row_no_ghost_save
 do
   if ! xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
