@@ -75,6 +75,16 @@ template $TvPreferencesDialog: Adw.PreferencesDialog {
     }
 
     Adw.PreferencesGroup {
+      title: _("Input");
+      description: _("Optional typing with a remote control.");
+
+      Adw.SwitchRow osk_enabled_row {
+        title: _("On-screen keyboard");
+        subtitle: _("Show keyboard buttons next to supported text fields.");
+      }
+    }
+
+    Adw.PreferencesGroup {
       title: _("Live Channels");
       name: "live-channels";
 
