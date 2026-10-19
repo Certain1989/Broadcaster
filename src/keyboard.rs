@@ -136,7 +136,9 @@ where
             let weak_parent = weak_parent.clone();
             key.connect_clicked(move |_| {
                 match label.as_str() {
-                    "Cancel" => dialog.close(),
+                    "Cancel" => {
+                        dialog.close();
+                    }
                     "Done" => {
                         if let Some(widget) = weak_widget.upgrade() {
                             // Refuse a stale, reparented or unmapped entry.
