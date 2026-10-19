@@ -285,7 +285,7 @@ fn osk_mapped_gtk_entry_row_immediate_save_once() {
 
     let settings = crate::settings::TvSettings::get();
     settings
-        .set_strv("mpv-arguments", &["--before"])
+        .set_strv("mpv-arguments", ["--before"])
         .expect("synthetic mpv key");
     let saves = Rc::new(Cell::new(0u32));
     row.connect_changed({
@@ -294,7 +294,7 @@ fn osk_mapped_gtk_entry_row_immediate_save_once() {
         move |row| {
             saves.set(saves.get() + 1);
             settings
-                .set_strv("mpv-arguments", &[row.text().to_string()])
+                .set_strv("mpv-arguments", [row.text().to_string()])
                 .expect("synthetic save");
         }
     });
