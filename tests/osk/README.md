@@ -20,9 +20,9 @@ claim that a compositor touchscreen OSK works with a TV remote.
    Record actual focus and event order for Up/Down/Left/Right/OK/Back/Escape/
    Home, distinguishing window capture from dialog capture; the prototype
    emits navigation-event classes without text content.
-3. Navigate the conventional letter rows (initial **QWERTZ**) and compose
-   `äöß`. Activate **Layout: QWERTZ** to select **QWERTY** and confirm that
-   Y and Z exchange their familiar positions; switch back and confirm the
+3. Navigate the conventional letter rows (initial **QWERTY**) and compose
+   `äöß`. Activate **Switch to QWERTZ** to select **QWERTZ** and confirm that
+   Y and Z exchange their familiar positions; switch back using **Switch to QWERTY** and confirm the
    typed draft is unaffected. On every row, Right from the last key must wrap
    to that row's first key, and Left from its first to its last. Check the
    shorter action row and Up/Down from longer letter rows as well.

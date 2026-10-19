@@ -13,12 +13,12 @@ use std::{
 
 // Rows have native-looking spacing and independent lengths; unlike a flat
 // column-indexed grid, there are no phantom keys in the final action row.
-// QWERTY swaps Y and Z without removing German characters or URL punctuation.
+// QWERTY is the initial layout; QWERTZ remains a one-button switch away.
 const ROWS: &[&[&str]] = &[
     &["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
-    &["q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü"],
+    &["q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "ü"],
     &["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
-    &["y", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
+    &["z", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
     &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_"],
     &[
         "Space",
@@ -26,7 +26,7 @@ const ROWS: &[&[&str]] = &[
         "Left",
         "Right",
         "Clear",
-        "Layout: QWERTZ",
+        "Switch to QWERTZ",
         "Done",
         "Cancel",
     ],
@@ -163,7 +163,7 @@ where
     body.append(&rows);
 
     let selected = Rc::new(Cell::new((0usize, 0usize)));
-    let qwertz = Rc::new(Cell::new(true));
+    let qwertz = Rc::new(Cell::new(false));
     // Only weak references are kept in signal closures; the dialog widget
     // tree remains the sole owner of the buttons.
     let keys: Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>> = Rc::new(RefCell::new(Vec::new()));
@@ -217,7 +217,7 @@ where
                         }
                         dialog.close();
                     }
-                    name if name.starts_with("Layout: ") => {
+                    name if name.starts_with("Switch to ") => {
                         let use_qwertz = !qwertz.get();
                         qwertz.set(use_qwertz);
                         let keys = keys_for_layout.borrow();
@@ -228,9 +228,9 @@ where
                             bottom.set_label(if use_qwertz { "y" } else { "z" });
                         }
                         key.set_label(if use_qwertz {
-                            "Layout: QWERTZ"
+                            "Switch to QWERTY"
                         } else {
-                            "Layout: QWERTY"
+                            "Switch to QWERTZ"
                         });
                     }
                     _ => {
@@ -340,6 +340,15 @@ mod tests {
         draft.insert("ä");
         assert_eq!(original, "https://example.invalid/?a=1");
         assert_eq!(draft.split_at_caret(), ("ä", original.as_str()));
+    }
+
+    #[test]
+    fn initial_layout_is_qwerty_with_visible_qwertz_switch() {
+        use super::ROWS;
+
+        assert_eq!(ROWS[1][5], "y");
+        assert_eq!(ROWS[3][0], "z");
+        assert_eq!(ROWS[5][5], "Switch to QWERTZ");
     }
 
     #[test]
