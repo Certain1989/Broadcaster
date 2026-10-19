@@ -33,7 +33,7 @@ mod imp {
         #[template_child]
         search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
-        keyboard_prototype_button: TemplateChild<gtk::Button>,
+        pub(super) keyboard_prototype_button: TemplateChild<gtk::Button>,
         #[template_child]
         results_stack: TemplateChild<gtk::Stack>,
         #[template_child]
@@ -280,7 +280,11 @@ impl TvLiveView {
     }
 
     pub fn keyboard_prototype_has_focus(&self, widget: &gtk::Widget) -> bool {
-        widget == self.imp().keyboard_prototype_button.upcast_ref::<gtk::Widget>()
+        widget
+            == self
+                .imp()
+                .keyboard_prototype_button
+                .upcast_ref::<gtk::Widget>()
     }
 }
 

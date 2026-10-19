@@ -316,7 +316,10 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         let weak_keyboard = keyboard.downgrade();
         nav.connect_key_pressed(move |_, key, _, mods| {
             if mods.is_empty() && key == gtk::gdk::Key::Down {
-                if weak_keyboard.upgrade().is_some_and(|button| button.grab_focus()) {
+                if weak_keyboard
+                    .upgrade()
+                    .is_some_and(|button| button.grab_focus())
+                {
                     return glib::Propagation::Stop;
                 }
             }
