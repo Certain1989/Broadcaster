@@ -177,7 +177,10 @@ mod imp {
                             && (key == gtk::gdk::Key::Down || key == gtk::gdk::Key::KP_Down)
                         {
                             if let Some(first) = slf.arguments_list.row_at_index(0) {
-                                if first.grab_focus() {
+                                if first
+                                    .downcast::<adw::EntryRow>()
+                                    .is_ok_and(|row| row.grab_focus_without_selecting())
+                                {
                                     return glib::Propagation::Stop;
                                 }
                             }
@@ -200,7 +203,8 @@ mod imp {
                 Some(VerticalDestination::Row(index)) => self
                     .arguments_list
                     .row_at_index(index)
-                    .is_some_and(|target| target.grab_focus()),
+                    .and_then(|target| target.downcast::<adw::EntryRow>().ok())
+                    .is_some_and(|target| target.grab_focus_without_selecting()),
                 Some(VerticalDestination::RestoreDefaults) => {
                     self.restore_defaults_button.grab_focus()
                 }
@@ -214,7 +218,8 @@ mod imp {
                 .arguments_list
                 .row_at_index(index)
                 .or_else(|| self.arguments_list.row_at_index(index.saturating_sub(1)))
-                .is_some_and(|row| row.grab_focus());
+                .and_then(|row| row.downcast::<adw::EntryRow>().ok())
+                .is_some_and(|row| row.grab_focus_without_selecting());
             if !focused {
                 self.add_argument_button.grab_focus();
             }
