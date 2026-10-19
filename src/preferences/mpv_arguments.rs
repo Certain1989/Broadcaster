@@ -9,6 +9,49 @@ use gettextrs::gettext;
 
 use crate::settings::TvSettings;
 
+// D-pad movement is independent of list selection (which is disabled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerticalDestination {
+    Row(i32),
+    RestoreDefaults,
+    AddArgument,
+}
+
+fn vertical_destination(
+    row_index: i32,
+    has_next_row: bool,
+    key: gtk::gdk::Key,
+) -> Option<VerticalDestination> {
+    if row_index < 0 {
+        return None;
+    }
+    if key == gtk::gdk::Key::Up || key == gtk::gdk::Key::KP_Up {
+        return Some(if row_index == 0 {
+            VerticalDestination::RestoreDefaults
+        } else {
+            VerticalDestination::Row(row_index - 1)
+        });
+    }
+    if key == gtk::gdk::Key::Down || key == gtk::gdk::Key::KP_Down {
+        return Some(if has_next_row {
+            VerticalDestination::Row(row_index + 1)
+        } else {
+            VerticalDestination::AddArgument
+        });
+    }
+    None
+}
+
+fn unmodified_arrow(modifiers: gtk::gdk::ModifierType) -> bool {
+    !modifiers.intersects(
+        gtk::gdk::ModifierType::SHIFT_MASK
+            | gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    )
+}
+
 mod imp {
     use super::*;
 
@@ -20,6 +63,10 @@ mod imp {
         arguments_group: TemplateChild<adw::PreferencesGroup>,
         #[template_child]
         arguments_list: TemplateChild<gtk::ListBox>,
+        #[template_child]
+        restore_defaults_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        add_argument_button: TemplateChild<gtk::Button>,
 
         /// The settings key holding the edited arguments.
         #[property(get, set, construct_only)]
@@ -73,6 +120,7 @@ mod imp {
                         tracing::error!("Failed to restore mpv arguments");
                     }
                     slf.load();
+                    slf.focus_nearest_row_or_add(0);
                 }
             ));
             dialog
@@ -111,6 +159,67 @@ mod imp {
             }
         }
 
+
+        // A header control is always a visible escape from the first/last row.
+        // Down from either header button returns to the first editable row.
+        fn install_header_navigation(&self) {
+            for button in [
+                self.restore_defaults_button.get(),
+                self.add_argument_button.get(),
+            ] {
+                let controller = gtk::EventControllerKey::new();
+                controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+                controller.connect_key_pressed(glib::clone!(
+                    #[weak(rename_to = slf)]
+                    self,
+                    move |_, key, _, modifiers| {
+                        if unmodified_arrow(modifiers)
+                            && (key == gtk::gdk::Key::Down || key == gtk::gdk::Key::KP_Down)
+                        {
+                            if let Some(first) = slf.arguments_list.row_at_index(0) {
+                                if first.grab_focus() {
+                                    return glib::Propagation::Stop;
+                                }
+                            }
+                        }
+                        glib::Propagation::Proceed
+                    }
+                ));
+                button.add_controller(controller);
+            }
+        }
+
+        fn focus_vertical(&self, row: &adw::EntryRow, key: gtk::gdk::Key) -> bool {
+            let index = row.index();
+            let destination = vertical_destination(
+                index,
+                self.arguments_list.row_at_index(index + 1).is_some(),
+                key,
+            );
+            match destination {
+                Some(VerticalDestination::Row(index)) => self
+                    .arguments_list
+                    .row_at_index(index)
+                    .is_some_and(|target| target.grab_focus()),
+                Some(VerticalDestination::RestoreDefaults) => {
+                    self.restore_defaults_button.grab_focus()
+                }
+                Some(VerticalDestination::AddArgument) => self.add_argument_button.grab_focus(),
+                None => false,
+            }
+        }
+
+        fn focus_nearest_row_or_add(&self, index: i32) {
+            let focused = self
+                .arguments_list
+                .row_at_index(index)
+                .or_else(|| self.arguments_list.row_at_index(index.saturating_sub(1)))
+                .is_some_and(|row| row.grab_focus());
+            if !focused {
+                self.add_argument_button.grab_focus();
+            }
+        }
+
         fn append_row(&self, argument: &str) -> adw::EntryRow {
             let row = adw::EntryRow::builder()
                 .text(argument)
@@ -130,12 +239,34 @@ mod imp {
                 row,
                 move |_| {
                     let previous = slf.arguments();
+                    let index = row.index();
                     slf.arguments_list.remove(&row);
                     slf.save();
+                    slf.focus_nearest_row_or_add(index);
                     slf.offer_undo(&gettext("Argument removed"), previous);
                 }
             ));
             row.add_suffix(&remove_button);
+
+            // Capture on the row so Up/Down also work from its embedded
+            // GtkEditable and from suffix buttons, without changing their
+            // Left/Right, typing or activation handling.
+            let controller = gtk::EventControllerKey::new();
+            controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            controller.connect_key_pressed(glib::clone!(
+                #[weak(rename_to = slf)]
+                self,
+                #[weak]
+                row,
+                move |_, key, _, modifiers| {
+                    if unmodified_arrow(modifiers) && slf.focus_vertical(&row, key) {
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    }
+                }
+            ));
+            row.add_controller(controller);
 
             row.connect_changed(glib::clone!(
                 #[weak(rename_to = slf)]
@@ -169,6 +300,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             self.load();
+            self.install_header_navigation();
         }
     }
     impl WidgetImpl for TvMpvArgumentsPage {}
@@ -187,5 +319,42 @@ impl TvMpvArgumentsPage {
     /// Creates a page editing the string list in the settings key `key`.
     pub fn new(key: &str) -> Self {
         glib::Object::builder().property("key", key).build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dpad_rows_and_header_boundaries() {
+        use VerticalDestination::{AddArgument, RestoreDefaults, Row};
+
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Up), Some(RestoreDefaults));
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Down), Some(Row(1)));
+        assert_eq!(vertical_destination(1, true, gtk::gdk::Key::Up), Some(Row(0)));
+        assert_eq!(vertical_destination(1, true, gtk::gdk::Key::Down), Some(Row(2)));
+        assert_eq!(vertical_destination(2, false, gtk::gdk::Key::Down), Some(AddArgument));
+        assert_eq!(vertical_destination(0, false, gtk::gdk::Key::Up), Some(RestoreDefaults));
+        assert_eq!(vertical_destination(0, false, gtk::gdk::Key::Down), Some(AddArgument));
+        assert_eq!(vertical_destination(-1, false, gtk::gdk::Key::Down), None);
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Left), None);
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::Right), None);
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::KP_Up), Some(RestoreDefaults));
+        assert_eq!(vertical_destination(0, true, gtk::gdk::Key::KP_Down), Some(Row(1)));
+    }
+
+    #[test]
+    fn modified_arrows_are_reserved_for_native_editing() {
+        assert!(unmodified_arrow(gtk::gdk::ModifierType::empty()));
+        for modifier in [
+            gtk::gdk::ModifierType::SHIFT_MASK,
+            gtk::gdk::ModifierType::CONTROL_MASK,
+            gtk::gdk::ModifierType::ALT_MASK,
+            gtk::gdk::ModifierType::SUPER_MASK,
+            gtk::gdk::ModifierType::META_MASK,
+        ] {
+            assert!(!unmodified_arrow(modifier));
+        }
     }
 }
