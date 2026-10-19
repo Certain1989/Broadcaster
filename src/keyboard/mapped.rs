@@ -341,7 +341,10 @@ fn osk_mapped_gtk_settings_toggle_and_search() {
         .set_boolean("osk-enabled", false)
         .expect("test must switch OSK off");
     spin();
-    assert!(!button.is_visible(), "launcher hides immediately without restart");
+    assert!(
+        !button.is_visible(),
+        "launcher hides immediately without restart"
+    );
     assert!(!crate::settings::TvSettings::new(crate::config::BASE_APP_ID).osk_enabled());
 
     settings
