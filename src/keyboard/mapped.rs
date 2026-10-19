@@ -5,7 +5,6 @@
 //! potentially headless cargo test; Meson runs these on a real X11 display.
 
 use super::*;
-use adw::prelude::*;
 
 fn spin() {
     let context = glib::MainContext::default();
