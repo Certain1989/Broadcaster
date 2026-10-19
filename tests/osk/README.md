@@ -1,66 +1,31 @@
-<!--
-SPDX-FileCopyrightText: 2026 Broadcaster contributors
-SPDX-License-Identifier: GPL-3.0-or-later
--->
+<!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Experimental GTK keyboard — manual feasibility protocol
+# On-screen keyboard: focused runtime verification
 
-This branch is deliberately **non-shipping**: it wires a GTK-owned D-pad
-prototype to **Live search** and the nested **Add Playlist → HTTP(S) URL**
-field only. It is not application-wide integration, persistent Settings, or a
-claim that a compositor touchscreen OSK works with a TV remote.
+The keyboard edits a private GTK text draft and updates the source editable only on **Done**. Availability is on by default and can be turned off in Preferences → Input. On means *on demand*; focusing a text field does not open it automatically.
 
-## Reproduce with mapped GTK widgets
+The current representative launchers are **Live search** and **Add Playlist → HTTP(S) URL**. A later integration step must provide independent launchers for all other editable field instances; none of those fields should be reported as covered yet.
 
-1. Build this exact branch using the repository's native Meson/Cargo tooling.
-   Start Broadcaster with `RUST_LOG=trace` **only with synthetic search and
-   URL data**. Never publish actual playlist URLs or tokens in screenshots,
-   logs, traces or CI artifacts.
-2. Open **Live**, move focus to **Keyboard** and press remote OK.
-   Record actual focus and event order for Up/Down/Left/Right/OK/Back/Escape/
-   Home, distinguishing window capture from dialog capture; the prototype
-   emits navigation-event classes without text content.
-3. Navigate the conventional letter rows (initial **QWERTY**) and compose
-   `äöß`. Activate **Switch to QWERTZ** to select **QWERTZ** and confirm that
-   Y and Z exchange their familiar positions; switch back using **Switch to QWERTY** and confirm the
-   typed draft is unaffected. Confirm the wide **Space** key is centered
-   in the main action row, with Delete, caret controls, Clear, Done and Cancel
-   beside it. The **Switch to QWERTZ/QWERTY** button must be alone on a
-   centered row *beneath* those actions—not in the spacebar position.
-   Confirm that Down from any action reaches that toggle and Up from the
-   toggle returns to Space. On every row, Right from the last key must wrap
-   to that row's first key, and Left from its first to its last (on the
-   single-key toggle row, Left/Right leave focus on the same toggle). Check
-   Up/Down from different-length letter and punctuation rows as well.
-   Verify the caret separator sits directly against the text, with no
-   character-sized blank before the newly inserted letter. Test caret
-   Left/Right, Delete, Clear and Done. Confirm the original search changes
-   only on Done and focus returns to its mapped entry. Repeat Cancel/Back;
-   verify the original value and caret remain unchanged.
-4. Open **My Channels → Add playlist → remote HTTP(S) URL**. Open the
-   experimental keyboard inside that existing Adw.Dialog. Input
-   `https://example.invalid/channel?x=1`. Done must edit the original URL
-   *without* executing parent Save or initiating network traffic. Repeat
-   Cancel/Back/Escape/Home: parent modal remains intact and focus returns.
-5. Destroy or unmap the original editable *while keyboard is open* using a
-   diagnostic GTK harness/inspector; verify no stale target update. Separately
-   trace remote events in a Preferences subpage and a facet picker popover:
-   these are focus/grab probes, **not wired keyboard integration**.
-6. Run under native Wayland, X11 and Flatpak, as available, with an ordinary
-   physical D-pad remote where possible. Record actual compositor, GTK/adw
-   versions, GDK key symbols, source SHA and observed route. Xvfb only proves
-   the simulated GTK path, not physical remote or real Wayland.
-7. Retest ordinary physical text entry, paste, Back/Home, menu and modal
-   Save/Replace behavior to catch unintended regressions.
+## Automated mapped GTK fixture
 
-Use `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`,
-`cargo test --locked`, native Meson tests and existing CI jobs where available.
-Distinguish PASS, FAIL and NOT RUN in the private handoff.
+The native Meson suite registers an Xvfb-backed, isolated GSettings fixture when `xvfb-run` is installed. To execute the same runner manually from the source root:
 
-## Deliberate limits
+```sh
+sh tests/osk/run-mapped.sh
+```
 
-This experiment must not declare success based solely on static inspection or green cargo
-tests. It does not supply application-wide text fields, persistent opt-out,
-translated keys/labels, production input validation, selection editing, or
-production Preferences/popover integration. A failed GTK modal/grab proof
-blocks production keyboard integration pending a new design decision, rather than reducing OSK scope.
+The script compiles the app's test target with Cargo, starts a mapped GTK/X11 session, and runs `osk_mapped_gtk_` tests with a disposable memory GSettings backend. These tests exercise editor transaction boundaries, weak cleanup and mapped origin/parent/focus conditions. A passing build or synthetic display does **not** establish behavior for real Wayland remotes.
+
+## Development Flatpak and Wayland checklist
+
+Use the development Flatpak bundle from the exact pull-request commit being reviewed. Record its source commit, installed Flatpak commit, GDK backend and actual remote key mapping, but never include personal playlists, stream URLs, custom mpv arguments or authentication data in reports.
+
+1. Open Live. With the D-pad only, navigate Search → Keyboard → results and back. Open Keyboard with OK. Verify that focus highlighting is visible and every key can be reached by Up/Down/Left/Right, including uneven action-key widths and row wrap. Type digits, symbols, a space, German `ä ö ü ß`, use Shift for capitals, and switch QWERTY/QWERTZ. Verify cursor moves, selection/backspace and long text visibility.
+2. Check Done updates the search field once and returns focus. Repeat with Cancel, Back, Escape and Home: no change to original text/caret/selection or unintended page navigation. Test mouse and physical keyboard/paste/IME editing in the draft, as available.
+3. Open My Channels → Add Playlist → Enter Playlist URL. Type only synthetic example URLs (for example `https://example.invalid/list.m3u?x=1`). Done edits the URL entry without saving/importing. Cancel and Back discard edits without closing the source editor. Check the original parent Save validation and open/close behavior independently. Keep actual playlists out of evidence.
+4. Open Preferences → Input; switch On-screen keyboard OFF. Confirm the two launchers disappear immediately, ordinary editable typing still works, and remote navigation can return to Settings to re-enable it. Switch ON and confirm launchers return without restart; restart and check the saved state. On a fresh, isolated settings profile, confirm it defaults to ON.
+5. In separate diagnostic GTK fixtures, exercise removed, destroyed, hidden/unmapped, insensitive, reparented, externally edited and parent-closed text origins; no ghost write or stale focus is acceptable. Confirm the keyboard/draft can be finalized after close. Exercise a real Preferences subpage, advanced expander and dynamically created popover; check modal Back/Escape/Home precedence and return focus.
+6. Recheck existing workflows including mpv Arguments dynamic row Add/Remove/Restore/Undo and its immediate GSettings behavior. An OSK launcher is not yet attached to these additional fields; do not mistake native editing success for on-screen-keyboard integration.
+
+Each check must be recorded separately as **PASS**, **FAIL** or **NOT RUN**, with source/build identification. Compilation and CI success do not substitute for a physical D-pad/Wayland observation.
