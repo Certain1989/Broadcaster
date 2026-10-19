@@ -454,3 +454,6 @@ mod tests {
         assert!(ROWS[4].contains(&"/"));
     }
 }
+
+#[cfg(test)]
+mod mapped;
