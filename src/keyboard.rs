@@ -21,8 +21,14 @@ const ROWS: &[&[&str]] = &[
     &["y", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
     &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_"],
     &[
-        "Space", "Delete", "Left", "Right", "Clear",
-        "Layout: QWERTZ", "Done", "Cancel",
+        "Space",
+        "Delete",
+        "Left",
+        "Right",
+        "Clear",
+        "Layout: QWERTZ",
+        "Done",
+        "Cancel",
     ],
 ];
 
@@ -160,8 +166,7 @@ where
     let qwertz = Rc::new(Cell::new(true));
     // Only weak references are kept in signal closures; the dialog widget
     // tree remains the sole owner of the buttons.
-    let keys: Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let keys: Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>> = Rc::new(RefCell::new(Vec::new()));
     for (row_index, labels) in ROWS.iter().enumerate() {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.set_halign(gtk::Align::Center);
@@ -216,10 +221,9 @@ where
                         let use_qwertz = !qwertz.get();
                         qwertz.set(use_qwertz);
                         let keys = keys_for_layout.borrow();
-                        if let (Some(top), Some(bottom)) = (
-                            keys[1][5].upgrade(),
-                            keys[3][0].upgrade(),
-                        ) {
+                        if let (Some(top), Some(bottom)) =
+                            (keys[1][5].upgrade(), keys[3][0].upgrade())
+                        {
                             top.set_label(if use_qwertz { "z" } else { "y" });
                             bottom.set_label(if use_qwertz { "y" } else { "z" });
                         }
