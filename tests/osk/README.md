@@ -1,4 +1,4 @@
-# K0 experimental GTK keyboard — manual feasibility protocol
+# Experimental GTK keyboard — manual feasibility protocol
 
 This branch is deliberately **non-shipping**: it wires a GTK-owned D-pad
 prototype to **Live search** and the nested **Add Playlist → HTTP(S) URL**
@@ -41,8 +41,8 @@ Distinguish PASS, FAIL and NOT RUN in the private handoff.
 
 ## Deliberate limits
 
-K0 must not declare success based solely on static inspection or green cargo
+This experiment must not declare success based solely on static inspection or green cargo
 tests. It does not supply application-wide text fields, persistent opt-out,
 translated keys/labels, production input validation, selection editing, or
 production Preferences/popover integration. A failed GTK modal/grab proof
-blocks K1 pending a new architectural decision, rather than reducing OSK scope.
+blocks production keyboard integration pending a new design decision, rather than reducing OSK scope.
