@@ -57,3 +57,12 @@ test(
   env: cargo_env,
   timeout: 1800,
 )
+# Exercise real mapped GTK widgets under Xvfb, never an unconditional
+# headless cargo test. GitHub's native Meson CI already runs this suite.
+test(
+  'K1 mapped GTK keyboard',
+  find_program('sh'),
+  args: [meson.project_source_root() / 'tests/osk/run-mapped.sh'],
+  env: cargo_env,
+  timeout: 900,
+)
