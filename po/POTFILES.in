@@ -20,6 +20,7 @@ src/live/mod.rs
 src/live/view.blp
 src/live/view.rs
 src/main.rs
+src/keyboard.rs
 src/mediathek/card.blp
 src/mediathek/card.rs
 src/mediathek/mod.rs
