@@ -309,6 +309,32 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         let keyboard = button(&gettext("Keyboard (prototype)"), &body);
         let input_for_keyboard = field.clone();
         keyboard.connect_clicked(move |_| crate::keyboard::show(&input_for_keyboard));
+        // Keep Left/Right in the URL entry for its native caret. The
+        // vertical boundary exposes the keyboard to an ordinary D-pad.
+        let nav = gtk::EventControllerKey::new();
+        nav.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak_keyboard = keyboard.downgrade();
+        nav.connect_key_pressed(move |_, key, _, mods| {
+            if mods.is_empty() && key == gtk::gdk::Key::Down {
+                if weak_keyboard.upgrade().is_some_and(|button| button.grab_focus()) {
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        field.add_controller(nav);
+        let nav_back = gtk::EventControllerKey::new();
+        nav_back.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak_field = field.downgrade();
+        nav_back.connect_key_pressed(move |_, key, _, mods| {
+            if mods.is_empty() && key == gtk::gdk::Key::Up {
+                if weak_field.upgrade().is_some_and(|entry| entry.grab_focus()) {
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        keyboard.add_controller(nav_back);
         Some(field)
     } else {
         None
