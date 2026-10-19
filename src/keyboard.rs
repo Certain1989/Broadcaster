@@ -276,6 +276,48 @@ fn from_preview(preview: &gtk::Entry) -> Draft {
             .map(|(a, b)| (a.max(0) as usize, b.max(0) as usize)),
     )
 }
+/// GtkEditable::set_text may deliver 'changed' once for deletion and again
+/// for insertion when replacing nonempty contents. That leaks an intermediate
+/// empty field to observers (e.g. immediate mpv GSettings persistence).
+/// Deliver exactly one normal GtkEditable::changed notification to connected
+/// application handlers, after the native setter finishes. No parent action,
+/// virtual key event or separate settings write occurs here.
+///
+/// We temporarily block the existing *changed* listeners on this one
+/// GtkEditable. GObject still performs GTK's native text replacement and
+/// notifies its other properties; the single final 'changed' delivery observes
+/// only the committed value. The blocks are balanced before any callbacks run.
+fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
+    if entry.text().as_str() == value {
+        entry.set_position(cursor);
+        return;
+    }
+
+    use glib::translate::{IntoGlib, ToGlibPtr};
+    let object = entry.to_glib_none().0 as *mut glib::gobject_ffi::GObject;
+    // SAFETY: the GtkEditable owns a valid GObject for this synchronous call.
+    // Both matched operations target only this object's 'changed' signal;
+    // the count/flags are from GObject's public signal API. No pointer is kept.
+    unsafe {
+        let signal = glib::gobject_ffi::g_signal_lookup(
+            c"changed".as_ptr(),
+            gtk::Editable::static_type().into_glib(),
+        );
+        assert_ne!(signal, 0, "GtkEditable must expose its changed signal");
+        let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID;
+        let null = std::ptr::null_mut();
+        glib::gobject_ffi::g_signal_handlers_block_matched(
+            object, mask, signal, 0, null, null, null,
+        );
+        entry.set_text(value);
+        entry.set_position(cursor);
+        glib::gobject_ffi::g_signal_handlers_unblock_matched(
+            object, mask, signal, 0, null, null, null,
+        );
+    }
+    entry.emit_by_name::<()>("changed", &[]);
+}
+
 fn target_live(
     widget: &gtk::Widget,
     parent: &Option<glib::WeakRef<gtk::Widget>>,
@@ -454,8 +496,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                             }
                         }
                         if let Ok(entry) = widget.downcast::<gtk::Editable>() {
-                            entry.set_text(&value); // exactly one normal commit
-                            entry.set_position(preview.position());
+                            commit_editable_once(&entry, &value, preview.position());
                         }
                         dialog.close();
                     }
