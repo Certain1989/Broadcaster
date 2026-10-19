@@ -135,7 +135,6 @@ impl TvSettings {
         self.0.boolean("osk-enabled")
     }
 
-    connect_setting!(connect_osk_enabled_changed, "osk-enabled");
     bind_setting!(bind_osk_enabled, "osk-enabled");
     bind_setting!(bind_use_external_player, "use-external-player");
     bind_setting!(bind_search_everywhere, "search-everywhere");
