@@ -229,9 +229,8 @@ mod imp {
             self.search_entry.set_key_capture_widget(Some(&*self.obj()));
 
             let search = self.search_entry.get();
-            self.keyboard_prototype_button.connect_clicked(move |_| {
-                crate::keyboard::show(&search);
-            });
+            crate::keyboard::bind_launcher(&self.keyboard_prototype_button,
+                &search, crate::keyboard::KeyboardOptions::default());
 
             // A second activation of an expanded row plays it. Keep playback
             // in the existing card action, which the explicit button also uses.
