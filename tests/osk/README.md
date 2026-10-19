@@ -16,7 +16,7 @@ claim that a compositor touchscreen OSK works with a TV remote.
    Start Broadcaster with `RUST_LOG=trace` **only with synthetic search and
    URL data**. Never publish actual playlist URLs or tokens in screenshots,
    logs, traces or CI artifacts.
-2. Open **Live**, move focus to **Keyboard (prototype)** and press remote OK.
+2. Open **Live**, move focus to **Keyboard** and press remote OK.
    Record actual focus and event order for Up/Down/Left/Right/OK/Back/Escape/
    Home, distinguishing window capture from dialog capture; the prototype
    emits navigation-event classes without text content.
