@@ -543,6 +543,22 @@ impl TvWindow {
         // navigation. Without this check Back/Home can change the main view
         // while Preferences, Shortcuts or About stays on screen.
         if let Some(dialog) = self.visible_dialog() {
+            // A nested keyboard cancels its own draft; Home cannot navigate
+            // behind the active modal or dismiss the source editor.
+            if dialog.has_css_class("osk-feasibility")
+                && modifiers.is_empty()
+                && matches!(
+                    key,
+                    gtk::gdk::Key::Back
+                        | gtk::gdk::Key::Escape
+                        | gtk::gdk::Key::Home
+                        | gtk::gdk::Key::HomePage
+                )
+            {
+                tracing::trace!("osk prototype: window cancel capture");
+                dialog.close();
+                return glib::Propagation::Stop;
+            }
             match modal_remote_action(key, modifiers) {
                 Some(ModalRemoteAction::Back) => {
                     // Preserve normal Preferences navigation: Back first

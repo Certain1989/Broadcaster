@@ -33,6 +33,8 @@ mod imp {
         #[template_child]
         search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
+        keyboard_prototype_button: TemplateChild<gtk::Button>,
+        #[template_child]
         results_stack: TemplateChild<gtk::Stack>,
         #[template_child]
         channels_list: TemplateChild<gtk::ListBox>,
@@ -225,6 +227,11 @@ mod imp {
                 .expect("the view is constructed once");
             // typing anywhere in the view filters the channels
             self.search_entry.set_key_capture_widget(Some(&*self.obj()));
+
+            let search = self.search_entry.get();
+            self.keyboard_prototype_button.connect_clicked(move |_| {
+                crate::keyboard::show(&search);
+            });
 
             // A second activation of an expanded row plays it. Keep playback
             // in the existing card action, which the explicit button also uses.

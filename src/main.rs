@@ -11,6 +11,7 @@ mod channel_icons;
 mod config {
     include!(concat!(env!("OUT_DIR"), "/config.rs"));
 }
+mod keyboard;
 mod launcher;
 mod live;
 mod mediathek;

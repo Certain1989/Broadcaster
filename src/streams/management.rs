@@ -306,6 +306,9 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         field.set_input_purpose(gtk::InputPurpose::Url);
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
         body.append(&url_error);
+        let keyboard = button(&gettext("Keyboard (prototype)"), &body);
+        let input_for_keyboard = field.clone();
+        keyboard.connect_clicked(move |_| crate::keyboard::show(&input_for_keyboard));
         Some(field)
     } else {
         None
