@@ -1046,3 +1046,68 @@ mod playback_navigation_tests {
         assert!(list.row_at_index(2).is_none(), "empty boundary is safe");
     }
 }
+
+#[cfg(test)]
+mod spatial_navigation_tests {
+    use super::{spatial_neighbor, ToolbarRect};
+    use gtk::gdk::Key;
+
+    fn rect(left: f32, top: f32, width: f32) -> ToolbarRect {
+        ToolbarRect {
+            left,
+            right: left + width,
+            top,
+            bottom: top + 40.0,
+        }
+    }
+
+    #[test]
+    fn horizontal_navigation_never_jumps_into_another_visual_row() {
+        // Search occupies the whole first row; toggle controls are beside it.
+        // Filters on a second row must never be chosen by Right/Left.
+        let layout = [
+            rect(0.0, 0.0, 430.0),
+            rect(440.0, 0.0, 40.0),
+            rect(490.0, 0.0, 40.0),
+            rect(10.0, 60.0, 140.0),
+            rect(160.0, 60.0, 140.0),
+            rect(310.0, 60.0, 110.0),
+        ];
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Right), Some(1));
+        assert_eq!(spatial_neighbor(&layout, 1, Key::Right), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Left), Some(1));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Right), None);
+        assert_eq!(spatial_neighbor(&layout, 3, Key::Right), Some(4));
+        assert_eq!(spatial_neighbor(&layout, 4, Key::Left), Some(3));
+    }
+
+    #[test]
+    fn vertical_navigation_chooses_nearest_actual_row_and_column() {
+        let layout = [
+            rect(0.0, 0.0, 300.0),
+            rect(0.0, 60.0, 90.0),
+            rect(105.0, 60.0, 90.0),
+            rect(210.0, 60.0, 90.0),
+            rect(0.0, 120.0, 90.0),
+            rect(105.0, 120.0, 90.0),
+            rect(210.0, 120.0, 90.0),
+        ];
+        // Search center is closest to column two, not the first-by-code filter.
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Down), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Down), Some(5));
+        assert_eq!(spatial_neighbor(&layout, 5, Key::Up), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Up), Some(0));
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Up), None);
+        assert_eq!(spatial_neighbor(&layout, 6, Key::Down), None);
+    }
+
+    #[test]
+    fn hidden_controls_do_not_create_phantom_geometric_neighbors() {
+        // The router supplies only mapped + visible + sensitive candidates.
+        let without_hidden_region = [rect(0.0, 0.0, 90.0), rect(100.0, 0.0, 90.0)];
+        assert_eq!(
+            spatial_neighbor(&without_hidden_region, 1, Key::Right),
+            None
+        );
+    }
+}
