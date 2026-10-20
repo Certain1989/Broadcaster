@@ -68,28 +68,37 @@ fn spatial_neighbor(rects: &[ToolbarRect], from: usize, key: gtk::gdk::Key) -> O
             continue;
         }
         let (primary, secondary) = match key {
-            gtk::gdk::Key::Left if candidate.cx() < origin.cx() - 1.0
-                && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
+            gtk::gdk::Key::Left
+                if candidate.cx() < origin.cx() - 1.0
+                    && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
             {
-                (origin.cx() - candidate.cx(), (origin.cy() - candidate.cy()).abs())
+                (
+                    origin.cx() - candidate.cx(),
+                    (origin.cy() - candidate.cy()).abs(),
+                )
             }
-            gtk::gdk::Key::Right if candidate.cx() > origin.cx() + 1.0
-                && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
+            gtk::gdk::Key::Right
+                if candidate.cx() > origin.cx() + 1.0
+                    && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
             {
-                (candidate.cx() - origin.cx(), (origin.cy() - candidate.cy()).abs())
+                (
+                    candidate.cx() - origin.cx(),
+                    (origin.cy() - candidate.cy()).abs(),
+                )
             }
-            gtk::gdk::Key::Up if candidate.bottom <= origin.top + 2.0 => {
-                (origin.top - candidate.bottom, (origin.cx() - candidate.cx()).abs())
-            }
-            gtk::gdk::Key::Down if candidate.top >= origin.bottom - 2.0 => {
-                (candidate.top - origin.bottom, (origin.cx() - candidate.cx()).abs())
-            }
+            gtk::gdk::Key::Up if candidate.bottom <= origin.top + 2.0 => (
+                origin.top - candidate.bottom,
+                (origin.cx() - candidate.cx()).abs(),
+            ),
+            gtk::gdk::Key::Down if candidate.top >= origin.bottom - 2.0 => (
+                candidate.top - origin.bottom,
+                (origin.cx() - candidate.cx()).abs(),
+            ),
             _ => continue,
         };
         if best.is_none_or(|(_, distance, offset)| {
             primary.total_cmp(&distance).is_lt()
-                || (primary.total_cmp(&distance).is_eq()
-                    && secondary.total_cmp(&offset).is_lt())
+                || (primary.total_cmp(&distance).is_eq() && secondary.total_cmp(&offset).is_lt())
         }) {
             best = Some((index, primary, secondary));
         }
@@ -510,10 +519,7 @@ impl TvWindow {
             .filter(|w| w.is_mapped() && w.is_sensitive() && w.is_visible())
             .filter_map(|w| ToolbarRect::of(&w, page).map(|rect| (w, rect)))
             .collect();
-        let Some(current) = mapped
-            .iter()
-            .position(|(w, _)| Self::is_within(focused, w))
-        else {
+        let Some(current) = mapped.iter().position(|(w, _)| Self::is_within(focused, w)) else {
             return false; // Never intercept list rows or nested dialogs.
         };
 
@@ -561,10 +567,7 @@ impl TvWindow {
     fn focus_boundary_key(&self, key: gtk::gdk::Key) -> bool {
         if !matches!(
             key,
-            gtk::gdk::Key::Up
-                | gtk::gdk::Key::Down
-                | gtk::gdk::Key::Left
-                | gtk::gdk::Key::Right
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
         ) || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
@@ -582,7 +585,11 @@ impl TvWindow {
 
         if Self::is_within(&focused, page) {
             if self.focus_spatial_toolbar_key(
-                self.imp().stack.visible_child_name().as_deref().unwrap_or_default(),
+                self.imp()
+                    .stack
+                    .visible_child_name()
+                    .as_deref()
+                    .unwrap_or_default(),
                 page,
                 &focused,
                 key,
@@ -1071,7 +1078,10 @@ mod playback_navigation_tests {
         assert_focused(&filters[8]);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&filters[9]);
-        assert!(!filters[6].is_mapped(), "hidden region must not steal focus");
+        assert!(
+            !filters[6].is_mapped(),
+            "hidden region must not steal focus"
+        );
     }
 
     /// Checks GTK widget ancestry and list-boundary detection against real
