@@ -1000,6 +1000,78 @@ mod playback_navigation_tests {
             Some("mediathek")
         );
         assert_eq!(settings.string("visible-view"), "live");
+
+        // The same CI Xvfb window exercises the production router against
+        // the actual K1 keyboard, Mediathek toggles and Streams filter rows.
+        // A list-only test would miss the wrong Up/Down upper-control chain.
+        let spin = || {
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+            }
+        };
+        let assert_focused = |target: &gtk::Widget| {
+            let focused = window.focused_widget().expect("visible focus");
+            assert!(
+                TvWindow::is_within(&focused, target),
+                "remote focus must follow the actual mapped neighboring control"
+            );
+        };
+
+        stack.set_visible_child_name("live");
+        spin();
+        let live = window.imp().live_view.toolbar_focus_targets();
+        assert!(live[0].grab_focus());
+        // A non-boundary Left/Right belongs to the editable caret.
+        let live_search = live[0].clone().downcast::<gtk::SearchEntry>().unwrap();
+        live_search.set_text("ab");
+        live_search.set_position(1);
+        assert!(!window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&live[0]);
+        live_search.set_position(2);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&live[1]); // physical neighbor, not Down
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&live[0]);
+        live_search.set_text("");
+
+        stack.set_visible_child_name("mediathek");
+        spin();
+        let med = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_eq!(med.len(), 6, "search, two toggles, three filters");
+        assert!(med[0].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[1]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&med[1]);
+        assert!(med[3].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[4]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[5]);
+
+        stack.set_visible_child_name("streams");
+        spin();
+        let filters = streams.toolbar_focus_targets();
+        assert!(filters[1].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[3]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&filters[2]);
+        assert!(filters[4].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[5]);
+        assert!(filters[7].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[8]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[9]);
+        assert!(!filters[6].is_mapped(), "hidden region must not steal focus");
     }
 
     /// Checks GTK widget ancestry and list-boundary detection against real
@@ -1050,7 +1122,7 @@ mod playback_navigation_tests {
 #[cfg(test)]
 mod spatial_navigation_tests {
     use super::{spatial_neighbor, ToolbarRect};
-    use gtk::gdk::Key;
+    use adw::gtk::gdk::Key;
 
     fn rect(left: f32, top: f32, width: f32) -> ToolbarRect {
         ToolbarRect {
