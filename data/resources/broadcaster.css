@@ -132,6 +132,9 @@ label.channel-fallback {
  * Libadwaita's normal button minimums otherwise force 12 symbol keys and
  * the last digit past the sheet edge even without a ScrolledWindow. */
 .osk-production button.osk-key {
+  /* Keep the entire key rounded, not just the focused outline.
+   * Border radius changes appearance, not the tested key dimensions. */
+  border-radius: 10px;
   min-width: 0;
   padding-left: 3px;
   padding-right: 3px;
