@@ -29,7 +29,7 @@ mod imp {
     #[template(file = "src/live/view.blp")]
     pub struct TvLiveView {
         #[template_child]
-        stack: TemplateChild<gtk::Stack>,
+        pub(super) stack: TemplateChild<gtk::Stack>,
         #[template_child]
         pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
