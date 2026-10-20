@@ -277,6 +277,16 @@ impl TvLiveView {
         self.imp().focus_search();
     }
 
+    /// Only mapped upper controls belong to spatial arrow navigation.
+    /// Returning the actual field instance preserves K1's ON/OFF launcher.
+    pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
+        let imp = self.imp();
+        vec![
+            imp.search_entry.clone().upcast(),
+            imp.keyboard_prototype_button.clone().upcast(),
+        ]
+    }
+
     pub fn focus_keyboard_prototype(&self) -> bool {
         self.imp().keyboard_prototype_button.grab_focus()
     }
