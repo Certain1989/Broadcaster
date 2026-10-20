@@ -72,6 +72,11 @@ pub fn bind_launcher<T>(button: &gtk::Button, target: &T, options: KeyboardOptio
 where
     T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
 {
+    // Icon-only launchers require an explicit screen-reader name; tooltip
+    // also documents the remote OK action without consuming toolbar width.
+    let description = gettext("Open on-screen keyboard");
+    button.set_tooltip_text(Some(&description));
+    button.update_property(&[gtk::accessible::Property::Label(&description)]);
     crate::settings::TvSettings::get()
         .bind_osk_enabled(button, "visible")
         .flags(adw::gio::SettingsBindFlags::GET)
