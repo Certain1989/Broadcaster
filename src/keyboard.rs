@@ -574,7 +574,14 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                             )),
                         }
                         preview.set_text(&draft.text);
-                        preview.set_position(draft.cursor as i32);
+                        if matches!((r, c), (5, 1) | (5, 3)) {
+                            // GTK may retain the selection when set_text is
+                            // unchanged. A zero-length selected region
+                            // explicitly collapses it at the requested edge.
+                            preview.select_region(draft.cursor as i32, draft.cursor as i32);
+                        } else {
+                            preview.set_position(draft.cursor as i32);
+                        }
                         error.set_text("");
                     }
                 }
