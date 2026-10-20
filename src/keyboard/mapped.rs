@@ -251,11 +251,19 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
     form.append(&launcher);
     spin();
 
-    assert!(form.width() > 300, "fixture must exercise wide dialog layout");
+    assert!(
+        form.width() > 300,
+        "fixture must exercise wide dialog layout"
+    );
     assert!(launcher.width() >= 48 && launcher.height() >= 44);
-    assert!(launcher.width() < 100, "icon button must not stretch to field width");
+    assert!(
+        launcher.width() < 100,
+        "icon button must not stretch to field width"
+    );
     let field_rect = url.compute_bounds(&form).expect("mapped URL bounds");
-    let key_rect = launcher.compute_bounds(&form).expect("mapped launcher bounds");
+    let key_rect = launcher
+        .compute_bounds(&form)
+        .expect("mapped launcher bounds");
     assert!(
         ((field_rect.x() + field_rect.width()) - (key_rect.x() + key_rect.width())).abs() <= 4.0,
         "launcher must align at the right edge"
@@ -278,12 +286,20 @@ where
     let observed = Rc::new(RefCell::new(Vec::<String>::new()));
     editable.connect_changed({
         let observed = observed.clone();
-        move |entry| observed.borrow_mut().push(format!("first:{}", entry.text()))
+        move |entry| {
+            observed
+                .borrow_mut()
+                .push(format!("first:{}", entry.text()))
+        }
     });
     let to_disconnect = Rc::new(RefCell::new(None::<glib::SignalHandlerId>));
     let id = editable.connect_changed({
         let observed = observed.clone();
-        move |entry| observed.borrow_mut().push(format!("second:{}", entry.text()))
+        move |entry| {
+            observed
+                .borrow_mut()
+                .push(format!("second:{}", entry.text()))
+        }
     });
     *to_disconnect.borrow_mut() = Some(id);
     let connected = Rc::new(Cell::new(false));
@@ -300,7 +316,11 @@ where
         });
     }
     let search_changes = Rc::new(Cell::new(0u32));
-    if let Ok(search) = target.clone().upcast::<gtk::Widget>().downcast::<gtk::SearchEntry>() {
+    if let Ok(search) = target
+        .clone()
+        .upcast::<gtk::Widget>()
+        .downcast::<gtk::SearchEntry>()
+    {
         let events = search_changes.clone();
         search.connect_search_changed(move |_| events.set(events.get() + 1));
     }
@@ -324,27 +344,49 @@ where
     });
     show_with_options(target, KeyboardOptions::default());
     let dlg = keyboard(win, target);
-    find_entry(dlg.upcast_ref()).expect("draft").set_text("after");
+    find_entry(dlg.upcast_ref())
+        .expect("draft")
+        .set_text("after");
     assert!(observed.borrow().is_empty(), "draft cannot notify source");
     click(&dlg, "Cancel");
     assert!(observed.borrow().is_empty(), "Cancel cannot notify source");
 
     show_with_options(target, KeyboardOptions::default());
     let dlg = keyboard(win, target);
-    find_entry(dlg.upcast_ref()).expect("draft").set_text("after");
+    find_entry(dlg.upcast_ref())
+        .expect("draft")
+        .set_text("after");
     click(&dlg, "Done");
-    assert!(connected.get(), "native text notification must be observable");
+    assert!(
+        connected.get(),
+        "native text notification must be observable"
+    );
     assert!(notified.get() > 0);
     assert_eq!(editable.text(), "after");
     let trace = observed.borrow();
-    assert_eq!(trace.iter().filter(|s| s.as_str() == "first:after").count(), 1);
-    assert_eq!(trace.iter().filter(|s| s.as_str() == "second:after").count(), 0);
-    assert_eq!(trace.iter().filter(|s| s.as_str() == "new:after").count(), 1);
+    assert_eq!(
+        trace.iter().filter(|s| s.as_str() == "first:after").count(),
+        1
+    );
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|s| s.as_str() == "second:after")
+            .count(),
+        0
+    );
+    assert_eq!(
+        trace.iter().filter(|s| s.as_str() == "new:after").count(),
+        1
+    );
     drop(trace);
     observed.borrow_mut().clear();
     editable.set_text("later");
     let trace = observed.borrow();
-    assert_eq!(trace.iter().filter(|s| s.as_str() == "first:later").count(), 1);
+    assert_eq!(
+        trace.iter().filter(|s| s.as_str() == "first:later").count(),
+        1
+    );
     assert_eq!(
         trace.iter().filter(|s| s.as_str() == "new:later").count(),
         1,
