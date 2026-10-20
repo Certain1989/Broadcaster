@@ -436,8 +436,9 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     let mut buttons = Vec::new();
     scan(&content, &mut buttons);
     assert_eq!(buttons.len(), 10 + 11 + 11 + 10 + 12 + 5 + 5);
-    for button in &buttons {
-        assert!(button.is_mapped(), "every key must be mapped");
+    let assert_inside = || {
+        for button in &buttons {
+            assert!(button.is_mapped(), "every key must be mapped");
         let rect = button
             .compute_bounds(&dialog)
             .expect("mapped key has dialog-relative coordinates");
@@ -449,12 +450,18 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
             "keyboard key {:?} lies outside dialog bounds",
             button.label()
         );
-    }
+        }
+    };
+    assert_inside();
     for name in ["Backspace", "Caret left", "Space", "Caret right", "Clear",
                  "Shift", "QWERTZ", "Symbols", "Done", "Cancel"] {
         assert!(buttons.iter().any(|button| button.label().as_deref() == Some(name)),
                 "required key {name} must be visible");
     }
+    // Shift changes the German action label's natural width; it must still
+    // leave Done and Cancel fully visible without any horizontal scrolling.
+    click(&dialog, "Shift");
+    assert_inside();
     click(&dialog, "Cancel");
     win.destroy();
 }
