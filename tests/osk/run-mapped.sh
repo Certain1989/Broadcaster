@@ -34,7 +34,7 @@ for case in \
   osk_mapped_gtk_all_keys_fit_without_scrolling
 do
   log_file="$schema_dir/$case.log"
-  if xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
+  if xvfb-run -a env G_DEBUG=fatal-criticals GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
     cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
