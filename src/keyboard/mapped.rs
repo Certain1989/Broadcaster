@@ -195,6 +195,45 @@ fn osk_mapped_gtk_caret_buttons_collapse_selection() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_native_url_correction_clears_error() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("https://example.invalid/previous.m3u");
+    body.append(&source);
+    spin();
+    show_with_options(&source, KeyboardOptions::url());
+    let dialog = keyboard(&win, &source);
+    let draft = find_entry(dialog.upcast_ref()).expect("native URL draft");
+    fn error_label(widget: &gtk::Widget) -> Option<gtk::Label> {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            if label.has_css_class("error") {
+                return Some(label.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            if let Some(label) = error_label(&item) {
+                return Some(label);
+            }
+            child = item.next_sibling();
+        }
+        None
+    }
+    let error = error_label(dialog.upcast_ref()).expect("URL validation label");
+
+    draft.set_text("not-a-url");
+    click(&dialog, "Done");
+    assert!(!error.text().is_empty(), "invalid URL shows feedback");
+    draft.set_text("https://example.invalid/corrected.m3u");
+    assert!(error.text().is_empty(), "native correction clears stale error");
+    assert_eq!(source.text(), "https://example.invalid/previous.m3u");
+    click(&dialog, "Cancel");
+    assert_eq!(source.text(), "https://example.invalid/previous.m3u");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_native_unicode_backspace() {
     let (win, body) = host();
     let entry = gtk::Entry::new();
