@@ -126,6 +126,114 @@ fn osk_mapped_gtk_input_transaction_and_cancel() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_multiple_changed_signal_observers() {
+    // R-01: Make the observable signal trace explicit, without pretending it
+    // proves equivalence for every custom/delegated GtkEditable implementation.
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    entry.set_text("before");
+    body.append(&entry);
+    spin();
+
+    let observed = Rc::new(RefCell::new(Vec::<String>::new()));
+    for id in ["first", "second"] {
+        let observed = observed.clone();
+        entry.connect_changed(move |entry| {
+            observed.borrow_mut().push(format!("{id}:{}", entry.text()));
+        });
+    }
+    let notified = Rc::new(RefCell::new(Vec::<String>::new()));
+    entry.connect_notify_local(Some("text"), {
+        let notified = notified.clone();
+        move |entry, _| notified.borrow_mut().push(entry.text().to_string())
+    });
+
+    show(&entry);
+    let dlg = keyboard(&win, &entry);
+    find_entry(dlg.upcast_ref())
+        .expect("draft")
+        .set_text("after");
+    assert!(observed.borrow().is_empty(), "draft is isolated");
+    click(&dlg, "Done");
+    assert_eq!(
+        observed.borrow().as_slice(),
+        &["first:after".to_string(), "second:after".to_string()],
+        "every changed observer must see the final text exactly once"
+    );
+    assert_eq!(entry.text(), "after");
+    assert_eq!(notified.borrow().last().map(String::as_str), Some("after"));
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_caret_buttons_collapse_selection() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("unchanged");
+    body.append(&source);
+    spin();
+    show(&source);
+    let dialog = keyboard(&win, &source);
+    let draft = find_entry(dialog.upcast_ref()).expect("native preview");
+    draft.set_text("abcdef");
+    for &(a, b) in &[(2, 4), (4, 2)] {
+        draft.select_region(a, b);
+        click(&dialog, "Caret left");
+        assert!(draft.selection_bounds().is_none());
+        assert_eq!(draft.position(), 2, "Left collapses to selection start");
+
+        draft.select_region(a, b);
+        click(&dialog, "Caret right");
+        assert!(draft.selection_bounds().is_none());
+        assert_eq!(draft.position(), 4, "Right collapses to selection end");
+    }
+    assert_eq!(source.text(), "unchanged", "draft actions cannot save");
+    click(&dialog, "Cancel");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_native_unicode_backspace() {
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    entry.set_text("unchanged");
+    body.append(&entry);
+    spin();
+    show(&entry);
+    let dlg = keyboard(&win, &entry);
+    let preview = find_entry(dlg.upcast_ref()).expect("GTK editable preview");
+
+    preview.set_text("e\u{301}");
+    preview.set_position(-1);
+    click(&dlg, "Backspace");
+    assert_eq!(
+        preview.text(),
+        "",
+        "native Backspace must remove the accent cluster"
+    );
+    assert_eq!(
+        entry.text(),
+        "unchanged",
+        "the source is isolated until Done"
+    );
+
+    preview.set_text("👨‍👩‍👧");
+    preview.set_position(-1);
+    click(&dlg, "Backspace");
+    assert_eq!(
+        preview.text(),
+        "",
+        "native Backspace handles a joined emoji cluster"
+    );
+    click(&dlg, "Cancel");
+    assert_eq!(entry.text(), "unchanged");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_lifecycle_guards() {
     let (win, body) = host();
     let entry = gtk::Entry::new();

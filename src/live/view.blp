@@ -47,8 +47,10 @@ template $TvLiveView: Adw.Bin {
             }
 
             Gtk.Button keyboard_prototype_button {
-              label: _("Keyboard");
-              tooltip-text: _("Edit search with on-screen keyboard");
+              icon-name: "input-keyboard-symbolic";
+              tooltip-text: _("Open on-screen keyboard");
+              width-request: 48;
+              height-request: 44;
               valign: center;
             }
           }

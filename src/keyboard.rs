@@ -72,6 +72,11 @@ pub fn bind_launcher<T>(button: &gtk::Button, target: &T, options: KeyboardOptio
 where
     T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
 {
+    // Icon-only launchers require an explicit screen-reader name; tooltip
+    // also documents the remote OK action without consuming toolbar width.
+    let description = gettext("Open on-screen keyboard");
+    button.set_tooltip_text(Some(&description));
+    button.update_property(&[gtk::accessible::Property::Label(&description)]);
     crate::settings::TvSettings::get()
         .bind_osk_enabled(button, "visible")
         .flags(adw::gio::SettingsBindFlags::GET)
@@ -82,6 +87,18 @@ where
             show_widget(&widget, options.clone());
         }
     });
+}
+
+/// Caps Lock and Num Lock must not disable D-pad navigation. Reject only
+/// modifiers with an actual navigation/selection meaning.
+pub(crate) fn unmodified_remote(modifiers: gtk::gdk::ModifierType) -> bool {
+    !modifiers.intersects(
+        gtk::gdk::ModifierType::SHIFT_MASK
+            | gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,7 +202,14 @@ impl Draft {
         }
     }
     fn move_caret(&mut self, left: bool) {
-        self.selection = None;
+        if let Some((a, b)) = self.selection.take() {
+            if a != b {
+                // Native GTK arrows collapse a selection to its corresponding
+                // edge; they do not move an extra character into the range.
+                self.cursor = if left { a.min(b) } else { a.max(b) };
+                return;
+            }
+        }
         self.cursor = if left {
             self.cursor.saturating_sub(1)
         } else {
@@ -370,6 +394,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         .and_downcast::<gtk::Window>()
         .map(|w| w.downgrade());
     let invalidated = Rc::new(Cell::new(false));
+    // Keep the committed final text only for the bounded close/idle return.
+    // The initial target snapshot remains immutable for write validation.
+    let restored_text = Rc::new(RefCell::new(initial.clone()));
+    let committed = Rc::new(Cell::new(false));
 
     let dialog = adw::Dialog::new();
     // The window's existing remote capture prioritizes this modal marker.
@@ -408,6 +436,14 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     error.add_css_class("error");
     error.set_wrap(true);
     body.append(&error);
+    // Native typing, IME and paste must clear stale URL validation feedback
+    // just as pressing an on-screen key does.
+    let weak_error = error.downgrade();
+    preview.connect_changed(move |_| {
+        if let Some(error) = weak_error.upgrade() {
+            error.set_text("");
+        }
+    });
     // Keep every action visible at once. A GTK scroller used to clip
     // Backspace/Cancel on real Wayland TVs and moved the focused key offscreen.
     // Seven compact rows fit the dialog without scrolling at TV scale.
@@ -458,6 +494,8 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             let window = window.clone();
             let initial = initial.clone();
             let invalidated = invalidated.clone();
+            let restored_text = restored_text.clone();
+            let committed = committed.clone();
             let qwertz = qwertz.clone();
             let shifted = shifted.clone();
             let symbols = symbols.clone();
@@ -489,6 +527,8 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         }
                         if let Ok(entry) = widget.downcast::<gtk::Editable>() {
                             commit_editable_once(&entry, &value, preview.position());
+                            *restored_text.borrow_mut() = entry.text().to_string();
+                            committed.set(true);
                         }
                         dialog.close();
                     }
@@ -505,6 +545,15 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         relabel(&keys.borrow(), qwertz.get(), shifted.get(), symbols.get());
                     }
                     _ => {
+                        if (r, c) == (5, 0) {
+                            // GtkEntry delegates editing to GtkText. Invoke
+                            // its native Backspace action instead of deleting
+                            // one Rust char (which splits grapheme clusters).
+                            if let Some(text) = preview.delegate().and_downcast::<gtk::Text>() {
+                                text.emit_by_name::<()>("backspace", &[]);
+                                return;
+                            }
+                        }
                         let mut draft = from_preview(&preview);
                         match (r, c) {
                             (5, 0) => draft.backspace(),
@@ -542,11 +591,13 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     let controller = gtk::EventControllerKey::new();
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     controller.connect_key_pressed(move |_, key, _, mods| {
-        if !mods.is_empty() {
+        if !unmodified_remote(mods) {
             return glib::Propagation::Proceed;
         }
         use gtk::gdk::Key;
-        if matches!(key, Key::Back | Key::Escape | Key::Home | Key::HomePage) {
+        // Physical Home retains native GtkEntry caret-to-start semantics.
+        // Remote HomePage, Back and Escape dismiss only the topmost OSK.
+        if matches!(key, Key::Back | Key::Escape | Key::HomePage) {
             if let Some(dialog) = weak_dialog_for_keys.upgrade() {
                 dialog.close();
             }
@@ -587,15 +638,40 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         }
         let weak_target = weak_target.clone();
         let weak_window = window.clone();
+        let weak_parent = parent.clone();
+        let invalidated = invalidated.clone();
+        let restored_text = restored_text.clone();
+        let committed = committed.clone();
         glib::idle_add_local_once(move || {
+            let Some(window) = weak_window.as_ref().and_then(|w| w.upgrade()) else {
+                return;
+            };
+            // Do not pull focus out of a newer active page/window.
+            if !window.is_mapped() || !window.is_active() {
+                return;
+            }
+            let original_parent = weak_parent.as_ref().and_then(|w| w.upgrade());
             if let Some(target) = weak_target.upgrade() {
-                if target.is_mapped() && target.is_sensitive() && target.grab_focus() {
+                if target_live(
+                    &target,
+                    &weak_parent,
+                    &weak_window,
+                    &restored_text.borrow(),
+                    invalidated.get() && !committed.get(),
+                ) && target.grab_focus()
+                {
                     return;
                 }
             }
-            if let Some(window) = weak_window.and_then(|w| w.upgrade()) {
-                if window.is_mapped() {
-                    window.child_focus(gtk::DirectionType::TabForward);
+            // Never focus a reparented target, or run broad window-wide
+            // TabForward navigation. Fall back only within the original,
+            // still-mapped parent (if it still belongs to this window).
+            if let Some(parent) = original_parent {
+                if parent.is_mapped()
+                    && parent.is_sensitive()
+                    && parent.root().and_downcast::<gtk::Window>() == Some(window)
+                {
+                    parent.child_focus(gtk::DirectionType::TabForward);
                 }
             }
         });
@@ -614,6 +690,33 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn caret_selection_collapse_without_extra_movement() {
+        for &(a, b) in &[(2, 4), (4, 2)] {
+            let mut left = Draft::new("abcdef", b, Some((a, b)));
+            left.move_caret(true);
+            assert_eq!(left.cursor, 2);
+            assert_eq!(left.selection, None);
+            left.insert("X");
+            assert_eq!(left.text, "abXcdef");
+
+            let mut right = Draft::new("abcdef", a, Some((a, b)));
+            right.move_caret(false);
+            assert_eq!(right.cursor, 4);
+            assert_eq!(right.selection, None);
+            right.insert("X");
+            assert_eq!(right.text, "abcdXef");
+        }
+    }
+
+    #[test]
+    fn lock_modifiers_do_not_disable_remote_navigation() {
+        use gtk::gdk::ModifierType as Mods;
+        assert!(unmodified_remote(Mods::LOCK_MASK));
+        assert!(!unmodified_remote(Mods::SHIFT_MASK | Mods::LOCK_MASK));
+        assert!(!unmodified_remote(Mods::CONTROL_MASK));
+    }
+
     #[test]
     fn unicode_selection_insert_and_backspace() {
         let mut d = Draft::new("aäößz", 4, Some((1, 4)));

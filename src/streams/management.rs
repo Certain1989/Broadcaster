@@ -307,6 +307,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
         body.append(&url_error);
         let keyboard = button(&gettext("Keyboard"), &body);
+        keyboard.set_icon_name("input-keyboard-symbolic");
+        keyboard.set_size_request(48, 44);
         crate::keyboard::bind_launcher(&keyboard, &field, crate::keyboard::KeyboardOptions::url());
         // Keep Left/Right in the URL entry for its native caret. The
         // vertical boundary exposes the keyboard to an ordinary D-pad.
@@ -314,8 +316,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         nav.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_keyboard = keyboard.downgrade();
         nav.connect_key_pressed(move |_, key, _, mods| {
-            if mods.is_empty()
-                && key == gtk::gdk::Key::Down
+            if crate::keyboard::unmodified_remote(mods)
+                && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
                 && weak_keyboard
                     .upgrade()
                     .is_some_and(|button| button.grab_focus())
@@ -329,8 +331,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         nav_back.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_field = field.downgrade();
         nav_back.connect_key_pressed(move |_, key, _, mods| {
-            if mods.is_empty()
-                && key == gtk::gdk::Key::Up
+            if crate::keyboard::unmodified_remote(mods)
+                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
                 && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
             {
                 return glib::Propagation::Stop;
