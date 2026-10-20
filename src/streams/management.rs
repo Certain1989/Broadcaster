@@ -316,8 +316,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         nav.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_keyboard = keyboard.downgrade();
         nav.connect_key_pressed(move |_, key, _, mods| {
-            if mods.is_empty()
-                && key == gtk::gdk::Key::Down
+            if crate::keyboard::unmodified_remote(mods)
+                && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
                 && weak_keyboard
                     .upgrade()
                     .is_some_and(|button| button.grab_focus())
@@ -331,8 +331,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         nav_back.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_field = field.downgrade();
         nav_back.connect_key_pressed(move |_, key, _, mods| {
-            if mods.is_empty()
-                && key == gtk::gdk::Key::Up
+            if crate::keyboard::unmodified_remote(mods)
+                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
                 && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
             {
                 return glib::Propagation::Stop;
