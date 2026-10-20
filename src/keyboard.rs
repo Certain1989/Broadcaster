@@ -376,7 +376,8 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     dialog.add_css_class("osk-feasibility");
     dialog.add_css_class("osk-production");
     dialog.set_title(&gettext("On-screen keyboard"));
-    dialog.set_content_width(735);
+    // Stay inside libadwaita's floating-sheet breakpoint at common TV sizes.
+    dialog.set_content_width(600);
     dialog.set_content_height(510);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
