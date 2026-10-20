@@ -89,6 +89,16 @@ where
     });
 }
 
+/// Layout contract for the existing Add Playlist URL launcher only.
+pub(crate) fn style_add_playlist_url_launcher(button: &gtk::Button) {
+    button.set_icon_name("input-keyboard-symbolic");
+    // GTK's styled allocation on the mapped Add Playlist form is 10px
+    // smaller than the request in each direction (5px inset per side).
+    // Reserve that inset without weakening the 48x44 visible-hit-target test.
+    button.set_size_request(58, 54);
+    button.set_halign(gtk::Align::End);
+}
+
 /// Caps Lock and Num Lock must not disable D-pad navigation. Reject only
 /// modifiers with an actual navigation/selection meaning.
 pub(crate) fn unmodified_remote(modifiers: gtk::gdk::ModifierType) -> bool {
@@ -292,6 +302,24 @@ fn from_preview(preview: &gtk::Entry) -> Draft {
             .map(|(a, b)| (a.max(0) as usize, b.max(0) as usize)),
     )
 }
+
+/// Preserve the selection GtkEntry may collapse during focus transfer, then
+/// delegate deletion to native GtkText for correct grapheme-cluster handling.
+fn native_preview_backspace(preview: &gtk::Entry, pending: Option<(usize, usize)>) -> bool {
+    let Some(text) = preview.delegate().and_downcast::<gtk::Text>() else {
+        return false;
+    };
+    if preview.selection_bounds().is_none() {
+        if let Some((a, b)) = pending {
+            let len = preview.text().chars().count();
+            if a != b && a <= len && b <= len {
+                preview.select_region(a as i32, b as i32);
+            }
+        }
+    }
+    text.emit_by_name::<()>("backspace", &[]);
+    true
+}
 /// GtkEditable::set_text may deliver 'changed' once for deletion and again
 /// for insertion when replacing nonempty contents. That leaks an intermediate
 /// empty field to observers (e.g. immediate mpv GSettings persistence).
@@ -299,10 +327,12 @@ fn from_preview(preview: &gtk::Entry) -> Draft {
 /// application handlers, after the native setter finishes. No parent action,
 /// virtual key event or separate settings write occurs here.
 ///
-/// We temporarily block the existing *changed* listeners on this one
-/// GtkEditable. GObject still performs GTK's native text replacement and
-/// notifies its other properties; the single final 'changed' delivery observes
-/// only the committed value. The blocks are balanced before any callbacks run.
+/// Temporarily block the currently active *changed* listeners by their
+/// individual handler IDs. Property notifications during GTK's native setter
+/// may disconnect a handler or attach a new one. Only handlers actually
+/// blocked here may be unblocked afterward: a second pattern match can target
+/// newly connected, never-blocked handlers and cause a GObject critical.
+/// Native text and property notifications are not suppressed.
 fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
     if entry.text().as_str() == value {
         entry.set_position(cursor);
@@ -313,25 +343,37 @@ fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
     let owned: glib::Object = entry.clone().upcast();
     let object: *mut glib::gobject_ffi::GObject = owned.to_glib_none().0;
     // SAFETY: the GtkEditable owns a valid GObject for this synchronous call.
-    // Both matched operations target only this object's 'changed' signal;
-    // the count/flags are from GObject's public signal API. No pointer is kept.
+    // Signal IDs and handler IDs are inspected only while owned remains alive.
+    // G_SIGNAL_MATCH_UNBLOCKED excludes already blocked handlers from lookup,
+    // allowing each original handler to be blocked precisely once.
     unsafe {
         let signal = glib::gobject_ffi::g_signal_lookup(
             c"changed".as_ptr(),
             gtk::Editable::static_type().into_glib(),
         );
         assert_ne!(signal, 0, "GtkEditable must expose its changed signal");
-        let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID;
+        let mask =
+            glib::gobject_ffi::G_SIGNAL_MATCH_ID | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED;
         let null = std::ptr::null_mut();
         let opaque: *mut std::ffi::c_void = std::ptr::null_mut();
-        glib::gobject_ffi::g_signal_handlers_block_matched(
-            object, mask, signal, 0, null, opaque, opaque,
-        );
+        let mut blocked = Vec::new();
+        loop {
+            let id = glib::gobject_ffi::g_signal_handler_find(
+                object, mask, signal, 0, null, opaque, opaque,
+            );
+            if id == 0 {
+                break;
+            }
+            glib::gobject_ffi::g_signal_handler_block(object, id);
+            blocked.push(id);
+        }
         entry.set_text(value);
         entry.set_position(cursor);
-        glib::gobject_ffi::g_signal_handlers_unblock_matched(
-            object, mask, signal, 0, null, opaque, opaque,
-        );
+        for id in blocked {
+            if glib::gobject_ffi::g_signal_handler_is_connected(object, id) != 0 {
+                glib::gobject_ffi::g_signal_handler_unblock(object, id);
+            }
+        }
     }
     entry.emit_by_name::<()>("changed", &[]);
 }
@@ -566,14 +608,11 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         relabel(&keys.borrow(), qwertz.get(), shifted.get(), symbols.get());
                     }
                     _ => {
-                        if (r, c) == (5, 0) {
-                            // GtkEntry delegates editing to GtkText. Invoke
-                            // its native Backspace action instead of deleting
-                            // one Rust char (which splits grapheme clusters).
-                            if let Some(text) = preview.delegate().and_downcast::<gtk::Text>() {
-                                text.emit_by_name::<()>("backspace", &[]);
-                                return;
-                            }
+                        if (r, c) == (5, 0)
+                            && native_preview_backspace(&preview, pending_selection.get())
+                        {
+                            pending_selection.set(None);
+                            return;
                         }
                         let mut draft = from_preview(&preview);
                         if draft.selection.is_none() {

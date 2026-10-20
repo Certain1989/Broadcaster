@@ -18,7 +18,12 @@ for case in \
   osk_mapped_gtk_close_releases_dialog_and_draft \
   osk_mapped_gtk_input_transaction_and_cancel \
   osk_mapped_gtk_native_unicode_backspace \
+  osk_mapped_gtk_pending_selection_native_backspace \
   osk_mapped_gtk_caret_buttons_collapse_selection \
+  osk_mapped_gtk_compact_add_playlist_url_launcher \
+  osk_mapped_gtk_entry_reentrant_signal_trace \
+  osk_mapped_gtk_search_reentrant_signal_trace \
+  osk_mapped_gtk_entry_row_reentrant_signal_trace \
   osk_mapped_gtk_multiple_changed_signal_observers \
   osk_mapped_gtk_native_url_correction_clears_error \
   osk_mapped_gtk_lifecycle_guards \
@@ -29,7 +34,7 @@ for case in \
   osk_mapped_gtk_all_keys_fit_without_scrolling
 do
   log_file="$schema_dir/$case.log"
-  if xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
+  if xvfb-run -a env G_DEBUG=fatal-criticals GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
     cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
