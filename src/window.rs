@@ -1033,7 +1033,10 @@ mod playback_navigation_tests {
         window.imp().live_view.show_toolbar_for_test();
         spin();
         let live = window.imp().live_view.toolbar_focus_targets();
-        assert!(live.iter().all(|w| w.is_mapped()), "Live toolbar must really be mapped");
+        assert!(
+            live.iter().all(|w| w.is_mapped()),
+            "Live toolbar must really be mapped"
+        );
         assert!(live[0].grab_focus());
         // A non-boundary Left/Right belongs to the editable caret.
         let live_search = live[0].clone().downcast::<gtk::SearchEntry>().unwrap();
