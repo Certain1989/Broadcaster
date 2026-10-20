@@ -225,7 +225,10 @@ fn osk_mapped_gtk_native_url_correction_clears_error() {
     click(&dialog, "Done");
     assert!(!error.text().is_empty(), "invalid URL shows feedback");
     draft.set_text("https://example.invalid/corrected.m3u");
-    assert!(error.text().is_empty(), "native correction clears stale error");
+    assert!(
+        error.text().is_empty(),
+        "native correction clears stale error"
+    );
     assert_eq!(source.text(), "https://example.invalid/previous.m3u");
     click(&dialog, "Cancel");
     assert_eq!(source.text(), "https://example.invalid/previous.m3u");
