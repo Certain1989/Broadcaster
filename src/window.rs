@@ -528,8 +528,10 @@ impl TvWindow {
                 if entry.selection_bounds().is_some() {
                     return Some(false);
                 }
-                let position = entry.position();
                 let last = entry.text().chars().count() as i32;
+                // GTK permits -1 to mean "at end", not "before start".
+                let raw_position = entry.position();
+                let position = if raw_position < 0 { last } else { raw_position };
                 if (key == gtk::gdk::Key::Left && position > 0)
                     || (key == gtk::gdk::Key::Right && position < last)
                 {
@@ -1055,6 +1057,19 @@ mod playback_navigation_tests {
         spin();
         let med = window.imp().mediathek_view.toolbar_focus_targets();
         assert_eq!(med.len(), 6, "search, two toggles, three filters");
+        assert!(med[0].is_mapped() && med[1].is_mapped());
+        let med_search = med[0].clone().downcast::<gtk::SearchEntry>().unwrap();
+        med_search.set_position(-1); // Explicitly move native caret to end.
+        let med_page = window.imp().mediathek_view.upcast_ref::<gtk::Widget>();
+        let med_rects: Vec<_> = med
+            .iter()
+            .map(|control| ToolbarRect::of(control, med_page).expect("mapped Mediathek control"))
+            .collect();
+        assert_eq!(
+            spatial_neighbor(&med_rects, 0, gtk::gdk::Key::Right),
+            Some(1),
+            "mapped search and the right-hand toggle must be spatial neighbors"
+        );
         assert!(med[0].grab_focus());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&med[1]);
