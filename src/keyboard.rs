@@ -324,10 +324,12 @@ fn native_preview_backspace(preview: &gtk::Entry, pending: Option<(usize, usize)
 /// application handlers, after the native setter finishes. No parent action,
 /// virtual key event or separate settings write occurs here.
 ///
-/// We temporarily block the existing *changed* listeners on this one
-/// GtkEditable. GObject still performs GTK's native text replacement and
-/// notifies its other properties; the single final 'changed' delivery observes
-/// only the committed value. The blocks are balanced before any callbacks run.
+/// Temporarily block the currently active *changed* listeners by their
+/// individual handler IDs. Property notifications during GTK's native setter
+/// may disconnect a handler or attach a new one. Only handlers actually
+/// blocked here may be unblocked afterward: a second pattern match can target
+/// newly connected, never-blocked handlers and cause a GObject critical.
+/// Native text and property notifications are not suppressed.
 fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
     if entry.text().as_str() == value {
         entry.set_position(cursor);
@@ -338,25 +340,37 @@ fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
     let owned: glib::Object = entry.clone().upcast();
     let object: *mut glib::gobject_ffi::GObject = owned.to_glib_none().0;
     // SAFETY: the GtkEditable owns a valid GObject for this synchronous call.
-    // Both matched operations target only this object's 'changed' signal;
-    // the count/flags are from GObject's public signal API. No pointer is kept.
+    // Signal IDs and handler IDs are inspected only while owned remains alive.
+    // G_SIGNAL_MATCH_UNBLOCKED excludes already blocked handlers from lookup,
+    // allowing each original handler to be blocked precisely once.
     unsafe {
         let signal = glib::gobject_ffi::g_signal_lookup(
             c"changed".as_ptr(),
             gtk::Editable::static_type().into_glib(),
         );
         assert_ne!(signal, 0, "GtkEditable must expose its changed signal");
-        let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID;
+        let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID
+            | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED;
         let null = std::ptr::null_mut();
         let opaque: *mut std::ffi::c_void = std::ptr::null_mut();
-        glib::gobject_ffi::g_signal_handlers_block_matched(
-            object, mask, signal, 0, null, opaque, opaque,
-        );
+        let mut blocked = Vec::new();
+        loop {
+            let id = glib::gobject_ffi::g_signal_handler_find(
+                object, mask, signal, 0, null, opaque, opaque,
+            );
+            if id == 0 {
+                break;
+            }
+            glib::gobject_ffi::g_signal_handler_block(object, id);
+            blocked.push(id);
+        }
         entry.set_text(value);
         entry.set_position(cursor);
-        glib::gobject_ffi::g_signal_handlers_unblock_matched(
-            object, mask, signal, 0, null, opaque, opaque,
-        );
+        for id in blocked {
+            if glib::gobject_ffi::g_signal_handler_is_connected(object, id) != 0 {
+                glib::gobject_ffi::g_signal_handler_unblock(object, id);
+            }
+        }
     }
     entry.emit_by_name::<()>("changed", &[]);
 }
