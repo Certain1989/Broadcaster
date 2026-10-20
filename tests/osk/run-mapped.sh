@@ -28,14 +28,23 @@ for case in \
   osk_mapped_gtk_removed_entry_row_no_ghost_save \
   osk_mapped_gtk_all_keys_fit_without_scrolling
 do
-  if ! xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
+  log_file="$schema_dir/$case.log"
+  if xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
-    cargo test --locked "$case" -- --ignored --test-threads=1; then
+    cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
+    printf 'K1 mapped GTK PASS: %s\n' "$case"
+  else
     failed=1
     failed_cases="$failed_cases $case"
+    printf 'K1 mapped GTK FAIL: %s\n' "$case"
   fi
 done
 if [ "$failed" -ne 0 ]; then
+  # Reproduce the assertions at the very end of Meson's truncated log.
+  for case in $failed_cases; do
+    printf 'K1 mapped GTK details for %s:\n' "$case" >&2
+    tail -n 45 "$schema_dir/$case.log" >&2
+  done
   # Meson displays only the last 100 log lines; keep the precise names of
   # every failing isolated fixture visible even when early output is cut off.
   printf 'K1 mapped GTK failed cases:%s\n' "$failed_cases" >&2
