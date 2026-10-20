@@ -92,7 +92,10 @@ where
 /// Layout contract for the existing Add Playlist URL launcher only.
 pub(crate) fn style_add_playlist_url_launcher(button: &gtk::Button) {
     button.set_icon_name("input-keyboard-symbolic");
-    button.set_size_request(48, 44);
+    // GTK's styled allocation on the mapped Add Playlist form is 10px
+    // smaller than the request in each direction (5px inset per side).
+    // Reserve that inset without weakening the 48x44 visible-hit-target test.
+    button.set_size_request(58, 54);
     button.set_halign(gtk::Align::End);
 }
 
