@@ -255,7 +255,16 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
         form.width() > 300,
         "fixture must exercise wide dialog layout"
     );
-    assert!(launcher.width() >= 48 && launcher.height() >= 44);
+    assert!(
+        launcher.is_mapped() && launcher.width() >= 48 && launcher.height() >= 44,
+        "launcher mapped={}, size={}x{}, request={}x{}, visible={}",
+        launcher.is_mapped(),
+        launcher.width(),
+        launcher.height(),
+        launcher.width_request(),
+        launcher.height_request(),
+        launcher.is_visible()
+    );
     assert!(
         launcher.width() < 100,
         "icon button must not stretch to field width"
