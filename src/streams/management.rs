@@ -309,6 +309,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         let keyboard = button(&gettext("Keyboard"), &body);
         keyboard.set_icon_name("input-keyboard-symbolic");
         keyboard.set_size_request(48, 44);
+        keyboard.set_halign(gtk::Align::End);
         crate::keyboard::bind_launcher(&keyboard, &field, crate::keyboard::KeyboardOptions::url());
         // Keep Left/Right in the URL entry for its native caret. The
         // vertical boundary exposes the keyboard to an ordinary D-pad.
