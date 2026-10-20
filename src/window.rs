@@ -531,7 +531,11 @@ impl TvWindow {
                 let last = entry.text().chars().count() as i32;
                 // GTK permits -1 to mean "at end", not "before start".
                 let raw_position = entry.position();
-                let position = if raw_position < 0 { last } else { raw_position };
+                let position = if raw_position < 0 {
+                    last
+                } else {
+                    raw_position
+                };
                 if (key == gtk::gdk::Key::Left && position > 0)
                     || (key == gtk::gdk::Key::Right && position < last)
                 {
@@ -1063,7 +1067,9 @@ mod playback_navigation_tests {
         let med_page = window.imp().mediathek_view.upcast_ref::<gtk::Widget>();
         let med_rects: Vec<_> = med
             .iter()
-            .map(|control| ToolbarRect::of(control, med_page).expect("mapped Mediathek control"))
+            .map(|control| {
+                ToolbarRect::of(control, med_page).expect("mapped Mediathek control")
+            })
             .collect();
         assert_eq!(
             spatial_neighbor(&med_rects, 0, gtk::gdk::Key::Right),
