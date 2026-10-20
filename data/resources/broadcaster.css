@@ -127,3 +127,12 @@ label.channel-fallback {
 .osk-production entry {
   min-height: 44px;
 }
+
+/* Keep all OSK rows inside AdwDialog's width cap (630 px on GTK 4.21).
+ * Libadwaita's normal button minimums otherwise force 12 symbol keys and
+ * the last digit past the sheet edge even without a ScrolledWindow. */
+.osk-production button.osk-key {
+  min-width: 0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
