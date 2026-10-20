@@ -1077,6 +1077,7 @@ mod playback_navigation_tests {
             "mapped search and the right-hand toggle must be spatial neighbors"
         );
         assert!(med[0].grab_focus());
+        med_search.set_position(-1);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&med[1]);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
