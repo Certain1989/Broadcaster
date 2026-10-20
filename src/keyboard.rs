@@ -17,16 +17,8 @@ const ROWS: &[&[&str]] = &[
     &["a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"],
     &["z", "x", "c", "v", "b", "n", "m", "ß", ",", "."],
     &[":", "/", "?", "&", "=", "#", "@", "+", "-", "_", "%", "~"],
-    &[
-        "Backspace",
-        "Left",
-        "Space",
-        "Right",
-        "Clear",
-        "Done",
-        "Cancel",
-    ],
-    &["Shift", "QWERTZ", "Symbols"],
+    &["Backspace", "Left", "Space", "Right", "Clear"],
+    &["Shift", "QWERTZ", "Symbols", "Done", "Cancel"],
 ];
 const SYMBOLS: &[&[&str]] = &[
     &["!", "'", "\"", "(", ")", "[", "]", "{", "}", "\\", "|"],
@@ -415,13 +407,12 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     error.add_css_class("error");
     error.set_wrap(true);
     body.append(&error);
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
-    scroll.set_vexpand(true);
-    body.append(&scroll);
+    // Keep every action visible at once. A GTK scroller used to clip
+    // Backspace/Cancel on real Wayland TVs and moved the focused key offscreen.
+    // Seven compact rows fit the dialog without scrolling at TV scale.
     let rows = gtk::Box::new(gtk::Orientation::Vertical, 5);
-    rows.set_valign(gtk::Align::Start);
-    scroll.set_child(Some(&rows));
+    rows.set_hexpand(true);
+    body.append(&rows);
     let selected = Rc::new(Cell::new((0usize, 0usize)));
     let qwertz = Rc::new(Cell::new(false));
     let shifted = Rc::new(Cell::new(false));
@@ -430,7 +421,9 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     let weak_dialog = dialog.downgrade();
     for (r, labels) in ROWS.iter().enumerate() {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        line.set_halign(gtk::Align::Center);
+        line.set_hexpand(true);
+        line.set_halign(gtk::Align::Fill);
+        line.set_homogeneous(true);
         if r == 6 {
             line.set_margin_top(6);
         }
@@ -439,17 +432,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         for (c, _) in labels.iter().enumerate() {
             let button = gtk::Button::with_label(&label_for(r, c, false, false, false));
             button.set_height_request(42);
-            button.set_width_request(if r == 6 {
-                154
-            } else if r == 5 {
-                if c == 2 {
-                    168
-                } else {
-                    70
-                }
-            } else {
-                49
-            });
+            button.set_hexpand(true);
+            // Character rows are dense, action rows need readable labels.
+            // Homogeneous allocation adapts both to the actual dialog width.
+            button.set_width_request(if r <= 4 { 28 } else { 0 });
             line.append(&button);
             refs.push(button.downgrade());
             let selected = selected.clone();
@@ -478,10 +464,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                     return;
                 };
                 match (r, c) {
-                    (5, 6) => {
+                    (6, 4) => {
                         dialog.close();
                     }
-                    (5, 5) => {
+                    (6, 3) => {
                         let Some(widget) = weak_target.upgrade() else {
                             dialog.close();
                             return;
