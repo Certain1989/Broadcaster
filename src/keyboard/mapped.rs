@@ -126,6 +126,33 @@ fn osk_mapped_gtk_input_transaction_and_cancel() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_native_unicode_backspace() {
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    entry.set_text("unchanged");
+    body.append(&entry);
+    spin();
+    show(&entry);
+    let dlg = keyboard(&win, &entry);
+    let preview = find_entry(dlg.upcast_ref()).expect("GTK editable preview");
+
+    preview.set_text("e\u{301}");
+    preview.set_position(-1);
+    click(&dlg, "Backspace");
+    assert_eq!(preview.text(), "", "native Backspace must remove the accent cluster");
+    assert_eq!(entry.text(), "unchanged", "the source is isolated until Done");
+
+    preview.set_text("👨‍👩‍👧");
+    preview.set_position(-1);
+    click(&dlg, "Backspace");
+    assert_eq!(preview.text(), "", "native Backspace handles a joined emoji cluster");
+    click(&dlg, "Cancel");
+    assert_eq!(entry.text(), "unchanged");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_lifecycle_guards() {
     let (win, body) = host();
     let entry = gtk::Entry::new();
