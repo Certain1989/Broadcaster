@@ -1063,14 +1063,40 @@ mod playback_navigation_tests {
         assert_focused(&live[0]);
         live_search.set_text("");
 
-        // Owner Wayland report: after Up from the first channel, Keyboard
-        // could activate despite showing no blue focus frame. Exercise that
-        // real list-to-toolbar route and verify the scoped bundled CSS covers
-        // the focused button regardless of GTK's :focus-visible heuristic.
+        // Search and Keyboard are distinct visual and focusable targets.
+        // Their actual allocated rectangles must have a visible TV-sized gap.
+        let live_page = window.imp().live_view.upcast_ref::<gtk::Widget>();
+        let search_rect = ToolbarRect::of(&live[0], live_page).expect("mapped Live search");
+        let keyboard_rect = ToolbarRect::of(&live[1], live_page).expect("mapped Live keyboard");
+        assert!(
+            keyboard_rect.left - search_rect.right >= 10.0,
+            "search and Keyboard must be visually separated: {search_rect:?}, {keyboard_rect:?}"
+        );
+
+        // Owner Wayland report: Up from the first channel jumped diagonally
+        // to Keyboard, although Search is directly above the channel list.
+        // Up must reach Search; Right then reaches Keyboard with a visible
+        // blue focus frame. Left and Down must restore spatial relationships.
         assert!(window.imp().live_view.focus_first_channel_for_test());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_focused(&live[0]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&live[1]);
         window.imp().live_view.assert_keyboard_remote_focus_styled();
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&live[0]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        let list = TvWindow::find_descendant(live_page, &|w| w.is::<gtk::ListBox>())
+            .expect("Live channel list");
+        assert!(
+            TvWindow::is_within(
+                &window.focused_widget().expect("Down returns focus to list"),
+                &list
+            ),
+            "Down from Live search must reach the channels"
+        );
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_focused(&live[0]);
 
         stack.set_visible_child_name("mediathek");
         window.queue_allocate();
