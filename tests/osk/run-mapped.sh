@@ -16,6 +16,7 @@ failed=0
 for case in \
   osk_mapped_gtk_close_releases_dialog_and_draft \
   osk_mapped_gtk_input_transaction_and_cancel \
+  osk_mapped_gtk_native_unicode_backspace \
   osk_mapped_gtk_lifecycle_guards \
   osk_mapped_gtk_preferences_expander_and_popover \
   osk_mapped_gtk_entry_row_immediate_save_once \
