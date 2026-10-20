@@ -642,7 +642,9 @@ impl TvWindow {
                     .focus_vertical_navigation(&focused, key);
             }
 
-            // Prototype remote route: Search -> Keyboard -> Results, and back.
+            // Live list's first row lies beneath Search, not Keyboard.
+            // Search <-> Keyboard is a horizontal transition, handled by
+            // mapped geometry above. Preserve the first-row child boundary.
             let list = Self::find_descendant(page, &|widget| widget.is::<gtk::ListBox>())
                 .and_then(|widget| widget.downcast::<gtk::ListBox>().ok());
 
@@ -653,12 +655,13 @@ impl TvWindow {
                         if focused != *first_widget {
                             return first.grab_focus();
                         }
-                        return self.imp().live_view.focus_keyboard_prototype()
-                            || search.as_ref().is_some_and(|entry| entry.grab_focus());
+                        return search.as_ref().is_some_and(|entry| entry.grab_focus());
                     }
                 }
                 if self.imp().live_view.keyboard_prototype_has_focus(&focused) {
-                    return search.as_ref().is_some_and(|entry| entry.grab_focus());
+                    // Above Keyboard is the page switcher, not Search to
+                    // its left. Normally the spatial router handles this.
+                    return self.focus_page_switcher();
                 }
                 if search
                     .as_ref()
@@ -677,11 +680,10 @@ impl TvWindow {
                     .as_ref()
                     .is_some_and(|entry| Self::is_within(&focused, entry))
                 {
-                    return self.imp().live_view.focus_keyboard_prototype()
-                        || list
-                            .as_ref()
-                            .and_then(|list| list.row_at_index(0))
-                            .is_some_and(|row| row.grab_focus());
+                    return list
+                        .as_ref()
+                        .and_then(|list| list.row_at_index(0))
+                        .is_some_and(|row| row.grab_focus());
                 }
             }
             return false;
