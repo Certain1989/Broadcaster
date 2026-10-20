@@ -13,6 +13,7 @@ glib-compile-schemas "$schema_dir"
 # sequential --test-threads=1 cases to DIFFERENT OS threads, which violates
 # gtk-rs's single-initialization-thread requirement.
 failed=0
+failed_cases=""
 for case in \
   osk_mapped_gtk_close_releases_dialog_and_draft \
   osk_mapped_gtk_input_transaction_and_cancel \
@@ -30,6 +31,14 @@ do
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
     cargo test --locked "$case" -- --ignored --test-threads=1; then
     failed=1
+    failed_cases="$failed_cases $case"
   fi
 done
+if [ "$failed" -ne 0 ]; then
+  # Meson displays only the last 100 log lines; keep the precise names of
+  # every failing isolated fixture visible even when early output is cut off.
+  printf 'K1 mapped GTK failed cases:%s\n' "$failed_cases" >&2
+else
+  echo "K1 mapped GTK: every named fixture passed"
+fi
 exit "$failed"
