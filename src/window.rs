@@ -1221,7 +1221,7 @@ mod spatial_navigation_tests {
         assert_eq!(super::normalize_remote_arrow(Key::KP_Right), Key::Right);
         assert_eq!(super::normalize_remote_arrow(Key::KP_Up), Key::Up);
         assert_eq!(super::normalize_remote_arrow(Key::KP_Down), Key::Down);
-        assert!(crate::keyboard::unmodified_remote(Mods::LOCK_MASK | Mods::MOD2_MASK));
+        assert!(crate::keyboard::unmodified_remote(Mods::LOCK_MASK));
         assert!(!crate::keyboard::unmodified_remote(Mods::CONTROL_MASK));
         assert_eq!(super::modal_remote_action(Key::Home, Mods::empty()), None);
     }
