@@ -658,6 +658,34 @@ impl TvMediathekView {
         false
     }
 
+    /// The two search toggles are immediate siblings of the search entry in
+    /// the real Blueprint row; the second row contains the three filters.
+    /// Geometry, not declaration order, determines each arrow destination.
+    pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
+        let imp = self.imp();
+        let mut controls = vec![imp.search_entry.clone().upcast::<gtk::Widget>()];
+        let mut sibling = imp.search_entry.upcast_ref::<gtk::Widget>().next_sibling();
+        while let Some(item) = sibling {
+            if item.is::<gtk::ToggleButton>() {
+                controls.push(item.clone());
+            }
+            sibling = item.next_sibling();
+        }
+        controls.extend([
+            imp.broadcaster_filter.clone().upcast(),
+            imp.duration_filter.clone().upcast(),
+            imp.sort_button.clone().upcast(),
+        ]);
+        controls
+    }
+
+    pub fn focus_first_result(&self) -> bool {
+        self.imp()
+            .results_list
+            .row_at_index(0)
+            .is_some_and(|row| row.grab_focus())
+    }
+
     pub fn focus_search(&self) {
         self.imp().search_entry.grab_focus();
     }
