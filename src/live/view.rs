@@ -35,9 +35,9 @@ mod imp {
         #[template_child]
         pub(super) keyboard_prototype_button: TemplateChild<gtk::Button>,
         #[template_child]
-        results_stack: TemplateChild<gtk::Stack>,
+        pub(super) results_stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        channels_list: TemplateChild<gtk::ListBox>,
+        pub(super) channels_list: TemplateChild<gtk::ListBox>,
         #[template_child]
         error_page: TemplateChild<adw::StatusPage>,
 
