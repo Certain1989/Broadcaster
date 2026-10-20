@@ -89,6 +89,13 @@ where
     });
 }
 
+/// Layout contract for the existing Add Playlist URL launcher only.
+pub(crate) fn style_add_playlist_url_launcher(button: &gtk::Button) {
+    button.set_icon_name("input-keyboard-symbolic");
+    button.set_size_request(48, 44);
+    button.set_halign(gtk::Align::End);
+}
+
 /// Caps Lock and Num Lock must not disable D-pad navigation. Reject only
 /// modifiers with an actual navigation/selection meaning.
 pub(crate) fn unmodified_remote(modifiers: gtk::gdk::ModifierType) -> bool {
