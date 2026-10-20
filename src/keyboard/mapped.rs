@@ -406,3 +406,55 @@ fn osk_mapped_gtk_removed_entry_row_no_ghost_save() {
     prefs.close();
     win.destroy();
 }
+
+#[test]
+#[ignore = "requires mapped GTK and isolated test GSettings"]
+fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
+    // Regression for real 2026-10-20 Wayland report: the old seven-action
+    // row was wider than the dialog; Cancel or Backspace disappeared.
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    body.append(&entry);
+    spin();
+    show(&entry);
+    let dialog = keyboard(&win, &entry);
+    let content = dialog.child().expect("GTK-owned keyboard content");
+    fn scan(widget: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
+        assert!(
+            !widget.is::<gtk::ScrolledWindow>(),
+            "keyboard must not require scrolling to reach its actions"
+        );
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            buttons.push(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(item) = child {
+            scan(&item, buttons);
+            child = item.next_sibling();
+        }
+    }
+    let mut buttons = Vec::new();
+    scan(&content, &mut buttons);
+    assert_eq!(buttons.len(), 10 + 11 + 11 + 10 + 12 + 5 + 5);
+    for button in &buttons {
+        assert!(button.is_mapped(), "every key must be mapped");
+        let rect = button
+            .compute_bounds(&dialog)
+            .expect("mapped key has dialog-relative coordinates");
+        assert!(
+            rect.x() >= -1.0
+                && rect.x() + rect.width() <= dialog.width() as f32 + 1.0
+                && rect.y() >= -1.0
+                && rect.y() + rect.height() <= dialog.height() as f32 + 1.0,
+            "keyboard key {:?} lies outside dialog bounds",
+            button.label()
+        );
+    }
+    for name in ["Backspace", "Caret left", "Space", "Caret right", "Clear",
+                 "Shift", "QWERTZ", "Symbols", "Done", "Cancel"] {
+        assert!(buttons.iter().any(|button| button.label().as_deref() == Some(name)),
+                "required key {name} must be visible");
+    }
+    click(&dialog, "Cancel");
+    win.destroy();
+}
