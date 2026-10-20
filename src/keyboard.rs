@@ -433,6 +433,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         let mut refs = Vec::new();
         for (c, _) in labels.iter().enumerate() {
             let button = gtk::Button::with_label(&label_for(r, c, false, false, false));
+            button.add_css_class("osk-key");
             button.set_height_request(42);
             button.set_hexpand(true);
             // Character rows are dense, action rows need readable labels.
