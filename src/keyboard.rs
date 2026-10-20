@@ -292,6 +292,24 @@ fn from_preview(preview: &gtk::Entry) -> Draft {
             .map(|(a, b)| (a.max(0) as usize, b.max(0) as usize)),
     )
 }
+
+/// Preserve the selection GtkEntry may collapse during focus transfer, then
+/// delegate deletion to native GtkText for correct grapheme-cluster handling.
+fn native_preview_backspace(preview: &gtk::Entry, pending: Option<(usize, usize)>) -> bool {
+    let Some(text) = preview.delegate().and_downcast::<gtk::Text>() else {
+        return false;
+    };
+    if preview.selection_bounds().is_none() {
+        if let Some((a, b)) = pending {
+            let len = preview.text().chars().count();
+            if a != b && a <= len && b <= len {
+                preview.select_region(a as i32, b as i32);
+            }
+        }
+    }
+    text.emit_by_name::<()>("backspace", &[]);
+    true
+}
 /// GtkEditable::set_text may deliver 'changed' once for deletion and again
 /// for insertion when replacing nonempty contents. That leaks an intermediate
 /// empty field to observers (e.g. immediate mpv GSettings persistence).
@@ -566,14 +584,11 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         relabel(&keys.borrow(), qwertz.get(), shifted.get(), symbols.get());
                     }
                     _ => {
-                        if (r, c) == (5, 0) {
-                            // GtkEntry delegates editing to GtkText. Invoke
-                            // its native Backspace action instead of deleting
-                            // one Rust char (which splits grapheme clusters).
-                            if let Some(text) = preview.delegate().and_downcast::<gtk::Text>() {
-                                text.emit_by_name::<()>("backspace", &[]);
-                                return;
-                            }
+                        if (r, c) == (5, 0)
+                            && native_preview_backspace(&preview, pending_selection.get())
+                        {
+                            pending_selection.set(None);
+                            return;
                         }
                         let mut draft = from_preview(&preview);
                         if draft.selection.is_none() {
