@@ -1061,6 +1061,15 @@ mod playback_navigation_tests {
         assert_focused(&live[0]);
         live_search.set_text("");
 
+        // Owner Wayland report: after Up from the first channel, Keyboard
+        // could activate despite showing no blue focus frame. Exercise that
+        // real list-to-toolbar route and verify the scoped bundled CSS covers
+        // the focused button regardless of GTK's :focus-visible heuristic.
+        assert!(window.imp().live_view.focus_first_channel_for_test());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_focused(&live[1]);
+        window.imp().live_view.assert_keyboard_remote_focus_styled();
+
         stack.set_visible_child_name("mediathek");
         window.queue_allocate();
         spin();
