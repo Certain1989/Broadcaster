@@ -89,6 +89,18 @@ where
     });
 }
 
+/// Caps Lock and Num Lock must not disable D-pad navigation. Reject only
+/// modifiers with an actual navigation/selection meaning.
+pub(crate) fn unmodified_remote(modifiers: gtk::gdk::ModifierType) -> bool {
+    !modifiers.intersects(
+        gtk::gdk::ModifierType::SHIFT_MASK
+            | gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Arrow {
     Left,
@@ -190,7 +202,14 @@ impl Draft {
         }
     }
     fn move_caret(&mut self, left: bool) {
-        self.selection = None;
+        if let Some((a, b)) = self.selection.take() {
+            if a != b {
+                // Native GTK arrows collapse a selection to its corresponding
+                // edge; they do not move an extra character into the range.
+                self.cursor = if left { a.min(b) } else { a.max(b) };
+                return;
+            }
+        }
         self.cursor = if left {
             self.cursor.saturating_sub(1)
         } else {
@@ -413,6 +432,14 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     error.add_css_class("error");
     error.set_wrap(true);
     body.append(&error);
+    // Native typing, IME and paste must clear stale URL validation feedback
+    // just as pressing an on-screen key does.
+    let weak_error = error.downgrade();
+    preview.connect_changed(move |_| {
+        if let Some(error) = weak_error.upgrade() {
+            error.set_text("");
+        }
+    });
     // Keep every action visible at once. A GTK scroller used to clip
     // Backspace/Cancel on real Wayland TVs and moved the focused key offscreen.
     // Seven compact rows fit the dialog without scrolling at TV scale.
@@ -547,11 +574,13 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     let controller = gtk::EventControllerKey::new();
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     controller.connect_key_pressed(move |_, key, _, mods| {
-        if !mods.is_empty() {
+        if !unmodified_remote(mods) {
             return glib::Propagation::Proceed;
         }
         use gtk::gdk::Key;
-        if matches!(key, Key::Back | Key::Escape | Key::Home | Key::HomePage) {
+        // Physical Home retains native GtkEntry caret-to-start semantics.
+        // Remote HomePage, Back and Escape dismiss only the topmost OSK.
+        if matches!(key, Key::Back | Key::Escape | Key::HomePage) {
             if let Some(dialog) = weak_dialog_for_keys.upgrade() {
                 dialog.close();
             }
@@ -619,6 +648,33 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn caret_selection_collapse_without_extra_movement() {
+        for &(a, b) in &[(2, 4), (4, 2)] {
+            let mut left = Draft::new("abcdef", b, Some((a, b)));
+            left.move_caret(true);
+            assert_eq!(left.cursor, 2);
+            assert_eq!(left.selection, None);
+            left.insert("X");
+            assert_eq!(left.text, "abXcdef");
+
+            let mut right = Draft::new("abcdef", a, Some((a, b)));
+            right.move_caret(false);
+            assert_eq!(right.cursor, 4);
+            assert_eq!(right.selection, None);
+            right.insert("X");
+            assert_eq!(right.text, "abcdXef");
+        }
+    }
+
+    #[test]
+    fn lock_modifiers_do_not_disable_remote_navigation() {
+        use gtk::gdk::ModifierType as Mods;
+        assert!(unmodified_remote(Mods::LOCK_MASK | Mods::MOD2_MASK));
+        assert!(!unmodified_remote(Mods::SHIFT_MASK | Mods::LOCK_MASK));
+        assert!(!unmodified_remote(Mods::CONTROL_MASK));
+    }
+
     #[test]
     fn unicode_selection_insert_and_backspace() {
         let mut d = Draft::new("aäößz", 4, Some((1, 4)));
