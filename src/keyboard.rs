@@ -394,6 +394,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         .and_downcast::<gtk::Window>()
         .map(|w| w.downgrade());
     let invalidated = Rc::new(Cell::new(false));
+    // Keep the committed final text only for the bounded close/idle return.
+    // The initial target snapshot remains immutable for write validation.
+    let restored_text = Rc::new(RefCell::new(initial.clone()));
+    let committed = Rc::new(Cell::new(false));
 
     let dialog = adw::Dialog::new();
     // The window's existing remote capture prioritizes this modal marker.
@@ -490,6 +494,8 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             let window = window.clone();
             let initial = initial.clone();
             let invalidated = invalidated.clone();
+            let restored_text = restored_text.clone();
+            let committed = committed.clone();
             let qwertz = qwertz.clone();
             let shifted = shifted.clone();
             let symbols = symbols.clone();
@@ -521,6 +527,8 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         }
                         if let Ok(entry) = widget.downcast::<gtk::Editable>() {
                             commit_editable_once(&entry, &value, preview.position());
+                            *restored_text.borrow_mut() = entry.text().to_string();
+                            committed.set(true);
                         }
                         dialog.close();
                     }
@@ -621,15 +629,40 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         }
         let weak_target = weak_target.clone();
         let weak_window = window.clone();
+        let weak_parent = parent.clone();
+        let invalidated = invalidated.clone();
+        let restored_text = restored_text.clone();
+        let committed = committed.clone();
         glib::idle_add_local_once(move || {
+            let Some(window) = weak_window.as_ref().and_then(|w| w.upgrade()) else {
+                return;
+            };
+            // Do not pull focus out of a newer active page/window.
+            if !window.is_mapped() || !window.is_active() {
+                return;
+            }
+            let original_parent = weak_parent.as_ref().and_then(|w| w.upgrade());
             if let Some(target) = weak_target.upgrade() {
-                if target.is_mapped() && target.is_sensitive() && target.grab_focus() {
+                if target_live(
+                    &target,
+                    &weak_parent,
+                    &weak_window,
+                    &restored_text.borrow(),
+                    invalidated.get() && !committed.get(),
+                ) && target.grab_focus()
+                {
                     return;
                 }
             }
-            if let Some(window) = weak_window.and_then(|w| w.upgrade()) {
-                if window.is_mapped() {
-                    window.child_focus(gtk::DirectionType::TabForward);
+            // Never focus a reparented target, or run broad window-wide
+            // TabForward navigation. Fall back only within the original,
+            // still-mapped parent (if it still belongs to this window).
+            if let Some(parent) = original_parent {
+                if parent.is_mapped()
+                    && parent.is_sensitive()
+                    && parent.root().and_downcast::<gtk::Window>() == Some(window)
+                {
+                    parent.child_focus(gtk::DirectionType::TabForward);
                 }
             }
         });
