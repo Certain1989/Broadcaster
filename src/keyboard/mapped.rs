@@ -21,8 +21,9 @@ fn spin() {
 fn host() -> (adw::Window, gtk::Box) {
     adw::init().expect("mapped fixture needs GTK/adw");
     // Match app startup: regression geometry must include packaged CSS.
-    let resources = adw::gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
-        .expect("bundled resources");
+    let resources =
+        adw::gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
     adw::gio::resources_register(&resources);
     let provider = gtk::CssProvider::new();
     provider.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
