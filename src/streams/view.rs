@@ -1411,16 +1411,16 @@ impl TvStreamsView {
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
         let imp = self.imp();
         vec![
-            imp.search_entry.clone().upcast(),
-            imp.source_filter.clone().upcast(),
-            imp.group_filter.clone().upcast(),
-            imp.sort_filter.clone().upcast(),
-            imp.language_filter.clone().upcast(),
-            imp.country_filter.clone().upcast(),
-            imp.region_filter.clone().upcast(),
-            imp.clear_button.clone().upcast(),
-            imp.manage_button.clone().upcast(),
-            imp.add_button.clone().upcast(),
+            imp.search_entry.get().upcast(),
+            imp.source_filter.get().upcast(),
+            imp.group_filter.get().upcast(),
+            imp.sort_filter.get().upcast(),
+            imp.language_filter.get().upcast(),
+            imp.country_filter.get().upcast(),
+            imp.region_filter.get().upcast(),
+            imp.clear_button.get().upcast(),
+            imp.manage_button.get().upcast(),
+            imp.add_button.get().upcast(),
         ]
     }
 
