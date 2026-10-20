@@ -306,7 +306,10 @@ impl TvLiveView {
     #[cfg(test)]
     pub(crate) fn assert_keyboard_remote_focus_styled(&self) {
         let button = &self.imp().keyboard_prototype_button;
-        assert!(button.has_focus(), "Up from first channel must focus Keyboard");
+        assert!(
+            button.has_focus(),
+            "Up from first channel must focus Keyboard"
+        );
         let toolbar = button.parent().expect("Live keyboard toolbar");
         assert!(
             toolbar.has_css_class("tv-live-controls"),
