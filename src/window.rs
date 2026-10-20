@@ -1040,6 +1040,7 @@ mod playback_navigation_tests {
 
         stack.set_visible_child_name("live");
         window.imp().live_view.show_toolbar_for_test();
+        window.queue_allocate();
         spin();
         let live = window.imp().live_view.toolbar_focus_targets();
         assert!(
