@@ -167,6 +167,34 @@ fn osk_mapped_gtk_multiple_changed_signal_observers() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_caret_buttons_collapse_selection() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("unchanged");
+    body.append(&source);
+    spin();
+    show(&source);
+    let dialog = keyboard(&win, &source);
+    let draft = find_entry(dialog.upcast_ref()).expect("native preview");
+    draft.set_text("abcdef");
+    for &(a, b) in &[(2, 4), (4, 2)] {
+        draft.select_region(a, b);
+        click(&dialog, "Caret left");
+        assert!(draft.selection_bounds().is_none());
+        assert_eq!(draft.position(), 2, "Left collapses to selection start");
+
+        draft.select_region(a, b);
+        click(&dialog, "Caret right");
+        assert!(draft.selection_bounds().is_none());
+        assert_eq!(draft.position(), 4, "Right collapses to selection end");
+    }
+    assert_eq!(source.text(), "unchanged", "draft actions cannot save");
+    click(&dialog, "Cancel");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_native_unicode_backspace() {
     let (win, body) = host();
     let entry = gtk::Entry::new();
