@@ -278,7 +278,15 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
         "launcher must align at the right edge"
     );
     assert!(url.grab_focus());
-    assert!(url.has_focus());
+    // GtkEntry delegates keyboard focus to its GtkText child on GTK4.
+    // Checking has_focus() on the outer Entry incorrectly rejects a
+    // successful native focus transfer. Verify the actual text delegate.
+    assert!(
+        url.delegate()
+            .and_downcast::<gtk::Text>()
+            .is_some_and(|text| text.has_focus()),
+        "URL entry's native GtkText delegate must own keyboard focus"
+    );
     assert!(launcher.grab_focus());
     assert!(launcher.has_focus(), "launcher must be focusable by remote");
     assert!(url.grab_focus());
