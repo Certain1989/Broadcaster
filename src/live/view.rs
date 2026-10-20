@@ -282,8 +282,8 @@ impl TvLiveView {
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
         let imp = self.imp();
         vec![
-            imp.search_entry.clone().upcast(),
-            imp.keyboard_prototype_button.clone().upcast(),
+            imp.search_entry.get().upcast(),
+            imp.keyboard_prototype_button.get().upcast(),
         ]
     }
 
