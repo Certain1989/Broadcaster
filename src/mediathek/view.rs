@@ -663,7 +663,7 @@ impl TvMediathekView {
     /// Geometry, not declaration order, determines each arrow destination.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
         let imp = self.imp();
-        let mut controls = vec![imp.search_entry.clone().upcast::<gtk::Widget>()];
+        let mut controls = vec![imp.search_entry.get().upcast::<gtk::Widget>()];
         let mut sibling = imp.search_entry.upcast_ref::<gtk::Widget>().next_sibling();
         while let Some(item) = sibling {
             if item.is::<gtk::ToggleButton>() {
@@ -672,9 +672,9 @@ impl TvMediathekView {
             sibling = item.next_sibling();
         }
         controls.extend([
-            imp.broadcaster_filter.clone().upcast(),
-            imp.duration_filter.clone().upcast(),
-            imp.sort_button.clone().upcast(),
+            imp.broadcaster_filter.get().upcast(),
+            imp.duration_filter.get().upcast(),
+            imp.sort_button.get().upcast(),
         ]);
         controls
     }
