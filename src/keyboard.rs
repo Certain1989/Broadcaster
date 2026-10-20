@@ -349,8 +349,8 @@ fn commit_editable_once(entry: &gtk::Editable, value: &str, cursor: i32) {
             gtk::Editable::static_type().into_glib(),
         );
         assert_ne!(signal, 0, "GtkEditable must expose its changed signal");
-        let mask = glib::gobject_ffi::G_SIGNAL_MATCH_ID
-            | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED;
+        let mask =
+            glib::gobject_ffi::G_SIGNAL_MATCH_ID | glib::gobject_ffi::G_SIGNAL_MATCH_UNBLOCKED;
         let null = std::ptr::null_mut();
         let opaque: *mut std::ffi::c_void = std::ptr::null_mut();
         let mut blocked = Vec::new();
