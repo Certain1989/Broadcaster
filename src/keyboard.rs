@@ -432,6 +432,22 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         KeyboardLayout::Url => gtk::InputPurpose::Url,
     });
     body.append(&preview);
+    // GtkEntry may collapse its native selection as the user moves focus
+    // onto an OSK key. Preserve the last live selection so that clicking
+    // Caret left/right, Backspace or a character uses the pre-transfer range.
+    // Never preserve it across an actual text edit or a focused deselection.
+    let pending_selection: Rc<Cell<Option<(usize, usize)>>> = Rc::new(Cell::new(None));
+    preview.connect_notify_local(Some("selection-bound"), {
+        let pending_selection = pending_selection.clone();
+        move |entry, _| {
+            let selected = entry
+                .selection_bounds()
+                .map(|(a, b)| (a.max(0) as usize, b.max(0) as usize));
+            if selected.is_some() || entry.has_focus() {
+                pending_selection.set(selected);
+            }
+        }
+    });
     let error = gtk::Label::new(None);
     error.add_css_class("error");
     error.set_wrap(true);
@@ -439,9 +455,13 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     // Native typing, IME and paste must clear stale URL validation feedback
     // just as pressing an on-screen key does.
     let weak_error = error.downgrade();
-    preview.connect_changed(move |_| {
-        if let Some(error) = weak_error.upgrade() {
-            error.set_text("");
+    preview.connect_changed({
+        let pending_selection = pending_selection.clone();
+        move |_| {
+            pending_selection.set(None);
+            if let Some(error) = weak_error.upgrade() {
+                error.set_text("");
+            }
         }
     });
     // Keep every action visible at once. A GTK scroller used to clip
@@ -488,6 +508,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             // No descendant callback captures a strong dialog or origin.
             let weak_dialog = weak_dialog.clone();
             let preview = preview.clone();
+            let pending_selection = pending_selection.clone();
             let error = error.clone();
             let weak_target = weak_target.clone();
             let parent = parent.clone();
@@ -555,6 +576,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                             }
                         }
                         let mut draft = from_preview(&preview);
+                        if draft.selection.is_none() {
+                            draft.selection = pending_selection.get();
+                        }
+                        pending_selection.set(None);
                         match (r, c) {
                             (5, 0) => draft.backspace(),
                             (5, 1) => draft.move_caret(true),
