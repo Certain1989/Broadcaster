@@ -439,24 +439,38 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     let assert_inside = || {
         for button in &buttons {
             assert!(button.is_mapped(), "every key must be mapped");
-        let rect = button
-            .compute_bounds(&dialog)
-            .expect("mapped key has dialog-relative coordinates");
-        assert!(
-            rect.x() >= -1.0
-                && rect.x() + rect.width() <= dialog.width() as f32 + 1.0
-                && rect.y() >= -1.0
-                && rect.y() + rect.height() <= dialog.height() as f32 + 1.0,
-            "keyboard key {:?} lies outside dialog bounds",
-            button.label()
-        );
+            let rect = button
+                .compute_bounds(&dialog)
+                .expect("mapped key has dialog-relative coordinates");
+            assert!(
+                rect.x() >= -1.0
+                    && rect.x() + rect.width() <= dialog.width() as f32 + 1.0
+                    && rect.y() >= -1.0
+                    && rect.y() + rect.height() <= dialog.height() as f32 + 1.0,
+                "keyboard key {:?} lies outside dialog bounds",
+                button.label()
+            );
         }
     };
     assert_inside();
-    for name in ["Backspace", "Caret left", "Space", "Caret right", "Clear",
-                 "Shift", "QWERTZ", "Symbols", "Done", "Cancel"] {
-        assert!(buttons.iter().any(|button| button.label().as_deref() == Some(name)),
-                "required key {name} must be visible");
+    for name in [
+        "Backspace",
+        "Caret left",
+        "Space",
+        "Caret right",
+        "Clear",
+        "Shift",
+        "QWERTZ",
+        "Symbols",
+        "Done",
+        "Cancel",
+    ] {
+        assert!(
+            buttons
+                .iter()
+                .any(|button| button.label().as_deref() == Some(name)),
+            "required key {name} must be visible"
+        );
     }
     // Shift changes the German action label's natural width; it must still
     // leave Done and Cancel fully visible without any horizontal scrolling.
