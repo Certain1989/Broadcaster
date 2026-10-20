@@ -28,6 +28,20 @@ impl PlaybackReturn {
     }
 }
 
+/// Keypad arrows normally represent the same remote direction as dedicated
+/// arrows when Num Lock is off. Preserve physical key identity outside the
+/// application's remote router and all modal/popover native editing.
+fn normalize_remote_arrow(key: gtk::gdk::Key) -> gtk::gdk::Key {
+    use gtk::gdk::Key;
+    match key {
+        Key::KP_Left => Key::Left,
+        Key::KP_Right => Key::Right,
+        Key::KP_Up => Key::Up,
+        Key::KP_Down => Key::Down,
+        _ => key,
+    }
+}
+
 /// Measured in the same mapped page coordinates. No synthetic tab order:
 /// each remote direction selects an actually visible geometric neighbor.
 #[derive(Clone, Copy, Debug)]
@@ -722,13 +736,10 @@ impl TvWindow {
             // A nested keyboard cancels its own draft; Home cannot navigate
             // behind the active modal or dismiss the source editor.
             if dialog.has_css_class("osk-feasibility")
-                && modifiers.is_empty()
+                && crate::keyboard::unmodified_remote(modifiers)
                 && matches!(
                     key,
-                    gtk::gdk::Key::Back
-                        | gtk::gdk::Key::Escape
-                        | gtk::gdk::Key::Home
-                        | gtk::gdk::Key::HomePage
+                    gtk::gdk::Key::Back | gtk::gdk::Key::Escape | gtk::gdk::Key::HomePage
                 )
             {
                 tracing::trace!("osk prototype: window cancel capture");
@@ -756,9 +767,10 @@ impl TvWindow {
             }
         }
 
-        if !modifiers.is_empty() {
+        if !crate::keyboard::unmodified_remote(modifiers) {
             return glib::Propagation::Proceed;
         }
+        let key = normalize_remote_arrow(key);
 
         // A key still held as mpv relinquishes Wayland focus is not a
         // main-application Back/Home command while playback is active.
@@ -849,7 +861,7 @@ fn modal_remote_action(
     key: gtk::gdk::Key,
     modifiers: gtk::gdk::ModifierType,
 ) -> Option<ModalRemoteAction> {
-    if !modifiers.is_empty() {
+    if !crate::keyboard::unmodified_remote(modifiers) {
         return None;
     }
     match key {
@@ -1202,6 +1214,18 @@ mod playback_navigation_tests {
 
 #[cfg(test)]
 mod spatial_navigation_tests {
+    #[test]
+    fn keypad_and_lock_modifiers_preserve_navigation_intent() {
+        use gtk::gdk::{Key, ModifierType as Mods};
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Left), Key::Left);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Right), Key::Right);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Up), Key::Up);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Down), Key::Down);
+        assert!(crate::keyboard::unmodified_remote(Mods::LOCK_MASK | Mods::MOD2_MASK));
+        assert!(!crate::keyboard::unmodified_remote(Mods::CONTROL_MASK));
+        assert_eq!(super::modal_remote_action(Key::Home, Mods::empty()), None);
+    }
+
     use super::{spatial_neighbor, ToolbarRect};
     use adw::gtk::gdk::Key;
 
