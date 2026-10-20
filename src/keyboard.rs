@@ -545,6 +545,17 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                         relabel(&keys.borrow(), qwertz.get(), shifted.get(), symbols.get());
                     }
                     _ => {
+                        if (r, c) == (5, 0) {
+                            // GtkEntry delegates editing to GtkText. Invoke
+                            // its native Backspace action instead of deleting
+                            // one Rust char (which splits grapheme clusters).
+                            if let Some(text) =
+                                preview.delegate().and_downcast::<gtk::Text>()
+                            {
+                                text.emit_by_name::<()>("backspace", &[]);
+                                return;
+                            }
+                        }
                         let mut draft = from_preview(&preview);
                         match (r, c) {
                             (5, 0) => draft.backspace(),
