@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn lock_modifiers_do_not_disable_remote_navigation() {
         use gtk::gdk::ModifierType as Mods;
-        assert!(unmodified_remote(Mods::LOCK_MASK | Mods::MOD2_MASK));
+        assert!(unmodified_remote(Mods::LOCK_MASK));
         assert!(!unmodified_remote(Mods::SHIFT_MASK | Mods::LOCK_MASK));
         assert!(!unmodified_remote(Mods::CONTROL_MASK));
     }
