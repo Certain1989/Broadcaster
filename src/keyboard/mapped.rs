@@ -195,6 +195,191 @@ fn osk_mapped_gtk_caret_buttons_collapse_selection() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_pending_selection_native_backspace() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("abcdef");
+    body.append(&source);
+    spin();
+    let changes = Rc::new(Cell::new(0));
+    source.connect_changed({
+        let changes = changes.clone();
+        move |_| changes.set(changes.get() + 1)
+    });
+
+    // Force the precise focus-loss state: selection retained by the OSK
+    // but collapsed in GtkText. The native action must delete "cd".
+    show(&source);
+    let dlg = keyboard(&win, &source);
+    let draft = find_entry(dlg.upcast_ref()).expect("draft");
+    draft.set_position(4);
+    assert!(draft.selection_bounds().is_none());
+    assert!(native_preview_backspace(&draft, Some((2, 4))));
+    assert_eq!(draft.text(), "abef");
+    assert_eq!(source.text(), "abcdef");
+    click(&dlg, "Cancel");
+    assert_eq!(source.text(), "abcdef");
+    assert_eq!(changes.get(), 0);
+
+    // Exercise the actual mapped key/selection capture path separately.
+    show(&source);
+    let dlg = keyboard(&win, &source);
+    let draft = find_entry(dlg.upcast_ref()).expect("draft");
+    draft.select_region(2, 4);
+    click(&dlg, "Backspace");
+    assert_eq!(draft.text(), "abef", "selected span wins over caret");
+    assert_eq!(source.text(), "abcdef", "draft must remain private");
+    click(&dlg, "Done");
+    assert_eq!(source.text(), "abef");
+    assert_eq!(changes.get(), 1, "Done emits one original changed");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
+    let (win, body) = host();
+    let form = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    form.set_hexpand(true);
+    body.append(&form);
+    let url = gtk::Entry::new();
+    url.set_hexpand(true);
+    form.append(&url);
+    let launcher = gtk::Button::with_label("Keyboard");
+    style_add_playlist_url_launcher(&launcher);
+    bind_launcher(&launcher, &url, KeyboardOptions::url());
+    form.append(&launcher);
+    spin();
+
+    assert!(form.width() > 300, "fixture must exercise wide dialog layout");
+    assert!(launcher.width() >= 48 && launcher.height() >= 44);
+    assert!(launcher.width() < 100, "icon button must not stretch to field width");
+    let field_rect = url.compute_bounds(&form).expect("mapped URL bounds");
+    let key_rect = launcher.compute_bounds(&form).expect("mapped launcher bounds");
+    assert!(
+        ((field_rect.x() + field_rect.width()) - (key_rect.x() + key_rect.width())).abs() <= 4.0,
+        "launcher must align at the right edge"
+    );
+    assert!(url.grab_focus());
+    assert!(url.has_focus());
+    assert!(launcher.grab_focus());
+    assert!(launcher.has_focus(), "launcher must be focusable by remote");
+    assert!(url.grab_focus());
+    win.destroy();
+}
+
+// Exercises observable wrapper signal semantics, not a claim of universal
+// transaction atomicity across arbitrary GTK delegate implementations.
+fn reentrant_signal_trace<T>(win: &adw::Window, target: &T)
+where
+    T: IsA<gtk::Widget> + IsA<gtk::Editable> + Clone + 'static,
+{
+    let editable: gtk::Editable = target.clone().upcast();
+    let observed = Rc::new(RefCell::new(Vec::<String>::new()));
+    editable.connect_changed({
+        let observed = observed.clone();
+        move |entry| observed.borrow_mut().push(format!("first:{}", entry.text()))
+    });
+    let to_disconnect = Rc::new(RefCell::new(None::<glib::SignalHandlerId>));
+    let id = editable.connect_changed({
+        let observed = observed.clone();
+        move |entry| observed.borrow_mut().push(format!("second:{}", entry.text()))
+    });
+    *to_disconnect.borrow_mut() = Some(id);
+    let connected = Rc::new(Cell::new(false));
+    let notified = Rc::new(Cell::new(0u32));
+    editable.connect_notify_local(Some("text"), {
+        let observed = observed.clone();
+        let to_disconnect = to_disconnect.clone();
+        let connected = connected.clone();
+        let notified = notified.clone();
+        move |entry, _| {
+            notified.set(notified.get() + 1);
+            if entry.text().as_str() == "after" && !connected.replace(true) {
+                if let Some(id) = to_disconnect.borrow_mut().take() {
+                    entry.disconnect(id);
+                }
+                let observed = observed.clone();
+                entry.connect_changed(move |entry| {
+                    observed.borrow_mut().push(format!("new:{}", entry.text()))
+                });
+            }
+        }
+    });
+    show_with_options(target, KeyboardOptions::default());
+    let dlg = keyboard(win, target);
+    find_entry(dlg.upcast_ref()).expect("draft").set_text("after");
+    assert!(observed.borrow().is_empty(), "draft cannot notify source");
+    click(&dlg, "Cancel");
+    assert!(observed.borrow().is_empty(), "Cancel cannot notify source");
+
+    show_with_options(target, KeyboardOptions::default());
+    let dlg = keyboard(win, target);
+    find_entry(dlg.upcast_ref()).expect("draft").set_text("after");
+    click(&dlg, "Done");
+    assert!(connected.get(), "native text notification must be observable");
+    assert!(notified.get() > 0);
+    assert_eq!(editable.text(), "after");
+    let trace = observed.borrow();
+    assert_eq!(trace.iter().filter(|s| s.as_str() == "first:after").count(), 1);
+    assert_eq!(trace.iter().filter(|s| s.as_str() == "second:after").count(), 0);
+    assert_eq!(trace.iter().filter(|s| s.as_str() == "new:after").count(), 1);
+    drop(trace);
+    observed.borrow_mut().clear();
+    editable.set_text("later");
+    let trace = observed.borrow();
+    assert_eq!(trace.iter().filter(|s| s.as_str() == "first:later").count(), 1);
+    assert_eq!(trace.iter().filter(|s| s.as_str() == "new:later").count(), 1,
+        "newly added callback must not remain accidentally blocked");
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_entry_reentrant_signal_trace() {
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    entry.set_text("before");
+    body.append(&entry);
+    spin();
+    reentrant_signal_trace(&win, &entry);
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_search_reentrant_signal_trace() {
+    let (win, body) = host();
+    let search = gtk::SearchEntry::new();
+    search.set_text("before");
+    body.append(&search);
+    spin();
+    reentrant_signal_trace(&win, &search);
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_entry_row_reentrant_signal_trace() {
+    let (win, _) = host();
+    let prefs = adw::PreferencesDialog::new();
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    let row = adw::EntryRow::new();
+    row.set_title("Synthetic editable");
+    row.set_text("before");
+    group.add(&row);
+    page.add(&group);
+    prefs.add(&page);
+    prefs.present(Some(&win));
+    spin();
+    assert!(row.is_mapped());
+    reentrant_signal_trace(&win, &row);
+    prefs.close();
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_native_url_correction_clears_error() {
     let (win, body) = host();
     let source = gtk::Entry::new();
