@@ -139,9 +139,7 @@ fn osk_mapped_gtk_multiple_changed_signal_observers() {
     for id in ["first", "second"] {
         let observed = observed.clone();
         entry.connect_changed(move |entry| {
-            observed
-                .borrow_mut()
-                .push(format!("{id}:{}", entry.text()));
+            observed.borrow_mut().push(format!("{id}:{}", entry.text()));
         });
     }
     let notified = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -182,13 +180,25 @@ fn osk_mapped_gtk_native_unicode_backspace() {
     preview.set_text("e\u{301}");
     preview.set_position(-1);
     click(&dlg, "Backspace");
-    assert_eq!(preview.text(), "", "native Backspace must remove the accent cluster");
-    assert_eq!(entry.text(), "unchanged", "the source is isolated until Done");
+    assert_eq!(
+        preview.text(),
+        "",
+        "native Backspace must remove the accent cluster"
+    );
+    assert_eq!(
+        entry.text(),
+        "unchanged",
+        "the source is isolated until Done"
+    );
 
     preview.set_text("👨‍👩‍👧");
     preview.set_position(-1);
     click(&dlg, "Backspace");
-    assert_eq!(preview.text(), "", "native Backspace handles a joined emoji cluster");
+    assert_eq!(
+        preview.text(),
+        "",
+        "native Backspace handles a joined emoji cluster"
+    );
     click(&dlg, "Cancel");
     assert_eq!(entry.text(), "unchanged");
     win.destroy();
