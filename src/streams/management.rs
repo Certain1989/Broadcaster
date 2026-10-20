@@ -307,9 +307,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         row(&gettext("Playlist HTTP(S) URL"), &field, &body);
         body.append(&url_error);
         let keyboard = button(&gettext("Keyboard"), &body);
-        keyboard.set_icon_name("input-keyboard-symbolic");
-        keyboard.set_size_request(48, 44);
-        keyboard.set_halign(gtk::Align::End);
+        crate::keyboard::style_add_playlist_url_launcher(&keyboard);
         crate::keyboard::bind_launcher(&keyboard, &field, crate::keyboard::KeyboardOptions::url());
         // Keep Left/Right in the URL entry for its native caret. The
         // vertical boundary exposes the keyboard to an ordinary D-pad.
