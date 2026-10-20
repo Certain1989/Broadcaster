@@ -1068,7 +1068,7 @@ mod playback_navigation_tests {
         assert_eq!(
             spatial_neighbor(&med_rects, 0, gtk::gdk::Key::Right),
             Some(1),
-            "mapped search and the right-hand toggle must be spatial neighbors"
+            "mapped search and the right-hand toggle must be spatial neighbors: {med_rects:?}"
         );
         assert!(med[0].grab_focus());
         med_search.set_position(-1);
