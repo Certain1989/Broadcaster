@@ -507,12 +507,12 @@ impl TvWindow {
         page: &gtk::Widget,
         focused: &gtk::Widget,
         key: gtk::gdk::Key,
-    ) -> bool {
+    ) -> Option<bool> {
         let controls = match page_name {
             "live" => self.imp().live_view.toolbar_focus_targets(),
             "mediathek" => self.imp().mediathek_view.toolbar_focus_targets(),
             "streams" => self.imp().streams_view.toolbar_focus_targets(),
-            _ => return false,
+            _ => return None,
         };
         let mapped: Vec<_> = controls
             .into_iter()
@@ -520,35 +520,35 @@ impl TvWindow {
             .filter_map(|w| ToolbarRect::of(&w, page).map(|rect| (w, rect)))
             .collect();
         let Some(current) = mapped.iter().position(|(w, _)| Self::is_within(focused, w)) else {
-            return false; // Never intercept list rows or nested dialogs.
+            return None; // Never intercept list rows or nested dialogs.
         };
 
         if matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right) {
             if let Some(entry) = mapped[current].0.downcast_ref::<gtk::SearchEntry>() {
                 if entry.selection_bounds().is_some() {
-                    return false;
+                    return Some(false);
                 }
                 let position = entry.position();
                 let last = entry.text().chars().count() as i32;
                 if (key == gtk::gdk::Key::Left && position > 0)
                     || (key == gtk::gdk::Key::Right && position < last)
                 {
-                    return false;
+                    return Some(false);
                 }
             }
         }
 
         let geometry: Vec<_> = mapped.iter().map(|(_, rect)| *rect).collect();
         if let Some(index) = spatial_neighbor(&geometry, current, key) {
-            return mapped[index].0.grab_focus();
+            return Some(mapped[index].0.grab_focus());
         }
         // Upper and lower boundaries deliberately remain navigable without
         // introducing diagonal/historical Up-Down toolbar chains.
         if key == gtk::gdk::Key::Up {
-            return self.focus_page_switcher();
+            return Some(self.focus_page_switcher());
         }
         if key == gtk::gdk::Key::Down {
-            return match page_name {
+            return Some(match page_name {
                 "live" => Self::find_descendant(page, &|w| w.is::<gtk::ListBox>())
                     .and_then(|list| list.downcast::<gtk::ListBox>().ok())
                     .and_then(|list| list.row_at_index(0))
@@ -556,9 +556,9 @@ impl TvWindow {
                 "mediathek" => self.imp().mediathek_view.focus_first_result(),
                 "streams" => self.imp().streams_view.focus_first_result(),
                 _ => false,
-            };
+            });
         }
-        false
+        Some(false)
     }
 
     /// Only bridge the known boundaries between list, toolbar and page
@@ -584,7 +584,7 @@ impl TvWindow {
         let search = Self::find_descendant(page, &|widget| widget.is::<gtk::SearchEntry>());
 
         if Self::is_within(&focused, page) {
-            if self.focus_spatial_toolbar_key(
+            if let Some(handled) = self.focus_spatial_toolbar_key(
                 self.imp()
                     .stack
                     .visible_child_name()
@@ -594,7 +594,10 @@ impl TvWindow {
                 &focused,
                 key,
             ) {
-                return true;
+                // A toolbar key was considered here. Never fall through to
+                // the historical fixed vertical chain, even when native text
+                // caret handling must receive an unconsumed arrow.
+                return handled;
             }
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
                 // Escape from any virtualized row using one remote key, no
