@@ -126,6 +126,49 @@ fn osk_mapped_gtk_input_transaction_and_cancel() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_multiple_changed_signal_observers() {
+    // R-01: Make the observable signal trace explicit, without pretending it
+    // proves equivalence for every custom/delegated GtkEditable implementation.
+    let (win, body) = host();
+    let entry = gtk::Entry::new();
+    entry.set_text("before");
+    body.append(&entry);
+    spin();
+
+    let observed = Rc::new(RefCell::new(Vec::<String>::new()));
+    for id in ["first", "second"] {
+        let observed = observed.clone();
+        entry.connect_changed(move |entry| {
+            observed
+                .borrow_mut()
+                .push(format!("{id}:{}", entry.text()));
+        });
+    }
+    let notified = Rc::new(RefCell::new(Vec::<String>::new()));
+    entry.connect_notify_local(Some("text"), {
+        let notified = notified.clone();
+        move |entry, _| notified.borrow_mut().push(entry.text().to_string())
+    });
+
+    show(&entry);
+    let dlg = keyboard(&win, &entry);
+    find_entry(dlg.upcast_ref())
+        .expect("draft")
+        .set_text("after");
+    assert!(observed.borrow().is_empty(), "draft is isolated");
+    click(&dlg, "Done");
+    assert_eq!(
+        observed.borrow().as_slice(),
+        &["first:after".to_string(), "second:after".to_string()],
+        "every changed observer must see the final text exactly once"
+    );
+    assert_eq!(entry.text(), "after");
+    assert_eq!(notified.borrow().last().map(String::as_str), Some("after"));
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_native_unicode_backspace() {
     let (win, body) = host();
     let entry = gtk::Entry::new();
