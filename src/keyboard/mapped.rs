@@ -288,6 +288,22 @@ where
     *to_disconnect.borrow_mut() = Some(id);
     let connected = Rc::new(Cell::new(false));
     let notified = Rc::new(Cell::new(0u32));
+    let delegate_events = Rc::new(RefCell::new(Vec::<&'static str>::new()));
+    if let Some(delegate) = editable.delegate() {
+        delegate.connect_insert_text({
+            let events = delegate_events.clone();
+            move |_, _, _| events.borrow_mut().push("insert")
+        });
+        delegate.connect_delete_text({
+            let events = delegate_events.clone();
+            move |_, _, _| events.borrow_mut().push("delete")
+        });
+    }
+    let search_changes = Rc::new(Cell::new(0u32));
+    if let Ok(search) = target.clone().upcast::<gtk::Widget>().downcast::<gtk::SearchEntry>() {
+        let events = search_changes.clone();
+        search.connect_search_changed(move |_| events.set(events.get() + 1));
+    }
     editable.connect_notify_local(Some("text"), {
         let observed = observed.clone();
         let to_disconnect = to_disconnect.clone();
@@ -329,8 +345,16 @@ where
     editable.set_text("later");
     let trace = observed.borrow();
     assert_eq!(trace.iter().filter(|s| s.as_str() == "first:later").count(), 1);
-    assert_eq!(trace.iter().filter(|s| s.as_str() == "new:later").count(), 1,
-        "newly added callback must not remain accidentally blocked");
+    assert_eq!(
+        trace.iter().filter(|s| s.as_str() == "new:later").count(),
+        1,
+        "newly added callback must not remain accidentally blocked"
+    );
+    eprintln!(
+        "Mapped GTK delegate trace: {} insert/delete events, {} search-changed events",
+        delegate_events.borrow().len(),
+        search_changes.get()
+    );
 }
 
 #[test]
