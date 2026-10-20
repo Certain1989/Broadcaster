@@ -549,9 +549,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                             // GtkEntry delegates editing to GtkText. Invoke
                             // its native Backspace action instead of deleting
                             // one Rust char (which splits grapheme clusters).
-                            if let Some(text) =
-                                preview.delegate().and_downcast::<gtk::Text>()
-                            {
+                            if let Some(text) = preview.delegate().and_downcast::<gtk::Text>() {
                                 text.emit_by_name::<()>("backspace", &[]);
                                 return;
                             }
