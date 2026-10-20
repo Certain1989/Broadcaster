@@ -20,6 +20,7 @@ for case in \
   osk_mapped_gtk_native_unicode_backspace \
   osk_mapped_gtk_caret_buttons_collapse_selection \
   osk_mapped_gtk_multiple_changed_signal_observers \
+  osk_mapped_gtk_native_url_correction_clears_error \
   osk_mapped_gtk_lifecycle_guards \
   osk_mapped_gtk_preferences_expander_and_popover \
   osk_mapped_gtk_entry_row_immediate_save_once \
