@@ -517,7 +517,11 @@ impl TvWindow {
         let mapped: Vec<_> = controls
             .into_iter()
             .filter(|w| w.is_mapped() && w.is_sensitive() && w.is_visible())
-            .filter_map(|w| ToolbarRect::of(&w, page).map(|rect| (w, rect)))
+            .filter_map(|w| {
+                ToolbarRect::of(&w, page)
+                    .filter(|rect| rect.right > rect.left + 1.0 && rect.bottom > rect.top + 1.0)
+                    .map(|rect| (w, rect))
+            })
             .collect();
         let Some(current) = mapped.iter().position(|(w, _)| Self::is_within(focused, w)) else {
             return None; // Never intercept list rows or nested dialogs.
@@ -1017,10 +1021,13 @@ mod playback_navigation_tests {
         // the actual K1 keyboard, Mediathek toggles and Streams filter rows.
         // A list-only test would miss the wrong Up/Down upper-control chain.
         let spin = || {
+            // A mapped widget can still have 0px allocation until the next
+            // GDK frame. Drain events *and* allow frame clock ticks on Xvfb.
             for _ in 0..20 {
                 while glib::MainContext::default().pending() {
                     glib::MainContext::default().iteration(false);
                 }
+                std::thread::sleep(std::time::Duration::from_millis(16));
             }
         };
         let assert_focused = |target: &gtk::Widget| {
@@ -1054,6 +1061,7 @@ mod playback_navigation_tests {
         live_search.set_text("");
 
         stack.set_visible_child_name("mediathek");
+        window.queue_allocate();
         spin();
         let med = window.imp().mediathek_view.toolbar_focus_targets();
         assert_eq!(med.len(), 6, "search, two toggles, three filters");
@@ -1085,6 +1093,7 @@ mod playback_navigation_tests {
         assert_focused(&med[5]);
 
         stack.set_visible_child_name("streams");
+        window.queue_allocate();
         spin();
         let filters = streams.toolbar_focus_targets();
         assert!(filters[1].grab_focus());
