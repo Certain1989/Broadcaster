@@ -423,7 +423,9 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         line.set_hexpand(true);
         line.set_halign(gtk::Align::Fill);
-        line.set_homogeneous(true);
+        // Characters should be equal width. Action labels vary by language:
+        // forcing them homogeneous would clip German 'Umschaltung aktiv'.
+        line.set_homogeneous(r <= 4);
         if r == 6 {
             line.set_margin_top(6);
         }
