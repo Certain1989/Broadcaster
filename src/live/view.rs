@@ -277,6 +277,13 @@ impl TvLiveView {
         self.imp().focus_search();
     }
 
+    /// Expose the real channel toolbar for offline mapped GTK navigation tests.
+    /// Production still waits for the normal asynchronous channel load.
+    #[cfg(test)]
+    pub(crate) fn show_toolbar_for_test(&self) {
+        self.imp().stack.set_visible_child_name("channels");
+    }
+
     /// Only mapped upper controls belong to spatial arrow navigation.
     /// Returning the actual field instance preserves K1's ON/OFF launcher.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
