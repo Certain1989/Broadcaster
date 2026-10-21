@@ -953,6 +953,92 @@ x.XCloseDisplay(d)
 
     #[test]
     #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_first_move_down_reverse_and_middle_up_native_persistence() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "mapped real Preferences channel page");
+
+        let settings = TvSettings::get();
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        settings.connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        fn model_order(page: &TvLiveChannelSelector) -> Vec<ChannelId> {
+            page.imp()
+                .visible_channels
+                .iter::<TvLiveChannelSelectorRow>()
+                .map(|entry| entry.expect("channel row").channel_id())
+                .collect()
+        }
+
+        fn native_move(
+            win: &crate::window::TvWindow,
+            page: &TvLiveChannelSelector,
+            position: i32,
+            arrow: &str,
+        ) {
+            let selected = row(page, position);
+            let button = find_menu(selected.upcast_ref(), "Move").expect("Move launcher");
+            assert!(button.grab_focus(), "focus originating Move launcher");
+            native_key("Return");
+            let popup = button.popover().expect("mapped Move popup");
+            assert!(popup.is_mapped(), "Return opens popup before {arrow}");
+            native_key(arrow);
+            let in_popup = gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focus| {
+                focus == popup.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popup)
+            });
+            assert!(popup.is_mapped() && in_popup, "native {arrow} must remain in popup");
+            native_key("Return");
+            assert!(!popup.is_mapped(), "Return executes Move and closes popup");
+        }
+
+        let alpha = ChannelId::from("fixture-channel-a".to_string());
+        let bravo = ChannelId::from("fixture-channel-b".to_string());
+        let charlie = ChannelId::from("fixture-channel-c".to_string());
+        let original = vec![alpha.clone(), bravo.clone(), charlie.clone()];
+        assert_eq!(model_order(&page), original, "original synthetic order");
+        assert_eq!(saves.get(), 0, "initial fixture must not save");
+
+        // Boundary Move Up is disabled, but Move Down must still be
+        // selectable with real remote Down/Return.
+        native_move(&win, &page, 0, "Down");
+        let first_down = vec![bravo.clone(), alpha.clone(), charlie.clone()];
+        assert_eq!(model_order(&page), first_down);
+        assert_eq!(settings.live_channels(), first_down);
+        assert_eq!(saves.get(), 1, "first-row down writes final order once");
+
+        // Move that same row back from the middle to first position.
+        native_move(&win, &page, 1, "Up");
+        assert_eq!(model_order(&page), original);
+        assert_eq!(settings.live_channels(), original);
+        assert_eq!(saves.get(), 2, "reverse move persists once");
+
+        // The previously middle row can independently become the first.
+        native_move(&win, &page, 1, "Up");
+        assert_eq!(model_order(&page), first_down);
+        assert_eq!(settings.live_channels(), first_down);
+        assert_eq!(saves.get(), 3, "middle-to-first persists once");
+
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
     fn osk_mapped_gtk_channel_sort_menu_native_remote() {
         adw::init().expect("GTK display");
         let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
