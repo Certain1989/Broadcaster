@@ -17,9 +17,22 @@ template $TvStreamsView: Adw.Bin {
         "tv-streams-controls"
       ]
 
-      Gtk.SearchEntry search_entry {
-        placeholder-text: _("Search My Channels");
-        hexpand: true;
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 12;
+
+        Gtk.SearchEntry search_entry {
+          placeholder-text: _("Search My Channels");
+          hexpand: true;
+        }
+
+        Gtk.Button keyboard_button {
+          icon-name: "input-keyboard-symbolic";
+          tooltip-text: _("Open on-screen keyboard");
+          width-request: 48;
+          height-request: 44;
+          valign: center;
+        }
       }
 
       Gtk.Box filter_bar {
