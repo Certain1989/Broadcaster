@@ -16,6 +16,10 @@ failed=0
 failed_cases=""
 for case in \
   osk_mapped_gtk_close_releases_dialog_and_draft \
+  osk_mapped_gtk_done_and_back_release_dialog_and_draft \
+  osk_mapped_gtk_parent_close_during_draft \
+  osk_mapped_gtk_cancel_invalidated_origin \
+  osk_mapped_gtk_dropped_origin_cancel_nonretention \
   osk_mapped_gtk_input_transaction_and_cancel \
   osk_mapped_gtk_native_unicode_backspace \
   osk_mapped_gtk_pending_selection_native_backspace \
