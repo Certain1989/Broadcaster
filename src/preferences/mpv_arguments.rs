@@ -449,7 +449,11 @@ x.XCloseDisplay(d)
 
     fn find_listbox(widget: &gtk::Widget) -> Option<gtk::ListBox> {
         if let Some(list) = widget.downcast_ref::<gtk::ListBox>() {
-            return Some(list.clone());
+            // Adw.PreferencesPage contains internal ListBoxes. Only the
+            // actual boxed argument list owns the editable argument rows.
+            if list.has_css_class("boxed-list") {
+                return Some(list.clone());
+            }
         }
         let mut child = widget.first_child();
         while let Some(w) = child {
