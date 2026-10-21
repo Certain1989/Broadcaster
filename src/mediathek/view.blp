@@ -38,14 +38,17 @@ template $TvMediathekView: Adw.Bin {
         Gtk.Button keyboard_button {
           icon-name: "input-keyboard-symbolic";
           tooltip-text: _("Open on-screen keyboard");
-          // Use GTK's natural icon-button size like the two adjacent toggles;
-          // mapped focus and OSK interaction are verified separately.
+          // Match the compact search-row button size in the other views.
+          width-request: 48;
+          height-request: 44;
           valign: center;
         }
 
         Gtk.ToggleButton {
           icon-name: "search-global-symbolic";
           tooltip-text: _("Search Everywhere");
+          width-request: 48;
+          height-request: 44;
           valign: center;
           active: bind template.search_everywhere bidirectional;
         }
@@ -53,6 +56,8 @@ template $TvMediathekView: Adw.Bin {
         Gtk.ToggleButton {
           icon-name: "month-symbolic";
           tooltip-text: _("Include Future Shows");
+          width-request: 48;
+          height-request: 44;
           valign: center;
           active: bind template.include-future bidirectional;
         }
