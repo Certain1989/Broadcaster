@@ -1067,59 +1067,33 @@ x.XCloseDisplay(d)
             win: &crate::window::TvWindow,
             page: &TvLiveChannelSelector,
             position: i32,
-            arrow: &str,
+            arrows: &[&str],
         ) {
             let selected = row(page, position);
             let button = find_menu(selected.upcast_ref(), "Move").expect("Move launcher");
             assert!(button.grab_focus(), "focus originating Move launcher");
             native_key("Return");
             let popup = button.popover().expect("mapped Move popup");
-            assert!(popup.is_mapped(), "Return opens popup before {arrow}");
-            fn dump_menu_focus(widget: &gtk::Widget) {
-                if widget.is_focusable() && widget.is_mapped() {
-                    eprintln!(
-                        "F02 native widget type={} focused={} sensitive={}",
-                        widget.type_().name(),
-                        widget.has_focus(),
-                        widget.is_sensitive()
-                    );
-                }
-                let mut child = widget.first_child();
-                while let Some(next) = child {
-                    dump_menu_focus(&next);
-                    child = next.next_sibling();
-                }
-            }
-            eprintln!(
-                "F02 native {arrow} popup initial focus={:?}",
-                gtk::prelude::GtkWindowExt::focus(win)
-                    .as_ref()
-                    .map(|widget| widget.type_().name().to_string())
-            );
-            dump_menu_focus(popup.upcast_ref());
-            native_key(arrow);
-            eprintln!(
-                "F02 native {arrow} popup after arrow focus={:?}",
-                gtk::prelude::GtkWindowExt::focus(win)
-                    .as_ref()
-                    .map(|widget| widget.type_().name().to_string())
-            );
-            dump_menu_focus(popup.upcast_ref());
-            let in_popup = gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focus| {
-                focus == popup.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popup)
-            });
+            assert!(popup.is_mapped(), "Return opens Move popup");
+
+            let focus = gtk::prelude::GtkWindowExt::focus(win).expect("initial menu focus");
             assert!(
-                popup.is_mapped() && in_popup,
-                "native {arrow} must remain in popup"
+                focus.is_ancestor(&popup) && is_mapped_menu_action(&focus),
+                "initial menu focus must be on an enabled GTK action"
             );
+            // Native arrows navigate between actual model actions; check
+            // focus and sensitivity after each key without resetting focus.
+            for arrow in arrows {
+                native_key(arrow);
+                let focus = gtk::prelude::GtkWindowExt::focus(win).expect("menu arrow focus");
+                assert!(
+                    popup.is_mapped()
+                        && focus.is_ancestor(&popup)
+                        && is_mapped_menu_action(&focus),
+                    "native {arrow} must leave an enabled action focused"
+                );
+            }
             native_key("Return");
-            eprintln!(
-                "F02 native {arrow} after Return mapped={} focus={:?}",
-                popup.is_mapped(),
-                gtk::prelude::GtkWindowExt::focus(win)
-                    .as_ref()
-                    .map(|widget| widget.type_().name().to_string())
-            );
             assert!(!popup.is_mapped(), "Return executes Move and closes popup");
         }
 
@@ -1132,20 +1106,20 @@ x.XCloseDisplay(d)
 
         // Boundary Move Up is disabled, but Move Down must still be
         // selectable with real remote Down/Return.
-        native_move(&win, &page, 0, "Down");
+        native_move(&win, &page, 0, &["Down"]);
         let first_down = vec![bravo.clone(), alpha.clone(), charlie.clone()];
         assert_eq!(model_order(&page), first_down);
         assert_eq!(settings.live_channels(), first_down);
         assert_eq!(saves.get(), 1, "first-row down writes final order once");
 
         // Move that same row back from the middle to first position.
-        native_move(&win, &page, 1, "Up");
+        native_move(&win, &page, 1, &["Down", "Up"]);
         assert_eq!(model_order(&page), original);
         assert_eq!(settings.live_channels(), original);
         assert_eq!(saves.get(), 2, "reverse move persists once");
 
         // The previously middle row can independently become the first.
-        native_move(&win, &page, 1, "Up");
+        native_move(&win, &page, 1, &["Down", "Up"]);
         assert_eq!(model_order(&page), first_down);
         assert_eq!(settings.live_channels(), first_down);
         assert_eq!(saves.get(), 3, "middle-to-first persists once");
