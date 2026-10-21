@@ -1114,7 +1114,7 @@ mod playback_navigation_tests {
         window.queue_allocate();
         spin();
         let med = window.imp().mediathek_view.toolbar_focus_targets();
-        assert_eq!(med.len(), 6, "search, two toggles, three filters");
+        assert_eq!(med.len(), 7, "search, keyboard, two toggles, three filters");
         assert!(med[0].is_mapped() && med[1].is_mapped());
         let med_search = med[0].clone().downcast::<gtk::SearchEntry>().unwrap();
         med_search.set_position(-1); // Explicitly move native caret to end.
