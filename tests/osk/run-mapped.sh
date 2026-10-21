@@ -62,7 +62,7 @@ do
     cargo test --locked "$case" -- --ignored --test-threads=1 $capture >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
     if [ "$case" = gtk_three_view_toolbar_geometry ]; then
-      grep "UX02 geometry" "$log_file" || :
+      grep -E "UX02 (geometry|compact)" "$log_file" || :
     fi
     if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
       grep 'F02 .*GtkModelButton' "$log_file" || :
