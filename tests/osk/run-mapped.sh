@@ -51,6 +51,9 @@ do
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
     cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
+    if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
+      grep 'F02 .*GtkModelButton' "$log_file" || :
+    fi
   else
     failed=1
     failed_cases="$failed_cases $case"
