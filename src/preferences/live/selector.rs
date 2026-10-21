@@ -705,6 +705,10 @@ x.XCloseDisplay(d)
             let in_hidden_list = focused
                 .as_ref()
                 .is_some_and(|widget| widget.is_ancestor(&*page.imp().hidden_channel_rows));
+            // GtkPopoverMenu is itself parented beneath its origin ListBox row.
+            // Popup descendants therefore also have list ancestry; that is
+            // not a background focus escape.
+            let escaped_background = !in_popup && (in_visible_list || in_hidden_list);
             let focus_ancestry = focused
                 .as_ref()
                 .map(|widget| {
@@ -718,7 +722,7 @@ x.XCloseDisplay(d)
                 })
                 .unwrap_or_else(|| "NONE".to_string());
             eprintln!(
-                "F02 step={} key={} mapped={} visible={} popup_focus={} visible_list_focus={} hidden_list_focus={} GtkWindow::focus={}",
+                "F02 step={} key={} mapped={} visible={} popup_focus={} visible_list_ancestry={} hidden_list_ancestry={} background_focus={} GtkWindow::focus={}",
                 step + 1,
                 key,
                 popup.is_mapped(),
@@ -726,10 +730,11 @@ x.XCloseDisplay(d)
                 in_popup,
                 in_visible_list,
                 in_hidden_list,
+                escaped_background,
                 focus_ancestry
             );
             assert!(
-                popup.is_mapped() && in_popup && !in_visible_list && !in_hidden_list,
+                popup.is_mapped() && in_popup && !escaped_background,
                 "F02 first-row focus escaped at native step {} key {}: popup mapped={} focus={}",
                 step + 1,
                 key,
