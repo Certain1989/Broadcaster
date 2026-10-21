@@ -1110,7 +1110,12 @@ mod tests {
                 "toolbar requests at least {minimum}px within {width}px viewport"
             );
             let imp = view.imp();
-            let filter_row = imp.filters_toolbar.get();
+            let filter_row = imp
+                .broadcaster_filter
+                .parent()
+                .expect("broadcaster filter group")
+                .parent()
+                .expect("filter toolbar");
             let panel = filter_row.parent().expect("toolbar panel");
             let search_row = imp.search_entry.parent().expect("search row");
             assert!(
