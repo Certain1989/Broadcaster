@@ -49,6 +49,53 @@ fn text(value: &str) -> gtk::Entry {
     entry
 }
 
+fn editable_control(field: &gtk::Entry, body: &gtk::Box) {
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    controls.append(field);
+    let keyboard = gtk::Button::new();
+    keyboard.set_icon_name("input-keyboard-symbolic");
+    keyboard.set_size_request(48, 44);
+    keyboard.set_valign(gtk::Align::Center);
+    crate::keyboard::bind_launcher(
+        &keyboard,
+        field,
+        crate::keyboard::KeyboardOptions::default(),
+    );
+    controls.append(&keyboard);
+    body.append(&controls);
+
+    // Entry Left/Right remain GTK caret keys. Down reveals its launcher;
+    // Up from the launcher returns focus to that exact live entry.
+    let down = gtk::EventControllerKey::new();
+    down.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_keyboard = keyboard.downgrade();
+    down.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && weak_keyboard.upgrade().is_some_and(|button| button.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    field.add_controller(down);
+    let up = gtk::EventControllerKey::new();
+    up.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_field = field.downgrade();
+    up.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    keyboard.add_controller(up);
+}
+
 fn label(value: &str, target: &gtk::Box) {
     let label = gtk::Label::new(Some(value));
     label.set_wrap(true);
@@ -114,7 +161,7 @@ fn editor_row(
 ) {
     label(&format!("{title} · {origin}"), box_);
     box_.append(picker);
-    box_.append(field);
+    editable_control(field, box_);
 }
 
 fn filled_region(code: &str, label: &str) -> Result<Region, &'static str> {
@@ -175,7 +222,7 @@ impl Fields {
                 .as_deref()
                 .unwrap_or(&detail.effective.visible_name),
         );
-        body.append(&name);
+        editable_control(&name, body);
         let name_error = gtk::Label::new(None);
         name_error.set_xalign(0.0);
         name_error.set_wrap(true);
@@ -287,7 +334,7 @@ impl Fields {
         );
         label(&gettext("Region label"), body);
         let region_label = text(region.and_then(|r| r.label.as_deref()).unwrap_or(""));
-        body.append(&region_label);
+        editable_control(&region_label, body);
         let region_error = gtk::Label::new(None);
         region_error.set_xalign(0.0);
         region_error.set_wrap(true);
