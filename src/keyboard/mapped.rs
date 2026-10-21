@@ -347,7 +347,7 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
     url.set_hexpand(true);
     form.append(&url);
     let launcher = gtk::Button::with_label("Keyboard");
-    style_add_playlist_url_launcher(&launcher);
+    style_add_playlist_field_launcher(&launcher);
     bind_launcher(&launcher, &url, KeyboardOptions::url());
     form.append(&launcher);
     spin();
