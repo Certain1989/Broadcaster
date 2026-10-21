@@ -535,5 +535,4 @@ x.XCloseDisplay(d)
         assert!(!preferences.is_mapped(), "Sort Home closes Preferences");
         win.destroy();
     }
-
 }
