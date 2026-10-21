@@ -22,6 +22,35 @@ use crate::{
 
 use super::selector_row::TvLiveChannelSelectorRow;
 
+// A mapped native menu action is the correct focus target, unlike its
+// focusable GtkScrolledWindow container. GTK may use either a private
+// GtkModelButton or a public menu-item accessible role.
+fn is_mapped_menu_action(widget: &gtk::Widget) -> bool {
+    widget.is_mapped()
+        && widget.is_sensitive()
+        && (widget.type_().name() == "GtkModelButton"
+            || matches!(
+                widget.accessible_role(),
+                gtk::AccessibleRole::MenuItem
+                    | gtk::AccessibleRole::MenuItemCheckbox
+                    | gtk::AccessibleRole::MenuItemRadio
+            ))
+}
+
+fn first_mapped_menu_action(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    if is_mapped_menu_action(widget) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(next) = child {
+        if let Some(action) = first_mapped_menu_action(&next) {
+            return Some(action);
+        }
+        child = next.next_sibling();
+    }
+    None
+}
+
 /// Attach a remote handler to the actual menu popover, which is created
 /// after the top-level window scans its initial widget tree. Native menu
 /// arrows, Return and Escape remain GTK-owned.
@@ -57,15 +86,60 @@ pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak_button = button.downgrade();
     controller.connect_key_pressed(move |_, key, _, modifiers| {
-        if !crate::keyboard::unmodified_remote(modifiers)
-            || !matches!(key, gdk::Key::Back | gdk::Key::HomePage)
-        {
+        if !crate::keyboard::unmodified_remote(modifiers) {
             return glib::Propagation::Proceed;
         }
         let Some(button) = weak_button.upgrade() else {
             return glib::Propagation::Proceed;
         };
-        if !button.popover().is_some_and(|menu| menu.is_mapped()) {
+        let Some(popover) = button.popover().filter(|menu| menu.is_mapped()) else {
+            return glib::Propagation::Proceed;
+        };
+
+        if matches!(
+            key,
+            gdk::Key::Up | gdk::Key::Down | gdk::Key::Left | gdk::Key::Right
+        ) {
+            // Let GTK move between its native enabled GtkModelButtons.
+            // At a menu boundary, GTK may instead focus the scroll pane;
+            // preserve the last actionable item without consuming the key.
+            let previous = popover
+                .root()
+                .and_then(|root| root.downcast::<gtk::Window>().ok())
+                .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+                .filter(|focus| focus.is_ancestor(&popover) && is_mapped_menu_action(focus))
+                .map(|focus| focus.downgrade());
+            let weak_popover = popover.downgrade();
+            glib::idle_add_local_once(move || {
+                let Some(popover) = weak_popover.upgrade() else {
+                    return;
+                };
+                if !popover.is_mapped() {
+                    return;
+                }
+                let focus = popover
+                    .root()
+                    .and_then(|root| root.downcast::<gtk::Window>().ok())
+                    .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
+                if focus.as_ref().is_some_and(|focus| {
+                    focus.is_ancestor(&popover) && is_mapped_menu_action(focus)
+                }) {
+                    return;
+                }
+                if let Some(previous) = previous.and_then(|weak| weak.upgrade()) {
+                    if previous.is_ancestor(&popover) && is_mapped_menu_action(&previous) {
+                        previous.grab_focus();
+                        return;
+                    }
+                }
+                if let Some(action) = first_mapped_menu_action(popover.upcast_ref()) {
+                    action.grab_focus();
+                }
+            });
+            return glib::Propagation::Proceed;
+        }
+
+        if !matches!(key, gdk::Key::Back | gdk::Key::HomePage) {
             return glib::Propagation::Proceed;
         }
 
@@ -144,10 +218,13 @@ pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
                     focus == popover.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popover)
                 });
             if !still_in_popover {
-                // Re-enter GTK's own focus chain of actionable menu
-                // descendants instead of swallowing remote arrow events
-                // or focusing the obscured originating list row.
-                let _ = popover.child_focus(gtk::DirectionType::TabForward);
+                // Re-enter an actual GTK menu action, not the focusable
+                // scrolling container or the obscured channel list.
+                if let Some(action) = first_mapped_menu_action(popover.upcast_ref()) {
+                    action.grab_focus();
+                } else {
+                    let _ = popover.child_focus(gtk::DirectionType::TabForward);
+                }
             }
         });
     });
