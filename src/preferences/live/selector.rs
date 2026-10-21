@@ -1002,7 +1002,10 @@ x.XCloseDisplay(d)
             let in_popup = gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focus| {
                 focus == popup.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popup)
             });
-            assert!(popup.is_mapped() && in_popup, "native {arrow} must remain in popup");
+            assert!(
+                popup.is_mapped() && in_popup,
+                "native {arrow} must remain in popup"
+            );
             native_key("Return");
             assert!(!popup.is_mapped(), "Return executes Move and closes popup");
         }
