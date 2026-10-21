@@ -375,41 +375,13 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     let url = if is_new && file.is_none() {
         let field = entry("");
         field.set_input_purpose(gtk::InputPurpose::Url);
-        row(&gettext("Playlist HTTP(S) URL"), &field, &body);
+        editable_row(
+            &gettext("Playlist HTTP(S) URL"),
+            &field,
+            &body,
+            crate::keyboard::KeyboardOptions::url(),
+        );
         body.append(&url_error);
-        let keyboard = button(&gettext("Keyboard"), &body);
-        crate::keyboard::style_add_playlist_url_launcher(&keyboard);
-        crate::keyboard::bind_launcher(&keyboard, &field, crate::keyboard::KeyboardOptions::url());
-        // Keep Left/Right in the URL entry for its native caret. The
-        // vertical boundary exposes the keyboard to an ordinary D-pad.
-        let nav = gtk::EventControllerKey::new();
-        nav.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak_keyboard = keyboard.downgrade();
-        nav.connect_key_pressed(move |_, key, _, mods| {
-            if crate::keyboard::unmodified_remote(mods)
-                && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-                && weak_keyboard
-                    .upgrade()
-                    .is_some_and(|button| button.grab_focus())
-            {
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        field.add_controller(nav);
-        let nav_back = gtk::EventControllerKey::new();
-        nav_back.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak_field = field.downgrade();
-        nav_back.connect_key_pressed(move |_, key, _, mods| {
-            if crate::keyboard::unmodified_remote(mods)
-                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
-                && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
-            {
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        keyboard.add_controller(nav_back);
         Some(field)
     } else {
         None
