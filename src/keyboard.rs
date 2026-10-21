@@ -89,12 +89,12 @@ where
     });
 }
 
-/// Layout contract for the existing Add Playlist URL launcher only.
-pub(crate) fn style_add_playlist_url_launcher(button: &gtk::Button) {
+/// Shared compact layout for the paired name and URL launchers in Add Playlist.
+/// Preserve the existing URL hit target while keeping both rows identical.
+pub(crate) fn style_add_playlist_field_launcher(button: &gtk::Button) {
     button.set_icon_name("input-keyboard-symbolic");
-    // GTK's styled allocation on the mapped Add Playlist form is 10px
-    // smaller than the request in each direction (5px inset per side).
-    // Reserve that inset without weakening the 48x44 visible-hit-target test.
+    // The mapped form loses approximately 10px to GTK styling.
+    // Keep the previously verified URL hit target on both paired fields.
     button.set_size_request(58, 54);
     button.set_halign(gtk::Align::End);
 }
