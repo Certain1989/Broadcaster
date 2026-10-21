@@ -268,6 +268,8 @@ mod imp {
         #[template_child]
         pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
+        pub(super) keyboard_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) broadcaster_filter: TemplateChild<gtk::DropDown>,
         #[template_child]
         pub(super) load_more_button: TemplateChild<gtk::Button>,
@@ -385,6 +387,11 @@ mod imp {
 
             let slf = self.obj();
             let settings = TvSettings::get();
+            crate::keyboard::bind_launcher(
+                &self.keyboard_button,
+                &self.search_entry.get(),
+                crate::keyboard::KeyboardOptions::default(),
+            );
             settings
                 .bind_search_everywhere(&*slf, "search-everywhere")
                 .flags(gio::SettingsBindFlags::DEFAULT)
@@ -602,6 +609,7 @@ impl TvMediathekView {
     pub fn focus_vertical_navigation(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
         let imp = self.imp();
         let search = imp.search_entry.upcast_ref::<gtk::Widget>();
+        let keyboard = imp.keyboard_button.upcast_ref::<gtk::Widget>();
         let channel = imp.broadcaster_filter.upcast_ref::<gtk::Widget>();
         let duration = imp.duration_filter.upcast_ref::<gtk::Widget>();
         let sort = imp.sort_button.upcast_ref::<gtk::Widget>();
@@ -636,10 +644,16 @@ impl TvMediathekView {
                 return imp.broadcaster_filter.grab_focus();
             }
             if widget_contains_focus(channel, focused) {
+                return imp.keyboard_button.grab_focus();
+            }
+            if widget_contains_focus(keyboard, focused) {
                 return imp.search_entry.grab_focus();
             }
         } else if key == gtk::gdk::Key::Down {
             if widget_contains_focus(search, focused) {
+                return imp.keyboard_button.grab_focus();
+            }
+            if widget_contains_focus(keyboard, focused) {
                 return imp.broadcaster_filter.grab_focus();
             }
             if widget_contains_focus(channel, focused) {
@@ -663,7 +677,10 @@ impl TvMediathekView {
     /// Geometry, not declaration order, determines each arrow destination.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
         let imp = self.imp();
-        let mut controls = vec![imp.search_entry.get().upcast::<gtk::Widget>()];
+        let mut controls = vec![
+            imp.search_entry.get().upcast::<gtk::Widget>(),
+            imp.keyboard_button.get().upcast::<gtk::Widget>(),
+        ];
         let mut sibling = imp.search_entry.upcast_ref::<gtk::Widget>().next_sibling();
         while let Some(item) = sibling {
             if item.is::<gtk::ToggleButton>() {
@@ -1133,6 +1150,8 @@ mod tests {
 
         assert!(imp.search_entry.grab_focus());
         assert!(down());
+        assert_focus(imp.keyboard_button.upcast_ref());
+        assert!(down());
         assert_focus(imp.broadcaster_filter.upcast_ref());
         assert!(down());
         assert_focus(imp.duration_filter.upcast_ref());
@@ -1151,6 +1170,8 @@ mod tests {
         assert_focus(imp.duration_filter.upcast_ref());
         assert!(up());
         assert_focus(imp.broadcaster_filter.upcast_ref());
+        assert!(up());
+        assert_focus(imp.keyboard_button.upcast_ref());
         assert!(up());
         assert_focus(imp.search_entry.upcast_ref());
 
