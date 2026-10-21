@@ -55,6 +55,60 @@ fn row(label: &str, control: &impl IsA<gtk::Widget>, box_: &gtk::Box) {
     box_.append(control);
 }
 
+// Compact, D-pad-reachable launcher for a concrete writable source field.
+ // Up from the icon returns to the entry; Down from its native text editor
+ // exposes the icon without taking over Left/Right caret navigation.
+fn editable_row(
+    label: &str,
+    field: &gtk::Entry,
+    parent: &gtk::Box,
+    options: crate::keyboard::KeyboardOptions,
+) {
+    let title = gtk::Label::new(Some(label));
+    title.set_xalign(0.0);
+    title.set_wrap(true);
+    parent.append(&title);
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    controls.append(field);
+    let keyboard = gtk::Button::new();
+    keyboard.set_icon_name("input-keyboard-symbolic");
+    keyboard.set_size_request(48, 44);
+    keyboard.set_valign(gtk::Align::Center);
+    crate::keyboard::bind_launcher(&keyboard, field, options);
+    controls.append(&keyboard);
+    parent.append(&controls);
+
+    let down = gtk::EventControllerKey::new();
+    down.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_keyboard = keyboard.downgrade();
+    down.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && weak_keyboard.upgrade().is_some_and(|button| button.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    field.add_controller(down);
+
+    let up = gtk::EventControllerKey::new();
+    up.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_field = field.downgrade();
+    up.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    keyboard.add_controller(up);
+}
+
 fn entry(value: &str) -> gtk::Entry {
     let field = gtk::Entry::new();
     field.set_text(value);
@@ -153,8 +207,18 @@ impl DefaultsForm {
                 .unwrap_or(""),
         );
         label.set_placeholder_text(Some(&gettext("Optional: Bavaria")));
-        row(&gettext("Default region code (optional)"), &code, box_);
-        row(&gettext("Default region name (optional)"), &label, box_);
+        editable_row(
+            &gettext("Default region code (optional)"),
+            &code,
+            box_,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        editable_row(
+            &gettext("Default region name (optional)"),
+            &label,
+            box_,
+            crate::keyboard::KeyboardOptions::default(),
+        );
         let region_error = gtk::Label::new(None);
         region_error.set_wrap(true);
         region_error.set_xalign(0.0);
@@ -294,7 +358,12 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     name_error.set_xalign(0.0);
     name_error.add_css_class("error");
     if is_new {
-        row(&gettext("Unique source name"), &name, &body);
+        editable_row(
+            &gettext("Unique source name"),
+            &name,
+            &body,
+            crate::keyboard::KeyboardOptions::default(),
+        );
         body.append(&name_error);
     }
     let url_error = gtk::Label::new(None);
@@ -784,7 +853,12 @@ fn rename_source(view: &TvStreamsView, source: Source) {
     };
     let (dialog, body, status) = sheet(&gettext("Rename Source"));
     let name = entry(&source.name);
-    row(&gettext("Source name"), &name, &body);
+    editable_row(
+        &gettext("Source name"),
+        &name,
+        &body,
+        crate::keyboard::KeyboardOptions::default(),
+    );
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
     let save = button(&gettext("Save"), &actions);
@@ -881,10 +955,11 @@ fn replace_url_form(view: &TvStreamsView, id: String) {
     let (dialog, body, status) = sheet(&gettext("Replace Playlist URL"));
     let input = entry("");
     input.set_input_purpose(gtk::InputPurpose::Url);
-    row(
+    editable_row(
         &gettext("New HTTP(S) URL (not shown in status messages)"),
         &input,
         &body,
+        crate::keyboard::KeyboardOptions::url(),
     );
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
