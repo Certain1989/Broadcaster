@@ -47,6 +47,47 @@ fn sheet(title: &str) -> (adw::Dialog, gtk::Box, gtk::Label) {
     (dialog, box_, status)
 }
 
+// Add Playlist has a short ordinary state and a longer Advanced state.
+// Keep the action footer outside the scroll area and adapt the requested
+// height to the state, rather than retaining unused space when collapsed.
+fn source_form_layout(
+    dialog: &adw::Dialog,
+    body: &gtk::Box,
+    advanced: &gtk::Expander,
+) -> (gtk::ScrolledWindow, gtk::Box) {
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+
+    // sheet() temporarily owns the editable body; reparent it inside the
+    // scroller before building the permanent dialog container.
+    dialog.set_child(None::<&gtk::Widget>);
+    scroll.set_child(Some(body));
+
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    shell.append(&scroll);
+    let footer = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    footer.set_margin_top(8);
+    footer.set_margin_bottom(16);
+    footer.set_margin_start(16);
+    footer.set_margin_end(16);
+    shell.append(&footer);
+    dialog.set_child(Some(&shell));
+
+    dialog.set_content_height(if advanced.is_expanded() { 620 } else { 360 });
+    advanced.connect_notify_local(
+        Some("expanded"),
+        glib::clone!(
+            #[weak]
+            dialog,
+            move |expander, _| {
+                dialog.set_content_height(if expander.is_expanded() { 620 } else { 360 });
+            }
+        ),
+    );
+    (scroll, footer)
+}
+
 fn row(label: &str, control: &impl IsA<gtk::Widget>, box_: &gtk::Box) {
     let text = gtk::Label::new(Some(label));
     text.set_xalign(0.0);
@@ -361,12 +402,16 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     name_error.set_xalign(0.0);
     name_error.add_css_class("error");
     if is_new {
-        editable_row(
+        let keyboard = editable_row(
             &gettext("Unique source name"),
             &name,
             &body,
             crate::keyboard::KeyboardOptions::default(),
         );
+        if file.is_none() {
+            // Match the adjacent URL row's tested launcher/entry dimensions.
+            crate::keyboard::style_add_playlist_field_launcher(&keyboard);
+        }
         body.append(&name_error);
     }
     let url_error = gtk::Label::new(None);
@@ -382,8 +427,8 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
             &body,
             crate::keyboard::KeyboardOptions::url(),
         );
-        // Keep the K1 URL-specific hit-target dimensions in the new paired row.
-        crate::keyboard::style_add_playlist_url_launcher(&keyboard);
+        // The source-name and URL rows share the existing tested geometry.
+        crate::keyboard::style_add_playlist_field_launcher(&keyboard);
         body.append(&url_error);
         Some(field)
     } else {
@@ -398,17 +443,14 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     let defaults = DefaultsForm::new(&advanced_body, &initial_defaults);
     advanced.set_child(Some(&advanced_body));
     body.append(&advanced);
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    dialog.set_child(None::<&gtk::Widget>);
-    scroll.set_child(Some(&body));
-    dialog.set_content_height(620);
-    dialog.set_child(Some(&scroll));
-    let buttons = line(&body);
+    // The form scrolls independently; actions/status remain visible when
+    // Advanced expands beyond the available dialog height.
+    let (_scroll, footer) = source_form_layout(&dialog, &body, &advanced);
+    let buttons = line(&footer);
     let cancel = button(&gettext("Cancel"), &buttons);
     let save = button(&gettext("Save"), &buttons);
     save.add_css_class("suggested-action");
-    body.append(&status);
+    footer.append(&status);
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
