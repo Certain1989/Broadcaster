@@ -401,6 +401,10 @@ mod native_channel_menu_tests {
     use super::*;
     use std::{cell::Cell, rc::Rc, time::Duration};
 
+    thread_local! {
+        static INITIAL_X11_FOCUS_SET: Cell<bool> = const { Cell::new(false) };
+    }
+
     fn spin() {
         for _ in 0..20 {
             while glib::MainContext::default().pending() {
@@ -412,6 +416,10 @@ mod native_channel_menu_tests {
 
     // X11/XTest injects real GDK key events into a mapped native surface.
     fn native_key(key: &str) {
+        // Only establish X11 focus for the first key. Re-focusing the last
+        // root child after a popdown targets a now-unmapped popup (BadMatch)
+        // and defeats GTK's real focus restoration.
+        let initial_focus = INITIAL_X11_FOCUS_SET.with(|flag| !flag.replace(true));
         let script = r#"
 import ctypes as c
 import sys
@@ -432,7 +440,8 @@ assert x.XQueryTree(d, root, c.byref(ret_root), c.byref(parent),
     c.byref(children), c.byref(count))
 assert count.value, "no mapped GTK window"
 x.XSetInputFocus.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_ulong]
-x.XSetInputFocus(d, children[count.value - 1], 1, 0)
+if sys.argv[2] == "initial":
+    x.XSetInputFocus(d, children[count.value - 1], 1, 0)
 x.XFree.argtypes = [c.c_void_p]
 x.XFree(c.cast(children, c.c_void_p))
 x.XStringToKeysym.argtypes = [c.c_char_p]
@@ -451,8 +460,9 @@ x.XFlush(d)
 x.XCloseDisplay.argtypes = [c.c_void_p]
 x.XCloseDisplay(d)
 "#;
+        let focus_mode = if initial_focus { "initial" } else { "keep" };
         let output = std::process::Command::new("python3")
-            .args(["-c", script, key])
+            .args(["-c", script, key, focus_mode])
             .output()
             .expect("XTest Python driver");
         assert!(
