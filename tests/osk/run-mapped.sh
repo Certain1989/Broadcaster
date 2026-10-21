@@ -31,6 +31,7 @@ for case in \
   osk_mapped_gtk_mpv_row_native_remote_route_and_lifecycle \
   osk_mapped_gtk_channel_move_menu_native_remote \
   osk_mapped_gtk_first_row_move_popup_native_focus_containment \
+  osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment \
   osk_mapped_gtk_channel_sort_menu_native_remote \
   gtk_mediathek_toolbar_narrow_allocations \
   osk_mapped_gtk_entry_reentrant_signal_trace \
