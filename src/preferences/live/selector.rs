@@ -631,6 +631,116 @@ x.XCloseDisplay(d)
         win.destroy();
     }
 
+    // Regression probe: exercise the first-row Move popup while it remains
+    // mapped, using the same real XTest path as the Back/Home tests.
+    // Keep this test separate so it can establish a before-fix failure.
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_first_row_move_popup_native_focus_containment() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "real Preferences subpage");
+
+        let first = row(&page, 0);
+        let button = find_menu(first.upcast_ref(), "Move").expect("first Move menu");
+        let popup = button.popover().expect("real GtkPopoverMenu");
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "first-row Move popup must be mapped");
+
+        // Inspect the actual mapped GTK menu widget hierarchy, including
+        // effective sensitivity; the action installer alone proves neither
+        // boundary-menu item is interactive.
+        fn inspect(widget: &gtk::Widget, depth: usize) {
+            if depth > 7 {
+                return;
+            }
+            eprintln!(
+                "F02 menu widget depth={} type={} mapped={} sensitive={} focusable={} focused={}",
+                depth,
+                widget.type_().name(),
+                widget.is_mapped(),
+                widget.is_sensitive(),
+                widget.is_focusable(),
+                widget.has_focus()
+            );
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                inspect(&next, depth + 1);
+                child = next.next_sibling();
+            }
+        }
+        inspect(popup.upcast_ref(), 0);
+
+        // No test-induced focus reset between these native directional keys.
+        // Capture the first escape and its exact preceding key.
+        for (step, key) in [
+            "Up", "Down", "Up", "Left", "Right", "Down", "Down",
+            "Up", "Left", "Right", "Up", "Down",
+        ]
+        .iter()
+        .enumerate()
+        {
+            native_key(key);
+            let focused = gtk::prelude::GtkWindowExt::focus(&win);
+            let in_popup = focused.as_ref().is_some_and(|widget| {
+                widget == popup.upcast_ref::<gtk::Widget>() || widget.is_ancestor(&popup)
+            });
+            let in_visible_list = focused.as_ref().is_some_and(|widget| {
+                widget.is_ancestor(&*page.imp().visible_channel_rows)
+            });
+            let in_hidden_list = focused.as_ref().is_some_and(|widget| {
+                widget.is_ancestor(&*page.imp().hidden_channel_rows)
+            });
+            let focus_ancestry = focused
+                .as_ref()
+                .map(|widget| {
+                    let mut names = Vec::new();
+                    let mut node = Some(widget.clone());
+                    while let Some(current) = node {
+                        names.push(current.type_().name().to_string());
+                        node = current.parent();
+                    }
+                    names.join(" <- ")
+                })
+                .unwrap_or_else(|| "NONE".to_string());
+            eprintln!(
+                "F02 step={} key={} mapped={} visible={} popup_focus={} visible_list_focus={} hidden_list_focus={} GtkWindow::focus={}",
+                step + 1,
+                key,
+                popup.is_mapped(),
+                popup.is_visible(),
+                in_popup,
+                in_visible_list,
+                in_hidden_list,
+                focus_ancestry
+            );
+            assert!(
+                popup.is_mapped() && in_popup && !in_visible_list && !in_hidden_list,
+                "F02 first-row focus escaped at native step {} key {}: popup mapped={} focus={}",
+                step + 1,
+                key,
+                popup.is_mapped(),
+                focus_ancestry
+            );
+        }
+        button.popdown();
+        win.destroy();
+    }
+
     #[test]
     #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
     fn osk_mapped_gtk_channel_sort_menu_native_remote() {
