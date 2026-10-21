@@ -25,8 +25,8 @@ headerbar.tv-header button:focus-visible {
 .tv-streams-controls {
   background-color: alpha(@accent_bg_color, 0.055);
   border-radius: 16px;
-  /* All three panels leave a visible inset around the remote focus rings. */
-  padding: 6px;
+  /* Keep the larger Mediathek inset consistently on all three surfaces. */
+  padding: 10px;
 }
 
 /* Preserve the already-accepted search height without inflating the
