@@ -47,9 +47,14 @@ for case in \
   osk_mapped_gtk_all_keys_fit_without_scrolling
 do
   log_file="$schema_dir/$case.log"
+  capture=
+  if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
+    # Preserve effective GTK menu-item sensitivities as CI evidence on PASS.
+    capture=--nocapture
+  fi
   if xvfb-run -a env G_DEBUG=fatal-criticals GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
-    cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
+    cargo test --locked "$case" -- --ignored --test-threads=1 $capture >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
     if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
       grep 'F02 .*GtkModelButton' "$log_file" || :
