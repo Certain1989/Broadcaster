@@ -1021,3 +1021,116 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     click(&dialog, "Cancel");
     win.destroy();
 }
+
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_done_and_back_release_dialog_and_draft() {
+    let (win, body) = host();
+    let origin = gtk::Entry::new();
+    origin.set_text("before");
+    body.append(&origin);
+    spin();
+
+    // A Done transaction and an external dialog dismissal must each release
+    // the complete OSK subtree, not just hide the dialog.
+    for (finish, draft_text, expected) in [
+        ("Done", "committed", "committed"),
+        ("Back-close", "discarded", "committed"),
+    ] {
+        show(&origin);
+        let dialog = keyboard(&win, &origin);
+        let draft = find_entry(dialog.upcast_ref()).expect("native draft");
+        let weak_dialog = dialog.downgrade();
+        let weak_draft = draft.downgrade();
+        draft.set_text(draft_text);
+
+        if finish == "Done" {
+            click(&dialog, "Done");
+        } else {
+            // Exercise Adw's non-button close path. Physical GDK Back/Escape
+            // event propagation is a separate, unproven requirement.
+            dialog.close();
+        }
+        assert_eq!(origin.text(), expected, "correct transaction boundary");
+        drop(draft);
+        drop(dialog);
+        for _ in 0..80 {
+            spin();
+            if weak_dialog.upgrade().is_none() && weak_draft.upgrade().is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        assert!(weak_dialog.upgrade().is_none(), "{finish}: dialog retained");
+        assert!(weak_draft.upgrade().is_none(), "{finish}: draft retained");
+    }
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_parent_close_during_draft() {
+    let (win, _) = host();
+    let parent = adw::Dialog::new();
+    let origin = gtk::Entry::new();
+    origin.set_text("before");
+    parent.set_child(Some(&origin));
+    parent.present(Some(&win));
+    spin();
+    assert!(origin.is_mapped(), "origin must begin inside a mapped parent");
+
+    show(&origin);
+    let osk = keyboard(&win, &origin);
+    find_entry(osk.upcast_ref())
+        .expect("draft")
+        .set_text("should never commit");
+    parent.close();
+    for _ in 0..80 {
+        spin();
+        if !origin.is_mapped() {
+            break;
+        }
+    }
+    assert!(!origin.is_mapped(), "closing parent must unmap its editable");
+    if osk.is_mapped() {
+        click(&osk, "Done");
+    }
+    assert_eq!(
+        origin.text(), "before",
+        "an orphaned keyboard cannot commit after its parent closes"
+    );
+    osk.close();
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_cancel_invalidated_origin() {
+    let (win, body) = host();
+    let origin = gtk::Entry::new();
+    origin.set_text("before");
+    body.append(&origin);
+    spin();
+
+    show(&origin);
+    let osk = keyboard(&win, &origin);
+    find_entry(osk.upcast_ref()).expect("draft").set_text("ghost");
+    origin.set_sensitive(false);
+    if osk.is_mapped() {
+        click(&osk, "Cancel");
+    }
+    assert_eq!(origin.text(), "before");
+    origin.set_sensitive(true);
+
+    show(&origin);
+    let osk = keyboard(&win, &origin);
+    find_entry(osk.upcast_ref()).expect("draft").set_text("ghost");
+    body.remove(&origin);
+    spin();
+    if osk.is_mapped() {
+        click(&osk, "Cancel");
+    }
+    assert_eq!(origin.text(), "before", "removed origin stays unchanged");
+    win.destroy();
+}
