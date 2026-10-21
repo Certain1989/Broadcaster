@@ -1343,7 +1343,10 @@ mod source_form_tests {
             url_keyboard.clone().upcast(),
         ] {
             assert!(control.is_mapped() && control.is_sensitive());
-            assert!(control.grab_focus(), "paired field control is not focusable");
+            assert!(
+                control.grab_focus(),
+                "paired field control is not focusable"
+            );
         }
         assert!(
             name_keyboard.width() >= 48 && name_keyboard.height() >= 44,
@@ -1394,8 +1397,14 @@ mod source_form_tests {
         adjustment.set_value(adjustment.upper() - adjustment.page_size());
         spin();
         footer_visible();
-        assert!(save.grab_focus(), "Save must remain D-pad focusable after scroll");
-        assert!(cancel.grab_focus(), "Cancel must remain D-pad focusable after scroll");
+        assert!(
+            save.grab_focus(),
+            "Save must remain D-pad focusable after scroll"
+        );
+        assert!(
+            cancel.grab_focus(),
+            "Cancel must remain D-pad focusable after scroll"
+        );
 
         advanced.set_expanded(false);
         spin();
