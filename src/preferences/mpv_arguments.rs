@@ -268,9 +268,13 @@ mod imp {
             );
             row.add_suffix(&remove_button);
 
-            // Capture on the row so Up/Down also work from its embedded
-            // GtkEditable and from suffix buttons, without changing their
-            // Left/Right, typing or activation handling.
+            // A remote cannot Tab out of EntryRow's native GtkEditable.
+            // Use vertical steps within the row: Up from the editor reaches
+            // its own keyboard suffix, then Remove, then the preceding row
+            // (or Restore Defaults). Down reverses these steps, except that
+            // Down from an editor proceeds to the following row/Add. Keep
+            // Left/Right entirely native for physical text-caret movement.
+            // When the OSK is disabled, skip its hidden suffix altogether.
             let controller = gtk::EventControllerKey::new();
             controller.set_propagation_phase(gtk::PropagationPhase::Capture);
             controller.connect_key_pressed(glib::clone!(
@@ -278,10 +282,40 @@ mod imp {
                 self,
                 #[weak]
                 row,
+                #[weak]
+                keyboard,
+                #[weak]
+                remove_button,
                 #[upgrade_or]
                 glib::Propagation::Proceed,
                 move |_, key, _, modifiers| {
-                    if unmodified_arrow(modifiers) && slf.focus_vertical(&row, key) {
+                    if !unmodified_arrow(modifiers) {
+                        return glib::Propagation::Proceed;
+                    }
+                    let up = matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up);
+                    let down = matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down);
+                    if !up && !down {
+                        return glib::Propagation::Proceed;
+                    }
+                    let keyboard_live = keyboard.is_mapped() && keyboard.is_sensitive();
+                    let handled = if up {
+                        if remove_button.has_focus() {
+                            slf.focus_vertical(&row, key)
+                        } else if keyboard.has_focus() {
+                            remove_button.grab_focus()
+                        } else {
+                            (keyboard_live && keyboard.grab_focus())
+                                || remove_button.grab_focus()
+                        }
+                    } else if remove_button.has_focus() {
+                        (keyboard_live && keyboard.grab_focus())
+                            || row.grab_focus_without_selecting()
+                    } else if keyboard.has_focus() {
+                        row.grab_focus_without_selecting()
+                    } else {
+                        slf.focus_vertical(&row, key)
+                    };
+                    if handled {
                         glib::Propagation::Stop
                     } else {
                         glib::Propagation::Proceed
