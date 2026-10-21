@@ -1087,9 +1087,7 @@ x.XCloseDisplay(d)
                 native_key(arrow);
                 let focus = gtk::prelude::GtkWindowExt::focus(win).expect("menu arrow focus");
                 assert!(
-                    popup.is_mapped()
-                        && focus.is_ancestor(&popup)
-                        && is_mapped_menu_action(&focus),
+                    popup.is_mapped() && focus.is_ancestor(&popup) && is_mapped_menu_action(&focus),
                     "native {arrow} must leave an enabled action focused"
                 );
             }
