@@ -498,7 +498,7 @@ fn preview_with_persistent_caret(preview: &gtk::Entry) -> gtk::Overlay {
         };
         // Contrasting edge plus the theme's normal entry foreground makes
         // the cursor clear on both dark and light themes. Never blink away.
-        let color = preview.style_context().color();
+        let color = preview.color();
         let x = rect.x() as f64;
         let y = rect.y() as f64;
         let height = rect.height() as f64;
