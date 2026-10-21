@@ -179,12 +179,12 @@ fn osk_mapped_gtk_caret_buttons_collapse_selection() {
     draft.set_text("abcdef");
     for &(a, b) in &[(2, 4), (4, 2)] {
         draft.select_region(a, b);
-        click(&dialog, "Caret left");
+        click(&dialog, "←");
         assert!(draft.selection_bounds().is_none());
         assert_eq!(draft.position(), 2, "Left collapses to selection start");
 
         draft.select_region(a, b);
-        click(&dialog, "Caret right");
+        click(&dialog, "→");
         assert!(draft.selection_bounds().is_none());
         assert_eq!(draft.position(), 4, "Right collapses to selection end");
     }
@@ -997,9 +997,9 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     assert_inside();
     for name in [
         "Backspace",
-        "Caret left",
+        "←",
         "Space",
-        "Caret right",
+        "→",
         "Clear",
         "Shift",
         "QWERTZ",
@@ -1014,10 +1014,24 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
             "required key {name} must be visible"
         );
     }
+    // The compact visual symbols still expose translated, descriptive help
+    // even after the OSK relabels itself for shift/layout transitions.
+    let assert_caret_help = || {
+        for (symbol, name) in [("←", "Caret left"), ("→", "Caret right")] {
+            let button = find_button(&content, symbol).expect("mapped caret arrow button");
+            assert_eq!(
+                button.tooltip_text().as_deref(),
+                Some(gettext(name).as_str()),
+                "symbolic caret controls must keep accessible descriptive help"
+            );
+        }
+    };
+    assert_caret_help();
     // Shift changes the German action label's natural width; it must still
     // leave Done and Cancel fully visible without any horizontal scrolling.
     click(&dialog, "Shift");
     assert_inside();
+    assert_caret_help();
     click(&dialog, "Cancel");
     win.destroy();
 }
