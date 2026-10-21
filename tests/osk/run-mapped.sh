@@ -28,6 +28,7 @@ for case in \
   osk_mapped_gtk_caret_visible_with_remote_key_focus \
   osk_mapped_gtk_caret_buttons_collapse_selection \
   osk_mapped_gtk_compact_add_playlist_url_launcher \
+  osk_mapped_gtk_add_playlist_paired_rows_and_footer \
   osk_mapped_gtk_mpv_row_native_remote_route_and_lifecycle \
   osk_mapped_gtk_channel_move_menu_native_remote \
   osk_mapped_gtk_first_row_move_popup_native_focus_containment \
