@@ -152,7 +152,11 @@ mod imp {
                         {
                             // Use the already existing window action. Home
                             // closes Preferences and returns to Mediathek.
-                            let _ = window.activate_action("window.show-mediathek", None);
+                            let _ = gtk::prelude::WidgetExt::activate_action(
+                                &window,
+                                "window.show-mediathek",
+                                None,
+                            );
                             fn focus_browse(widget: &gtk::Widget) -> bool {
                                 if let Some(view) =
                                     widget.downcast_ref::<crate::mediathek::TvMediathekView>()
