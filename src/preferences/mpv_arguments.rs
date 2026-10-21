@@ -304,8 +304,7 @@ mod imp {
                         } else if keyboard.has_focus() {
                             remove_button.grab_focus()
                         } else {
-                            (keyboard_live && keyboard.grab_focus())
-                                || remove_button.grab_focus()
+                            (keyboard_live && keyboard.grab_focus()) || remove_button.grab_focus()
                         }
                     } else if remove_button.has_focus() {
                         (keyboard_live && keyboard.grab_focus())
@@ -381,7 +380,6 @@ impl TvMpvArgumentsPage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     // Send actual XTest keyboard events into the mapped GTK native surface.
     // Emitting EventControllerKey's signal directly would bypass capture
@@ -480,8 +478,9 @@ x.XCloseDisplay(d)
     }
 
     fn row_owns_focus(win: &adw::Window, row: &adw::EntryRow) -> bool {
-        gtk::prelude::GtkWindowExt::focus(win)
-            .is_some_and(|focused| focused.is_ancestor(row) || focused == *row.upcast_ref::<gtk::Widget>())
+        gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focused| {
+            focused.is_ancestor(row) || focused == row.clone().upcast::<gtk::Widget>()
+        })
     }
 
     fn find_draft(widget: &gtk::Widget) -> Option<gtk::Entry> {
@@ -520,14 +519,15 @@ x.XCloseDisplay(d)
         use std::{cell::Cell, rc::Rc};
 
         adw::init().expect("GTK display");
-        let resources = adw::gio::Resource::from_data(&glib::Bytes::from_static(
-            crate::GRESOURCE_BYTES,
-        ))
-        .expect("bundled resources");
+        let resources =
+            adw::gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+                .expect("bundled resources");
         adw::gio::resources_register(&resources);
 
         let settings = TvSettings::get();
-        settings.set_boolean("osk-enabled", true).expect("enable OSK");
+        settings
+            .set_boolean("osk-enabled", true)
+            .expect("enable OSK");
         settings
             .set_strv(GENERAL_KEY, ["--first=1", "--second=2"])
             .expect("synthetic settings");
@@ -565,8 +565,8 @@ x.XCloseDisplay(d)
             .expect("first Remove suffix");
         let restore = find_icon_button(page.upcast_ref(), "edit-undo-symbolic")
             .expect("Restore Defaults header");
-        let add = find_icon_button(page.upcast_ref(), "list-add-symbolic")
-            .expect("Add Argument header");
+        let add =
+            find_icon_button(page.upcast_ref(), "list-add-symbolic").expect("Add Argument header");
 
         assert!(first.grab_focus_without_selecting());
         first.set_position(4);
@@ -593,11 +593,17 @@ x.XCloseDisplay(d)
         native_key("Up");
         assert!(restore.has_focus(), "first row can escape to header");
         native_key("Down");
-        assert!(row_owns_focus(&win, &first), "header Down returns to first editor");
+        assert!(
+            row_owns_focus(&win, &first),
+            "header Down returns to first editor"
+        );
         native_key("Up");
         assert!(keyboard0.has_focus(), "editor Up returns to its keyboard");
         native_key("Down");
-        assert!(row_owns_focus(&win, &first), "keyboard Down returns to row editor");
+        assert!(
+            row_owns_focus(&win, &first),
+            "keyboard Down returns to row editor"
+        );
 
         native_key("Down");
         assert!(row_owns_focus(&win, &second), "editor Down visits next row");
@@ -620,15 +626,22 @@ x.XCloseDisplay(d)
         assert!(add.has_focus(), "last row Down reaches Add");
 
         // Turning off the keyboard must eliminate, not trap, its destination.
-        settings.set_boolean("osk-enabled", false).expect("disable OSK");
+        settings
+            .set_boolean("osk-enabled", false)
+            .expect("disable OSK");
         mapped_spin();
         assert!(!keyboard0.is_visible() && !keyboard1.is_visible());
         assert!(first.grab_focus_without_selecting());
         native_key("Up");
         assert!(remove0.has_focus(), "OFF skips hidden keyboard button");
         native_key("Down");
-        assert!(row_owns_focus(&win, &first), "OFF retains editor and Remove route");
-        settings.set_boolean("osk-enabled", true).expect("re-enable OSK");
+        assert!(
+            row_owns_focus(&win, &first),
+            "OFF retains editor and Remove route"
+        );
+        settings
+            .set_boolean("osk-enabled", true)
+            .expect("re-enable OSK");
         mapped_spin();
 
         // Removing a row during a draft must never resurrect its GSettings
@@ -641,8 +654,8 @@ x.XCloseDisplay(d)
         find_draft(osk.upcast_ref())
             .expect("draft")
             .set_text("stale resurrection");
-        let remove1 = find_icon_button(second.upcast_ref(), "user-trash-symbolic")
-            .expect("live row removal");
+        let remove1 =
+            find_icon_button(second.upcast_ref(), "user-trash-symbolic").expect("live row removal");
         remove1.emit_by_name::<()>("clicked", &[]);
         mapped_spin();
         let after_remove = settings.strv(GENERAL_KEY);
@@ -666,12 +679,14 @@ x.XCloseDisplay(d)
             .expect("Restore rebuilds rows")
             .downcast::<adw::EntryRow>()
             .expect("restored editable");
-        let rebuilt_keyboard =
-            find_icon_button(rebuilt.upcast_ref(), "input-keyboard-symbolic")
-                .expect("rebuilt row keyboard");
+        let rebuilt_keyboard = find_icon_button(rebuilt.upcast_ref(), "input-keyboard-symbolic")
+            .expect("rebuilt row keyboard");
         assert!(rebuilt.grab_focus_without_selecting());
         native_key("Up");
-        assert!(rebuilt_keyboard.has_focus(), "restored row has live routing");
+        assert!(
+            rebuilt_keyboard.has_focus(),
+            "restored row has live routing"
+        );
         dialog.close();
         win.destroy();
     }
