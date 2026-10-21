@@ -1222,6 +1222,10 @@ mod tests {
             let search_row = targets[0].parent().expect("Mediathek search row");
             let panel = search_row.parent().expect("Mediathek panel");
             let mediathek_entry_height = targets[0].height();
+            let mediathek_channel_height = targets[4].height();
+            let mediathek_duration_height = targets[5].height();
+            let mediathek_sort_height = targets[6].height();
+            let mediathek_toggle_heights = [targets[2].height(), targets[3].height()];
             let filter_row = mediathek
                 .imp()
                 .broadcaster_filter
@@ -1238,6 +1242,10 @@ mod tests {
                 &search_row,
                 Some(&filter_row),
             );
+            let mediathek_inset = search_row
+                .compute_bounds(&panel)
+                .expect("Mediathek search row bounds")
+                .x();
             window.destroy();
 
             let live: crate::live::TvLiveView = glib::Object::new();
@@ -1268,6 +1276,10 @@ mod tests {
                 &panel,
                 None,
             );
+            let live_inset = targets[0]
+                .compute_bounds(&panel)
+                .expect("Live search bounds")
+                .x();
             window.destroy();
 
             let streams: crate::streams::view::TvStreamsView = glib::Object::new();
@@ -1286,7 +1298,34 @@ mod tests {
                 &search_row,
                 Some(&filter_row),
             );
+            let streams_inset = search_row
+                .compute_bounds(&panel)
+                .expect("My Channels search row bounds")
+                .x();
+            let streams_filter_height = targets[1].height();
+            let streams_sort_height = targets[3].height();
+            let streams_action_height = targets[7].height();
             window.destroy();
+
+            // The three panels should expose comparable painted inner insets,
+            // not double the Mediathek inset through nested Blueprint margins.
+            println!(
+                "UX02 compact width={width} inset: Mediathek={mediathek_inset:.0}, Live={live_inset:.0}, My Channels={streams_inset:.0}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
+            );
+            assert!(
+                (mediathek_inset - streams_inset).abs() <= 2.0
+                    && (mediathek_inset - live_inset).abs() <= 2.0,
+                "different panel insets at {width}px: Mediathek={mediathek_inset}, Live={live_inset}, My Channels={streams_inset}"
+            );
+            assert!(
+                (mediathek_channel_height - streams_filter_height).abs() <= 6
+                    && (mediathek_duration_height - streams_filter_height).abs() <= 6
+                    && (mediathek_sort_height - streams_sort_height).abs() <= 6
+                    && mediathek_toggle_heights
+                        .iter()
+                        .all(|h| *h <= streams_action_height + 6),
+                "Mediathek filters/actions must match compact My Channels at {width}px"
+            );
 
             // Compare mapped GtkSearchEntry allocations, not width/height requests.
             // Distinct theme styling may differ by a few pixels; a stretched
