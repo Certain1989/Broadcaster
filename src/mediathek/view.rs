@@ -1350,7 +1350,11 @@ mod tests {
             );
             let mediathek_gap = mediathek_entry_height - mediathek_keyboard_size.1;
             for (name, reference, reference_gap) in [
-                ("Live", live_keyboard_size, live_entry_height - live_keyboard_size.1),
+                (
+                    "Live",
+                    live_keyboard_size,
+                    live_entry_height - live_keyboard_size.1,
+                ),
                 (
                     "My Channels",
                     streams_keyboard_size,
