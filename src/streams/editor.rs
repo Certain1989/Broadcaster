@@ -72,7 +72,9 @@ fn editable_control(field: &gtk::Entry, body: &gtk::Box) {
     down.connect_key_pressed(move |_, key, _, modifiers| {
         if crate::keyboard::unmodified_remote(modifiers)
             && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-            && weak_keyboard.upgrade().is_some_and(|button| button.grab_focus())
+            && weak_keyboard
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
         {
             glib::Propagation::Stop
         } else {
