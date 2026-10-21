@@ -37,8 +37,10 @@ template $TvMediathekView: Adw.Bin {
         Gtk.Button keyboard_button {
           icon-name: "input-keyboard-symbolic";
           tooltip-text: _("Open on-screen keyboard");
-          width-request: 48;
-          height-request: 44;
+          // The mapped styled button loses 12px width and 4px height
+          // compared with its request. Keep the real hit target >=48x44.
+          width-request: 60;
+          height-request: 50;
           valign: center;
         }
 
