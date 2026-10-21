@@ -73,7 +73,9 @@ template $TvMediathekView: Adw.Bin {
 
           Gtk.DropDown broadcaster_filter {
             tooltip-text: _("Filter by broadcaster");
-            width-request: 170;
+            // Compact minimum; use surplus space at ordinary TV widths.
+            hexpand: true;
+            width-request: 120;
           }
         }
 
@@ -88,7 +90,8 @@ template $TvMediathekView: Adw.Bin {
 
           Gtk.DropDown duration_filter {
             tooltip-text: _("Filter by duration");
-            width-request: 180;
+            hexpand: true;
+            width-request: 128;
           }
         }
 
