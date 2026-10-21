@@ -116,3 +116,26 @@ label.channel-fallback {
 .tv-stream-channel-summary {
   font-size: 14px;
 }
+
+/* Remote focus must remain visible across the large OSK key grid. */
+.osk-production button:focus,
+.osk-production button:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.osk-production entry {
+  min-height: 44px;
+}
+
+/* Keep all OSK rows inside AdwDialog's width cap (630 px on GTK 4.21).
+ * Libadwaita's normal button minimums otherwise force 12 symbol keys and
+ * the last digit past the sheet edge even without a ScrolledWindow. */
+.osk-production button.osk-key {
+  /* Keep the entire key rounded, not just the focused outline.
+   * Border radius changes appearance, not the tested key dimensions. */
+  border-radius: 10px;
+  min-width: 0;
+  padding-left: 3px;
+  padding-right: 3px;
+}
