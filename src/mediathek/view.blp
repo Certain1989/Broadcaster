@@ -38,14 +38,11 @@ template $TvMediathekView: Adw.Bin {
         Gtk.Button keyboard_button {
           icon-name: "input-keyboard-symbolic";
           tooltip-text: _("Open on-screen keyboard");
-          // Keep the verified remote hit allocation; CSS only reduces the
-          // painted face to match the compact launchers in other views.
-          width-request: 60;
-          height-request: 56;
+          // Same compact launcher requests as Live and My Channels;
+          // D-pad reachability and focus are verified by mapped GTK tests.
+          width-request: 48;
+          height-request: 44;
           valign: center;
-          styles [
-            "tv-compact-keyboard-launcher"
-          ]
         }
 
         Gtk.ToggleButton {
