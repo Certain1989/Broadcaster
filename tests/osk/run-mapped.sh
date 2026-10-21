@@ -28,6 +28,8 @@ for case in \
   osk_mapped_gtk_caret_visible_with_remote_key_focus \
   osk_mapped_gtk_caret_buttons_collapse_selection \
   osk_mapped_gtk_compact_add_playlist_url_launcher \
+  osk_mapped_gtk_mpv_row_native_remote_route_and_lifecycle \
+  gtk_mediathek_toolbar_narrow_allocations \
   osk_mapped_gtk_entry_reentrant_signal_trace \
   osk_mapped_gtk_search_reentrant_signal_trace \
   osk_mapped_gtk_entry_row_reentrant_signal_trace \
