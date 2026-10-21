@@ -73,6 +73,21 @@ headerbar.tv-header button:focus-visible {
   border-radius: 10px;
 }
 
+/* Live has its own search + keyboard row outside .tv-controls.
+ * A D-pad Up from the channel list can focus the Keyboard button before
+ * GTK marks it :focus-visible. Match actual focus and focus-within so the
+ * blue outline never disappears while OK still activates that button. */
+.tv-live-controls button:focus,
+.tv-live-controls button:focus-within,
+.tv-live-controls button:focus-visible,
+.tv-live-controls entry.search:focus,
+.tv-live-controls entry.search:focus-within,
+.tv-live-controls entry.search:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: 1px;
+  border-radius: 10px;
+}
+
 /* My Channels has a separate toolbar from Mediathek. Highlight actual
  * keyboard/remote focus on every upper control, including GtkDropDown's
  * focused internal child, without changing the unfocused toolbar styling.

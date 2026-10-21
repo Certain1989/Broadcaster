@@ -29,15 +29,15 @@ mod imp {
     #[template(file = "src/live/view.blp")]
     pub struct TvLiveView {
         #[template_child]
-        stack: TemplateChild<gtk::Stack>,
+        pub(super) stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        search_entry: TemplateChild<gtk::SearchEntry>,
+        pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
         pub(super) keyboard_prototype_button: TemplateChild<gtk::Button>,
         #[template_child]
-        results_stack: TemplateChild<gtk::Stack>,
+        pub(super) results_stack: TemplateChild<gtk::Stack>,
         #[template_child]
-        channels_list: TemplateChild<gtk::ListBox>,
+        pub(super) channels_list: TemplateChild<gtk::ListBox>,
         #[template_child]
         error_page: TemplateChild<adw::StatusPage>,
 
@@ -275,6 +275,76 @@ impl TvLiveView {
 
     pub fn focus_search(&self) {
         self.imp().focus_search();
+    }
+
+    /// Expose the real channel toolbar for offline mapped GTK navigation tests.
+    /// Production still waits for the normal asynchronous channel load.
+    #[cfg(test)]
+    pub(crate) fn show_toolbar_for_test(&self) {
+        self.imp().stack.set_visible_child_name("channels");
+    }
+
+    /// Exercise the real channel-list-to-toolbar Up boundary without network
+    /// requests. A synthetic row is only inserted when the offline fixture
+    /// has not loaded a channel model.
+    #[cfg(test)]
+    pub(crate) fn focus_first_channel_for_test(&self) -> bool {
+        let imp = self.imp();
+        imp.results_stack.set_visible_child_name("list");
+        if imp.channels_list.row_at_index(0).is_none() {
+            let row = gtk::ListBoxRow::new();
+            row.set_child(Some(&gtk::Label::new(Some("Synthetic channel"))));
+            imp.channels_list.append(&row);
+        }
+        imp.channels_list
+            .row_at_index(0)
+            .is_some_and(|row| row.grab_focus())
+    }
+
+    /// The Live focus style must reach the button actually selected by the
+    /// remote, even when programmatic focus is not yet :focus-visible.
+    #[cfg(test)]
+    pub(crate) fn assert_keyboard_remote_focus_styled(&self) {
+        let button = &self.imp().keyboard_prototype_button;
+        assert!(
+            button.has_focus(),
+            "Up from first channel must focus Keyboard"
+        );
+        let toolbar = button.parent().expect("Live keyboard toolbar");
+        assert!(
+            toolbar.has_css_class("tv-live-controls"),
+            "Live keyboard must be inside a visible remote-focus styling scope"
+        );
+        assert!(
+            self.imp().search_entry.is_ancestor(&toolbar),
+            "Live search and Keyboard must share focus styling"
+        );
+        let css = gio::resources_lookup_data(
+            "/io/github/Certain1989/Broadcaster/broadcaster.css",
+            gio::ResourceLookupFlags::NONE,
+        )
+        .expect("bundled application focus stylesheet");
+        let css = String::from_utf8_lossy(css.as_ref());
+        for selector in [
+            ".tv-live-controls button:focus",
+            ".tv-live-controls button:focus-within",
+            ".tv-live-controls button:focus-visible",
+        ] {
+            assert!(
+                css.contains(selector),
+                "focused Keyboard needs bundled stylesheet selector {selector}"
+            );
+        }
+    }
+
+    /// Only mapped upper controls belong to spatial arrow navigation.
+    /// Returning the actual field instance preserves K1's ON/OFF launcher.
+    pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
+        let imp = self.imp();
+        vec![
+            imp.search_entry.get().upcast(),
+            imp.keyboard_prototype_button.get().upcast(),
+        ]
     }
 
     pub fn focus_keyboard_prototype(&self) -> bool {

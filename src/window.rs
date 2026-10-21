@@ -28,6 +28,98 @@ impl PlaybackReturn {
     }
 }
 
+/// Keypad arrows normally represent the same remote direction as dedicated
+/// arrows when Num Lock is off. Preserve physical key identity outside the
+/// application's remote router and all modal/popover native editing.
+fn normalize_remote_arrow(key: gtk::gdk::Key) -> gtk::gdk::Key {
+    use gtk::gdk::Key;
+    match key {
+        Key::KP_Left => Key::Left,
+        Key::KP_Right => Key::Right,
+        Key::KP_Up => Key::Up,
+        Key::KP_Down => Key::Down,
+        _ => key,
+    }
+}
+
+/// Measured in the same mapped page coordinates. No synthetic tab order:
+/// each remote direction selects an actually visible geometric neighbor.
+#[derive(Clone, Copy, Debug)]
+struct ToolbarRect {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl ToolbarRect {
+    fn of(widget: &gtk::Widget, page: &gtk::Widget) -> Option<Self> {
+        widget.compute_bounds(page).map(|rect| Self {
+            left: rect.x(),
+            top: rect.y(),
+            right: rect.x() + rect.width(),
+            bottom: rect.y() + rect.height(),
+        })
+    }
+
+    fn cx(self) -> f32 {
+        (self.left + self.right) / 2.0
+    }
+
+    fn cy(self) -> f32 {
+        (self.top + self.bottom) / 2.0
+    }
+}
+
+/// Horizontal arrows stay on the same visual row; vertical arrows select the
+/// closest adjacent row and then the closest horizontal center. Candidate
+/// order resolves exact geometric ties (stable even when controls reflow).
+fn spatial_neighbor(rects: &[ToolbarRect], from: usize, key: gtk::gdk::Key) -> Option<usize> {
+    let origin = *rects.get(from)?;
+    let mut best: Option<(usize, f32, f32)> = None;
+    for (index, candidate) in rects.iter().copied().enumerate() {
+        if index == from {
+            continue;
+        }
+        let (primary, secondary) = match key {
+            gtk::gdk::Key::Left
+                if candidate.cx() < origin.cx() - 1.0
+                    && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
+            {
+                (
+                    origin.cx() - candidate.cx(),
+                    (origin.cy() - candidate.cy()).abs(),
+                )
+            }
+            gtk::gdk::Key::Right
+                if candidate.cx() > origin.cx() + 1.0
+                    && candidate.bottom.min(origin.bottom) > candidate.top.max(origin.top) =>
+            {
+                (
+                    candidate.cx() - origin.cx(),
+                    (origin.cy() - candidate.cy()).abs(),
+                )
+            }
+            gtk::gdk::Key::Up if candidate.bottom <= origin.top + 2.0 => (
+                origin.top - candidate.bottom,
+                (origin.cx() - candidate.cx()).abs(),
+            ),
+            gtk::gdk::Key::Down if candidate.top >= origin.bottom - 2.0 => (
+                candidate.top - origin.bottom,
+                (origin.cx() - candidate.cx()).abs(),
+            ),
+            _ => continue,
+        };
+        if best.is_none_or(|(_, distance, offset)| {
+            primary.total_cmp(&distance).is_lt()
+                || (primary.total_cmp(&distance).is_eq() && secondary.total_cmp(&offset).is_lt())
+        }) {
+            best = Some((index, primary, secondary));
+        }
+    }
+    best.map(|(index, _, _)| index)
+}
+
 mod imp {
     use super::*;
 
@@ -420,13 +512,82 @@ impl TvWindow {
         false
     }
 
+    /// Used only when focus is already inside an upper page control. Modal
+    /// dialogs and mapped dropdown/popover menus were excluded by the caller.
+    /// Native search editing owns Left/Right until the caret hits that edge.
+    fn focus_spatial_toolbar_key(
+        &self,
+        page_name: &str,
+        page: &gtk::Widget,
+        focused: &gtk::Widget,
+        key: gtk::gdk::Key,
+    ) -> Option<bool> {
+        let controls = match page_name {
+            "live" => self.imp().live_view.toolbar_focus_targets(),
+            "mediathek" => self.imp().mediathek_view.toolbar_focus_targets(),
+            "streams" => self.imp().streams_view.toolbar_focus_targets(),
+            _ => return None,
+        };
+        let mapped: Vec<_> = controls
+            .into_iter()
+            .filter(|w| w.is_mapped() && w.is_sensitive() && w.is_visible())
+            .filter_map(|w| {
+                ToolbarRect::of(&w, page)
+                    .filter(|rect| rect.right > rect.left + 1.0 && rect.bottom > rect.top + 1.0)
+                    .map(|rect| (w, rect))
+            })
+            .collect();
+        let Some(current) = mapped.iter().position(|(w, _)| Self::is_within(focused, w)) else {
+            return None; // Never intercept list rows or nested dialogs.
+        };
+
+        if matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right) {
+            if let Some(entry) = mapped[current].0.downcast_ref::<gtk::SearchEntry>() {
+                if entry.selection_bounds().is_some() {
+                    return Some(false);
+                }
+                let last = entry.text().chars().count() as i32;
+                // GTK permits -1 to mean "at end", not "before start".
+                let raw_position = entry.position();
+                let position = if raw_position < 0 { last } else { raw_position };
+                if (key == gtk::gdk::Key::Left && position > 0)
+                    || (key == gtk::gdk::Key::Right && position < last)
+                {
+                    return Some(false);
+                }
+            }
+        }
+
+        let geometry: Vec<_> = mapped.iter().map(|(_, rect)| *rect).collect();
+        if let Some(index) = spatial_neighbor(&geometry, current, key) {
+            return Some(mapped[index].0.grab_focus());
+        }
+        // Upper and lower boundaries deliberately remain navigable without
+        // introducing diagonal/historical Up-Down toolbar chains.
+        if key == gtk::gdk::Key::Up {
+            return Some(self.focus_page_switcher());
+        }
+        if key == gtk::gdk::Key::Down {
+            return Some(match page_name {
+                "live" => Self::find_descendant(page, &|w| w.is::<gtk::ListBox>())
+                    .and_then(|list| list.downcast::<gtk::ListBox>().ok())
+                    .and_then(|list| list.row_at_index(0))
+                    .is_some_and(|row| row.grab_focus()),
+                "mediathek" => self.imp().mediathek_view.focus_first_result(),
+                "streams" => self.imp().streams_view.focus_first_result(),
+                _ => false,
+            });
+        }
+        Some(false)
+    }
+
     /// Only bridge the known boundaries between list, toolbar and page
     /// switcher. Interior row navigation, editing, dropdowns, dialogs and
     /// mpv keep their own native key handling.
     fn focus_boundary_key(&self, key: gtk::gdk::Key) -> bool {
         if !matches!(
             key,
-            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
         ) || Self::find_mapped_popover(self.upcast_ref()).is_some()
         {
             return false;
@@ -443,6 +604,21 @@ impl TvWindow {
         let search = Self::find_descendant(page, &|widget| widget.is::<gtk::SearchEntry>());
 
         if Self::is_within(&focused, page) {
+            if let Some(handled) = self.focus_spatial_toolbar_key(
+                self.imp()
+                    .stack
+                    .visible_child_name()
+                    .as_deref()
+                    .unwrap_or_default(),
+                page,
+                &focused,
+                key,
+            ) {
+                // A toolbar key was considered here. Never fall through to
+                // the historical fixed vertical chain, even when native text
+                // caret handling must receive an unconsumed arrow.
+                return handled;
+            }
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
                 // Escape from any virtualized row using one remote key, no
                 // matter where the selection is in a large playlist.
@@ -480,7 +656,9 @@ impl TvWindow {
                     .focus_vertical_navigation(&focused, key);
             }
 
-            // Prototype remote route: Search -> Keyboard -> Results, and back.
+            // Live list's first row lies beneath Search, not Keyboard.
+            // Search <-> Keyboard is a horizontal transition, handled by
+            // mapped geometry above. Preserve the first-row child boundary.
             let list = Self::find_descendant(page, &|widget| widget.is::<gtk::ListBox>())
                 .and_then(|widget| widget.downcast::<gtk::ListBox>().ok());
 
@@ -491,12 +669,13 @@ impl TvWindow {
                         if focused != *first_widget {
                             return first.grab_focus();
                         }
-                        return self.imp().live_view.focus_keyboard_prototype()
-                            || search.as_ref().is_some_and(|entry| entry.grab_focus());
+                        return search.as_ref().is_some_and(|entry| entry.grab_focus());
                     }
                 }
                 if self.imp().live_view.keyboard_prototype_has_focus(&focused) {
-                    return search.as_ref().is_some_and(|entry| entry.grab_focus());
+                    // Above Keyboard is the page switcher, not Search to
+                    // its left. Normally the spatial router handles this.
+                    return self.focus_page_switcher();
                 }
                 if search
                     .as_ref()
@@ -515,11 +694,10 @@ impl TvWindow {
                     .as_ref()
                     .is_some_and(|entry| Self::is_within(&focused, entry))
                 {
-                    return self.imp().live_view.focus_keyboard_prototype()
-                        || list
-                            .as_ref()
-                            .and_then(|list| list.row_at_index(0))
-                            .is_some_and(|row| row.grab_focus());
+                    return list
+                        .as_ref()
+                        .and_then(|list| list.row_at_index(0))
+                        .is_some_and(|row| row.grab_focus());
                 }
             }
             return false;
@@ -558,13 +736,10 @@ impl TvWindow {
             // A nested keyboard cancels its own draft; Home cannot navigate
             // behind the active modal or dismiss the source editor.
             if dialog.has_css_class("osk-feasibility")
-                && modifiers.is_empty()
+                && crate::keyboard::unmodified_remote(modifiers)
                 && matches!(
                     key,
-                    gtk::gdk::Key::Back
-                        | gtk::gdk::Key::Escape
-                        | gtk::gdk::Key::Home
-                        | gtk::gdk::Key::HomePage
+                    gtk::gdk::Key::Back | gtk::gdk::Key::Escape | gtk::gdk::Key::HomePage
                 )
             {
                 tracing::trace!("osk prototype: window cancel capture");
@@ -592,9 +767,10 @@ impl TvWindow {
             }
         }
 
-        if !modifiers.is_empty() {
+        if !crate::keyboard::unmodified_remote(modifiers) {
             return glib::Propagation::Proceed;
         }
+        let key = normalize_remote_arrow(key);
 
         // A key still held as mpv relinquishes Wayland focus is not a
         // main-application Back/Home command while playback is active.
@@ -685,7 +861,7 @@ fn modal_remote_action(
     key: gtk::gdk::Key,
     modifiers: gtk::gdk::ModifierType,
 ) -> Option<ModalRemoteAction> {
-    if !modifiers.is_empty() {
+    if !crate::keyboard::unmodified_remote(modifiers) {
         return None;
     }
     match key {
@@ -854,6 +1030,141 @@ mod playback_navigation_tests {
             Some("mediathek")
         );
         assert_eq!(settings.string("visible-view"), "live");
+
+        // The same CI Xvfb window exercises the production router against
+        // the actual K1 keyboard, Mediathek toggles and Streams filter rows.
+        // A list-only test would miss the wrong Up/Down upper-control chain.
+        let spin = || {
+            // A mapped widget can still have 0px allocation until the next
+            // GDK frame. Drain events *and* allow frame clock ticks on Xvfb.
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+        };
+        let assert_focused = |target: &gtk::Widget| {
+            let focused = window.focused_widget().expect("visible focus");
+            assert!(
+                TvWindow::is_within(&focused, target),
+                "remote focus must follow the actual mapped neighboring control"
+            );
+        };
+
+        stack.set_visible_child_name("live");
+        window.imp().live_view.show_toolbar_for_test();
+        window.queue_allocate();
+        spin();
+        let live = window.imp().live_view.toolbar_focus_targets();
+        assert!(
+            live.iter().all(|w| w.is_mapped()),
+            "Live toolbar must really be mapped"
+        );
+        assert!(live[0].grab_focus());
+        // A non-boundary Left/Right belongs to the editable caret.
+        let live_search = live[0].clone().downcast::<gtk::SearchEntry>().unwrap();
+        live_search.set_text("ab");
+        live_search.set_position(1);
+        assert!(!window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&live[0]);
+        live_search.set_position(2);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&live[1]); // physical neighbor, not Down
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&live[0]);
+        live_search.set_text("");
+
+        // Search and Keyboard are distinct visual and focusable targets.
+        // Their actual allocated rectangles must have a visible TV-sized gap.
+        let live_page = window.imp().live_view.upcast_ref::<gtk::Widget>();
+        let search_rect = ToolbarRect::of(&live[0], live_page).expect("mapped Live search");
+        let keyboard_rect = ToolbarRect::of(&live[1], live_page).expect("mapped Live keyboard");
+        assert!(
+            keyboard_rect.left - search_rect.right >= 10.0,
+            "search and Keyboard must be visually separated: {search_rect:?}, {keyboard_rect:?}"
+        );
+
+        // Owner Wayland report: Up from the first channel jumped diagonally
+        // to Keyboard, although Search is directly above the channel list.
+        // Up must reach Search; Right then reaches Keyboard with a visible
+        // blue focus frame. Left and Down must restore spatial relationships.
+        assert!(window.imp().live_view.focus_first_channel_for_test());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_focused(&live[0]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&live[1]);
+        window.imp().live_view.assert_keyboard_remote_focus_styled();
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&live[0]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        let list = TvWindow::find_descendant(live_page, &|w| w.is::<gtk::ListBox>())
+            .expect("Live channel list");
+        assert!(
+            TvWindow::is_within(
+                &window.focused_widget().expect("Down returns focus to list"),
+                &list
+            ),
+            "Down from Live search must reach the channels"
+        );
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_focused(&live[0]);
+
+        stack.set_visible_child_name("mediathek");
+        window.queue_allocate();
+        spin();
+        let med = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_eq!(med.len(), 6, "search, two toggles, three filters");
+        assert!(med[0].is_mapped() && med[1].is_mapped());
+        let med_search = med[0].clone().downcast::<gtk::SearchEntry>().unwrap();
+        med_search.set_position(-1); // Explicitly move native caret to end.
+        let med_page = window.imp().mediathek_view.upcast_ref::<gtk::Widget>();
+        let med_rects: Vec<_> = med
+            .iter()
+            .map(|control| ToolbarRect::of(control, med_page).expect("mapped Mediathek control"))
+            .collect();
+        assert_eq!(
+            spatial_neighbor(&med_rects, 0, gtk::gdk::Key::Right),
+            Some(1),
+            "mapped search and the right-hand toggle must be spatial neighbors: {med_rects:?}"
+        );
+        assert!(med[0].grab_focus());
+        med_search.set_position(-1);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[1]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&med[1]);
+        assert!(med[3].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[4]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[5]);
+
+        stack.set_visible_child_name("streams");
+        window.queue_allocate();
+        spin();
+        let filters = streams.toolbar_focus_targets();
+        assert!(filters[1].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[3]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&filters[2]);
+        assert!(filters[4].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[5]);
+        assert!(filters[7].grab_focus());
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[8]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&filters[9]);
+        assert!(
+            !filters[6].is_mapped(),
+            "hidden region must not steal focus"
+        );
     }
 
     /// Checks GTK widget ancestry and list-boundary detection against real
@@ -898,5 +1209,82 @@ mod playback_navigation_tests {
                 .expect("find child action nested under the first row");
         assert_eq!(from_list, button.upcast::<gtk::Widget>());
         assert!(list.row_at_index(2).is_none(), "empty boundary is safe");
+    }
+}
+
+#[cfg(test)]
+mod spatial_navigation_tests {
+    #[test]
+    fn keypad_and_lock_modifiers_preserve_navigation_intent() {
+        use gtk::gdk::{Key, ModifierType as Mods};
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Left), Key::Left);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Right), Key::Right);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Up), Key::Up);
+        assert_eq!(super::normalize_remote_arrow(Key::KP_Down), Key::Down);
+        assert!(crate::keyboard::unmodified_remote(Mods::LOCK_MASK));
+        assert!(!crate::keyboard::unmodified_remote(Mods::CONTROL_MASK));
+        assert_eq!(super::modal_remote_action(Key::Home, Mods::empty()), None);
+    }
+
+    use super::{spatial_neighbor, ToolbarRect};
+    use adw::gtk::gdk::Key;
+
+    fn rect(left: f32, top: f32, width: f32) -> ToolbarRect {
+        ToolbarRect {
+            left,
+            right: left + width,
+            top,
+            bottom: top + 40.0,
+        }
+    }
+
+    #[test]
+    fn horizontal_navigation_never_jumps_into_another_visual_row() {
+        // Search occupies the whole first row; toggle controls are beside it.
+        // Filters on a second row must never be chosen by Right/Left.
+        let layout = [
+            rect(0.0, 0.0, 430.0),
+            rect(440.0, 0.0, 40.0),
+            rect(490.0, 0.0, 40.0),
+            rect(10.0, 60.0, 140.0),
+            rect(160.0, 60.0, 140.0),
+            rect(310.0, 60.0, 110.0),
+        ];
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Right), Some(1));
+        assert_eq!(spatial_neighbor(&layout, 1, Key::Right), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Left), Some(1));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Right), None);
+        assert_eq!(spatial_neighbor(&layout, 3, Key::Right), Some(4));
+        assert_eq!(spatial_neighbor(&layout, 4, Key::Left), Some(3));
+    }
+
+    #[test]
+    fn vertical_navigation_chooses_nearest_actual_row_and_column() {
+        let layout = [
+            rect(0.0, 0.0, 300.0),
+            rect(0.0, 60.0, 90.0),
+            rect(105.0, 60.0, 90.0),
+            rect(210.0, 60.0, 90.0),
+            rect(0.0, 120.0, 90.0),
+            rect(105.0, 120.0, 90.0),
+            rect(210.0, 120.0, 90.0),
+        ];
+        // Search center is closest to column two, not the first-by-code filter.
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Down), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Down), Some(5));
+        assert_eq!(spatial_neighbor(&layout, 5, Key::Up), Some(2));
+        assert_eq!(spatial_neighbor(&layout, 2, Key::Up), Some(0));
+        assert_eq!(spatial_neighbor(&layout, 0, Key::Up), None);
+        assert_eq!(spatial_neighbor(&layout, 6, Key::Down), None);
+    }
+
+    #[test]
+    fn hidden_controls_do_not_create_phantom_geometric_neighbors() {
+        // The router supplies only mapped + visible + sensitive candidates.
+        let without_hidden_region = [rect(0.0, 0.0, 90.0), rect(100.0, 0.0, 90.0)];
+        assert_eq!(
+            spatial_neighbor(&without_hidden_region, 1, Key::Right),
+            None
+        );
     }
 }

@@ -1406,6 +1406,32 @@ impl TvStreamsView {
         }
     }
 
+    /// Actual focusable toolbar widgets only; the Channels count label is
+    /// excluded. Hidden dynamic region controls are filtered by the router.
+    pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
+        let imp = self.imp();
+        vec![
+            imp.search_entry.get().upcast(),
+            imp.source_filter.get().upcast(),
+            imp.group_filter.get().upcast(),
+            imp.sort_filter.get().upcast(),
+            imp.language_filter.get().upcast(),
+            imp.country_filter.get().upcast(),
+            imp.region_filter.get().upcast(),
+            imp.clear_button.get().upcast(),
+            imp.manage_button.get().upcast(),
+            imp.add_button.get().upcast(),
+        ]
+    }
+
+    pub fn focus_first_result(&self) -> bool {
+        if self.imp().rows.get().is_some_and(|rows| rows.n_items() > 0) {
+            self.imp().results_list.grab_focus()
+        } else {
+            false
+        }
+    }
+
     pub fn focus_vertical_navigation(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
         if !matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::Down) {
             return false;
