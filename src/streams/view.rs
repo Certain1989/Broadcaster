@@ -1424,7 +1424,6 @@ impl TvStreamsView {
         let imp = self.imp();
         vec![
             imp.search_entry.get().upcast(),
-            imp.keyboard_button.get().upcast(),
             imp.source_filter.get().upcast(),
             imp.group_filter.get().upcast(),
             imp.sort_filter.get().upcast(),
@@ -1434,6 +1433,9 @@ impl TvStreamsView {
             imp.clear_button.get().upcast(),
             imp.manage_button.get().upcast(),
             imp.add_button.get().upcast(),
+            // Spatial navigation uses mapped geometry, not vector ordering.
+            // Preserve the existing filter indices in read-only router tests.
+            imp.keyboard_button.get().upcast(),
         ]
     }
 
