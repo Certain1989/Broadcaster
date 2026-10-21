@@ -479,6 +479,11 @@ x.XCloseDisplay(d)
         None
     }
 
+    fn row_owns_focus(win: &adw::Window, row: &adw::EntryRow) -> bool {
+        gtk::prelude::GtkWindowExt::focus(win)
+            .is_some_and(|focused| focused.is_ancestor(row) || focused == *row.upcast_ref::<gtk::Widget>())
+    }
+
     fn find_draft(widget: &gtk::Widget) -> Option<gtk::Entry> {
         if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
             return Some(entry.clone());
@@ -588,13 +593,14 @@ x.XCloseDisplay(d)
         native_key("Up");
         assert!(restore.has_focus(), "first row can escape to header");
         native_key("Down");
+        assert!(row_owns_focus(&win, &first), "header Down returns to first editor");
+        native_key("Up");
+        assert!(keyboard0.has_focus(), "editor Up returns to its keyboard");
         native_key("Down");
-        assert!(keyboard0.has_focus(), "header -> editor -> own keyboard");
-        native_key("Down");
-        assert!(first.is_focus(), "keyboard Down returns to row editor");
+        assert!(row_owns_focus(&win, &first), "keyboard Down returns to row editor");
 
         native_key("Down");
-        assert!(second.is_focus(), "editor Down visits next row");
+        assert!(row_owns_focus(&win, &second), "editor Down visits next row");
         native_key("Up");
         assert!(keyboard1.has_focus(), "second row has distinct keyboard");
         native_key("Return");
@@ -621,7 +627,7 @@ x.XCloseDisplay(d)
         native_key("Up");
         assert!(remove0.has_focus(), "OFF skips hidden keyboard button");
         native_key("Down");
-        assert!(first.is_focus(), "OFF retains editor and Remove route");
+        assert!(row_owns_focus(&win, &first), "OFF retains editor and Remove route");
         settings.set_boolean("osk-enabled", true).expect("re-enable OSK");
         mapped_spin();
 
@@ -647,7 +653,11 @@ x.XCloseDisplay(d)
                 .emit_by_name::<()>("clicked", &[]);
         }
         mapped_spin();
-        assert_eq!(settings.strv(GENERAL_KEY), after_remove, "no ghost save");
+        assert_eq!(
+            settings.strv(GENERAL_KEY).as_slice(),
+            after_remove.as_slice(),
+            "no ghost save"
+        );
 
         restore.emit_by_name::<()>("clicked", &[]);
         mapped_spin();
