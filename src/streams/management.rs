@@ -1282,6 +1282,130 @@ mod source_form_tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires a mapped display and isolated test GSettings"]
+    fn osk_mapped_gtk_add_playlist_paired_rows_and_footer() {
+        adw::init().expect("mapped dialog test needs GTK");
+        let win = adw::Window::new();
+        win.set_default_size(960, 720);
+        win.present();
+
+        let (dialog, body, status) = sheet("Add Playlist");
+        let name = entry("");
+        let url = entry("");
+        url.set_input_purpose(gtk::InputPurpose::Url);
+        let name_keyboard = editable_row(
+            "Unique source name",
+            &name,
+            &body,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        let url_keyboard = editable_row(
+            "Playlist HTTP(S) URL",
+            &url,
+            &body,
+            crate::keyboard::KeyboardOptions::url(),
+        );
+        for keyboard in [&name_keyboard, &url_keyboard] {
+            crate::keyboard::style_add_playlist_field_launcher(keyboard);
+        }
+
+        let advanced = gtk::Expander::new(Some("Advanced"));
+        let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        // Make the expanded state taller than the available window so the
+        // scroller and pinned footer must coexist.
+        for _ in 0..35 {
+            advanced_body.append(&gtk::Label::new(Some("Optional source metadata")));
+        }
+        advanced.set_child(Some(&advanced_body));
+        body.append(&advanced);
+        let (scroll, footer) = source_form_layout(&dialog, &body, &advanced);
+        let actions = line(&footer);
+        let cancel = button("Cancel", &actions);
+        let save = button("Save", &actions);
+        footer.append(&status);
+
+        dialog.present(Some(&win));
+        let spin = || {
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(12));
+            }
+        };
+        spin();
+
+        assert_eq!(dialog.property::<i32>("content-height"), 360);
+        for control in [
+            name.clone().upcast::<gtk::Widget>(),
+            url.clone().upcast::<gtk::Widget>(),
+            name_keyboard.clone().upcast(),
+            url_keyboard.clone().upcast(),
+        ] {
+            assert!(control.is_mapped() && control.is_sensitive());
+            assert!(control.grab_focus(), "paired field control is not focusable");
+        }
+        assert!(
+            name_keyboard.width() >= 48 && name_keyboard.height() >= 44,
+            "source-name keyboard target too small: {}x{}",
+            name_keyboard.width(),
+            name_keyboard.height()
+        );
+        assert_eq!(
+            (name_keyboard.width(), name_keyboard.height()),
+            (url_keyboard.width(), url_keyboard.height()),
+            "paired Add Playlist keyboard launchers must have matching allocations"
+        );
+        assert_eq!(
+            name.height(),
+            url.height(),
+            "paired source-name and URL entries must be equally tall"
+        );
+        let name_rect = name.compute_bounds(&body).expect("name entry bounds");
+        let url_rect = url.compute_bounds(&body).expect("URL entry bounds");
+        assert!(
+            (name_rect.x() - url_rect.x()).abs() <= 2.0
+                && (name_rect.width() - url_rect.width()).abs() <= 2.0,
+            "paired entries must align and have equal widths"
+        );
+
+        let footer_visible = || {
+            let bounds = footer.compute_bounds(&dialog).expect("footer bounds");
+            assert!(
+                footer.is_mapped()
+                    && bounds.y() >= -1.0
+                    && bounds.y() + bounds.height() <= dialog.height() as f32 + 1.0,
+                "footer must remain inside dialog viewport: y={} height={} dialog={}",
+                bounds.y(),
+                bounds.height(),
+                dialog.height()
+            );
+            assert!(cancel.is_mapped() && save.is_mapped());
+        };
+        footer_visible();
+        advanced.set_expanded(true);
+        spin();
+        assert_eq!(dialog.property::<i32>("content-height"), 620);
+        let adjustment = scroll.vadjustment();
+        assert!(
+            adjustment.upper() > adjustment.page_size(),
+            "expanded optional fields must remain scrollable"
+        );
+        adjustment.set_value(adjustment.upper() - adjustment.page_size());
+        spin();
+        footer_visible();
+        assert!(save.grab_focus(), "Save must remain D-pad focusable after scroll");
+        assert!(cancel.grab_focus(), "Cancel must remain D-pad focusable after scroll");
+
+        advanced.set_expanded(false);
+        spin();
+        assert_eq!(dialog.property::<i32>("content-height"), 360);
+        footer_visible();
+        dialog.close();
+        win.destroy();
+    }
+
+    #[test]
     fn source_default_codes_and_optional_region_validate() {
         assert_eq!(
             crate::streams::model::normalize_facet("de", FacetDimension::Language).unwrap(),
