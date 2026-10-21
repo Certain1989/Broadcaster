@@ -252,6 +252,20 @@ mod imp {
                     slf.offer_undo(&gettext("Argument removed"), previous);
                 }
             ));
+            // Bind to each newly constructed EntryRow, including rows rebuilt
+            // by Restore Defaults and Undo. Its existing changed handler is
+            // the sole immediate GSettings writer, not an OSK Save action.
+            let keyboard = gtk::Button::new();
+            keyboard.set_icon_name("input-keyboard-symbolic");
+            keyboard.set_size_request(48, 44);
+            keyboard.set_valign(gtk::Align::Center);
+            keyboard.add_css_class("flat");
+            row.add_suffix(&keyboard);
+            crate::keyboard::bind_launcher(
+                &keyboard,
+                &row,
+                crate::keyboard::KeyboardOptions::default(),
+            );
             row.add_suffix(&remove_button);
 
             // Capture on the row so Up/Down also work from its embedded
