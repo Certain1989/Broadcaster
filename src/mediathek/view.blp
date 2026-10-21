@@ -34,6 +34,14 @@ template $TvMediathekView: Adw.Bin {
           text: bind template.query_string bidirectional;
         }
 
+        Gtk.Button keyboard_button {
+          icon-name: "input-keyboard-symbolic";
+          tooltip-text: _("Open on-screen keyboard");
+          width-request: 48;
+          height-request: 44;
+          valign: center;
+        }
+
         Gtk.ToggleButton {
           icon-name: "search-global-symbolic";
           tooltip-text: _("Search Everywhere");
