@@ -457,17 +457,16 @@ fn remote_preview_caret_rect(
     // scrolling; character counts are not pixel offsets or byte indexes.
     let position = preview.position().max(0) as usize;
     let (strong, _) = text.compute_cursor_extents(position);
-    let point = text.compute_point(
-        canvas,
-        &gtk::graphene::Point::new(strong.x(), strong.y()),
-    )?;
+    let point = text.compute_point(canvas, &gtk::graphene::Point::new(strong.x(), strong.y()))?;
     let bounds = text.compute_bounds(canvas)?;
     if bounds.width() < 2.0 || bounds.height() < 1.0 {
         return None;
     }
     let height = strong.height().max(1.0).min(bounds.height());
     Some(gtk::graphene::Rect::new(
-        point.x().clamp(bounds.x(), bounds.x() + bounds.width() - 2.0),
+        point
+            .x()
+            .clamp(bounds.x(), bounds.x() + bounds.width() - 2.0),
         point
             .y()
             .clamp(bounds.y(), bounds.y() + bounds.height() - height),
