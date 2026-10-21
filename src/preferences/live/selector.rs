@@ -619,6 +619,17 @@ x.XCloseDisplay(d)
         native_key("Return");
         assert!(!popup.is_mapped(), "Move action closes popup");
         assert_eq!(saves.get(), 1, "one GSettings commit on move");
+        let final_ids: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_id())
+            .collect();
+        assert_eq!(
+            settings.live_channels(),
+            final_ids,
+            "persisted order must exactly match the final displayed order"
+        );
         let names: Vec<_> = page
             .imp()
             .visible_channels
@@ -648,6 +659,11 @@ x.XCloseDisplay(d)
             .collect();
         assert_eq!(after_boundary, before_boundary, "boundary cannot reorder");
         assert_eq!(saves.get(), before_saves, "boundary cannot persist");
+        assert_eq!(
+            settings.live_channels(),
+            final_ids,
+            "invalid boundary actions must leave stored order unchanged"
+        );
         let last_button = find_menu(last.upcast_ref(), "Move").unwrap();
         assert!(last_button.grab_focus());
         native_key("Return");
@@ -823,21 +839,32 @@ x.XCloseDisplay(d)
 
             // Inspect GTK's effective item sensitivity on mapped widgets;
             // class-installed actions alone are not proof of menu sensitivity.
-            fn inspect_items(widget: &gtk::Widget, context: &str) {
+            fn inspect_items(widget: &gtk::Widget, context: &str, states: &mut Vec<bool>) {
                 if widget.type_().name() == "GtkModelButton" {
                     eprintln!(
                         "F02 {context}: GtkModelButton mapped={} sensitive={}",
                         widget.is_mapped(),
                         widget.is_sensitive()
                     );
+                    states.push(widget.is_sensitive());
                 }
                 let mut child = widget.first_child();
                 while let Some(next) = child {
-                    inspect_items(&next, context);
+                    inspect_items(&next, context, states);
                     child = next.next_sibling();
                 }
             }
-            inspect_items(popup.upcast_ref(), context);
+            let mut states = Vec::new();
+            inspect_items(popup.upcast_ref(), context, &mut states);
+            let expected = match context {
+                "first-boundary" => [false, true],
+                "last-boundary" => [true, false],
+                _ => [true, true],
+            };
+            assert_eq!(
+                states, expected,
+                "{context}: effective mapped GTK menu item sensitivities"
+            );
 
             // No manual focus reset during traversal. Containment must
             // survive repeated attempts to leave the enabled menu action.
@@ -901,8 +928,18 @@ x.XCloseDisplay(d)
             .unwrap()
             .downcast::<TvLiveChannelSelectorRow>()
             .unwrap();
+        let old_button = find_menu(item.upcast_ref(), "Move").unwrap();
+        assert!(old_button.grab_focus());
+        native_key("Return");
+        let old_popup = old_button.popover().unwrap();
+        assert!(old_popup.is_mapped(), "middle popup open before row unmap");
         let was_loading = page.imp().loading.replace(true);
         page.imp().visible_channels.remove(1);
+        spin();
+        assert!(
+            !old_popup.is_mapped(),
+            "unmapping a row must not retain an orphaned menu"
+        );
         page.imp().visible_channels.insert(1, &item);
         page.imp().loading.set(was_loading);
         spin();
