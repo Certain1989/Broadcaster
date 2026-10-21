@@ -113,6 +113,44 @@ pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
         glib::Propagation::Stop
     });
     popover.add_controller(controller);
+
+    // A menu with just one effective action can hand native GTK focus out
+    // to the underlying row during directional navigation, without hiding
+    // its popover. Keep its mapped lifetime as the active focus scope.
+    // EventControllerFocus observes GTK's real focus hierarchy, not key
+    // events, so normal menu arrow/Return handling remains untouched.
+    let focus_controller = gtk::EventControllerFocus::new();
+    let weak_popover = popover.downgrade();
+    focus_controller.connect_leave(move |_| {
+        let weak_popover = weak_popover.clone();
+        // Let GTK finish its current focus transition first. A pending
+        // popdown must not be counteracted by restoring focus to a closed
+        // menu, and weak references cannot retain removed rows.
+        glib::idle_add_local_once(move || {
+            let Some(popover) = weak_popover.upgrade() else {
+                return;
+            };
+            if !popover.is_mapped() {
+                return;
+            }
+            let Some(window) = popover
+                .root()
+                .and_then(|root| root.downcast::<gtk::Window>().ok())
+            else {
+                return;
+            };
+            let still_in_popover = gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focus| {
+                focus == popover.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popover)
+            });
+            if !still_in_popover {
+                // Re-enter GTK's own focus chain of actionable menu
+                // descendants instead of swallowing remote arrow events
+                // or focusing the obscured originating list row.
+                let _ = popover.child_focus(gtk::DirectionType::TabForward);
+            }
+        });
+    });
+    popover.add_controller(focus_controller);
 }
 
 mod imp {
