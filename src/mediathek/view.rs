@@ -1169,8 +1169,8 @@ mod tests {
                 keyboard.grab_focus() && keyboard.has_focus(),
                 "remote launcher must accept visible GTK focus at {width}px"
             );
-            // Compare actual allocations with the adjacent natural-size GTK
-            // icon toggles, not the unrelated Live/My Channels size requests.
+            // All three icons should have the same compact allocation, rather
+            // than a short icon button next to a taller search entry.
             for (name, toggle) in [
                 ("Search Everywhere", &controls[2]),
                 ("Include Future Shows", &controls[3]),
@@ -1185,6 +1185,12 @@ mod tests {
                     toggle.height()
                 );
             }
+            let search_height = controls[0].height();
+            let icon_height = keyboard.height();
+            assert!(
+                (0..=8).contains(&(search_height - icon_height)),
+                "search and toolbar icon heights unbalanced at {width}px: search={search_height}, icon={icon_height}"
+            );
             window.destroy();
         }
     }
@@ -1335,25 +1341,30 @@ mod tests {
             let streams_action_height = targets[7].height();
             window.destroy();
 
-            // All three search launchers share compact GTK size requests.
-            // Compare real mapped allocations; remote reachability is
-            // checked separately, not inferred from a touch-target minimum.
+            // All three launchers use the same compact size requests, but
+            // actual GTK allocations (and their relationship to the search
+            // entries) establish the visual parity; the two Mediathek toggles
+            // must also match the keyboard in the narrow-allocation test.
             println!(
                 "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
             );
-            // The other two views keep their existing 48x44 size requests,
-            // so their mapped GTK content boxes can legitimately be larger.
-            // Mediathek instead follows its two neighboring icon toggles;
-            // the narrow-allocation test enforces that local visual parity.
-            // Retain cross-view dimensions as diagnostic evidence while the
-            // search/filter geometry checks below remain strict.
-            for (name, reference) in [
-                ("Live", live_keyboard_size),
-                ("My Channels", streams_keyboard_size),
+            let mediathek_gap = mediathek_entry_height - mediathek_keyboard_size.1;
+            for (name, reference, reference_gap) in [
+                ("Live", live_keyboard_size, live_entry_height - live_keyboard_size.1),
+                (
+                    "My Channels",
+                    streams_keyboard_size,
+                    streams_entry_height - streams_keyboard_size.1,
+                ),
             ] {
                 assert!(
-                    reference.0 > 0 && reference.1 > 0,
-                    "{name} keyboard must remain allocated at {width}px"
+                    (mediathek_keyboard_size.0 - reference.0).abs() <= 2
+                        && (mediathek_keyboard_size.1 - reference.1).abs() <= 2,
+                    "Mediathek keyboard {mediathek_keyboard_size:?} differs from {name} {reference:?} at {width}px"
+                );
+                assert!(
+                    (mediathek_gap - reference_gap).abs() <= 4,
+                    "search-to-keyboard height balance differs at {width}px: Mediathek gap={mediathek_gap}, {name} gap={reference_gap}"
                 );
             }
 
