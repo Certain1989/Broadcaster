@@ -332,6 +332,11 @@ mod imp {
             self.arguments_list.append(&row);
             row
         }
+
+        #[cfg(test)]
+        pub(super) fn mapped_test_arguments_list(&self) -> gtk::ListBox {
+            self.arguments_list.get()
+        }
     }
 
     #[glib::object_subclass]
@@ -447,24 +452,6 @@ x.XCloseDisplay(d)
         }
     }
 
-    fn find_listbox(widget: &gtk::Widget) -> Option<gtk::ListBox> {
-        if let Some(list) = widget.downcast_ref::<gtk::ListBox>() {
-            // Adw.PreferencesPage contains internal ListBoxes. Only the
-            // actual boxed argument list owns the editable argument rows.
-            if list.has_css_class("boxed-list") {
-                return Some(list.clone());
-            }
-        }
-        let mut child = widget.first_child();
-        while let Some(w) = child {
-            if let Some(found) = find_listbox(&w) {
-                return Some(found);
-            }
-            child = w.next_sibling();
-        }
-        None
-    }
-
     fn find_icon_button(widget: &gtk::Widget, icon: &str) -> Option<gtk::Button> {
         if let Some(button) = widget.downcast_ref::<gtk::Button>() {
             if button.icon_name().as_deref() == Some(icon) {
@@ -550,7 +537,7 @@ x.XCloseDisplay(d)
         dialog.present(Some(&win));
         mapped_spin();
 
-        let list = find_listbox(page.upcast_ref()).expect("actual mpv argument list");
+        let list = page.imp().mapped_test_arguments_list();
         let first = list
             .row_at_index(0)
             .expect("row 0")
