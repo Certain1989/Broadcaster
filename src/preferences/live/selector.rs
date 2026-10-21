@@ -5,6 +5,11 @@
 
 use std::cell::{Cell, RefCell};
 
+#[cfg(test)]
+thread_local! {
+    static SUPPRESS_LIVE_LOAD: Cell<bool> = const { Cell::new(false) };
+}
+
 use adw::{gio, glib, gtk, prelude::*, subclass::prelude::*};
 use indexmap::IndexMap;
 use smart_default::SmartDefault;
@@ -147,11 +152,34 @@ mod imp {
                 return;
             };
 
+            // A single user reorder must not persist its transient removal.
+            let was_loading = self.loading.replace(true);
             self.visible_channels.remove(position);
             self.visible_channels.insert(new_position, row);
+            self.loading.set(was_loading);
+            if !was_loading {
+                self.settings.set_live_channels(
+                    self.visible_channels
+                        .iter::<TvLiveChannelSelectorRow>()
+                        .map(|entry| entry.expect("live row").channel_id())
+                        .collect(),
+                );
+            }
             // the row lost the focus when it was removed
             row.grab_focus();
         }
+        #[cfg(test)]
+        pub(super) fn add_synthetic_row(&self, id: &str, name: &str) {
+            let row = TvLiveChannelSelectorRow::new(&ChannelId::from(id.to_owned()), name);
+            row.connect_move_requested(glib::clone!(
+                #[weak(rename_to = slf)]
+                self,
+                move |row, offset| slf.move_row(row, offset)
+            ));
+            row.set_visible(true);
+            self.visible_channels.append(&row);
+        }
+
         fn remove_row(&self, row: &TvLiveChannelSelectorRow) {
             if let Some(pos) = self.visible_channels.find(row) {
                 self.visible_channels.remove(pos)
@@ -220,11 +248,17 @@ mod imp {
                 });
 
             self.loading.set(true);
-            spawn(glib::clone!(
-                #[weak(rename_to = slf)]
-                self,
-                async move { slf.load().await }
-            ));
+            #[cfg(test)]
+            let suppress_load = SUPPRESS_LIVE_LOAD.with(Cell::get);
+            #[cfg(not(test))]
+            let suppress_load = false;
+            if !suppress_load {
+                spawn(glib::clone!(
+                    #[weak(rename_to = slf)]
+                    self,
+                    async move { slf.load().await }
+                ));
+            }
 
             let settings = self.settings.clone();
             let owner = self.obj().downgrade();
@@ -263,5 +297,199 @@ glib::wrapper! {
 impl TvLiveChannelSelector {
     pub fn new() -> Self {
         glib::Object::new()
+    }
+}
+
+
+#[cfg(test)]
+mod native_channel_menu_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    fn spin() {
+        for _ in 0..20 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    // X11/XTest injects real GDK key events into a mapped native surface.
+    fn native_key(key: &str) {
+        let script = r#"
+import ctypes as c
+import sys
+x, t = c.CDLL("libX11.so.6"), c.CDLL("libXtst.so.6")
+x.XOpenDisplay.argtypes = [c.c_char_p]
+x.XOpenDisplay.restype = c.c_void_p
+d = x.XOpenDisplay(None)
+assert d, "X11 display missing"
+x.XDefaultRootWindow.argtypes = [c.c_void_p]
+x.XDefaultRootWindow.restype = c.c_ulong
+x.XQueryTree.argtypes = [c.c_void_p, c.c_ulong, c.POINTER(c.c_ulong),
+    c.POINTER(c.c_ulong), c.POINTER(c.POINTER(c.c_ulong)), c.POINTER(c.c_uint)]
+x.XQueryTree.restype = c.c_int
+root = x.XDefaultRootWindow(d)
+ret_root, parent, count = c.c_ulong(), c.c_ulong(), c.c_uint()
+children = c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d, root, c.byref(ret_root), c.byref(parent),
+    c.byref(children), c.byref(count))
+assert count.value, "no mapped GTK window"
+x.XSetInputFocus.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_ulong]
+x.XSetInputFocus(d, children[count.value - 1], 1, 0)
+x.XFree.argtypes = [c.c_void_p]
+x.XFree(c.cast(children, c.c_void_p))
+x.XStringToKeysym.argtypes = [c.c_char_p]
+x.XStringToKeysym.restype = c.c_ulong
+x.XKeysymToKeycode.argtypes = [c.c_void_p, c.c_ulong]
+x.XKeysymToKeycode.restype = c.c_uint
+sym = x.XStringToKeysym(sys.argv[1].encode())
+assert sym, "unknown keysym " + sys.argv[1]
+code = x.XKeysymToKeycode(d, sym)
+assert code, "unmapped keysym " + sys.argv[1]
+t.XTestFakeKeyEvent.argtypes = [c.c_void_p, c.c_uint, c.c_int, c.c_ulong]
+assert t.XTestFakeKeyEvent(d, code, 1, 0)
+assert t.XTestFakeKeyEvent(d, code, 0, 0)
+x.XFlush.argtypes = [c.c_void_p]
+x.XFlush(d)
+x.XCloseDisplay.argtypes = [c.c_void_p]
+x.XCloseDisplay(d)
+"#;
+        let output = std::process::Command::new("python3")
+            .args(["-c", script, key])
+            .output()
+            .expect("XTest Python driver");
+        assert!(
+            output.status.success(),
+            "native {key} injection: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        spin();
+    }
+
+    fn find_menu(widget: &gtk::Widget, tooltip: &str) -> Option<gtk::MenuButton> {
+        if let Some(button) = widget.downcast_ref::<gtk::MenuButton>() {
+            if button.tooltip_text().as_deref() == Some(tooltip) {
+                return Some(button.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(button) = find_menu(&next, tooltip) {
+                return Some(button);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+
+    fn synthetic_page() -> TvLiveChannelSelector {
+        SUPPRESS_LIVE_LOAD.with(|skip| skip.set(true));
+        let page = TvLiveChannelSelector::new();
+        SUPPRESS_LIVE_LOAD.with(|skip| skip.set(false));
+        for (id, name) in [
+            ("fixture-channel-a", "Alpha"),
+            ("fixture-channel-b", "Bravo"),
+            ("fixture-channel-c", "Charlie"),
+        ] {
+            page.imp().add_synthetic_row(id, name);
+        }
+        page.imp().loading.set(false);
+        page
+    }
+
+    fn row(page: &TvLiveChannelSelector, index: i32) -> TvLiveChannelSelectorRow {
+        page.imp()
+            .visible_channel_rows
+            .row_at_index(index)
+            .expect("mapped live row")
+            .downcast()
+            .expect("TvLiveChannelSelectorRow")
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_move_menu_native_remote() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "real Preferences subpage");
+
+        let settings = TvSettings::get();
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        settings.connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        let second = row(&page, 1);
+        let button = find_menu(second.upcast_ref(), "Move").expect("Move menu");
+        let popup = button.popover().expect("real PopoverMenu");
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "Return opens menu");
+        native_key("XF86Back");
+        assert!(!popup.is_mapped(), "Back closes Move popup");
+        assert!(page.is_mapped(), "Back retains Preferences subpage");
+        assert!(button.has_focus(), "Back restores origin focus");
+        assert_eq!(saves.get(), 0, "dismissal must not reorder");
+
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "reopen after Back");
+        native_key("Escape");
+        assert!(!popup.is_mapped(), "native Escape dismisses menu");
+        assert_eq!(saves.get(), 0);
+
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped());
+        native_key("Down");
+        native_key("Return");
+        assert!(!popup.is_mapped(), "Move action closes popup");
+        assert_eq!(saves.get(), 1, "one GSettings commit on move");
+        let names: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_name())
+            .collect();
+        assert_ne!(names, ["Alpha", "Bravo", "Charlie"], "native move changes order");
+
+        let first = row(&page, 0);
+        let last = row(&page, 2);
+        assert!(!first.action_is_enabled("row.move-up"));
+        assert!(!last.action_is_enabled("row.move-down"));
+        let last_button = find_menu(last.upcast_ref(), "Move").unwrap();
+        assert!(last_button.grab_focus());
+        native_key("Return");
+        assert!(last_button.popover().unwrap().is_mapped());
+        native_key("XF86Back");
+        assert!(!last_button.popover().unwrap().is_mapped());
+
+        native_key("XF86Back");
+        assert!(!page.is_mapped(), "second Back pops subpage normally");
+        assert!(preferences.is_mapped(), "Preferences retained");
+        preferences.push_subpage(&page);
+        spin();
+        let first_button = find_menu(row(&page, 0).upcast_ref(), "Move").unwrap();
+        assert!(first_button.grab_focus());
+        native_key("Return");
+        assert!(first_button.popover().unwrap().is_mapped());
+        native_key("XF86HomePage");
+        assert!(!first_button.popover().unwrap().is_mapped());
+        assert!(!preferences.is_mapped(), "Home closes Preferences");
+        win.destroy();
     }
 }
