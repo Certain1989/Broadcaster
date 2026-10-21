@@ -1073,6 +1073,68 @@ mod tests {
     };
     use std::time::Duration;
 
+    /// Verify the real Blueprint toolbar has a satisfiable minimum width
+    /// and keeps all seven keyboard/remote destinations mapped at narrow,
+    /// formerly failing and normal window sizes.
+    #[test]
+    #[ignore = "requires a mapped GTK display and isolated GSettings"]
+    fn gtk_mediathek_toolbar_narrow_allocations() {
+        use super::*;
+
+        let bytes = glib::Bytes::from_static(crate::GRESOURCE_BYTES);
+        let resource = gio::Resource::from_data(&bytes).expect("valid resource bundle");
+        gio::resources_register(&resource);
+        gtk::init().expect("GTK display");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        for width in [600, 630, 760] {
+            let view: TvMediathekView = glib::Object::new();
+            let window = gtk::Window::new();
+            window.set_default_size(width, 720);
+            window.set_child(Some(&view));
+            window.present();
+            for _ in 0..24 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+            }
+            let (minimum, _, _, _) = view.measure(gtk::Orientation::Horizontal, -1);
+            assert!(
+                minimum <= width,
+                "toolbar requests at least {minimum}px within {width}px viewport"
+            );
+            let controls = view.toolbar_focus_targets();
+            assert_eq!(controls.len(), 7, "all search/filter controls must remain");
+            for control in &controls {
+                assert!(control.is_mapped(), "toolbar control unmapped at {width}px");
+                let bounds = control.compute_bounds(&view).expect("mapped control bounds");
+                assert!(
+                    bounds.x() >= -1.0
+                        && bounds.x() + bounds.width() <= view.width() as f32 + 1.0,
+                    "toolbar control clipped at {width}px: x={} width={} view={}",
+                    bounds.x(),
+                    bounds.width(),
+                    view.width()
+                );
+                assert!(control.grab_focus(), "toolbar control must be reachable");
+            }
+            let keyboard = view.imp().keyboard_button.get();
+            assert!(
+                keyboard.width() >= 48 && keyboard.height() >= 44,
+                "remote launcher target {}x{} below 48x44 at {width}px",
+                keyboard.width(),
+                keyboard.height()
+            );
+            window.destroy();
+        }
+    }
+
     #[test]
     fn catalogue_body_limit_accepts_exact_boundary_across_chunks() {
         let mut body = Vec::new();
