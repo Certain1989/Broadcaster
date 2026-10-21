@@ -1123,11 +1123,12 @@ mod tests {
                 "keep tinted Mediathek panel"
             );
             assert_eq!(search_row.parent(), Some(panel.clone()));
-            // The panel intentionally has 10px padding at each end plus
-            // the existing 6px gap between rows. Catch double-applied margins.
+            // GtkWidget::height() is the CSS content-box allocation; the
+            // surface's 10px CSS padding is outside this value. Only the
+            // Blueprint's 6px inter-row gap belongs in this measurement.
             let vertical_overhead = panel.height() - search_row.height() - filter_row.height();
             assert!(
-                (22..=30).contains(&vertical_overhead),
+                (0..=10).contains(&vertical_overhead),
                 "toolbar excessive vertical inset at {width}px: panel={} search={} filters={} extra={vertical_overhead}",
                 panel.height(),
                 search_row.height(),
@@ -1242,10 +1243,7 @@ mod tests {
                 &search_row,
                 Some(&filter_row),
             );
-            let mediathek_inset = search_row
-                .compute_bounds(&panel)
-                .expect("Mediathek search row bounds")
-                .x();
+            let mediathek_panel_width = panel.width();
             window.destroy();
 
             let live: crate::live::TvLiveView = glib::Object::new();
@@ -1276,10 +1274,7 @@ mod tests {
                 &panel,
                 None,
             );
-            let live_inset = targets[0]
-                .compute_bounds(&panel)
-                .expect("Live search bounds")
-                .x();
+            let live_panel_width = panel.width();
             window.destroy();
 
             let streams: crate::streams::view::TvStreamsView = glib::Object::new();
@@ -1298,24 +1293,23 @@ mod tests {
                 &search_row,
                 Some(&filter_row),
             );
-            let streams_inset = search_row
-                .compute_bounds(&panel)
-                .expect("My Channels search row bounds")
-                .x();
+            let streams_panel_width = panel.width();
             let streams_filter_height = targets[1].height();
             let streams_sort_height = targets[3].height();
             let streams_action_height = targets[7].height();
             window.destroy();
 
-            // The three panels should expose comparable painted inner insets,
-            // not double the Mediathek inset through nested Blueprint margins.
+            // GtkWidget widths exclude CSS padding. At equal viewport sizes,
+            // Mediathek and My Channels use identical outer 12px margins and
+            // must expose identical content widths; Live's 6px margins leave
+            // exactly 12px more available for its corresponding content.
             println!(
-                "UX02 compact width={width} inset: Mediathek={mediathek_inset:.0}, Live={live_inset:.0}, My Channels={streams_inset:.0}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
+                "UX02 compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
             );
             assert!(
-                (mediathek_inset - streams_inset).abs() <= 2.0
-                    && (mediathek_inset - live_inset).abs() <= 2.0,
-                "different panel insets at {width}px: Mediathek={mediathek_inset}, Live={live_inset}, My Channels={streams_inset}"
+                mediathek_panel_width == streams_panel_width
+                    && live_panel_width == mediathek_panel_width + 12,
+                "different panel content widths at {width}px: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}"
             );
             assert!(
                 (mediathek_channel_height - streams_filter_height).abs() <= 6
