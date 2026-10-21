@@ -1151,15 +1151,23 @@ mod tests {
                 assert!(control.grab_focus(), "toolbar control must be reachable");
             }
             let keyboard = view.imp().keyboard_button.get();
+            // Remote D-pad focus does not depend on a touch-size hitbox.
+            // Test the real mapped button and its accessible focus target.
             assert!(
-                keyboard.has_css_class("tv-compact-keyboard-launcher"),
-                "Mediathek launcher must use a compact painted face at {width}px"
+                keyboard.is_visible() && keyboard.is_sensitive() && keyboard.is_mapped(),
+                "remote launcher must be visible, sensitive and mapped at {width}px"
             );
             assert!(
-                keyboard.width() >= 48 && keyboard.height() >= 44,
-                "remote launcher target {}x{} below 48x44 at {width}px",
-                keyboard.width(),
-                keyboard.height()
+                keyboard.width() > 0 && keyboard.height() > 0,
+                "remote launcher must have a nonzero allocation at {width}px"
+            );
+            assert!(
+                !keyboard.has_css_class("tv-compact-keyboard-launcher"),
+                "remove the former paint-clipping launcher workaround"
+            );
+            assert!(
+                keyboard.grab_focus() && keyboard.has_focus(),
+                "remote launcher must accept visible GTK focus at {width}px"
             );
             window.destroy();
         }
@@ -1227,6 +1235,7 @@ mod tests {
             let search_row = targets[0].parent().expect("Mediathek search row");
             let panel = search_row.parent().expect("Mediathek panel");
             let mediathek_entry_height = targets[0].height();
+            let mediathek_keyboard_size = (targets[1].width(), targets[1].height());
             let mediathek_channel_height = targets[4].height();
             let mediathek_duration_height = targets[5].height();
             let mediathek_sort_height = targets[6].height();
@@ -1268,6 +1277,7 @@ mod tests {
                 "Live controls must be mapped before comparing allocations at {width}px"
             );
             let live_entry_height = targets[0].height();
+            let live_keyboard_size = (targets[1].width(), targets[1].height());
             let panel = targets[0].parent().expect("Live panel");
             report(
                 "Live",
@@ -1285,6 +1295,8 @@ mod tests {
             let window = allocate(&streams, width);
             let targets = streams.toolbar_focus_targets();
             let streams_entry_height = targets[0].height();
+            let streams_keyboard = targets.last().expect("My Channels keyboard");
+            let streams_keyboard_size = (streams_keyboard.width(), streams_keyboard.height());
             let search_row = targets[0].parent().expect("My Channels search row");
             let panel = search_row.parent().expect("My Channels panel");
             let filter_row = targets[1].parent().expect("My Channels filters");
@@ -1302,6 +1314,23 @@ mod tests {
             let streams_sort_height = targets[3].height();
             let streams_action_height = targets[7].height();
             window.destroy();
+
+            // All three search launchers share compact GTK size requests.
+            // Compare real mapped allocations; remote reachability is
+            // checked separately, not inferred from a touch-target minimum.
+            println!(
+                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
+            );
+            for (name, reference) in [
+                ("Live", live_keyboard_size),
+                ("My Channels", streams_keyboard_size),
+            ] {
+                assert!(
+                    (mediathek_keyboard_size.0 - reference.0).abs() <= 2
+                        && (mediathek_keyboard_size.1 - reference.1).abs() <= 2,
+                    "Mediathek launcher {mediathek_keyboard_size:?} differs from {name} {reference:?} at {width}px"
+                );
+            }
 
             // GtkWidget widths exclude CSS padding. At equal viewport sizes,
             // Mediathek and My Channels use identical outer 12px margins and
