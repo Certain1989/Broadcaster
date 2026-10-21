@@ -251,9 +251,9 @@ fn label_for(r: usize, c: usize, qwertz: bool, shift: bool, symbols: bool) -> St
     } else {
         match raw {
             "Backspace" => gettext("Backspace"),
-            "Left" => gettext("Caret left"),
+            "Left" => "←".into(),
             "Space" => gettext("Space"),
-            "Right" => gettext("Caret right"),
+            "Right" => "→".into(),
             "Clear" => gettext("Clear"),
             "Done" => gettext("Done"),
             "Cancel" => gettext("Cancel"),
@@ -282,13 +282,25 @@ fn label_for(r: usize, c: usize, qwertz: bool, shift: bool, symbols: bool) -> St
         }
     }
 }
+
+// Keep screen-reader names and hover help descriptive even though the
+// visible caret movement controls are compact arrow symbols.
+fn caret_action_name(r: usize, c: usize) -> Option<String> {
+    match (r, c) {
+        (5, 1) => Some(gettext("Caret left")),
+        (5, 3) => Some(gettext("Caret right")),
+        _ => None,
+    }
+}
+
 fn relabel(keys: &[Vec<glib::WeakRef<gtk::Button>>], qwertz: bool, shift: bool, symbols: bool) {
     for (r, row) in keys.iter().enumerate() {
         for (c, weak) in row.iter().enumerate() {
             if let Some(button) = weak.upgrade() {
                 let label = label_for(r, c, qwertz, shift, symbols);
                 button.set_label(&label);
-                button.set_tooltip_text(Some(&label));
+                let tooltip = caret_action_name(r, c).unwrap_or(label);
+                button.set_tooltip_text(Some(&tooltip));
             }
         }
     }
@@ -541,6 +553,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         let mut refs = Vec::new();
         for (c, _) in labels.iter().enumerate() {
             let button = gtk::Button::with_label(&label_for(r, c, false, false, false));
+            if let Some(name) = caret_action_name(r, c) {
+                button.set_tooltip_text(Some(&name));
+                button.update_property(&[gtk::accessible::Property::Label(&name)]);
+            }
             button.add_css_class("osk-key");
             button.set_height_request(42);
             button.set_hexpand(true);
@@ -818,6 +834,13 @@ mod tests {
         assert_eq!(original, "https://example.invalid/?x=1");
         assert_eq!(label_for(3, 7, false, true, false), "ẞ");
         assert_eq!(label_for(1, 5, true, false, false), "z");
+        // Visible caret controls remain arrows across every keyboard mode.
+        for (qwertz, shift, symbols) in [(false, false, false), (true, true, true)] {
+            assert_eq!(label_for(5, 1, qwertz, shift, symbols), "←");
+            assert_eq!(label_for(5, 3, qwertz, shift, symbols), "→");
+        }
+        assert!(caret_action_name(5, 1).is_some());
+        assert!(caret_action_name(5, 3).is_some());
         assert!(ROWS[4].contains(&"%"));
         assert!(ROWS[4].contains(&"/"));
     }
