@@ -1152,6 +1152,10 @@ mod tests {
             }
             let keyboard = view.imp().keyboard_button.get();
             assert!(
+                keyboard.has_css_class("tv-compact-keyboard-launcher"),
+                "Mediathek launcher must use a compact painted face at {width}px"
+            );
+            assert!(
                 keyboard.width() >= 48 && keyboard.height() >= 44,
                 "remote launcher target {}x{} below 48x44 at {width}px",
                 keyboard.width(),
