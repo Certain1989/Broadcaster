@@ -22,8 +22,6 @@ use crate::{
 
 use super::selector_row::TvLiveChannelSelectorRow;
 
-
-
 /// Attach a remote handler to the actual menu popover, which is created
 /// after the top-level window scans its initial widget tree. Native menu
 /// arrows, Return and Escape remain GTK-owned.
@@ -96,9 +94,7 @@ pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
                     None,
                 );
                 fn focus_browse(widget: &gtk::Widget) -> bool {
-                    if let Some(view) =
-                        widget.downcast_ref::<crate::mediathek::TvMediathekView>()
-                    {
+                    if let Some(view) = widget.downcast_ref::<crate::mediathek::TvMediathekView>() {
                         view.focus_browse();
                         return true;
                     }
