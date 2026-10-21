@@ -1113,10 +1113,11 @@ mod tests {
             assert_eq!(controls.len(), 7, "all search/filter controls must remain");
             for control in &controls {
                 assert!(control.is_mapped(), "toolbar control unmapped at {width}px");
-                let bounds = control.compute_bounds(&view).expect("mapped control bounds");
+                let bounds = control
+                    .compute_bounds(&view)
+                    .expect("mapped control bounds");
                 assert!(
-                    bounds.x() >= -1.0
-                        && bounds.x() + bounds.width() <= view.width() as f32 + 1.0,
+                    bounds.x() >= -1.0 && bounds.x() + bounds.width() <= view.width() as f32 + 1.0,
                     "toolbar control clipped at {width}px: x={} width={} view={}",
                     bounds.x(),
                     bounds.width(),
