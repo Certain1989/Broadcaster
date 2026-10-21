@@ -19,13 +19,13 @@ template $TvMediathekView: Adw.Bin {
         "tv-controls"
       ]
 
-      // Inset controls from the rounded panel instead of restyling them.
+      // The panel's shared CSS padding supplies the complete inner inset.
       Gtk.Box {
         orientation: horizontal;
         spacing: 8;
-        margin-top: 3;
-        margin-start: 4;
-        margin-end: 4;
+        margin-top: 0;
+        margin-start: 0;
+        margin-end: 0;
 
         Gtk.SearchEntry search_entry {
           placeholder-text: _("Search the Mediathek");
@@ -63,9 +63,9 @@ template $TvMediathekView: Adw.Bin {
       Gtk.Box filters_toolbar {
         orientation: horizontal;
         spacing: 8;
-        margin-bottom: 3;
-        margin-start: 4;
-        margin-end: 4;
+        margin-bottom: 0;
+        margin-start: 0;
+        margin-end: 0;
 
         Gtk.Box {
           orientation: horizontal;
