@@ -192,10 +192,12 @@ fn osk_mapped_gtk_caret_visible_with_remote_key_focus() {
     show(&source);
     let dialog = keyboard(&win, &source);
     let preview = find_entry(dialog.upcast_ref()).expect("native draft preview");
-    let canvas =
-        find_persistent_caret(dialog.upcast_ref()).expect("noninteractive cursor overlay");
+    let canvas = find_persistent_caret(dialog.upcast_ref()).expect("noninteractive cursor overlay");
     assert!(canvas.is_mapped(), "overlay must map with the OSK");
-    assert!(!canvas.can_target(), "cursor must not intercept remote/mouse focus");
+    assert!(
+        !canvas.can_target(),
+        "cursor must not intercept remote/mouse focus"
+    );
 
     preview.set_text("aäöbcd");
     preview.set_position(3);
@@ -217,7 +219,11 @@ fn osk_mapped_gtk_caret_visible_with_remote_key_focus() {
         "visible cursor must follow the actual Unicode insertion position"
     );
     click(&dialog, "x");
-    assert_eq!(preview.text(), "aäxöbcd", "insert at displayed cursor, not at the end");
+    assert_eq!(
+        preview.text(),
+        "aäxöbcd",
+        "insert at displayed cursor, not at the end"
+    );
     assert!(
         remote_preview_caret_rect(&preview, &canvas).is_some(),
         "cursor stays visible after character insertion"
@@ -235,7 +241,9 @@ fn osk_mapped_gtk_caret_visible_with_remote_key_focus() {
     spin();
     let long = remote_preview_caret_rect(&preview, &canvas)
         .expect("long horizontally scrolled text keeps a visible cursor");
-    let bounds = canvas.compute_bounds(&dialog).expect("mapped overlay bounds");
+    let bounds = canvas
+        .compute_bounds(&dialog)
+        .expect("mapped overlay bounds");
     assert!(long.width() > 0.0 && long.height() > 0.0);
     assert!(long.x() >= 0.0 && long.x() + long.width() <= bounds.width() + 1.0);
 
@@ -249,7 +257,11 @@ fn osk_mapped_gtk_caret_visible_with_remote_key_focus() {
     spin();
     assert!(remote_preview_caret_rect(&preview, &canvas).is_some());
 
-    assert_eq!(source.text(), "unchanged", "preview edits must not escape on Cancel");
+    assert_eq!(
+        source.text(),
+        "unchanged",
+        "preview edits must not escape on Cancel"
+    );
     click(&dialog, "Cancel");
     win.destroy();
 }
