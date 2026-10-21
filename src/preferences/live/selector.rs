@@ -688,8 +688,8 @@ x.XCloseDisplay(d)
         // No test-induced focus reset between these native directional keys.
         // Capture the first escape and its exact preceding key.
         for (step, key) in [
-            "Up", "Down", "Up", "Left", "Right", "Down", "Down",
-            "Up", "Left", "Right", "Up", "Down",
+            "Up", "Down", "Up", "Left", "Right", "Down", "Down", "Up", "Left", "Right", "Up",
+            "Down",
         ]
         .iter()
         .enumerate()
@@ -699,12 +699,12 @@ x.XCloseDisplay(d)
             let in_popup = focused.as_ref().is_some_and(|widget| {
                 widget == popup.upcast_ref::<gtk::Widget>() || widget.is_ancestor(&popup)
             });
-            let in_visible_list = focused.as_ref().is_some_and(|widget| {
-                widget.is_ancestor(&*page.imp().visible_channel_rows)
-            });
-            let in_hidden_list = focused.as_ref().is_some_and(|widget| {
-                widget.is_ancestor(&*page.imp().hidden_channel_rows)
-            });
+            let in_visible_list = focused
+                .as_ref()
+                .is_some_and(|widget| widget.is_ancestor(&*page.imp().visible_channel_rows));
+            let in_hidden_list = focused
+                .as_ref()
+                .is_some_and(|widget| widget.is_ancestor(&*page.imp().hidden_channel_rows));
             let focus_ancestry = focused
                 .as_ref()
                 .map(|widget| {
