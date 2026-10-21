@@ -1388,10 +1388,13 @@ mod tests {
                 (mediathek_channel_height - streams_filter_height).abs() <= 6
                     && (mediathek_duration_height - streams_filter_height).abs() <= 6
                     && (mediathek_sort_height - streams_sort_height).abs() <= 6
+                    // The search-row icon toggles are comparable to the
+                    // My Channels search-row keyboard, not to its unrelated
+                    // smaller Clear Filters / Manage Sources action buttons.
                     && mediathek_toggle_heights
                         .iter()
-                        .all(|h| *h <= streams_action_height + 6),
-                "Mediathek filters/actions must match compact My Channels at {width}px"
+                        .all(|h| (*h - streams_keyboard_size.1).abs() <= 2),
+                "Mediathek filters/search icons must match compact My Channels at {width}px"
             );
 
             // Compare mapped GtkSearchEntry allocations, not width/height requests.
