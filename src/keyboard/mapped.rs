@@ -1022,7 +1022,6 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     win.destroy();
 }
 
-
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_done_and_back_release_dialog_and_draft() {
@@ -1078,7 +1077,10 @@ fn osk_mapped_gtk_parent_close_during_draft() {
     parent.set_child(Some(&origin));
     parent.present(Some(&win));
     spin();
-    assert!(origin.is_mapped(), "origin must begin inside a mapped parent");
+    assert!(
+        origin.is_mapped(),
+        "origin must begin inside a mapped parent"
+    );
 
     show(&origin);
     let osk = keyboard(&win, &origin);
@@ -1092,12 +1094,16 @@ fn osk_mapped_gtk_parent_close_during_draft() {
             break;
         }
     }
-    assert!(!origin.is_mapped(), "closing parent must unmap its editable");
+    assert!(
+        !origin.is_mapped(),
+        "closing parent must unmap its editable"
+    );
     if osk.is_mapped() {
         click(&osk, "Done");
     }
     assert_eq!(
-        origin.text(), "before",
+        origin.text(),
+        "before",
         "an orphaned keyboard cannot commit after its parent closes"
     );
     osk.close();
@@ -1115,7 +1121,9 @@ fn osk_mapped_gtk_cancel_invalidated_origin() {
 
     show(&origin);
     let osk = keyboard(&win, &origin);
-    find_entry(osk.upcast_ref()).expect("draft").set_text("ghost");
+    find_entry(osk.upcast_ref())
+        .expect("draft")
+        .set_text("ghost");
     origin.set_sensitive(false);
     if osk.is_mapped() {
         click(&osk, "Cancel");
@@ -1125,7 +1133,9 @@ fn osk_mapped_gtk_cancel_invalidated_origin() {
 
     show(&origin);
     let osk = keyboard(&win, &origin);
-    find_entry(osk.upcast_ref()).expect("draft").set_text("ghost");
+    find_entry(osk.upcast_ref())
+        .expect("draft")
+        .set_text("ghost");
     body.remove(&origin);
     spin();
     if osk.is_mapped() {
