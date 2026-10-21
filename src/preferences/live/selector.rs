@@ -494,13 +494,9 @@ x.XCloseDisplay(d)
         page
     }
 
-    fn menu_owns_focus(
-        window: &crate::window::TvWindow,
-        button: &gtk::MenuButton,
-    ) -> bool {
+    fn menu_owns_focus(window: &crate::window::TvWindow, button: &gtk::MenuButton) -> bool {
         gtk::prelude::GtkWindowExt::focus(window).is_some_and(|focused| {
-            focused == button.clone().upcast::<gtk::Widget>()
-                || focused.is_ancestor(button)
+            focused == button.clone().upcast::<gtk::Widget>() || focused.is_ancestor(button)
         })
     }
 
