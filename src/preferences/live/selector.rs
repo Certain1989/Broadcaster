@@ -1013,10 +1013,20 @@ x.XCloseDisplay(d)
                     child = next.next_sibling();
                 }
             }
-            eprintln!("F02 native {arrow} popup initial focus={:?}", gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
+            eprintln!(
+                "F02 native {arrow} popup initial focus={:?}",
+                gtk::prelude::GtkWindowExt::focus(win)
+                    .as_ref()
+                    .map(|widget| widget.type_().name().to_string())
+            );
             dump_menu_focus(popup.upcast_ref());
             native_key(arrow);
-            eprintln!("F02 native {arrow} popup after arrow focus={:?}", gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
+            eprintln!(
+                "F02 native {arrow} popup after arrow focus={:?}",
+                gtk::prelude::GtkWindowExt::focus(win)
+                    .as_ref()
+                    .map(|widget| widget.type_().name().to_string())
+            );
             dump_menu_focus(popup.upcast_ref());
             let in_popup = gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focus| {
                 focus == popup.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popup)
@@ -1026,7 +1036,13 @@ x.XCloseDisplay(d)
                 "native {arrow} must remain in popup"
             );
             native_key("Return");
-            eprintln!("F02 native {arrow} after Return mapped={} focus={:?}", popup.is_mapped(), gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
+            eprintln!(
+                "F02 native {arrow} after Return mapped={} focus={:?}",
+                popup.is_mapped(),
+                gtk::prelude::GtkWindowExt::focus(win)
+                    .as_ref()
+                    .map(|widget| widget.type_().name().to_string())
+            );
             assert!(!popup.is_mapped(), "Return executes Move and closes popup");
         }
 
