@@ -115,7 +115,7 @@ mod imp {
                 16,
             );
 
-            super::selector::install_channel_menu_remote_handler(&self.move_button);
+            super::super::selector::install_channel_menu_remote_handler(&self.move_button);
         }
         fn signals() -> &'static [Signal] {
             static SIGNALS: OnceLock<[Signal; 2]> = OnceLock::new();
