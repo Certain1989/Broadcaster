@@ -9,11 +9,11 @@ template $TvMediathekView: Adw.Bin {
     [top]
     Gtk.Box search_toolbar {
       orientation: vertical;
-      spacing: 10;
-      margin-top: 12;
-      margin-bottom: 12;
-      margin-start: 16;
-      margin-end: 16;
+      spacing: 6;
+      margin-top: 8;
+      margin-bottom: 8;
+      margin-start: 12;
+      margin-end: 12;
 
       styles [
         "tv-controls"
@@ -22,10 +22,10 @@ template $TvMediathekView: Adw.Bin {
       // Inset controls from the rounded panel instead of restyling them.
       Gtk.Box {
         orientation: horizontal;
-        spacing: 10;
-        margin-top: 12;
-        margin-start: 16;
-        margin-end: 16;
+        spacing: 8;
+        margin-top: 6;
+        margin-start: 8;
+        margin-end: 8;
 
         Gtk.SearchEntry search_entry {
           placeholder-text: _("Search the Mediathek");
@@ -37,11 +37,11 @@ template $TvMediathekView: Adw.Bin {
         Gtk.Button keyboard_button {
           icon-name: "input-keyboard-symbolic";
           tooltip-text: _("Open on-screen keyboard");
-          // The mapped styled button loses 12px width and 4px height
-          // compared with its request. Keep the real hit target >=48x44.
+          // Keep the >=48x44 hit target checked by the mapped GTK test.
+          // GTK's allocation can be smaller than the themed request.
           width-request: 60;
-          height-request: 60;
-          valign: fill;
+          height-request: 48;
+          valign: center;
         }
 
         Gtk.ToggleButton {
@@ -59,10 +59,10 @@ template $TvMediathekView: Adw.Bin {
 
       Gtk.Box filters_toolbar {
         orientation: horizontal;
-        spacing: 10;
-        margin-bottom: 12;
-        margin-start: 16;
-        margin-end: 16;
+        spacing: 8;
+        margin-bottom: 6;
+        margin-start: 8;
+        margin-end: 8;
 
         Gtk.Box {
           orientation: horizontal;

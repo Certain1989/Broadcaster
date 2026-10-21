@@ -1093,7 +1093,7 @@ mod tests {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
-        for width in [600, 630, 760] {
+        for width in [600, 630, 760, 1280] {
             let view: TvMediathekView = glib::Object::new();
             let window = gtk::Window::new();
             window.set_default_size(width, 720);
@@ -1108,6 +1108,25 @@ mod tests {
             assert!(
                 minimum <= width,
                 "toolbar requests at least {minimum}px within {width}px viewport"
+            );
+            let imp = view.imp();
+            let filter_row = imp.filters_toolbar.get();
+            let panel = filter_row.parent().expect("toolbar panel");
+            let search_row = imp.search_entry.parent().expect("search row");
+            assert!(
+                panel.has_css_class("tv-controls"),
+                "keep tinted Mediathek panel"
+            );
+            assert_eq!(search_row.parent(), Some(panel.clone()));
+            // The compact panel's excess is its two end insets plus the
+            // inter-row spacing; catch accidental restoration of tall padding.
+            let vertical_overhead = panel.height() - search_row.height() - filter_row.height();
+            assert!(
+                (0..=24).contains(&vertical_overhead),
+                "toolbar excessive vertical inset at {width}px: panel={} search={} filters={} extra={vertical_overhead}",
+                panel.height(),
+                search_row.height(),
+                filter_row.height()
             );
             let controls = view.toolbar_focus_targets();
             assert_eq!(controls.len(), 7, "all search/filter controls must remain");

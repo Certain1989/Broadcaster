@@ -18,10 +18,20 @@ headerbar.tv-header button:focus-visible {
   border-radius: 10px;
 }
 
-/* Round the blue-grey toolbar PANEL, not its individual controls. */
-.tv-controls {
+/* Match the Mediathek's theme-adaptive tinted, rounded surface across
+ * the three top toolbars. Keep per-view control sizing rules separate. */
+.tv-controls,
+.tv-live-controls,
+.tv-streams-controls {
   background-color: alpha(@accent_bg_color, 0.055);
   border-radius: 16px;
+}
+
+/* Live and My Channels already have compact controls. Give their new
+ * background just enough inset for the positive-offset remote focus ring. */
+.tv-live-controls,
+.tv-streams-controls {
+  padding: 4px;
 }
 
 .tv-controls entry.search,
