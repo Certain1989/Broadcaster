@@ -1160,7 +1160,6 @@ mod tests {
         }
     }
 
-
     /// Capture real GTK allocations, rather than comparing height requests,
     /// for the three themed toolbar variants under one display and scale.
     #[test]
@@ -1193,8 +1192,15 @@ mod tests {
             window
         }
 
-        fn report(name: &str, width: i32, panel: &gtk::Widget, entry: &gtk::Widget,
-            keyboard: &gtk::Widget, search_row: &gtk::Widget, second_row: Option<&gtk::Widget>) {
+        fn report(
+            name: &str,
+            width: i32,
+            panel: &gtk::Widget,
+            entry: &gtk::Widget,
+            keyboard: &gtk::Widget,
+            search_row: &gtk::Widget,
+            second_row: Option<&gtk::Widget>,
+        ) {
             let entry_bounds = entry.compute_bounds(panel).expect("mapped entry");
             let button_bounds = keyboard.compute_bounds(panel).expect("mapped keyboard");
             println!(
@@ -1211,10 +1217,22 @@ mod tests {
             let targets = mediathek.toolbar_focus_targets();
             let search_row = targets[0].parent().expect("Mediathek search row");
             let panel = search_row.parent().expect("Mediathek panel");
-            let filter_row = mediathek.imp().broadcaster_filter.parent()
-                .expect("Mediathek group").parent().expect("Mediathek filters");
-            report("Mediathek", width, &panel, &targets[0], &targets[1],
-                &search_row, Some(&filter_row));
+            let filter_row = mediathek
+                .imp()
+                .broadcaster_filter
+                .parent()
+                .expect("Mediathek group")
+                .parent()
+                .expect("Mediathek filters");
+            report(
+                "Mediathek",
+                width,
+                &panel,
+                &targets[0],
+                &targets[1],
+                &search_row,
+                Some(&filter_row),
+            );
             window.destroy();
 
             let live: crate::live::TvLiveView = glib::Object::new();
@@ -1222,7 +1240,15 @@ mod tests {
             let window = allocate(&live, width);
             let targets = live.toolbar_focus_targets();
             let panel = targets[0].parent().expect("Live panel");
-            report("Live", width, &panel, &targets[0], &targets[1], &panel, None);
+            report(
+                "Live",
+                width,
+                &panel,
+                &targets[0],
+                &targets[1],
+                &panel,
+                None,
+            );
             window.destroy();
 
             let streams: crate::streams::view::TvStreamsView = glib::Object::new();
@@ -1231,8 +1257,15 @@ mod tests {
             let search_row = targets[0].parent().expect("My Channels search row");
             let panel = search_row.parent().expect("My Channels panel");
             let filter_row = targets[1].parent().expect("My Channels filters");
-            report("My Channels", width, &panel, &targets[0],
-                targets.last().expect("My Channels keyboard"), &search_row, Some(&filter_row));
+            report(
+                "My Channels",
+                width,
+                &panel,
+                &targets[0],
+                targets.last().expect("My Channels keyboard"),
+                &search_row,
+                Some(&filter_row),
+            );
             window.destroy();
         }
     }
