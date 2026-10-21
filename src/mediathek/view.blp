@@ -38,10 +38,8 @@ template $TvMediathekView: Adw.Bin {
         Gtk.Button keyboard_button {
           icon-name: "input-keyboard-symbolic";
           tooltip-text: _("Open on-screen keyboard");
-          // Same compact launcher requests as Live and My Channels;
-          // D-pad reachability and focus are verified by mapped GTK tests.
-          width-request: 48;
-          height-request: 44;
+          // Use GTK's natural icon-button size like the two adjacent toggles;
+          // mapped focus and OSK interaction are verified separately.
           valign: center;
         }
 
