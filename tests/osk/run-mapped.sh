@@ -35,6 +35,7 @@ for case in \
   osk_mapped_gtk_first_move_down_reverse_and_middle_up_native_persistence \
   osk_mapped_gtk_channel_sort_menu_native_remote \
   gtk_mediathek_toolbar_narrow_allocations \
+  gtk_three_view_toolbar_geometry \
   osk_mapped_gtk_entry_reentrant_signal_trace \
   osk_mapped_gtk_search_reentrant_signal_trace \
   osk_mapped_gtk_entry_row_reentrant_signal_trace \
@@ -49,6 +50,9 @@ for case in \
 do
   log_file="$schema_dir/$case.log"
   capture=
+  if [ "$case" = gtk_three_view_toolbar_geometry ]; then
+    capture=--nocapture
+  fi
   if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
     # Preserve effective GTK menu-item sensitivities as CI evidence on PASS.
     capture=--nocapture
@@ -57,6 +61,9 @@ do
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
     cargo test --locked "$case" -- --ignored --test-threads=1 $capture >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
+    if [ "$case" = gtk_three_view_toolbar_geometry ]; then
+      grep "UX02 geometry" "$log_file" || :
+    fi
     if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
       grep 'F02 .*GtkModelButton' "$log_file" || :
     fi

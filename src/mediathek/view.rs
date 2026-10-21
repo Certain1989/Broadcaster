@@ -1160,6 +1160,83 @@ mod tests {
         }
     }
 
+
+    /// Capture real GTK allocations, rather than comparing height requests,
+    /// for the three themed toolbar variants under one display and scale.
+    #[test]
+    #[ignore = "requires a mapped GTK display and isolated GSettings"]
+    fn gtk_three_view_toolbar_geometry() {
+        use super::*;
+
+        let bytes = glib::Bytes::from_static(crate::GRESOURCE_BYTES);
+        let resource = gio::Resource::from_data(&bytes).expect("valid resource bundle");
+        gio::resources_register(&resource);
+        gtk::init().expect("GTK display");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        fn allocate(widget: &impl IsA<gtk::Widget>, width: i32) -> gtk::Window {
+            let window = gtk::Window::new();
+            window.set_default_size(width, 720);
+            window.set_child(Some(widget));
+            window.present();
+            for _ in 0..24 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+            }
+            window
+        }
+
+        fn report(name: &str, width: i32, panel: &gtk::Widget, entry: &gtk::Widget,
+            keyboard: &gtk::Widget, search_row: &gtk::Widget, second_row: Option<&gtk::Widget>) {
+            let entry_bounds = entry.compute_bounds(panel).expect("mapped entry");
+            let button_bounds = keyboard.compute_bounds(panel).expect("mapped keyboard");
+            println!(
+                "UX02 geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
+                panel.width(), panel.height(), search_row.height(), entry.width(), entry.height(),
+                entry_bounds.x(), entry_bounds.y(), keyboard.width(), keyboard.height(),
+                button_bounds.x(), button_bounds.y(), second_row.map_or(0, gtk::Widget::height)
+            );
+        }
+
+        for width in [600, 630, 760, 1280] {
+            let mediathek: TvMediathekView = glib::Object::new();
+            let window = allocate(&mediathek, width);
+            let targets = mediathek.toolbar_focus_targets();
+            let search_row = targets[0].parent().expect("Mediathek search row");
+            let panel = search_row.parent().expect("Mediathek panel");
+            let filter_row = mediathek.imp().broadcaster_filter.parent()
+                .expect("Mediathek group").parent().expect("Mediathek filters");
+            report("Mediathek", width, &panel, &targets[0], &targets[1],
+                &search_row, Some(&filter_row));
+            window.destroy();
+
+            let live: crate::live::TvLiveView = glib::Object::new();
+            live.show_toolbar_for_test();
+            let window = allocate(&live, width);
+            let targets = live.toolbar_focus_targets();
+            let panel = targets[0].parent().expect("Live panel");
+            report("Live", width, &panel, &targets[0], &targets[1], &panel, None);
+            window.destroy();
+
+            let streams: crate::streams::view::TvStreamsView = glib::Object::new();
+            let window = allocate(&streams, width);
+            let targets = streams.toolbar_focus_targets();
+            let search_row = targets[0].parent().expect("My Channels search row");
+            let panel = search_row.parent().expect("My Channels panel");
+            let filter_row = targets[1].parent().expect("My Channels filters");
+            report("My Channels", width, &panel, &targets[0],
+                targets.last().expect("My Channels keyboard"), &search_row, Some(&filter_row));
+            window.destroy();
+        }
+    }
+
     #[test]
     fn catalogue_body_limit_accepts_exact_boundary_across_chunks() {
         let mut body = Vec::new();
