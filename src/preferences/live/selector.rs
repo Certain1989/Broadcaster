@@ -139,9 +139,10 @@ pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
             else {
                 return;
             };
-            let still_in_popover = gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focus| {
-                focus == popover.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popover)
-            });
+            let still_in_popover =
+                gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focus| {
+                    focus == popover.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popover)
+                });
             if !still_in_popover {
                 // Re-enter GTK's own focus chain of actionable menu
                 // descendants instead of swallowing remote arrow events
