@@ -787,6 +787,138 @@ x.XCloseDisplay(d)
 
     #[test]
     #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped());
+
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        TvSettings::get().connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        fn assert_native_arrows(
+            win: &crate::window::TvWindow,
+            button: &gtk::MenuButton,
+            context: &str,
+        ) {
+            assert!(button.grab_focus(), "{context}: launcher focus");
+            native_key("Return");
+            let popup = button.popover().expect("native PopoverMenu");
+            assert!(popup.is_mapped(), "{context}: popup mapped");
+
+            // Inspect GTK's effective item sensitivity on mapped widgets;
+            // class-installed actions alone are not proof of menu sensitivity.
+            fn inspect_items(widget: &gtk::Widget, context: &str) {
+                if widget.type_().name() == "GtkModelButton" {
+                    eprintln!(
+                        "F02 {context}: GtkModelButton mapped={} sensitive={}",
+                        widget.is_mapped(),
+                        widget.is_sensitive()
+                    );
+                }
+                let mut child = widget.first_child();
+                while let Some(next) = child {
+                    inspect_items(&next, context);
+                    child = next.next_sibling();
+                }
+            }
+            inspect_items(popup.upcast_ref(), context);
+
+            // No manual focus reset during traversal. Containment must
+            // survive repeated attempts to leave the enabled menu action.
+            for (step, key) in [
+                "Up", "Down", "Left", "Right", "Down", "Up", "Right", "Left",
+            ]
+            .iter()
+            .enumerate()
+            {
+                native_key(key);
+                let focused = gtk::prelude::GtkWindowExt::focus(win);
+                let in_popup = focused.as_ref().is_some_and(|focus| {
+                    focus == popup.upcast_ref::<gtk::Widget>() || focus.is_ancestor(&popup)
+                });
+                eprintln!(
+                    "F02 {context} step={} key={key} popup_mapped={} popup_focus={} actual_focus={:?}",
+                    step + 1,
+                    popup.is_mapped(),
+                    in_popup,
+                    focused
+                        .as_ref()
+                        .map(|widget| widget.type_().name().to_string())
+                );
+                assert!(
+                    popup.is_mapped() && in_popup,
+                    "{context}: native {key} escaped mapped menu at step {} (focus={:?})",
+                    step + 1,
+                    focused.as_ref().map(|widget| widget.type_().name().to_string())
+                );
+            }
+            native_key("Escape");
+            assert!(!popup.is_mapped(), "{context}: Escape dismisses popup");
+        }
+
+        for (context, button) in [
+            (
+                "first-boundary",
+                find_menu(row(&page, 0).upcast_ref(), "Move").unwrap(),
+            ),
+            (
+                "middle",
+                find_menu(row(&page, 1).upcast_ref(), "Move").unwrap(),
+            ),
+            (
+                "last-boundary",
+                find_menu(row(&page, 2).upcast_ref(), "Move").unwrap(),
+            ),
+            (
+                "header-sort",
+                find_menu(page.upcast_ref(), "Sort").unwrap(),
+            ),
+        ] {
+            assert_native_arrows(&win, &button, context);
+            assert!(page.is_mapped(), "{context}: Preferences subpage retained");
+            assert_eq!(saves.get(), 0, "{context}: traversal/dismissal cannot save");
+        }
+
+        // Reinsert an already-dismissed row while initial-load suppression
+        // is active, as a model/list binding and weak-lifetime regression.
+        let item = page
+            .imp()
+            .visible_channels
+            .item(1)
+            .unwrap()
+            .downcast::<TvLiveChannelSelectorRow>()
+            .unwrap();
+        let was_loading = page.imp().loading.replace(true);
+        page.imp().visible_channels.remove(1);
+        page.imp().visible_channels.insert(1, &item);
+        page.imp().loading.set(was_loading);
+        spin();
+        assert_eq!(saves.get(), 0, "model rebind cannot persist");
+        let fresh_button = find_menu(row(&page, 1).upcast_ref(), "Move").unwrap();
+        assert_native_arrows(&win, &fresh_button, "reinserted-middle");
+        assert_eq!(saves.get(), 0, "reopen/dismiss cannot persist");
+
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
     fn osk_mapped_gtk_channel_sort_menu_native_remote() {
         adw::init().expect("GTK display");
         let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
