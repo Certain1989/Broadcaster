@@ -1169,6 +1169,22 @@ mod tests {
                 keyboard.grab_focus() && keyboard.has_focus(),
                 "remote launcher must accept visible GTK focus at {width}px"
             );
+            // Compare actual allocations with the adjacent natural-size GTK
+            // icon toggles, not the unrelated Live/My Channels size requests.
+            for (name, toggle) in [
+                ("Search Everywhere", &controls[2]),
+                ("Include Future Shows", &controls[3]),
+            ] {
+                assert!(
+                    (keyboard.width() - toggle.width()).abs() <= 2
+                        && (keyboard.height() - toggle.height()).abs() <= 2,
+                    "keyboard launcher {}x{} differs from {name} {}x{} at {width}px",
+                    keyboard.width(),
+                    keyboard.height(),
+                    toggle.width(),
+                    toggle.height()
+                );
+            }
             window.destroy();
         }
     }
@@ -1236,6 +1252,10 @@ mod tests {
             let panel = search_row.parent().expect("Mediathek panel");
             let mediathek_entry_height = targets[0].height();
             let mediathek_keyboard_size = (targets[1].width(), targets[1].height());
+            let mediathek_icon_sizes = [
+                (targets[2].width(), targets[2].height()),
+                (targets[3].width(), targets[3].height()),
+            ];
             let mediathek_channel_height = targets[4].height();
             let mediathek_duration_height = targets[5].height();
             let mediathek_sort_height = targets[6].height();
@@ -1319,7 +1339,7 @@ mod tests {
             // Compare real mapped allocations; remote reachability is
             // checked separately, not inferred from a touch-target minimum.
             println!(
-                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
+                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
             );
             for (name, reference) in [
                 ("Live", live_keyboard_size),
