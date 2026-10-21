@@ -36,6 +36,24 @@ headerbar.tv-header button:focus-visible {
   min-height: 40px;
 }
 
+/* Paint the existing Mediathek keyboard button at the visual size of the
+ * other views' compact keyboard launchers, while retaining its real hit
+ * target and focusable GTK button (no separate overlay or hitbox).
+ * GTK clips the button background to its content box: at 48x46, 6px
+ * insets yield an approximately 36x34 painted face. */
+.tv-controls button.tv-compact-keyboard-launcher {
+  background-clip: content-box;
+  padding: 6px;
+  border: 0;
+  box-shadow: none;
+}
+
+.tv-controls button.tv-compact-keyboard-launcher:focus,
+.tv-controls button.tv-compact-keyboard-launcher:focus-within,
+.tv-controls button.tv-compact-keyboard-launcher:focus-visible {
+  outline-offset: -6px;
+}
+
 .tv-results row {
   min-height: 84px;
   transition: background-color 120ms ease;
