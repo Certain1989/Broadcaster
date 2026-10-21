@@ -1179,6 +1179,10 @@ mod tests {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
+        // Live's async channel loader expects the normal application context,
+        // even when only its toolbar is being measured.
+        let _app = crate::application::TvApplication::new();
+
         fn allocate(widget: &impl IsA<gtk::Widget>, width: i32) -> gtk::Window {
             let window = gtk::Window::new();
             window.set_default_size(width, 720);
@@ -1237,9 +1241,22 @@ mod tests {
             window.destroy();
 
             let live: crate::live::TvLiveView = glib::Object::new();
-            live.show_toolbar_for_test();
             let window = allocate(&live, width);
+            // Let the initial asynchronous reload begin, then explicitly
+            // show the offline test toolbar before the GDK allocation tick.
+            live.show_toolbar_for_test();
+            window.queue_allocate();
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
             let targets = live.toolbar_focus_targets();
+            assert!(
+                targets.iter().all(gtk::Widget::is_mapped),
+                "Live controls must be mapped before comparing allocations at {width}px"
+            );
             let live_entry_height = targets[0].height();
             let panel = targets[0].parent().expect("Live panel");
             report(
