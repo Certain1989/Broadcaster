@@ -300,7 +300,6 @@ impl TvLiveChannelSelector {
     }
 }
 
-
 #[cfg(test)]
 mod native_channel_menu_tests {
     use super::*;
@@ -465,12 +464,22 @@ x.XCloseDisplay(d)
             .iter::<TvLiveChannelSelectorRow>()
             .map(|r| r.unwrap().channel_name())
             .collect();
-        assert_ne!(names, ["Alpha", "Bravo", "Charlie"], "native move changes order");
+        assert_ne!(
+            names,
+            ["Alpha", "Bravo", "Charlie"],
+            "native move changes order"
+        );
 
         let first = row(&page, 0);
         let last = row(&page, 2);
-        assert!(!first.action_is_enabled("row.move-up"));
-        assert!(!last.action_is_enabled("row.move-down"));
+        assert!(
+            first.activate_action("row.move-up", None).is_err(),
+            "top boundary action is disabled"
+        );
+        assert!(
+            last.activate_action("row.move-down", None).is_err(),
+            "bottom boundary action is disabled"
+        );
         let last_button = find_menu(last.upcast_ref(), "Move").unwrap();
         assert!(last_button.grab_focus());
         native_key("Return");
@@ -492,4 +501,39 @@ x.XCloseDisplay(d)
         assert!(!preferences.is_mapped(), "Home closes Preferences");
         win.destroy();
     }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_sort_menu_native_remote() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        let sort = find_menu(page.upcast_ref(), "Sort").expect("header Sort button");
+        let popup = sort.popover().expect("real Sort PopoverMenu");
+        assert!(sort.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "Sort popup mapped");
+        native_key("XF86Back");
+        assert!(!popup.is_mapped(), "Sort should dismiss on native Back");
+        assert!(page.is_mapped(), "Sort Back stays on Preferences subpage");
+        assert!(sort.has_focus(), "Sort Back restores focus");
+        assert!(sort.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped());
+        native_key("XF86HomePage");
+        assert!(!popup.is_mapped(), "Sort Home closes popup");
+        assert!(!preferences.is_mapped(), "Sort Home closes Preferences");
+        win.destroy();
+    }
+
 }

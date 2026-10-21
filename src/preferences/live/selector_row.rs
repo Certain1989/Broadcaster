@@ -147,8 +147,8 @@ mod imp {
                         if let Some(dialog) = dialog {
                             dialog.close();
                         }
-                        if let Some(window) = root
-                            .and_then(|root| root.downcast::<crate::window::TvWindow>().ok())
+                        if let Some(window) =
+                            root.and_then(|root| root.downcast::<crate::window::TvWindow>().ok())
                         {
                             // Use the already existing window action. Home
                             // closes Preferences and returns to Mediathek.
