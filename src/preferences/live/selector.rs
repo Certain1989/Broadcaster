@@ -841,11 +841,9 @@ x.XCloseDisplay(d)
 
             // No manual focus reset during traversal. Containment must
             // survive repeated attempts to leave the enabled menu action.
-            for (step, key) in [
-                "Up", "Down", "Left", "Right", "Down", "Up", "Right", "Left",
-            ]
-            .iter()
-            .enumerate()
+            for (step, key) in ["Up", "Down", "Left", "Right", "Down", "Up", "Right", "Left"]
+                .iter()
+                .enumerate()
             {
                 native_key(key);
                 let focused = gtk::prelude::GtkWindowExt::focus(win);
@@ -865,7 +863,9 @@ x.XCloseDisplay(d)
                     popup.is_mapped() && in_popup,
                     "{context}: native {key} escaped mapped menu at step {} (focus={:?})",
                     step + 1,
-                    focused.as_ref().map(|widget| widget.type_().name().to_string())
+                    focused
+                        .as_ref()
+                        .map(|widget| widget.type_().name().to_string())
                 );
             }
             native_key("Escape");
@@ -885,10 +885,7 @@ x.XCloseDisplay(d)
                 "last-boundary",
                 find_menu(row(&page, 2).upcast_ref(), "Move").unwrap(),
             ),
-            (
-                "header-sort",
-                find_menu(page.upcast_ref(), "Sort").unwrap(),
-            ),
+            ("header-sort", find_menu(page.upcast_ref(), "Sort").unwrap()),
         ] {
             assert_native_arrows(&win, &button, context);
             assert!(page.is_mapped(), "{context}: Preferences subpage retained");
