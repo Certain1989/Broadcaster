@@ -63,7 +63,7 @@ fn editable_row(
     field: &gtk::Entry,
     parent: &gtk::Box,
     options: crate::keyboard::KeyboardOptions,
-) {
+) -> gtk::Button {
     let title = gtk::Label::new(Some(label));
     title.set_xalign(0.0);
     title.set_wrap(true);
@@ -109,6 +109,7 @@ fn editable_row(
         }
     });
     keyboard.add_controller(up);
+    keyboard
 }
 
 fn entry(value: &str) -> gtk::Entry {
@@ -375,12 +376,14 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     let url = if is_new && file.is_none() {
         let field = entry("");
         field.set_input_purpose(gtk::InputPurpose::Url);
-        editable_row(
+        let keyboard = editable_row(
             &gettext("Playlist HTTP(S) URL"),
             &field,
             &body,
             crate::keyboard::KeyboardOptions::url(),
         );
+        // Keep the K1 URL-specific hit-target dimensions in the new paired row.
+        crate::keyboard::style_add_playlist_url_launcher(&keyboard);
         body.append(&url_error);
         Some(field)
     } else {
