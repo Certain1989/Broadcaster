@@ -29,10 +29,10 @@ headerbar.tv-header button:focus-visible {
   padding: 6px;
 }
 
-.tv-controls entry.search,
-.tv-controls dropdown,
-.tv-controls menubutton,
-.tv-controls button {
+/* Preserve the already-accepted search height without inflating the
+ * Mediathek dropdowns, Sort or search-option buttons. Their intrinsic sizes
+ * should match the compact controls in My Channels. */
+.tv-controls entry.search {
   min-height: 40px;
 }
 
