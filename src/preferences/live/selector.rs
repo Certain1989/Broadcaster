@@ -415,6 +415,10 @@ x.XCloseDisplay(d)
             .expect("bundled resources");
         gio::resources_register(&resources);
         let app = TvApplication::new();
+        // GtkApplicationWindow registration is only valid after startup.
+        // Register synchronously before constructing the mapped test window.
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
         let win = crate::window::TvWindow::new(&app);
         win.set_default_size(1152, 760);
         win.present();
@@ -510,6 +514,10 @@ x.XCloseDisplay(d)
             .expect("bundled resources");
         gio::resources_register(&resources);
         let app = TvApplication::new();
+        // GtkApplicationWindow registration is only valid after startup.
+        // Register synchronously before constructing the mapped test window.
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
         let win = crate::window::TvWindow::new(&app);
         win.set_default_size(1152, 760);
         win.present();
