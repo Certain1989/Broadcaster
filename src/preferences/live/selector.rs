@@ -998,7 +998,26 @@ x.XCloseDisplay(d)
             native_key("Return");
             let popup = button.popover().expect("mapped Move popup");
             assert!(popup.is_mapped(), "Return opens popup before {arrow}");
+            fn dump_menu_focus(widget: &gtk::Widget) {
+                if widget.is_focusable() && widget.is_mapped() {
+                    eprintln!(
+                        "F02 native widget type={} focused={} sensitive={}",
+                        widget.type_().name(),
+                        widget.has_focus(),
+                        widget.is_sensitive()
+                    );
+                }
+                let mut child = widget.first_child();
+                while let Some(next) = child {
+                    dump_menu_focus(&next);
+                    child = next.next_sibling();
+                }
+            }
+            eprintln!("F02 native {arrow} popup initial focus={:?}", gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
+            dump_menu_focus(popup.upcast_ref());
             native_key(arrow);
+            eprintln!("F02 native {arrow} popup after arrow focus={:?}", gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
+            dump_menu_focus(popup.upcast_ref());
             let in_popup = gtk::prelude::GtkWindowExt::focus(win).is_some_and(|focus| {
                 focus == popup.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popup)
             });
@@ -1007,6 +1026,7 @@ x.XCloseDisplay(d)
                 "native {arrow} must remain in popup"
             );
             native_key("Return");
+            eprintln!("F02 native {arrow} after Return mapped={} focus={:?}", popup.is_mapped(), gtk::prelude::GtkWindowExt::focus(win).as_ref().map(|widget| widget.type_().name().to_string()));
             assert!(!popup.is_mapped(), "Return executes Move and closes popup");
         }
 
