@@ -1106,7 +1106,9 @@ fn osk_mapped_gtk_parent_close_during_draft() {
         "before",
         "an orphaned keyboard cannot commit after its parent closes"
     );
-    osk.close();
+    if osk.is_mapped() {
+        osk.close();
+    }
     win.destroy();
 }
 
@@ -1142,5 +1144,43 @@ fn osk_mapped_gtk_cancel_invalidated_origin() {
         click(&osk, "Cancel");
     }
     assert_eq!(origin.text(), "before", "removed origin stays unchanged");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_dropped_origin_cancel_nonretention() {
+    let (win, body) = host();
+    let origin = gtk::Entry::new();
+    origin.set_text("before");
+    let weak_origin = origin.downgrade();
+    body.append(&origin);
+    spin();
+
+    show(&origin);
+    let osk = keyboard(&win, &origin);
+    find_entry(osk.upcast_ref())
+        .expect("draft")
+        .set_text("ghost");
+    body.remove(&origin);
+    drop(origin);
+    spin();
+
+    // A dead editable must never be retained by the open OSK or restored
+    // from its draft when the dialog is cancelled.
+    if osk.is_mapped() {
+        click(&osk, "Cancel");
+    }
+    drop(osk);
+    for _ in 0..80 {
+        spin();
+        if weak_origin.upgrade().is_none() {
+            break;
+        }
+    }
+    assert!(
+        weak_origin.upgrade().is_none(),
+        "removed/dropped origin must not be retained by the keyboard"
+    );
     win.destroy();
 }
