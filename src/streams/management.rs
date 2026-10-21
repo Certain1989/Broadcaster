@@ -251,18 +251,23 @@ impl DefaultsForm {
                 .unwrap_or(""),
         );
         label.set_placeholder_text(Some(&gettext("Optional: Bavaria")));
-        editable_row(
+        let code_keyboard = editable_row(
             &gettext("Default region code (optional)"),
             &code,
             box_,
             crate::keyboard::KeyboardOptions::default(),
         );
-        editable_row(
+        let name_keyboard = editable_row(
             &gettext("Default region name (optional)"),
             &label,
             box_,
             crate::keyboard::KeyboardOptions::default(),
         );
+        // Advanced region editors belong to the same source form: their
+        // input/launcher heights must match the source-name and URL fields.
+        for keyboard in [&code_keyboard, &name_keyboard] {
+            crate::keyboard::style_add_playlist_field_launcher(keyboard);
+        }
         let region_error = gtk::Label::new(None);
         region_error.set_wrap(true);
         region_error.set_xalign(0.0);
@@ -1311,9 +1316,10 @@ mod source_form_tests {
 
         let advanced = gtk::Expander::new(Some("Advanced"));
         let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let defaults = DefaultsForm::new(&advanced_body, &SourceDefaults::default());
         // Make the expanded state taller than the available window so the
         // scroller and pinned footer must coexist.
-        for _ in 0..35 {
+        for _ in 0..25 {
             advanced_body.append(&gtk::Label::new(Some("Optional source metadata")));
         }
         advanced.set_child(Some(&advanced_body));
@@ -1389,6 +1395,26 @@ mod source_form_tests {
         advanced.set_expanded(true);
         spin();
         assert_eq!(dialog.property::<i32>("content-height"), 620);
+        for field in [&defaults.code, &defaults.label] {
+            let launcher = field
+                .parent()
+                .expect("Advanced region row")
+                .last_child()
+                .expect("Advanced region keyboard")
+                .downcast::<gtk::Button>()
+                .expect("GTK button in region row");
+            assert_eq!(
+                (launcher.width(), launcher.height()),
+                (name_keyboard.width(), name_keyboard.height()),
+                "Advanced region keyboard launcher must match paired form rows"
+            );
+            assert_eq!(
+                field.height(),
+                name.height(),
+                "Advanced region field height must match source-name field"
+            );
+            assert!(launcher.is_mapped() && launcher.is_sensitive());
+        }
         let adjustment = scroll.vadjustment();
         assert!(
             adjustment.upper() > adjustment.page_size(),
