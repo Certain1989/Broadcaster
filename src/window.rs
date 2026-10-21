@@ -1137,6 +1137,8 @@ mod playback_navigation_tests {
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert_focused(&med[1]);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&med[3]);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert_focused(&med[2]);
