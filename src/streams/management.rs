@@ -56,8 +56,8 @@ fn row(label: &str, control: &impl IsA<gtk::Widget>, box_: &gtk::Box) {
 }
 
 // Compact, D-pad-reachable launcher for a concrete writable source field.
- // Up from the icon returns to the entry; Down from its native text editor
- // exposes the icon without taking over Left/Right caret navigation.
+// Up from the icon returns to the entry; Down from its native text editor
+// exposes the icon without taking over Left/Right caret navigation.
 fn editable_row(
     label: &str,
     field: &gtk::Entry,
@@ -84,7 +84,9 @@ fn editable_row(
     down.connect_key_pressed(move |_, key, _, modifiers| {
         if crate::keyboard::unmodified_remote(modifiers)
             && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-            && weak_keyboard.upgrade().is_some_and(|button| button.grab_focus())
+            && weak_keyboard
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
         {
             glib::Propagation::Stop
         } else {
