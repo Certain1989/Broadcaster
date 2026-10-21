@@ -25,13 +25,8 @@ headerbar.tv-header button:focus-visible {
 .tv-streams-controls {
   background-color: alpha(@accent_bg_color, 0.055);
   border-radius: 16px;
-}
-
-/* Live and My Channels already have compact controls. Give their new
- * background just enough inset for the positive-offset remote focus ring. */
-.tv-live-controls,
-.tv-streams-controls {
-  padding: 4px;
+  /* All three panels leave a visible inset around the remote focus rings. */
+  padding: 6px;
 }
 
 .tv-controls entry.search,

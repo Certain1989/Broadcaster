@@ -23,13 +23,14 @@ template $TvMediathekView: Adw.Bin {
       Gtk.Box {
         orientation: horizontal;
         spacing: 8;
-        margin-top: 6;
-        margin-start: 8;
-        margin-end: 8;
+        margin-top: 3;
+        margin-start: 4;
+        margin-end: 4;
 
         Gtk.SearchEntry search_entry {
           placeholder-text: _("Search the Mediathek");
           hexpand: true;
+          valign: center;
           search-delay: 250;
           text: bind template.query_string bidirectional;
         }
@@ -47,12 +48,14 @@ template $TvMediathekView: Adw.Bin {
         Gtk.ToggleButton {
           icon-name: "search-global-symbolic";
           tooltip-text: _("Search Everywhere");
+          valign: center;
           active: bind template.search_everywhere bidirectional;
         }
 
         Gtk.ToggleButton {
           icon-name: "month-symbolic";
           tooltip-text: _("Include Future Shows");
+          valign: center;
           active: bind template.include-future bidirectional;
         }
       }
@@ -60,9 +63,9 @@ template $TvMediathekView: Adw.Bin {
       Gtk.Box filters_toolbar {
         orientation: horizontal;
         spacing: 8;
-        margin-bottom: 6;
-        margin-start: 8;
-        margin-end: 8;
+        margin-bottom: 3;
+        margin-start: 4;
+        margin-end: 4;
 
         Gtk.Box {
           orientation: horizontal;

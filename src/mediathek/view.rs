@@ -1217,6 +1217,7 @@ mod tests {
             let targets = mediathek.toolbar_focus_targets();
             let search_row = targets[0].parent().expect("Mediathek search row");
             let panel = search_row.parent().expect("Mediathek panel");
+            let mediathek_entry_height = targets[0].height();
             let filter_row = mediathek
                 .imp()
                 .broadcaster_filter
@@ -1239,6 +1240,7 @@ mod tests {
             live.show_toolbar_for_test();
             let window = allocate(&live, width);
             let targets = live.toolbar_focus_targets();
+            let live_entry_height = targets[0].height();
             let panel = targets[0].parent().expect("Live panel");
             report(
                 "Live",
@@ -1254,6 +1256,7 @@ mod tests {
             let streams: crate::streams::view::TvStreamsView = glib::Object::new();
             let window = allocate(&streams, width);
             let targets = streams.toolbar_focus_targets();
+            let streams_entry_height = targets[0].height();
             let search_row = targets[0].parent().expect("My Channels search row");
             let panel = search_row.parent().expect("My Channels panel");
             let filter_row = targets[1].parent().expect("My Channels filters");
@@ -1267,6 +1270,15 @@ mod tests {
                 Some(&filter_row),
             );
             window.destroy();
+
+            // Compare mapped GtkSearchEntry allocations, not width/height requests.
+            // Distinct theme styling may differ by a few pixels; a stretched
+            // Mediathek field must not be as tall as its keyboard row.
+            assert!(
+                (mediathek_entry_height - live_entry_height).abs() <= 4
+                    && (mediathek_entry_height - streams_entry_height).abs() <= 4,
+                "search height mismatch at {width}px: Mediathek={mediathek_entry_height}, Live={live_entry_height}, My Channels={streams_entry_height}"
+            );
         }
     }
 
