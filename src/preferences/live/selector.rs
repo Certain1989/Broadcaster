@@ -594,14 +594,21 @@ x.XCloseDisplay(d)
 
         let first = row(&page, 0);
         let last = row(&page, 2);
-        assert!(
-            first.activate_action("row.move-up", None).is_err(),
-            "top boundary action is disabled"
-        );
-        assert!(
-            last.activate_action("row.move-down", None).is_err(),
-            "bottom boundary action is disabled"
-        );
+        // GtkWidget.activate_action returns success when an action exists,
+        // even if its disabled state prevents a callback. Test the observable
+        // contract instead: no boundary action may reorder or persist.
+        let before_boundary = names.clone();
+        let before_saves = saves.get();
+        let _ = first.activate_action("row.move-up", None);
+        let _ = last.activate_action("row.move-down", None);
+        let after_boundary: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_name())
+            .collect();
+        assert_eq!(after_boundary, before_boundary, "boundary cannot reorder");
+        assert_eq!(saves.get(), before_saves, "boundary cannot persist");
         let last_button = find_menu(last.upcast_ref(), "Move").unwrap();
         assert!(last_button.grab_focus());
         native_key("Return");
