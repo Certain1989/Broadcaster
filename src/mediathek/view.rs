@@ -1123,11 +1123,11 @@ mod tests {
                 "keep tinted Mediathek panel"
             );
             assert_eq!(search_row.parent(), Some(panel.clone()));
-            // The compact panel's excess is its two end insets plus the
-            // inter-row spacing; catch accidental restoration of tall padding.
+            // The panel intentionally has 10px padding at each end plus
+            // the existing 6px gap between rows. Catch double-applied margins.
             let vertical_overhead = panel.height() - search_row.height() - filter_row.height();
             assert!(
-                (0..=24).contains(&vertical_overhead),
+                (22..=30).contains(&vertical_overhead),
                 "toolbar excessive vertical inset at {width}px: panel={} search={} filters={} extra={vertical_overhead}",
                 panel.height(),
                 search_row.height(),
