@@ -19,6 +19,8 @@ for case in \
   osk_mapped_gtk_input_transaction_and_cancel \
   osk_mapped_gtk_native_unicode_backspace \
   osk_mapped_gtk_pending_selection_native_backspace \
+  osk_mapped_gtk_native_draft_focus_clears_collapsed_selection \
+  osk_mapped_gtk_draft_selection_survives_key_focus_transfer \
   osk_mapped_gtk_caret_buttons_collapse_selection \
   osk_mapped_gtk_compact_add_playlist_url_launcher \
   osk_mapped_gtk_entry_reentrant_signal_trace \

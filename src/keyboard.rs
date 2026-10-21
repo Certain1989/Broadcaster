@@ -417,6 +417,15 @@ where
     show_widget(&widget, options);
 }
 
+// GTK4 GtkEntry delegates native keyboard focus to its GtkText child.
+// The outer Entry itself does not report has_focus() while editing.
+fn draft_native_text_has_focus(entry: &gtk::Entry) -> bool {
+    entry
+        .delegate()
+        .and_downcast::<gtk::Text>()
+        .is_some_and(|text| text.has_focus())
+}
+
 fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     if !crate::settings::TvSettings::get().osk_enabled() {
         return;
@@ -485,7 +494,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             let selected = entry
                 .selection_bounds()
                 .map(|(a, b)| (a.max(0) as usize, b.max(0) as usize));
-            if selected.is_some() || entry.has_focus() {
+            if selected.is_some() || draft_native_text_has_focus(entry) {
                 pending_selection.set(selected);
             }
         }
@@ -675,7 +684,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             return glib::Propagation::Stop;
         }
         // Physical input in the preview retains native caret, IME, selection.
-        if weak_preview.upgrade().is_some_and(|p| p.has_focus()) {
+        if weak_preview
+            .upgrade()
+            .is_some_and(|preview| draft_native_text_has_focus(&preview))
+        {
             return glib::Propagation::Proceed;
         }
         let arrow = match key {

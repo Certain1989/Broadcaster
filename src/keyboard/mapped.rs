@@ -293,6 +293,118 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
     win.destroy();
 }
 
+// A mapped focus assertion, not synthetic GDK key-dispatch proof. GTK4
+// directs actual keyboard input to the GtkText delegate of GtkEntry.
+#[test]
+#[ignore = "requires mapped GTK and isolated test GSettings"]
+fn osk_mapped_gtk_native_draft_focus_clears_collapsed_selection() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("abcdef");
+    body.append(&source);
+    spin();
+    let changes = Rc::new(Cell::new(0));
+    source.connect_changed({
+        let changes = changes.clone();
+        move |_| changes.set(changes.get() + 1)
+    });
+
+    show(&source);
+    let dlg = keyboard(&win, &source);
+    let draft = find_entry(dlg.upcast_ref()).expect("native draft");
+    assert!(draft.grab_focus());
+    spin();
+    assert!(
+        draft_native_text_has_focus(&draft),
+        "native GtkText delegate must report focus while draft is editable"
+    );
+    draft.select_region(1, 3);
+    assert!(draft.selection_bounds().is_some());
+    draft.set_position(5); // Real focused caret motion collapses selection.
+    spin();
+    assert!(draft.selection_bounds().is_none());
+    assert!(draft_native_text_has_focus(&draft));
+    click(&dlg, "a");
+    assert_eq!(
+        draft.text().as_str(),
+        "abcdeaf",
+        "focused deselection must discard stale pending selection"
+    );
+    assert_eq!(source.text().as_str(), "abcdef");
+    click(&dlg, "Cancel");
+    assert_eq!(source.text().as_str(), "abcdef");
+    assert_eq!(changes.get(), 0, "Cancel must not notify the origin");
+
+    show(&source);
+    let dlg = keyboard(&win, &source);
+    let draft = find_entry(dlg.upcast_ref()).expect("native draft");
+    assert!(draft.grab_focus());
+    spin();
+    assert!(draft_native_text_has_focus(&draft));
+    draft.select_region(1, 3);
+    draft.set_position(5);
+    spin();
+    assert!(draft.selection_bounds().is_none());
+    click(&dlg, "Backspace");
+    assert_eq!(
+        draft.text().as_str(),
+        "abcdf",
+        "Backspace after focused deselection must delete at the new caret"
+    );
+    assert_eq!(source.text().as_str(), "abcdef");
+    click(&dlg, "Done");
+    assert_eq!(source.text().as_str(), "abcdf");
+    assert_eq!(changes.get(), 1, "Done must notify the origin exactly once");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires mapped GTK and isolated test GSettings"]
+fn osk_mapped_gtk_draft_selection_survives_key_focus_transfer() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("abcdef");
+    body.append(&source);
+    spin();
+    let changes = Rc::new(Cell::new(0));
+    source.connect_changed({
+        let changes = changes.clone();
+        move |_| changes.set(changes.get() + 1)
+    });
+
+    show(&source);
+    let dlg = keyboard(&win, &source);
+    let draft = find_entry(dlg.upcast_ref()).expect("native draft");
+    assert!(draft.grab_focus());
+    spin();
+    assert!(draft_native_text_has_focus(&draft));
+    draft.select_region(2, 4);
+    assert!(draft.selection_bounds().is_some());
+
+    // The key owns native focus, so a selection collapsed by focus loss
+    // must remain available for the user's next on-screen edit.
+    let key = find_button(dlg.upcast_ref(), "a").expect("mapped character key");
+    assert!(key.grab_focus());
+    spin();
+    assert!(key.has_focus());
+    assert!(
+        !draft_native_text_has_focus(&draft),
+        "OSK key focus must differ from native draft focus"
+    );
+    key.emit_by_name::<()>("clicked", &[]);
+    spin();
+    assert_eq!(
+        draft.text().as_str(),
+        "abaef",
+        "selection selected before focus transfer must be replaced"
+    );
+    assert_eq!(source.text().as_str(), "abcdef");
+    click(&dlg, "Done");
+    assert_eq!(source.text().as_str(), "abaef");
+    assert_eq!(changes.get(), 1);
+    win.destroy();
+}
+
 // Exercises observable wrapper signal semantics, not a claim of universal
 // transaction atomicity across arbitrary GTK delegate implementations.
 fn reentrant_signal_trace<T>(win: &adw::Window, target: &T)
