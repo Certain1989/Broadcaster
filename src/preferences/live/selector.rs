@@ -494,6 +494,16 @@ x.XCloseDisplay(d)
         page
     }
 
+    fn menu_owns_focus(
+        window: &crate::window::TvWindow,
+        button: &gtk::MenuButton,
+    ) -> bool {
+        gtk::prelude::GtkWindowExt::focus(window).is_some_and(|focused| {
+            focused == button.clone().upcast::<gtk::Widget>()
+                || focused.is_ancestor(button)
+        })
+    }
+
     fn row(page: &TvLiveChannelSelector, index: i32) -> TvLiveChannelSelectorRow {
         page.imp()
             .visible_channel_rows
@@ -541,10 +551,16 @@ x.XCloseDisplay(d)
         native_key("XF86Back");
         assert!(!popup.is_mapped(), "Back closes Move popup");
         assert!(page.is_mapped(), "Back retains Preferences subpage");
-        assert!(button.has_focus(), "Back restores origin focus");
+        assert!(
+            menu_owns_focus(&win, &button),
+            "Back restores focus into Move button; actual focus: {:?}",
+            gtk::prelude::GtkWindowExt::focus(&win)
+                .as_ref()
+                .map(|widget| widget.type_().name().to_string())
+        );
         assert_eq!(saves.get(), 0, "dismissal must not reorder");
 
-        assert!(button.grab_focus());
+        // No synthetic grab_focus here: native Return must work after Back.
         native_key("Return");
         assert!(popup.is_mapped(), "reopen after Back");
         native_key("Escape");
@@ -630,8 +646,14 @@ x.XCloseDisplay(d)
         native_key("XF86Back");
         assert!(!popup.is_mapped(), "Sort should dismiss on native Back");
         assert!(page.is_mapped(), "Sort Back stays on Preferences subpage");
-        assert!(sort.has_focus(), "Sort Back restores focus");
-        assert!(sort.grab_focus());
+        assert!(
+            menu_owns_focus(&win, &sort),
+            "Sort Back restores button focus; actual focus: {:?}",
+            gtk::prelude::GtkWindowExt::focus(&win)
+                .as_ref()
+                .map(|widget| widget.type_().name().to_string())
+        );
+        // Reopen using native Return without a test-induced focus reset.
         native_key("Return");
         assert!(popup.is_mapped());
         native_key("XF86HomePage");
