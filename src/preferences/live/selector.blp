@@ -15,7 +15,7 @@ template $TvLiveChannelSelector: Adw.NavigationPage {
         title: _("Visible Channels");
         name: "visible-channels";
 
-        header-suffix: Gtk.MenuButton {
+        header-suffix: Gtk.MenuButton sort_button {
           icon-name: "view-more-symbolic";
           tooltip-text: _("Sort");
           menu-model: sort_menu;

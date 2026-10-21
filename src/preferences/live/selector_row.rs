@@ -115,71 +115,7 @@ mod imp {
                 16,
             );
 
-            // Dynamic Preferences rows appear after the main window's
-            // startup scan of native popovers. Install the remote escape
-            // route on the actual popover that owns the keyboard grab.
-            let button = &*self.move_button;
-            if let Some(popover) = button.popover() {
-                let controller = gtk::EventControllerKey::new();
-                controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-                let weak_button = button.downgrade();
-                controller.connect_key_pressed(move |_, key, _, modifiers| {
-                    if !crate::keyboard::unmodified_remote(modifiers)
-                        || !matches!(key, gdk::Key::Back | gdk::Key::HomePage)
-                    {
-                        return glib::Propagation::Proceed;
-                    }
-                    let Some(button) = weak_button.upgrade() else {
-                        return glib::Propagation::Proceed;
-                    };
-                    if !button.popover().is_some_and(|menu| menu.is_mapped()) {
-                        return glib::Propagation::Proceed;
-                    }
-
-                    let dialog = button
-                        .ancestor(adw::Dialog::static_type())
-                        .and_then(|widget| widget.downcast::<adw::Dialog>().ok());
-                    let root = button.root();
-                    button.popdown();
-                    if key == gdk::Key::Back {
-                        button.grab_focus();
-                    } else {
-                        if let Some(dialog) = dialog {
-                            dialog.close();
-                        }
-                        if let Some(window) =
-                            root.and_then(|root| root.downcast::<crate::window::TvWindow>().ok())
-                        {
-                            // Use the already existing window action. Home
-                            // closes Preferences and returns to Mediathek.
-                            let _ = gtk::prelude::WidgetExt::activate_action(
-                                &window,
-                                "window.show-mediathek",
-                                None,
-                            );
-                            fn focus_browse(widget: &gtk::Widget) -> bool {
-                                if let Some(view) =
-                                    widget.downcast_ref::<crate::mediathek::TvMediathekView>()
-                                {
-                                    view.focus_browse();
-                                    return true;
-                                }
-                                let mut child = widget.first_child();
-                                while let Some(next) = child {
-                                    if focus_browse(&next) {
-                                        return true;
-                                    }
-                                    child = next.next_sibling();
-                                }
-                                false
-                            }
-                            focus_browse(window.upcast_ref());
-                        }
-                    }
-                    glib::Propagation::Stop
-                });
-                popover.add_controller(controller);
-            }
+            super::selector::install_channel_menu_remote_handler(&self.move_button);
         }
         fn signals() -> &'static [Signal] {
             static SIGNALS: OnceLock<[Signal; 2]> = OnceLock::new();

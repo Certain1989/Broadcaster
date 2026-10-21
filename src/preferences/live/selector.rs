@@ -10,7 +10,7 @@ thread_local! {
     static SUPPRESS_LIVE_LOAD: Cell<bool> = const { Cell::new(false) };
 }
 
-use adw::{gio, glib, gtk, prelude::*, subclass::prelude::*};
+use adw::{gdk, gio, glib, gtk, prelude::*, subclass::prelude::*};
 use indexmap::IndexMap;
 use smart_default::SmartDefault;
 
@@ -22,6 +22,103 @@ use crate::{
 
 use super::selector_row::TvLiveChannelSelectorRow;
 
+
+
+/// Attach a remote handler to the actual menu popover, which is created
+/// after the top-level window scans its initial widget tree. Native menu
+/// arrows, Return and Escape remain GTK-owned.
+pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
+    let Some(popover) = button.popover() else {
+        return;
+    };
+
+    // GTK's popdown can hand focus back after our event handler runs.
+    // Restore the origin only after the popover has finished closing.
+    let restore_focus = std::rc::Rc::new(Cell::new(false));
+    let weak_button = button.downgrade();
+    popover.connect_closed({
+        let restore_focus = restore_focus.clone();
+        move |_| {
+            if restore_focus.replace(false) {
+                let weak_button = weak_button.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(button) = weak_button.upgrade() {
+                        if button.is_mapped()
+                            && button.is_sensitive()
+                            && !button.popover().is_some_and(|menu| menu.is_mapped())
+                        {
+                            button.grab_focus();
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_button = button.downgrade();
+    controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if !crate::keyboard::unmodified_remote(modifiers)
+            || !matches!(key, gdk::Key::Back | gdk::Key::HomePage)
+        {
+            return glib::Propagation::Proceed;
+        }
+        let Some(button) = weak_button.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
+        if !button.popover().is_some_and(|menu| menu.is_mapped()) {
+            return glib::Propagation::Proceed;
+        }
+
+        // Resolve the modal before closing the menu and releasing its grab.
+        let dialog = button
+            .ancestor(adw::Dialog::static_type())
+            .and_then(|widget| widget.downcast::<adw::Dialog>().ok());
+        let root = button.root();
+        if key == gdk::Key::Back {
+            restore_focus.set(true);
+            button.popdown();
+        } else {
+            restore_focus.set(false);
+            button.popdown();
+            if let Some(dialog) = dialog {
+                dialog.close();
+            }
+            if let Some(window) =
+                root.and_then(|root| root.downcast::<crate::window::TvWindow>().ok())
+            {
+                // Existing window action and Mediathek focus policy; no global
+                // router edits, no navigation behind the still-open modal.
+                let _ = gtk::prelude::WidgetExt::activate_action(
+                    &window,
+                    "window.show-mediathek",
+                    None,
+                );
+                fn focus_browse(widget: &gtk::Widget) -> bool {
+                    if let Some(view) =
+                        widget.downcast_ref::<crate::mediathek::TvMediathekView>()
+                    {
+                        view.focus_browse();
+                        return true;
+                    }
+                    let mut child = widget.first_child();
+                    while let Some(next) = child {
+                        if focus_browse(&next) {
+                            return true;
+                        }
+                        child = next.next_sibling();
+                    }
+                    false
+                }
+                focus_browse(window.upcast_ref());
+            }
+        }
+        glib::Propagation::Stop
+    });
+    popover.add_controller(controller);
+}
+
 mod imp {
     use crate::utils::{show_error, spawn, ListStoreExtManual};
 
@@ -32,6 +129,8 @@ mod imp {
     pub struct TvLiveChannelSelector {
         #[template_child]
         pub(super) visible_channel_rows: TemplateChild<gtk::ListBox>,
+        #[template_child]
+        pub(super) sort_button: TemplateChild<gtk::MenuButton>,
         #[template_child]
         pub(super) hidden_channel_rows: TemplateChild<gtk::ListBox>,
 
@@ -237,6 +336,7 @@ mod imp {
     impl ObjectImpl for TvLiveChannelSelector {
         fn constructed(&self) {
             self.parent_constructed();
+            install_channel_menu_remote_handler(&self.sort_button);
 
             self.visible_channel_rows
                 .bind_model(Some(&self.visible_channels), |row| {
