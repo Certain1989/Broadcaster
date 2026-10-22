@@ -122,7 +122,7 @@ def main():
         [args.mpv, "--version"], capture_output=True, text=True,
         timeout=10, check=True,
     ).stdout
-    if not re.search(r"\\bmpv 0\\.41(?:\\.|\\b)", version):
+    if not re.search(r"\bmpv 0\.41(?:\.|\b)", version):
         raise SystemExit("NOT RUN: this fixture requires mpv 0.41")
     with tempfile.TemporaryDirectory(prefix="broadcaster-p1-http-") as tmp:
         observations = []
