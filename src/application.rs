@@ -624,11 +624,17 @@ mod tests {
         let pending_a = requests.begin();
         assert!(requests.is_current(pending_a));
         let live = requests.begin();
-        assert!(!requests.is_current(pending_a), "delayed A must not replace Live");
+        assert!(
+            !requests.is_current(pending_a),
+            "delayed A must not replace Live"
+        );
         assert!(requests.is_current(live));
         let pending_b = requests.begin();
         let mediathek = requests.begin();
-        assert!(!requests.is_current(pending_b), "delayed B must not replace Mediathek");
+        assert!(
+            !requests.is_current(pending_b),
+            "delayed B must not replace Mediathek"
+        );
         assert!(!requests.is_current(live));
         assert!(requests.is_current(mediathek));
         let pending_c = requests.begin();
