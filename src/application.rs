@@ -204,11 +204,17 @@ impl TvApplication {
             let window = self.window();
             let token = window.begin_playback();
             let weak_window = glib::clone::Downgrade::downgrade(&window);
-            if let Err(e) = mpv::play(video.title(), uri, video.subtitle_url(), video.stream_headers(), move || {
-                if let Some(window) = weak_window.upgrade() {
-                    window.finish_playback(token);
-                }
-            })
+            if let Err(e) = mpv::play(
+                video.title(),
+                uri,
+                video.subtitle_url(),
+                video.stream_headers(),
+                move || {
+                    if let Some(window) = weak_window.upgrade() {
+                        window.finish_playback(token);
+                    }
+                },
+            )
             .await
             {
                 // A spawn failure has no watcher. Discard this context without
@@ -433,7 +439,10 @@ pub struct StreamHeaders {
 
 impl StreamHeaders {
     pub(crate) fn imported(user_agent: Option<String>, referer: Option<String>) -> Self {
-        Self { user_agent, referer }
+        Self {
+            user_agent,
+            referer,
+        }
     }
 }
 

@@ -17,7 +17,12 @@ use futures_util::{
 use gettextrs::gettext;
 
 use crate::config::PKGDATADIR;
-use crate::{application::{StreamHeaders, TvApplication}, settings::TvSettings, utils::spawn, window::TvWindow};
+use crate::{
+    application::{StreamHeaders, TvApplication},
+    settings::TvSettings,
+    utils::spawn,
+    window::TvWindow,
+};
 
 pub const MPV: &str = "mpv";
 
@@ -375,14 +380,22 @@ mod redaction_tests {
     #[test]
     fn hint_validation_rejects_controls_and_bad_referers() {
         for invalid in [
-            "", " leading", "trailing ", "bad\rvalue", "bad\nvalue",
-            "bad\0value", "bad\tvalue", "☃",
+            "",
+            " leading",
+            "trailing ",
+            "bad\rvalue",
+            "bad\nvalue",
+            "bad\0value",
+            "bad\tvalue",
+            "☃",
         ] {
             assert!(!safe_header_value(invalid, 1024));
         }
         assert!(!safe_header_value(&"A".repeat(1025), 1024));
         for invalid in [
-            "", "ftp://example.invalid/", "http://",
+            "",
+            "ftp://example.invalid/",
+            "http://",
             "https://user:fake@example.invalid/",
             "https://example.invalid/#fragment",
             "https://example.invalid/\r\nInjected: true",
@@ -400,23 +413,43 @@ mod redaction_tests {
             referer: Some("https://example.invalid/page".into()),
         };
         let options = stream_header_options(Some(&a));
-        assert_eq!(options, [
-            "--user-agent=--script=not-an-option",
-            "--referrer=https://example.invalid/page",
-        ]);
+        assert_eq!(
+            options,
+            [
+                "--user-agent=--script=not-an-option",
+                "--referrer=https://example.invalid/page",
+            ]
+        );
         let global = vec!["--user-agent=global".into(), "  ".into()];
         let argv = player_argv(
-            &global, "--input-conf=/tmp/remote.conf", "--script=/tmp/remote.lua",
-            None, "--force-media-title=Example", &options,
+            &global,
+            "--input-conf=/tmp/remote.conf",
+            "--script=/tmp/remote.lua",
+            None,
+            "--force-media-title=Example",
+            &options,
             "https://example.invalid/video?token=fake",
         );
-        assert!(argv.iter().position(|x| x == "--user-agent=global").unwrap()
-            < argv.iter().position(|x| x == "--user-agent=--script=not-an-option").unwrap());
+        assert!(
+            argv.iter()
+                .position(|x| x == "--user-agent=global")
+                .unwrap()
+                < argv
+                    .iter()
+                    .position(|x| x == "--user-agent=--script=not-an-option")
+                    .unwrap()
+        );
         assert_eq!(argv[argv.len() - 2], "--");
-        assert_eq!(argv[argv.len() - 1], "https://example.invalid/video?token=fake");
+        assert_eq!(
+            argv[argv.len() - 1],
+            "https://example.invalid/video?token=fake"
+        );
         assert!(argv.contains(&"--input-conf=/tmp/remote.conf".to_owned()));
         assert!(argv.contains(&"--script=/tmp/remote.lua".to_owned()));
-        assert_eq!(argv.iter().filter(|x| x.starts_with("--referrer=")).count(), 1);
+        assert_eq!(
+            argv.iter().filter(|x| x.starts_with("--referrer=")).count(),
+            1
+        );
     }
 
     #[test]
