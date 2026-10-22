@@ -57,7 +57,10 @@ async fn injected_dns_addresses_are_the_actual_dial_and_explicit_proxy_is_disabl
         .connect_timeout(Duration::from_secs(5))
         .resolve_to_addrs(
             "playlist-fixture.invalid",
-            &[SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), target_addr.port())],
+            &[SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                target_addr.port(),
+            )],
         )
         .build()
         .unwrap();
