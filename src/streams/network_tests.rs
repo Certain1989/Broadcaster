@@ -537,9 +537,9 @@ async fn global_to_global_to_private_redirect_is_blocked_before_third_send() {
                 let (mut stream, _) = replies.accept().await.unwrap();
                 let mut buf = [0; 1024];
                 let n = stream.read(&mut buf).await.unwrap();
+                let expected = format!("GET {path} ");
                 assert!(
-                    String::from_utf8_lossy(&buf[..n])
-                        .starts_with(&format!("GET {path} ")),
+                    String::from_utf8_lossy(&buf[..n]).starts_with(expected.as_str()),
                     "unexpected synthetic hop request"
                 );
                 stream
