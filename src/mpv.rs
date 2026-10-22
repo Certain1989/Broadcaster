@@ -578,7 +578,7 @@ mod redaction_tests {
         // A rejected metadata hint produces no managed header option, and
         // therefore cannot unexpectedly disable existing global arguments.
         let invalid = stream_header_options(Some(&StreamHeaders {
-            user_agent: Some("bad\\r\\nAgent".into()),
+            user_agent: Some("bad\r\nAgent".into()),
             referer: Some("file:///unsupported".into()),
         }));
         assert!(invalid.is_empty());
