@@ -51,7 +51,7 @@ impl StartError {
             Self::InvalidMediaUrl => gettext("The video or subtitle URL is invalid."),
             Self::ConflictingArguments => gettext("Remove the mpv argument separator from custom player options to use stream headers."),
             Self::ConflictingHttpHeaders => gettext(
-                "Imported stream headers conflict with custom mpv HTTP header options. Remove --http-header-fields from your global player options to play this channel.",
+                "Imported stream headers conflict with custom mpv HTTP header options. Remove --http-header-fields or --stream-lavf-o from your global player options to play this channel.",
             ),
             Self::Superseded => gettext("Playback was replaced by a newer request."),
             Self::LaunchFailed => gettext("Failed to start mpv. Check the player installation."),
@@ -123,10 +123,13 @@ fn global_separator_conflicts(user_arguments: &[String], header_options: &[Strin
 }
 
 /// mpv 0.41 combines --referrer with --http-header-fields instead of
-/// resolving duplicate header names. Fail closed for *any* generic global
-/// header field when an imported hint is active: parsing mpv's escaped
-/// string-list grammar here would otherwise miss ambiguous overrides.
-/// Never mutate stored preferences or expose their values in diagnostics.
+/// resolving duplicate header names. It also applies --stream-lavf-o after
+/// the dedicated --user-agent / --referrer values, allowing FFmpeg's
+/// headers / user_agent dictionary keys to override imported hints.
+/// Conservatively refuse either *entire* option family when a validated
+/// imported hint is active: parsing list modifiers and escaping here could
+/// miss effective overrides. This may also reject benign stream-lavf-o keys.
+/// Never mutate saved preferences or expose their values in diagnostics.
 fn global_http_header_conflicts(user_arguments: &[String], header_options: &[String]) -> bool {
     !header_options.is_empty()
         && user_arguments.iter().any(|arg| {
@@ -134,7 +137,11 @@ fn global_http_header_conflicts(user_arguments: &[String], header_options: &[Str
                 .trim()
                 .split_once('=')
                 .map_or(arg.trim(), |(name, _)| name);
-            option == "--http-header-fields" || option.starts_with("--http-header-fields-")
+            option == "--http-header-fields"
+                || option.starts_with("--http-header-fields-")
+                || option == "--stream-lavf-o"
+                || option.starts_with("--stream-lavf-o-")
+                || option.starts_with("--stream-lavf-o:")
         })
 }
 
@@ -515,6 +522,88 @@ mod redaction_tests {
             argv.iter().filter(|x| x.starts_with("--referrer=")).count(),
             1
         );
+    }
+
+    #[test]
+    fn stream_lavf_o_family_is_blocked_only_with_valid_imported_hints() {
+        // In mpv 0.41 stream-lavf-o is applied to FFmpeg's dictionary last;
+        // even an apparently unrelated entry is refused conservatively.
+        let user_agent = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("FixtureAgent/1".into()),
+            referer: None,
+        }));
+        let referer = stream_header_options(Some(&StreamHeaders {
+            user_agent: None,
+            referer: Some("https://fixture.invalid/watch".into()),
+        }));
+        let both = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("FixtureAgent/1".into()),
+            referer: Some("https://fixture.invalid/watch".into()),
+        }));
+        assert_eq!(user_agent.len(), 1);
+        assert_eq!(referer.len(), 1);
+        assert_eq!(both.len(), 2);
+
+        for global_option in [
+            "--stream-lavf-o=user_agent=GlobalAgent/1",
+            "--stream-lavf-o=headers=Referer: global",
+            "--stream-lavf-o",
+            "--stream-lavf-o-add=user_agent=GlobalAgent/1",
+            "--stream-lavf-o-append=headers=Referer: global",
+            "--stream-lavf-o-set=user_agent=GlobalAgent/1",
+            "--stream-lavf-o-clr",
+            "--stream-lavf-o-del=user_agent",
+            "--stream-lavf-o:ambiguous=1",
+            "--stream-lavf-o=reconnect=1",
+            "--stream-lavf-o=headers=escaped\\,user_agent=GlobalAgent/1",
+        ] {
+            let global = vec![global_option.to_owned()];
+            for imported in [&user_agent, &referer, &both] {
+                assert!(
+                    global_http_header_conflicts(&global, imported),
+                    "must reject stream-lavf-o family: {global_option}"
+                );
+            }
+            // Do not change or reject global configuration on unrelated streams.
+            let saved = global.clone();
+            assert!(!global_http_header_conflicts(&global, &[]));
+            assert_eq!(global, saved);
+        }
+        let separated_value = vec![
+            "--stream-lavf-o".to_owned(),
+            "headers=Referer: global,user_agent=GlobalAgent/1".to_owned(),
+        ];
+        assert!(global_http_header_conflicts(&separated_value, &both));
+
+        // A rejected metadata hint produces no managed header option, and
+        // therefore cannot unexpectedly disable existing global arguments.
+        let invalid = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("bad\\r\\nAgent".into()),
+            referer: Some("file:///unsupported".into()),
+        }));
+        assert!(invalid.is_empty());
+        assert!(!global_http_header_conflicts(&separated_value, &invalid));
+        assert!(!global_http_header_conflicts(&separated_value, &[]));
+
+        for unrelated in [
+            "--stream-lavf-probesize=1024",
+            "--user-agent=global",
+            "--referrer=https://global.invalid/",
+            "--vo=gpu",
+        ] {
+            assert!(!global_http_header_conflicts(
+                &[unrelated.to_owned()],
+                &both
+            ));
+        }
+        assert!(global_http_header_conflicts(
+            &["--http-header-fields-append=Referer: global".into()],
+            &both
+        ));
+        assert!(global_separator_conflicts(&["--".into()], &both));
+        assert!(StartError::ConflictingHttpHeaders
+            .message()
+            .contains("--stream-lavf-o"));
     }
 
     #[test]
