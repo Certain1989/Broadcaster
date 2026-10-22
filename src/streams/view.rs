@@ -1183,7 +1183,7 @@ impl TvStreamsView {
         if !safe {
             return;
         }
-        self.imp().selected_id.replace(Some(channel.id));
+        self.imp().selected_id.replace(Some(channel.id.clone()));
         #[cfg(test)]
         if self.imp().fake_player_enabled.get() {
             let calls = self.imp().fake_player_calls.get();
