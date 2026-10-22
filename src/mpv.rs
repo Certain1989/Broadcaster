@@ -130,7 +130,10 @@ fn global_separator_conflicts(user_arguments: &[String], header_options: &[Strin
 fn global_http_header_conflicts(user_arguments: &[String], header_options: &[String]) -> bool {
     !header_options.is_empty()
         && user_arguments.iter().any(|arg| {
-            let option = arg.trim().split_once('=').map_or(arg.trim(), |(name, _)| name);
+            let option = arg
+                .trim()
+                .split_once('=')
+                .map_or(arg.trim(), |(name, _)| name);
             option == "--http-header-fields" || option.starts_with("--http-header-fields-")
         })
 }
@@ -642,11 +645,7 @@ mod redaction_tests {
             "#!/bin/sh\nout=$1\nshift\nprintf '%s\\n' \"$@\" > \"$out\"\n",
         )
         .unwrap();
-        std::fs::set_permissions(
-            &executable,
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let headers = StreamHeaders {
             user_agent: Some("FixtureAgent/1".into()),
