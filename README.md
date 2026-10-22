@@ -15,6 +15,7 @@ Broadcaster is a lightweight, native Linux application for German public-service
 - **Mediathek:** search German-language broadcaster catalogues through MediathekViewWeb. Filter by channel or duration, sort results, choose stream quality, and open programme details.
 - **Live TV:** browse current programmes from the Zapp service, read programme descriptions, and select which live channels appear and in what order.
 - **My Channels (new in v0.2.0):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
+- **On-screen keyboard (v0.2.1):** enter text using directional remote keys wherever an editable field offers the keyboard; it is available by default and can be disabled in Settings. Mouse and physical keyboard input still work.
 - **TV controls:** fullscreen startup, remote-friendly navigation, and a dedicated mpv overlay for play/pause, seeking, playback speed, audio tracks and subtitles. Labels reflect available stream metadata.
 - **Desktop integration:** native GTK4 interface, English and German text, optional external player and downloader, and Flatpak builds for x86-64 and ARM64.
 
@@ -32,20 +33,21 @@ To find playlists for **My Channels**, browse [IPTV-org's country, language and 
 
 Broadcaster neither hosts nor supplies media. Stream availability, channel metadata, subtitles, regional restrictions and service uptime are controlled by broadcasters and external catalogue providers. Remote key mapping depends on your desktop and hardware; Fedora KDE Plasma Bigscreen/Wayland is the primary tested TV environment. Other Linux desktops may work but are not guaranteed.
 
-## Install v0.2.0
+## Install Broadcaster
 
-Download the `broadcaster-0.2.0-x86_64.flatpak` bundle for Intel/AMD PCs or `broadcaster-0.2.0-aarch64.flatpak` for ARM64 systems, **together with `SHA256SUMS`**, from the [v0.2.0 GitHub release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0). Run the following in the download directory (substitute `aarch64` everywhere for ARM64):
+Download the published production Flatpak for your architecture, together with the matching `SHA256SUMS`, from [GitHub Releases](https://github.com/Certain1989/Broadcaster/releases). The example below uses **v0.2.1**, for Intel/AMD x86_64; use `aarch64` for ARM64. These files are available only **once v0.2.1 has been released**. If they are not listed yet, use the [published v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) with its own filenames and checksums instead.
 
 ```bash
-grep 'broadcaster-0.2.0-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.2.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.2.0-x86_64.flatpak
+flatpak install --user ./broadcaster-0.2.1-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
-The checksum command verifies the downloaded x86_64 bundle against `SHA256SUMS`. For ARM64, replace `x86_64` with `aarch64` in both the checksum check and installation command. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install system-wide for a separate TV account, use the equivalent `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.0-x86_64.flatpak`, and `sudo flatpak uninstall --system ...` operations; start the app without sudo.
+The checksum command checks the downloaded bundle against the release's `SHA256SUMS`; use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install system-wide for a separate TV account, use `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.1-x86_64.flatpak` and `sudo flatpak uninstall --system ...`; start the app without sudo.
 
-Broadcaster requires the GNOME Platform 51 runtime, which Flatpak can download from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable ID above is distinct from `io.github.Certain1989.Broadcaster.Devel` used for CI development builds.
+Broadcaster uses GNOME Platform 51, which Flatpak can obtain from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable app ID above is different from `io.github.Certain1989.Broadcaster.Devel` used by CI development builds.
+
 
 ### Black video after installing the Flatpak
 
