@@ -16,8 +16,8 @@ use std::{
 use reqwest::{redirect::Policy, Client, Proxy, Url};
 
 use super::fetch::{
-    authorize_hop, classify_addresses, fetch_redirects_with_resolver, AddressClass,
-    FetchError, PlaylistResolver,
+    authorize_hop, classify_addresses, fetch_redirects_with_resolver, AddressClass, FetchError,
+    PinnedResolver, PlaylistResolver,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -264,4 +264,32 @@ fn global_origin_rebinding_to_private_is_rejected_at_every_hop() {
             Err(FetchError::Redirect)
         );
     }
+}
+
+#[tokio::test]
+async fn unexpected_hostname_cannot_fall_back_to_system_dns() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target = listener.local_addr().unwrap();
+    let client = Client::builder()
+        .no_proxy()
+        .dns_resolver(Arc::new(PinnedResolver::new(
+            "permitted-fixture.invalid".to_owned(),
+            vec![target],
+        )))
+        .build()
+        .unwrap();
+    let result = client
+        .get(format!(
+            "http://unpermitted-fixture.invalid:{}/playlist",
+            target.port()
+        ))
+        .send()
+        .await;
+    assert!(result.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), listener.accept())
+            .await
+            .is_err(),
+        "unrecognized resolver hostname opened a socket"
+    );
 }
