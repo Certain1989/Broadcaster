@@ -1114,7 +1114,7 @@ mod playback_navigation_tests {
         window.queue_allocate();
         spin();
         let med = window.imp().mediathek_view.toolbar_focus_targets();
-        assert_eq!(med.len(), 6, "search, two toggles, three filters");
+        assert_eq!(med.len(), 7, "search, keyboard, two toggles, three filters");
         assert!(med[0].is_mapped() && med[1].is_mapped());
         let med_search = med[0].clone().downcast::<gtk::SearchEntry>().unwrap();
         med_search.set_position(-1); // Explicitly move native caret to end.
@@ -1126,7 +1126,7 @@ mod playback_navigation_tests {
         assert_eq!(
             spatial_neighbor(&med_rects, 0, gtk::gdk::Key::Right),
             Some(1),
-            "mapped search and the right-hand toggle must be spatial neighbors: {med_rects:?}"
+            "mapped search and keyboard launcher must be spatial neighbors: {med_rects:?}"
         );
         assert!(med[0].grab_focus());
         med_search.set_position(-1);
@@ -1136,11 +1136,17 @@ mod playback_navigation_tests {
         assert_focused(&med[2]);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert_focused(&med[1]);
-        assert!(med[3].grab_focus());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
-        assert_focused(&med[4]);
+        assert_focused(&med[2]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[3]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_focused(&med[2]);
+        assert!(med[4].grab_focus());
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
         assert_focused(&med[5]);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_focused(&med[6]);
 
         stack.set_visible_child_name("streams");
         window.queue_allocate();

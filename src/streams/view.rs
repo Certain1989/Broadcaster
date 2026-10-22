@@ -98,6 +98,8 @@ mod imp {
         #[template_child]
         pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
+        pub(super) keyboard_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) filter_bar: TemplateChild<gtk::Box>,
         #[template_child]
         pub(super) advanced_filter_bar: TemplateChild<gtk::Box>,
@@ -222,6 +224,11 @@ glib::wrapper! {
 impl TvStreamsView {
     fn initialize(&self) {
         let imp = self.imp();
+        crate::keyboard::bind_launcher(
+            &imp.keyboard_button,
+            &imp.search_entry.get(),
+            crate::keyboard::KeyboardOptions::default(),
+        );
         let rows = StreamRows::new();
         let selection = gtk::SingleSelection::new(Some(rows.clone()));
         selection.set_autoselect(true);
@@ -1379,11 +1386,16 @@ impl TvStreamsView {
     #[cfg(test)]
     pub(crate) fn assert_remote_toolbar_focus_styled(&self) {
         let imp = self.imp();
-        let toolbar = imp.search_entry.parent().expect("search toolbar");
+        let toolbar = imp
+            .search_entry
+            .parent()
+            .and_then(|row| row.parent())
+            .expect("search toolbar");
         assert!(toolbar.has_css_class("tv-streams-controls"));
         assert!(imp.add_button.has_focus(), "Up must focus Add Playlist");
         for control in [
             imp.search_entry.upcast_ref::<gtk::Widget>(),
+            imp.keyboard_button.upcast_ref(),
             imp.source_filter.upcast_ref(),
             imp.group_filter.upcast_ref(),
             imp.sort_filter.upcast_ref(),
@@ -1421,6 +1433,9 @@ impl TvStreamsView {
             imp.clear_button.get().upcast(),
             imp.manage_button.get().upcast(),
             imp.add_button.get().upcast(),
+            // Spatial navigation uses mapped geometry, not vector ordering.
+            // Preserve the existing filter indices in read-only router tests.
+            imp.keyboard_button.get().upcast(),
         ]
     }
 
@@ -1437,8 +1452,9 @@ impl TvStreamsView {
             return false;
         }
         let imp = self.imp();
-        let controls: [&gtk::Widget; 11] = [
+        let controls: [&gtk::Widget; 12] = [
             imp.search_entry.upcast_ref(),
+            imp.keyboard_button.upcast_ref(),
             imp.source_filter.upcast_ref(),
             imp.group_filter.upcast_ref(),
             imp.language_filter.upcast_ref(),

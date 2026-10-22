@@ -18,16 +18,21 @@ headerbar.tv-header button:focus-visible {
   border-radius: 10px;
 }
 
-/* Round the blue-grey toolbar PANEL, not its individual controls. */
-.tv-controls {
+/* Match the Mediathek's theme-adaptive tinted, rounded surface across
+ * the three top toolbars. Keep per-view control sizing rules separate. */
+.tv-controls,
+.tv-live-controls,
+.tv-streams-controls {
   background-color: alpha(@accent_bg_color, 0.055);
   border-radius: 16px;
+  /* Keep the larger Mediathek inset consistently on all three surfaces. */
+  padding: 10px;
 }
 
-.tv-controls entry.search,
-.tv-controls dropdown,
-.tv-controls menubutton,
-.tv-controls button {
+/* Preserve the already-accepted search height without inflating the
+ * Mediathek dropdowns, Sort or search-option buttons. Their intrinsic sizes
+ * should match the compact controls in My Channels. */
+.tv-controls entry.search {
   min-height: 40px;
 }
 

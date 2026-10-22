@@ -72,6 +72,22 @@ fn find_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
     None
 }
 
+fn find_persistent_caret(widget: &gtk::Widget) -> Option<gtk::DrawingArea> {
+    if let Some(area) = widget.downcast_ref::<gtk::DrawingArea>() {
+        if area.has_css_class("osk-persistent-caret") {
+            return Some(area.clone());
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(item) = child {
+        if let Some(area) = find_persistent_caret(&item) {
+            return Some(area);
+        }
+        child = item.next_sibling();
+    }
+    None
+}
+
 fn click(dialog: &adw::Dialog, name: &str) {
     let button = find_button(dialog.upcast_ref(), name).expect("mapped keyboard key");
     button.grab_focus();
@@ -167,6 +183,91 @@ fn osk_mapped_gtk_multiple_changed_signal_observers() {
 
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
+fn osk_mapped_gtk_caret_visible_with_remote_key_focus() {
+    let (win, body) = host();
+    let source = gtk::Entry::new();
+    source.set_text("unchanged");
+    body.append(&source);
+    spin();
+    show(&source);
+    let dialog = keyboard(&win, &source);
+    let preview = find_entry(dialog.upcast_ref()).expect("native draft preview");
+    let canvas = find_persistent_caret(dialog.upcast_ref()).expect("noninteractive cursor overlay");
+    assert!(canvas.is_mapped(), "overlay must map with the OSK");
+    assert!(
+        !canvas.can_target(),
+        "cursor must not intercept remote/mouse focus"
+    );
+
+    preview.set_text("aäöbcd");
+    preview.set_position(3);
+    // Real OSK interaction keeps focus on the buttons, not the GtkText.
+    let left = find_button(dialog.upcast_ref(), "←").expect("left caret key");
+    assert!(left.grab_focus());
+    spin();
+    assert!(left.has_focus());
+    assert!(!draft_native_text_has_focus(&preview));
+    let original =
+        remote_preview_caret_rect(&preview, &canvas).expect("visible remote insertion cursor");
+
+    click(&dialog, "←");
+    assert_eq!(preview.position(), 2);
+    let moved =
+        remote_preview_caret_rect(&preview, &canvas).expect("cursor remains visible after Left");
+    assert!(
+        moved.x() < original.x(),
+        "visible cursor must follow the actual Unicode insertion position"
+    );
+    click(&dialog, "x");
+    assert_eq!(
+        preview.text(),
+        "aäxöbcd",
+        "insert at displayed cursor, not at the end"
+    );
+    assert!(
+        remote_preview_caret_rect(&preview, &canvas).is_some(),
+        "cursor stays visible after character insertion"
+    );
+    click(&dialog, "→");
+    assert!(
+        remote_preview_caret_rect(&preview, &canvas).is_some(),
+        "cursor stays visible after Right"
+    );
+
+    // The real GtkText owns horizontal scrolling for long URLs; the
+    // visual caret follows its own geometry rather than assuming fixed glyphs.
+    preview.set_text(&format!("{}äöß", "w".repeat(240)));
+    preview.set_position(240);
+    spin();
+    let long = remote_preview_caret_rect(&preview, &canvas)
+        .expect("long horizontally scrolled text keeps a visible cursor");
+    let bounds = canvas
+        .compute_bounds(&dialog)
+        .expect("mapped overlay bounds");
+    assert!(long.width() > 0.0 && long.height() > 0.0);
+    assert!(long.x() >= 0.0 && long.x() + long.width() <= bounds.width() + 1.0);
+
+    // GTK's original native insertion caret must take over without a
+    // doubled indicator when physical typing refocuses the preview.
+    assert!(preview.grab_focus());
+    spin();
+    assert!(draft_native_text_has_focus(&preview));
+    assert!(remote_preview_caret_rect(&preview, &canvas).is_none());
+    assert!(left.grab_focus());
+    spin();
+    assert!(remote_preview_caret_rect(&preview, &canvas).is_some());
+
+    assert_eq!(
+        source.text(),
+        "unchanged",
+        "preview edits must not escape on Cancel"
+    );
+    click(&dialog, "Cancel");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_caret_buttons_collapse_selection() {
     let (win, body) = host();
     let source = gtk::Entry::new();
@@ -179,12 +280,12 @@ fn osk_mapped_gtk_caret_buttons_collapse_selection() {
     draft.set_text("abcdef");
     for &(a, b) in &[(2, 4), (4, 2)] {
         draft.select_region(a, b);
-        click(&dialog, "Caret left");
+        click(&dialog, "←");
         assert!(draft.selection_bounds().is_none());
         assert_eq!(draft.position(), 2, "Left collapses to selection start");
 
         draft.select_region(a, b);
-        click(&dialog, "Caret right");
+        click(&dialog, "→");
         assert!(draft.selection_bounds().is_none());
         assert_eq!(draft.position(), 4, "Right collapses to selection end");
     }
@@ -246,7 +347,7 @@ fn osk_mapped_gtk_compact_add_playlist_url_launcher() {
     url.set_hexpand(true);
     form.append(&url);
     let launcher = gtk::Button::with_label("Keyboard");
-    style_add_playlist_url_launcher(&launcher);
+    style_add_playlist_field_launcher(&launcher);
     bind_launcher(&launcher, &url, KeyboardOptions::url());
     form.append(&launcher);
     spin();
@@ -997,9 +1098,9 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     assert_inside();
     for name in [
         "Backspace",
-        "Caret left",
+        "←",
         "Space",
-        "Caret right",
+        "→",
         "Clear",
         "Shift",
         "QWERTZ",
@@ -1014,10 +1115,24 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
             "required key {name} must be visible"
         );
     }
+    // The compact visual symbols still expose translated, descriptive help
+    // even after the OSK relabels itself for shift/layout transitions.
+    let assert_caret_help = || {
+        for (symbol, name) in [("←", "Caret left"), ("→", "Caret right")] {
+            let button = find_button(&content, symbol).expect("mapped caret arrow button");
+            assert_eq!(
+                button.tooltip_text().as_deref(),
+                Some(gettext(name).as_str()),
+                "symbolic caret controls must keep accessible descriptive help"
+            );
+        }
+    };
+    assert_caret_help();
     // Shift changes the German action label's natural width; it must still
     // leave Done and Cancel fully visible without any horizontal scrolling.
     click(&dialog, "Shift");
     assert_inside();
+    assert_caret_help();
     click(&dialog, "Cancel");
     win.destroy();
 }

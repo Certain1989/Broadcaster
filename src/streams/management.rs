@@ -47,12 +47,110 @@ fn sheet(title: &str) -> (adw::Dialog, gtk::Box, gtk::Label) {
     (dialog, box_, status)
 }
 
+// Add Playlist has a short ordinary state and a longer Advanced state.
+// Keep the action footer outside the scroll area and adapt the requested
+// height to the state, rather than retaining unused space when collapsed.
+fn source_form_layout(
+    dialog: &adw::Dialog,
+    body: &gtk::Box,
+    advanced: &gtk::Expander,
+) -> (gtk::ScrolledWindow, gtk::Box) {
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_vexpand(true);
+
+    // sheet() temporarily owns the editable body; reparent it inside the
+    // scroller before building the permanent dialog container.
+    dialog.set_child(None::<&gtk::Widget>);
+    scroll.set_child(Some(body));
+
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    shell.append(&scroll);
+    let footer = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    footer.set_margin_top(8);
+    footer.set_margin_bottom(16);
+    footer.set_margin_start(16);
+    footer.set_margin_end(16);
+    shell.append(&footer);
+    dialog.set_child(Some(&shell));
+
+    dialog.set_content_height(if advanced.is_expanded() { 620 } else { 360 });
+    advanced.connect_notify_local(
+        Some("expanded"),
+        glib::clone!(
+            #[weak]
+            dialog,
+            move |expander, _| {
+                dialog.set_content_height(if expander.is_expanded() { 620 } else { 360 });
+            }
+        ),
+    );
+    (scroll, footer)
+}
+
 fn row(label: &str, control: &impl IsA<gtk::Widget>, box_: &gtk::Box) {
     let text = gtk::Label::new(Some(label));
     text.set_xalign(0.0);
     text.set_wrap(true);
     box_.append(&text);
     box_.append(control);
+}
+
+// Compact, D-pad-reachable launcher for a concrete writable source field.
+// Up from the icon returns to the entry; Down from its native text editor
+// exposes the icon without taking over Left/Right caret navigation.
+fn editable_row(
+    label: &str,
+    field: &gtk::Entry,
+    parent: &gtk::Box,
+    options: crate::keyboard::KeyboardOptions,
+) -> gtk::Button {
+    let title = gtk::Label::new(Some(label));
+    title.set_xalign(0.0);
+    title.set_wrap(true);
+    parent.append(&title);
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    controls.append(field);
+    let keyboard = gtk::Button::new();
+    keyboard.set_icon_name("input-keyboard-symbolic");
+    keyboard.set_size_request(48, 44);
+    keyboard.set_valign(gtk::Align::Center);
+    crate::keyboard::bind_launcher(&keyboard, field, options);
+    controls.append(&keyboard);
+    parent.append(&controls);
+
+    let down = gtk::EventControllerKey::new();
+    down.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_keyboard = keyboard.downgrade();
+    down.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && weak_keyboard
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    field.add_controller(down);
+
+    let up = gtk::EventControllerKey::new();
+    up.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_field = field.downgrade();
+    up.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    keyboard.add_controller(up);
+    keyboard
 }
 
 fn entry(value: &str) -> gtk::Entry {
@@ -153,8 +251,23 @@ impl DefaultsForm {
                 .unwrap_or(""),
         );
         label.set_placeholder_text(Some(&gettext("Optional: Bavaria")));
-        row(&gettext("Default region code (optional)"), &code, box_);
-        row(&gettext("Default region name (optional)"), &label, box_);
+        let code_keyboard = editable_row(
+            &gettext("Default region code (optional)"),
+            &code,
+            box_,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        let name_keyboard = editable_row(
+            &gettext("Default region name (optional)"),
+            &label,
+            box_,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        // Advanced region editors belong to the same source form: their
+        // input/launcher heights must match the source-name and URL fields.
+        for keyboard in [&code_keyboard, &name_keyboard] {
+            crate::keyboard::style_add_playlist_field_launcher(keyboard);
+        }
         let region_error = gtk::Label::new(None);
         region_error.set_wrap(true);
         region_error.set_xalign(0.0);
@@ -294,7 +407,16 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     name_error.set_xalign(0.0);
     name_error.add_css_class("error");
     if is_new {
-        row(&gettext("Unique source name"), &name, &body);
+        let keyboard = editable_row(
+            &gettext("Unique source name"),
+            &name,
+            &body,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        if file.is_none() {
+            // Match the adjacent URL row's tested launcher/entry dimensions.
+            crate::keyboard::style_add_playlist_field_launcher(&keyboard);
+        }
         body.append(&name_error);
     }
     let url_error = gtk::Label::new(None);
@@ -304,41 +426,15 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     let url = if is_new && file.is_none() {
         let field = entry("");
         field.set_input_purpose(gtk::InputPurpose::Url);
-        row(&gettext("Playlist HTTP(S) URL"), &field, &body);
+        let keyboard = editable_row(
+            &gettext("Playlist HTTP(S) URL"),
+            &field,
+            &body,
+            crate::keyboard::KeyboardOptions::url(),
+        );
+        // The source-name and URL rows share the existing tested geometry.
+        crate::keyboard::style_add_playlist_field_launcher(&keyboard);
         body.append(&url_error);
-        let keyboard = button(&gettext("Keyboard"), &body);
-        crate::keyboard::style_add_playlist_url_launcher(&keyboard);
-        crate::keyboard::bind_launcher(&keyboard, &field, crate::keyboard::KeyboardOptions::url());
-        // Keep Left/Right in the URL entry for its native caret. The
-        // vertical boundary exposes the keyboard to an ordinary D-pad.
-        let nav = gtk::EventControllerKey::new();
-        nav.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak_keyboard = keyboard.downgrade();
-        nav.connect_key_pressed(move |_, key, _, mods| {
-            if crate::keyboard::unmodified_remote(mods)
-                && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-                && weak_keyboard
-                    .upgrade()
-                    .is_some_and(|button| button.grab_focus())
-            {
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        field.add_controller(nav);
-        let nav_back = gtk::EventControllerKey::new();
-        nav_back.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak_field = field.downgrade();
-        nav_back.connect_key_pressed(move |_, key, _, mods| {
-            if crate::keyboard::unmodified_remote(mods)
-                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
-                && weak_field.upgrade().is_some_and(|entry| entry.grab_focus())
-            {
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        });
-        keyboard.add_controller(nav_back);
         Some(field)
     } else {
         None
@@ -352,17 +448,14 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     let defaults = DefaultsForm::new(&advanced_body, &initial_defaults);
     advanced.set_child(Some(&advanced_body));
     body.append(&advanced);
-    let scroll = gtk::ScrolledWindow::new();
-    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    dialog.set_child(None::<&gtk::Widget>);
-    scroll.set_child(Some(&body));
-    dialog.set_content_height(620);
-    dialog.set_child(Some(&scroll));
-    let buttons = line(&body);
+    // The form scrolls independently; actions/status remain visible when
+    // Advanced expands beyond the available dialog height.
+    let (_scroll, footer) = source_form_layout(&dialog, &body, &advanced);
+    let buttons = line(&footer);
     let cancel = button(&gettext("Cancel"), &buttons);
     let save = button(&gettext("Save"), &buttons);
     save.add_css_class("suggested-action");
-    body.append(&status);
+    footer.append(&status);
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -784,7 +877,12 @@ fn rename_source(view: &TvStreamsView, source: Source) {
     };
     let (dialog, body, status) = sheet(&gettext("Rename Source"));
     let name = entry(&source.name);
-    row(&gettext("Source name"), &name, &body);
+    editable_row(
+        &gettext("Source name"),
+        &name,
+        &body,
+        crate::keyboard::KeyboardOptions::default(),
+    );
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
     let save = button(&gettext("Save"), &actions);
@@ -881,10 +979,11 @@ fn replace_url_form(view: &TvStreamsView, id: String) {
     let (dialog, body, status) = sheet(&gettext("Replace Playlist URL"));
     let input = entry("");
     input.set_input_purpose(gtk::InputPurpose::Url);
-    row(
+    editable_row(
         &gettext("New HTTP(S) URL (not shown in status messages)"),
         &input,
         &body,
+        crate::keyboard::KeyboardOptions::url(),
     );
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
@@ -1186,6 +1285,160 @@ pub(crate) fn assert_synthetic_source_defaults_form() {
 #[cfg(test)]
 mod source_form_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a mapped display and isolated test GSettings"]
+    fn osk_mapped_gtk_add_playlist_paired_rows_and_footer() {
+        adw::init().expect("mapped dialog test needs GTK");
+        let win = adw::Window::new();
+        win.set_default_size(960, 720);
+        win.present();
+
+        let (dialog, body, status) = sheet("Add Playlist");
+        let name = entry("");
+        let url = entry("");
+        url.set_input_purpose(gtk::InputPurpose::Url);
+        let name_keyboard = editable_row(
+            "Unique source name",
+            &name,
+            &body,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        let url_keyboard = editable_row(
+            "Playlist HTTP(S) URL",
+            &url,
+            &body,
+            crate::keyboard::KeyboardOptions::url(),
+        );
+        for keyboard in [&name_keyboard, &url_keyboard] {
+            crate::keyboard::style_add_playlist_field_launcher(keyboard);
+        }
+
+        let advanced = gtk::Expander::new(Some("Advanced"));
+        let advanced_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let defaults = DefaultsForm::new(&advanced_body, &SourceDefaults::default());
+        // Make the expanded state taller than the available window so the
+        // scroller and pinned footer must coexist.
+        for _ in 0..25 {
+            advanced_body.append(&gtk::Label::new(Some("Optional source metadata")));
+        }
+        advanced.set_child(Some(&advanced_body));
+        body.append(&advanced);
+        let (scroll, footer) = source_form_layout(&dialog, &body, &advanced);
+        let actions = line(&footer);
+        let cancel = button("Cancel", &actions);
+        let save = button("Save", &actions);
+        footer.append(&status);
+
+        dialog.present(Some(&win));
+        let spin = || {
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(12));
+            }
+        };
+        spin();
+
+        assert_eq!(dialog.property::<i32>("content-height"), 360);
+        for control in [
+            name.clone().upcast::<gtk::Widget>(),
+            url.clone().upcast::<gtk::Widget>(),
+            name_keyboard.clone().upcast(),
+            url_keyboard.clone().upcast(),
+        ] {
+            assert!(control.is_mapped() && control.is_sensitive());
+            assert!(
+                control.grab_focus(),
+                "paired field control is not focusable"
+            );
+        }
+        assert!(
+            name_keyboard.width() >= 48 && name_keyboard.height() >= 44,
+            "source-name keyboard target too small: {}x{}",
+            name_keyboard.width(),
+            name_keyboard.height()
+        );
+        assert_eq!(
+            (name_keyboard.width(), name_keyboard.height()),
+            (url_keyboard.width(), url_keyboard.height()),
+            "paired Add Playlist keyboard launchers must have matching allocations"
+        );
+        assert_eq!(
+            name.height(),
+            url.height(),
+            "paired source-name and URL entries must be equally tall"
+        );
+        let name_rect = name.compute_bounds(&body).expect("name entry bounds");
+        let url_rect = url.compute_bounds(&body).expect("URL entry bounds");
+        assert!(
+            (name_rect.x() - url_rect.x()).abs() <= 2.0
+                && (name_rect.width() - url_rect.width()).abs() <= 2.0,
+            "paired entries must align and have equal widths"
+        );
+
+        let footer_visible = || {
+            let bounds = footer.compute_bounds(&dialog).expect("footer bounds");
+            assert!(
+                footer.is_mapped()
+                    && bounds.y() >= -1.0
+                    && bounds.y() + bounds.height() <= dialog.height() as f32 + 1.0,
+                "footer must remain inside dialog viewport: y={} height={} dialog={}",
+                bounds.y(),
+                bounds.height(),
+                dialog.height()
+            );
+            assert!(cancel.is_mapped() && save.is_mapped());
+        };
+        footer_visible();
+        advanced.set_expanded(true);
+        spin();
+        assert_eq!(dialog.property::<i32>("content-height"), 620);
+        for field in [&defaults.code, &defaults.label] {
+            let launcher = field
+                .parent()
+                .expect("Advanced region row")
+                .last_child()
+                .expect("Advanced region keyboard")
+                .downcast::<gtk::Button>()
+                .expect("GTK button in region row");
+            assert_eq!(
+                (launcher.width(), launcher.height()),
+                (name_keyboard.width(), name_keyboard.height()),
+                "Advanced region keyboard launcher must match paired form rows"
+            );
+            assert_eq!(
+                field.height(),
+                name.height(),
+                "Advanced region field height must match source-name field"
+            );
+            assert!(launcher.is_mapped() && launcher.is_sensitive());
+        }
+        let adjustment = scroll.vadjustment();
+        assert!(
+            adjustment.upper() > adjustment.page_size(),
+            "expanded optional fields must remain scrollable"
+        );
+        adjustment.set_value(adjustment.upper() - adjustment.page_size());
+        spin();
+        footer_visible();
+        assert!(
+            save.grab_focus(),
+            "Save must remain D-pad focusable after scroll"
+        );
+        assert!(
+            cancel.grab_focus(),
+            "Cancel must remain D-pad focusable after scroll"
+        );
+
+        advanced.set_expanded(false);
+        spin();
+        assert_eq!(dialog.property::<i32>("content-height"), 360);
+        footer_visible();
+        dialog.close();
+        win.destroy();
+    }
 
     #[test]
     fn source_default_codes_and_optional_region_validate() {
