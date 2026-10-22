@@ -333,10 +333,8 @@ impl StreamsService {
     /// refresh. Never run from list/query or a per-row UI path, and never run
     /// synchronously on the GTK main context. SQLite serializes writers.
     async fn purge_expired_missing_if_due(&self) {
-        self.purge_expired_missing_if_due_at(now(), |store, at| {
-            store.purge_expired_missing(at)
-        })
-        .await;
+        self.purge_expired_missing_if_due_at(now(), |store, at| store.purge_expired_missing(at))
+            .await;
     }
 
     // Injectable clock and blocking DB operation make failure/cadence tests
