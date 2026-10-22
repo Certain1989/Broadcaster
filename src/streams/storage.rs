@@ -543,8 +543,7 @@ fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult
         initialization_checkpoint(fail_at, InitCheckpoint::TempCreated)?;
         drop(created);
 
-        let connection =
-            Connection::open(&temp_path).map_err(|_| StorageError::StorageFailure)?;
+        let connection = Connection::open(&temp_path).map_err(|_| StorageError::StorageFailure)?;
         configure(&connection)?;
         connection.execute_batch(MIGRATION_001).map_err(|_| {
             let _ = connection.execute_batch("ROLLBACK");
@@ -562,7 +561,9 @@ fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult
             return Err(StorageError::IncompatibleDatabase);
         }
         // A live connection or SQLite sidecar must not be renamed/published.
-        connection.close().map_err(|_| StorageError::StorageFailure)?;
+        connection
+            .close()
+            .map_err(|_| StorageError::StorageFailure)?;
         for suffix in ["-journal", "-wal", "-shm"] {
             let mut name = temp_path.as_os_str().to_os_string();
             name.push(suffix);
@@ -1065,10 +1066,8 @@ mod staged_database_tests {
     struct PrivateDir(PathBuf);
     impl PrivateDir {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "broadcaster-db-stage-{}",
-                uuid::Uuid::new_v4()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("broadcaster-db-stage-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             #[cfg(unix)]
             {
@@ -1085,13 +1084,7 @@ mod staged_database_tests {
         fn entries(&self) -> Vec<String> {
             fs::read_dir(&self.0)
                 .unwrap()
-                .map(|entry| {
-                    entry
-                        .unwrap()
-                        .file_name()
-                        .to_string_lossy()
-                        .into_owned()
-                })
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
                 .collect()
         }
     }
@@ -1129,8 +1122,14 @@ mod staged_database_tests {
             let path = fixture.database();
             let error = initialize_new(&path, Some(checkpoint)).unwrap_err();
             assert_eq!(error, StorageError::StorageFailure);
-            assert!(!path.exists(), "failed stage unexpectedly published the database");
-            assert!(fixture.entries().is_empty(), "failed stage leaked staging files");
+            assert!(
+                !path.exists(),
+                "failed stage unexpectedly published the database"
+            );
+            assert!(
+                fixture.entries().is_empty(),
+                "failed stage leaked staging files"
+            );
             Storage::at(path).initialize().unwrap();
         }
     }
@@ -1164,8 +1163,10 @@ mod staged_database_tests {
 
         fs::remove_file(&path).unwrap();
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("CREATE TABLE user_original(v TEXT); INSERT INTO user_original VALUES('retain');")
-            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE user_original(v TEXT); INSERT INTO user_original VALUES('retain');",
+        )
+        .unwrap();
         drop(conn);
         let original = fs::read(&path).unwrap();
         assert!(matches!(
