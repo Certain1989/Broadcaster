@@ -1056,3 +1056,183 @@ fn effective_set(
         _ => (BTreeSet::new(), FieldOrigin::Unknown),
     }
 }
+
+#[cfg(test)]
+mod staged_database_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    struct PrivateDir(PathBuf);
+    impl PrivateDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "broadcaster-db-stage-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir(&path).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            Self(path)
+        }
+
+        fn database(&self) -> PathBuf {
+            self.0.join("catalogue.sqlite3")
+        }
+
+        fn entries(&self) -> Vec<String> {
+            fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        }
+    }
+    impl Drop for PrivateDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_initialization_is_durable_private_and_reopenable() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let storage = Storage::at(&path);
+        storage.initialize().unwrap();
+        let entries = fixture.entries();
+        assert_eq!(entries, vec!["catalogue.sqlite3"]);
+        let permissions = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(permissions, 0o600);
+        storage.initialize().unwrap();
+        assert!(storage.list_sources().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn injected_staging_failures_leave_no_final_database_or_own_temp() {
+        for checkpoint in [
+            InitCheckpoint::TempCreated,
+            InitCheckpoint::MigrationComplete,
+            InitCheckpoint::BeforePublish,
+        ] {
+            let fixture = PrivateDir::new();
+            let path = fixture.database();
+            let error = initialize_new(&path, Some(checkpoint)).unwrap_err();
+            assert_eq!(error, StorageError::StorageFailure);
+            assert!(!path.exists(), "failed stage unexpectedly published the database");
+            assert!(fixture.entries().is_empty(), "failed stage leaked staging files");
+            Storage::at(path).initialize().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_after_no_replace_publish_preserves_valid_database() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let error = initialize_new(&path, Some(InitCheckpoint::AfterPublish)).unwrap_err();
+        assert_eq!(error, StorageError::StorageFailure);
+        // After successful atomic publication no cleanup is allowed to remove
+        // the durable winner, even if a later durability phase reports error.
+        let bytes = fs::read(&path).unwrap();
+        assert!(!bytes.is_empty());
+        Storage::at(&path).initialize().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_and_legacy_existing_files_are_never_overwritten() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let original = b"not a SQLite database - preserve all original user data";
+        fs::write(&path, original).unwrap();
+        assert!(Storage::at(&path).initialize().is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(fixture.entries().len() == 1);
+
+        fs::remove_file(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE user_original(v TEXT); INSERT INTO user_original VALUES('retain');")
+            .unwrap();
+        drop(conn);
+        let original = fs::read(&path).unwrap();
+        assert!(matches!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::IncompatibleDatabase)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_final_creator_wins_without_byte_changes() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let content = b"concurrent external user data";
+        fs::write(&path, content).unwrap();
+        let failure = initialize_new(&path, None);
+        assert!(failure.is_err());
+        assert_eq!(fs::read(&path).unwrap(), content);
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simultaneous_initializers_cannot_replace_winning_database() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let barrier = barrier.clone();
+            let path = path.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                Storage::at(path).initialize()
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+        Storage::at(&path).initialize().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_stale_staging_file_is_not_deleted() {
+        let fixture = PrivateDir::new();
+        let stale = fixture.0.join(".catalogue.sqlite3-staging-previous-run");
+        let payload = b"old, unknown file. must not be touched.";
+        fs::write(&stale, payload).unwrap();
+        Storage::at(fixture.database()).initialize().unwrap();
+        assert_eq!(fs::read(&stale).unwrap(), payload);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_parent_permissions_refuse_database_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
+        let path = fixture.database();
+        assert_eq!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::PermissionDenied)
+        );
+        assert!(!path.exists());
+    }
+}
