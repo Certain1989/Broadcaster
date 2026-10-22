@@ -550,22 +550,22 @@ async fn purge_and_refresh_serialize_without_catalogue_loss() {
 
     // Hold an actual SQLite writer lock to force both the purge worker and
     // refresh transaction to contend, then release the lock together.
-    let cleanup_service = test.service.clone();
-    let cleanup = tokio::spawn(async move {
-        cleanup_service
-            .purge_expired_missing_if_due_at(now + 2 * 86400, |store, at| {
-                store.purge_expired_missing(at)
-            })
-            .await;
-    });
-    let refresh_service = test.service.clone();
-    let source_id = source.id.clone();
-    let refresh = tokio::spawn(async move { refresh_service.refresh(&source_id).await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    conn.execute_batch("COMMIT").unwrap();
-    cleanup.await.unwrap();
+    // A refresh future can hold non-Send GIO types even for URL-backed
+    // sources. Join these local futures rather than requiring tokio::spawn's
+    // Send bound; the SQLite operations still execute on blocking workers.
+    let cleanup = test
+        .service
+        .purge_expired_missing_if_due_at(now + 2 * 86400, |store, at| {
+            store.purge_expired_missing(at)
+        });
+    let refresh = test.service.refresh(&source.id);
+    let release_writer = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        conn.execute_batch("COMMIT").unwrap();
+    };
+    let ((), refresh_result, ()) = tokio::join!(cleanup, refresh, release_writer);
     assert!(matches!(
-        refresh.await.unwrap().unwrap(),
+        refresh_result.unwrap(),
         RefreshOutcome::Committed(_)
     ));
 
