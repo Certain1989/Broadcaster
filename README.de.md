@@ -21,13 +21,37 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 
 ## Screenshots
 
-<img width="760" alt="Mediathek-Suche mit Ergebnisliste und Filtern" src="https://github.com/user-attachments/assets/0aa04dc6-f0ec-4ebf-a146-9b3825bd3d59" />
+### Mediathek-Suche
 
-<img width="760" alt="Live-TV mit Sendungsinformationen und Fortschrittsbalken" src="https://github.com/user-attachments/assets/a03f6228-35df-466e-8292-4d958ba27155" />
+Sendungen über die Suche sowie Sender-, Dauer- und Sortierfilter finden.
 
-<img width="760" alt="Eigene Sender aus einer M3U-Wiedergabeliste mit Filtern" src="https://github.com/user-attachments/assets/b42b2e26-524c-49fd-824e-233e6f4014c5" />
+<img width="760" alt="Mediathek-Suchfeld mit Sender- und Dauerfiltern sowie leerem Suchzustand" src="docs/screenshots/v0.2.1/mediathek-search.png" />
 
-Weitere Bilder, etwa zum Hinzufügen von Playlists und zur Wiedergabesteuerung, zeigt das [Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0).
+### Bildschirmtastatur
+
+Suchbegriffe mit einer Fernbedienung eingeben, ohne eine physische Tastatur zu benötigen.
+
+<img width="760" alt="Mediathek-Suche mit geöffneter, per Fernbedienung steuerbarer Bildschirmtastatur" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+
+### Live-TV
+
+Laufende Sendungen mit Fortschrittsanzeige und aufklappbaren Beschreibungen durchsuchen.
+
+<img width="760" alt="Live-TV-Senderliste mit Sendungsfortschritt und ausgeklappter Programmbeschreibung" src="docs/screenshots/v0.2.1/live-tv.png" />
+
+### Eigene Sender
+
+Importierte IPTV-Sender anzeigen und nach Quelle, Gruppe, Sprache oder Land filtern.
+
+<img width="760" alt="Eigene Sender mit IPTV-Senderliste sowie Quellen-, Gruppen-, Sprach- und Länderfiltern" src="docs/screenshots/v0.2.1/my-channels.png" />
+
+### Videowiedergabe
+
+Die bestehende mpv-Wiedergabesteuerung bleibt in v0.2.1 unverändert.
+
+<img width="760" alt="Broadcaster-Videoplayer mit integrierter mpv-Wiedergabesteuerung" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
+
+Weitere ältere Screenshots, auch zum Hinzufügen von Playlists, zeigt das [Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0).
 
 Öffentlich verfügbare Wiedergabelisten für **Eigene Sender** bietet [IPTV-org nach Land, Sprache und Kategorie](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). Der Dialog „Wiedergabeliste hinzufügen“ verlinkt dasselbe externe Verzeichnis; Broadcaster abonniert nichts automatisch. Heruntergeladene Senderlogos werden lokal zwischengespeichert (bis zu 2.048 Bilder oder 256 MiB). Nach erfolgreicher Aktualisierung einer Wiedergabeliste oder dem Löschen einer Quelle werden nicht mehr verwendete Logos entfernt; der kleinere Arbeitsspeicher-Cache bleibt für eine flüssige Fernbedienung begrenzt.
 

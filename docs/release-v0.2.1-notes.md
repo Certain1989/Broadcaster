@@ -13,6 +13,28 @@ Broadcaster v0.2.1 refines TV-remote operation and improves the safety and relia
 - **Safer local data:** First-run IPTV SQLite initialization uses validated, non-overwriting database publication. Unedited channels missing from sources for 90 days can be cleaned up without deleting channels that have user overrides.
 - **Per-channel playback headers:** Imported User-Agent and Referer hints can be validated and passed to Broadcaster's **managed mpv** player for individual IPTV channels. They are not applied to Live TV, Mediathek, or playback in an external player.
 
+## Screenshots
+
+### Mediathek search
+
+<img width="960" alt="Mediathek search field with broadcaster and duration filters" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/main/docs/screenshots/v0.2.1/mediathek-search.png" />
+
+### Remote-controlled on-screen keyboard
+
+<img width="960" alt="Mediathek with the remote-controlled on-screen keyboard open" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/main/docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+
+### Live TV
+
+<img width="960" alt="Live TV programme list with progress indicators and expanded programme details" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/main/docs/screenshots/v0.2.1/live-tv.png" />
+
+### My Channels
+
+<img width="960" alt="My Channels IPTV browser with source, group, language and country filters" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/main/docs/screenshots/v0.2.1/my-channels.png" />
+
+### Player controls (unchanged)
+
+<img width="960" alt="Broadcaster integrated mpv video player controls" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
+
 ## Installation and compatibility
 
 Download the production Flatpak bundle for your architecture (`broadcaster-0.2.1-x86_64.flatpak` or `broadcaster-0.2.1-aarch64.flatpak`) and the accompanying `SHA256SUMS` from the published release assets. Verify the downloaded bundle against that checksum file before installation. Refer to the [installation instructions](../README.md) or the [German instructions](../README.de.md) for the commands.
