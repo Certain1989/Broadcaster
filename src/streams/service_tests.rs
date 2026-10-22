@@ -352,3 +352,82 @@ fn local_gio_reselect_preserves_cached_channels_until_atomic_replacement() {
         })
         .unwrap();
 }
+
+#[tokio::test]
+async fn production_startup_purge_keeps_overridden_and_young_missing_channels() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(4)).await;
+    let _source = test
+        .service
+        .add_url(
+            "Retention fixture",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let ids = conn
+        .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(ids.len(), 4);
+
+    for (index, since) in [
+        (0, now - 91 * 86400),
+        (1, now - 91 * 86400),
+        (2, now - 89 * 86400),
+    ] {
+        conn.execute(
+            "UPDATE iptv_channels SET is_present=0, missing_since=?1 WHERE id=?2",
+            rusqlite::params![since, ids[index]],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO iptv_channel_overrides (channel_id,display_name_override,updated_at)
+         VALUES (?1,'Kept user edit',?2)",
+        rusqlite::params![ids[1], now],
+    )
+    .unwrap();
+    drop(conn);
+
+    // This runs the real service initialization path, not a detached SQL call.
+    // Its cleanup must occur on the SQLite blocking worker and never touch
+    // overridden or recent missing entries.
+    let reopened = StreamsService::with_storage(Storage::at(&test.path))
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let remaining: Vec<String> = conn
+        .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(remaining.len(), 3);
+    assert!(!remaining.contains(&ids[0]), "expired unedited tombstone survived");
+    assert!(remaining.contains(&ids[1]), "user override was deleted");
+    assert!(remaining.contains(&ids[2]), "recent tombstone was deleted");
+    assert!(remaining.contains(&ids[3]), "present channel was deleted");
+    drop(conn);
+
+    assert_eq!(reopened.list_sources().await.unwrap().len(), 1);
+    let _again = StreamsService::with_storage(Storage::at(&test.path))
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM iptv_channels", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 3, "startup cleanup is not idempotent");
+}
