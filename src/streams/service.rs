@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     fmt,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
         Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -148,6 +148,7 @@ struct Inner {
     http: Client,
     generations: Mutex<HashMap<SourceId, Running>>,
     counter: AtomicU64,
+    last_purge_at: AtomicI64,
     events: broadcast::Sender<ServiceEvent>,
 }
 
@@ -174,15 +175,20 @@ impl StreamsService {
         })
         .await?;
         let (events, _) = broadcast::channel(128);
-        Ok(Self {
+        let service = Self {
             inner: Arc::new(Inner {
                 storage,
                 http: fetch::http_client()?,
                 generations: Mutex::new(HashMap::new()),
                 counter: AtomicU64::new(0),
+                last_purge_at: AtomicI64::new(0),
                 events,
             }),
-        })
+        };
+        // Single startup cleanup, off-main via the SQLite blocking worker.
+        // Failed cleanup must never prevent opening a valid existing catalogue.
+        service.purge_expired_missing_if_due().await;
+        Ok(service)
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
@@ -323,6 +329,42 @@ impl StreamsService {
 
     /// Run file-cache cleanup outside GTK and only for the real installed
     /// database. A failed reference query cannot lead to deleting user logos.
+    /// Once at service startup and at most daily after a successfully committed
+    /// refresh. Never run from list/query or a per-row UI path, and never run
+    /// synchronously on the GTK main context. SQLite serializes writers.
+    async fn purge_expired_missing_if_due(&self) {
+        const DAY: i64 = 24 * 60 * 60;
+        let at = now();
+        let last = self.inner.last_purge_at.load(Ordering::Acquire);
+        if at.saturating_sub(last) < DAY
+            || self
+                .inner
+                .last_purge_at
+                .compare_exchange(last, at, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+        let result = self
+            .db(move |store| {
+                store
+                    .purge_expired_missing(at)
+                    .map_err(ServiceError::Storage)
+            })
+            .await;
+        if result.is_err() {
+            // Retry is allowed on the next successful refresh. The SQL
+            // cleanup failure cannot retroactively fail a committed import.
+            let _ = self.inner.last_purge_at.compare_exchange(
+                at,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            tracing::warn!("IPTV retention cleanup failed");
+        }
+    }
+
     async fn prune_unused_logos(&self) {
         if !self.inner.storage.uses_default_database() {
             return;
@@ -643,6 +685,7 @@ impl StreamsService {
             // Source snapshots are authoritative only after commit. Never
             // remove cached images on cancelled/declined/failed previews.
             self.prune_unused_logos().await;
+            self.purge_expired_missing_if_due().await;
         }
         self.finish(
             &id,
