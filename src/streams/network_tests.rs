@@ -17,8 +17,8 @@ use reqwest::{redirect::Policy, Client, Proxy, Url};
 
 use super::fetch::{
     authorize_hop, classify_addresses, fetch_redirects_with_resolver,
-    fetch_redirects_with_transport, AddressClass, FetchError, PinnedResolver, PlaylistResolver,
-    PlaylistTransport,
+    fetch_redirects_with_transport, fetch_remote, http_client, AddressClass, Cancellation,
+    FetchError, PinnedResolver, PlaylistResolver, PlaylistTransport,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -295,20 +295,26 @@ async fn unexpected_hostname_cannot_fall_back_to_system_dns() {
     );
 }
 
-/// The synthetic public responder is deliberately substituted *only* for
-/// the first global-classified hop. This permits deterministic 302 responses
-/// without a real Internet server; every later hop uses the production
-/// guarded reqwest client. If the guard mistakenly permits a private GET,
-/// the forbidden loopback listener below will receive it.
+/// Substitute only explicitly identified globally classified hops with
+/// synthetic HTTP 302 responses. This is not a real global socket dial.
+/// All other requests pass the production guard first, then would enter the
+/// transport below. Count these attempted sends independently of destination
+/// address family; a loopback listener alone cannot observe IPv6/RFC1918 GETs.
 struct SyntheticPublicRedirect {
     reply_port: u16,
     synthetic_gets: Arc<AtomicUsize>,
+    forbidden_send_attempts: Arc<AtomicUsize>,
 }
 
 impl PlaylistTransport for SyntheticPublicRedirect {
     async fn send(&self, client: &Client, url: &Url) -> Result<reqwest::Response, reqwest::Error> {
-        if url.host_str() == Some("public-fixture.invalid") && url.path() == "/start" {
+        let public_first =
+            url.host_str() == Some("public-fixture.invalid") && url.path() == "/start";
+        let public_second =
+            url.host_str() == Some("second-public-fixture.invalid") && url.path() == "/next";
+        if public_first || public_second {
             self.synthetic_gets.fetch_add(1, Ordering::SeqCst);
+            let path = if public_first { "/start" } else { "/next" };
             Client::builder()
                 .no_proxy()
                 // This fixture must return the 302 to the production redirect
@@ -316,10 +322,13 @@ impl PlaylistTransport for SyntheticPublicRedirect {
                 .redirect(Policy::none())
                 .build()
                 .unwrap()
-                .get(format!("http://127.0.0.1:{}/start", self.reply_port))
+                .get(format!("http://127.0.0.1:{}{path}", self.reply_port))
                 .send()
                 .await
         } else {
+            // The tests below require *no* private destination to reach
+            // transport.send, regardless of whether a listener could observe it.
+            self.forbidden_send_attempts.fetch_add(1, Ordering::SeqCst);
             client.get(url.clone()).send().await
         }
     }
@@ -384,9 +393,11 @@ async fn public_origin_redirects_never_issue_forbidden_private_gets() {
             ]),
         };
         let synthetic_gets = Arc::new(AtomicUsize::new(0));
+        let forbidden_send_attempts = Arc::new(AtomicUsize::new(0));
         let transport = SyntheticPublicRedirect {
             reply_port: reply_addr.port(),
             synthetic_gets: synthetic_gets.clone(),
+            forbidden_send_attempts: forbidden_send_attempts.clone(),
         };
         let mut url = Url::parse(&format!(
             "http://public-fixture.invalid:{}/start",
@@ -411,12 +422,21 @@ async fn public_origin_redirects_never_issue_forbidden_private_gets() {
             1,
             "the synthetic public origin was not requested"
         );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
-                .await
-                .is_err(),
-            "{target_kind} allowed a forbidden GET to the local socket"
+        assert_eq!(
+            forbidden_send_attempts.load(Ordering::SeqCst),
+            0,
+            "{target_kind} reached network transport despite global-origin policy"
         );
+        // This supplemental listener check observes loopback only, not other
+        // address families. The transport counter above covers all cases.
+        if matches!(target_kind, "literal" | "hostname" | "mixed" | "mapped") {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
+                    .await
+                    .is_err(),
+                "{target_kind} opened the forbidden loopback socket"
+            );
+        }
     }
 }
 
@@ -461,9 +481,11 @@ async fn public_origin_dns_rebinding_before_second_dial_never_reaches_loopback()
         private_address: forbidden_address,
     };
     let synthetic_gets = Arc::new(AtomicUsize::new(0));
+    let forbidden_send_attempts = Arc::new(AtomicUsize::new(0));
     let transport = SyntheticPublicRedirect {
         reply_port,
         synthetic_gets: synthetic_gets.clone(),
+        forbidden_send_attempts: forbidden_send_attempts.clone(),
     };
     let mut url = Url::parse(&format!("http://public-fixture.invalid:{reply_port}/start")).unwrap();
     let result = tokio::time::timeout(
@@ -477,10 +499,157 @@ async fn public_origin_dns_rebinding_before_second_dial_never_reaches_loopback()
     assert!(matches!(result, Err(FetchError::Redirect)));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
     assert_eq!(synthetic_gets.load(Ordering::SeqCst), 1);
+    assert_eq!(forbidden_send_attempts.load(Ordering::SeqCst), 0);
     assert!(
         tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
             .await
             .is_err(),
         "DNS rebinding allowed a forbidden local GET"
     );
+}
+
+#[tokio::test]
+async fn global_to_global_to_private_redirect_is_blocked_before_third_send() {
+    // Both apparent global hops are simulated, not actual Internet traffic.
+    // Each passes the production per-hop classification, while the final
+    // private destination must fail *before* transport.send for every family.
+    for private_kind in ["literal", "dns"] {
+        let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let forbidden_addr = forbidden.local_addr().unwrap();
+        let replies = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reply_port = replies.local_addr().unwrap().port();
+        let location = match private_kind {
+            "literal" => format!("http://127.0.0.1:{}/secret", forbidden_addr.port()),
+            "dns" => format!(
+                "http://private-fixture.invalid:{}/secret",
+                forbidden_addr.port()
+            ),
+            _ => unreachable!(),
+        };
+        let server = tokio::spawn(async move {
+            for (path, redirect) in [
+                (
+                    "/start",
+                    format!("http://second-public-fixture.invalid:{reply_port}/next"),
+                ),
+                ("/next", location),
+            ] {
+                let (mut stream, _) = replies.accept().await.unwrap();
+                let mut buf = [0; 1024];
+                let n = stream.read(&mut buf).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&buf[..n])
+                        .starts_with(&format!("GET {path} ")),
+                    "unexpected synthetic hop request"
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 302 Found\r\nLocation: {redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let resolver = FixtureResolver {
+            answers: HashMap::from([
+                (
+                    "public-fixture.invalid".to_owned(),
+                    vec![endpoint("8.8.8.8", reply_port)],
+                ),
+                (
+                    "second-public-fixture.invalid".to_owned(),
+                    vec![endpoint("1.1.1.1", reply_port)],
+                ),
+                ("private-fixture.invalid".to_owned(), vec![forbidden_addr]),
+            ]),
+        };
+        let synthetic_gets = Arc::new(AtomicUsize::new(0));
+        let forbidden_send_attempts = Arc::new(AtomicUsize::new(0));
+        let transport = SyntheticPublicRedirect {
+            reply_port,
+            synthetic_gets: synthetic_gets.clone(),
+            forbidden_send_attempts: forbidden_send_attempts.clone(),
+        };
+        let mut url =
+            Url::parse(&format!("http://public-fixture.invalid:{reply_port}/start")).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_redirects_with_transport(&mut url, &resolver, &transport),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        assert!(
+            matches!(result, Err(FetchError::Redirect)),
+            "{private_kind} redirect did not fail"
+        );
+        assert_eq!(
+            synthetic_gets.load(Ordering::SeqCst),
+            2,
+            "both global hops must be exercised"
+        );
+        assert_eq!(
+            forbidden_send_attempts.load(Ordering::SeqCst),
+            0,
+            "third, private hop reached transport.send"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
+                .await
+                .is_err(),
+            "private redirect reached the loopback listener"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancellation_during_active_redirect_chain_aborts_fetch() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (second_seen_tx, second_seen_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 1024];
+        let n = first.read(&mut request).await.unwrap();
+        assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET /first "));
+        first
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: /slow\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        drop(first);
+
+        let (mut second, _) = listener.accept().await.unwrap();
+        let n = second.read(&mut request).await.unwrap();
+        assert!(String::from_utf8_lossy(&request[..n]).starts_with("GET /slow "));
+        let _ = second_seen_tx.send(());
+        // Keep the second HTTP hop unresolved until cancellation.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+    });
+    let token = Cancellation::new();
+    let fetch_token = token.clone();
+    let fetcher = tokio::spawn(async move {
+        fetch_remote(
+            &http_client().unwrap(),
+            &format!("http://127.0.0.1:{port}/first"),
+            &fetch_token,
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), second_seen_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    token.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(2), fetcher)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, Err(FetchError::Cancelled)));
+    server.abort();
+    let _ = server.await;
 }
