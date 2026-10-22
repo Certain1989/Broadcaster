@@ -86,7 +86,6 @@ pub(crate) fn http_client() -> Result<Client, FetchError> {
         .map_err(|_| FetchError::Network)
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AddressClass {
     Global,
@@ -190,6 +189,39 @@ impl PlaylistResolver for SystemResolver {
     }
 }
 
+/// A strict fallback prevents DNS overrides from silently falling through
+/// to a fresh system lookup if a hostname spelling ever fails to match.
+pub(super) struct PinnedResolver {
+    hostname: String,
+    addresses: Vec<SocketAddr>,
+}
+
+impl PinnedResolver {
+    pub(super) fn new(hostname: String, addresses: Vec<SocketAddr>) -> Self {
+        Self {
+            hostname,
+            addresses,
+        }
+    }
+}
+
+impl reqwest::dns::Resolve for PinnedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let permitted = name.as_str().eq_ignore_ascii_case(&self.hostname);
+        let addresses = self.addresses.clone();
+        Box::pin(async move {
+            if !permitted {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "unvalidated DNS request",
+                )
+                .into());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 /// A validated address set becomes the **only** dial-eligible address set.
 /// Fresh per-hop clients also prevent connection-pool reuse across trust scopes.
 async fn guarded_client<R: PlaylistResolver>(
@@ -198,7 +230,9 @@ async fn guarded_client<R: PlaylistResolver>(
     resolver: &R,
 ) -> Result<(Client, AddressClass), FetchError> {
     let hostname = url.host_str().ok_or(FetchError::InvalidOrigin)?;
-    let port = url.port_or_known_default().ok_or(FetchError::InvalidOrigin)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or(FetchError::InvalidOrigin)?;
     let numeric = hostname
         .trim_start_matches('[')
         .trim_end_matches(']')
@@ -222,7 +256,12 @@ async fn guarded_client<R: PlaylistResolver>(
         .connect_timeout(Duration::from_secs(5))
         .redirect(Policy::none());
     if numeric.is_none() {
-        builder = builder.resolve_to_addrs(hostname, &addresses);
+        builder = builder
+            .dns_resolver(std::sync::Arc::new(PinnedResolver::new(
+                hostname.to_owned(),
+                addresses.clone(),
+            )))
+            .resolve_to_addrs(hostname, &addresses);
     }
     let client = builder.build().map_err(|_| FetchError::Network)?;
     Ok((client, class))
