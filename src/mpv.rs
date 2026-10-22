@@ -17,7 +17,12 @@ use futures_util::{
 use gettextrs::gettext;
 
 use crate::config::PKGDATADIR;
-use crate::{application::TvApplication, settings::TvSettings, utils::spawn, window::TvWindow};
+use crate::{
+    application::{StreamHeaders, TvApplication},
+    settings::TvSettings,
+    utils::spawn,
+    window::TvWindow,
+};
 
 pub const MPV: &str = "mpv";
 
@@ -28,6 +33,9 @@ pub enum StartError {
     MissingPlayer,
     MissingRemoteResources,
     InvalidMediaUrl,
+    ConflictingArguments,
+    ConflictingHttpHeaders,
+    Superseded,
     LaunchFailed,
 }
 
@@ -41,6 +49,11 @@ impl StartError {
                 gettext("Broadcaster's packaged mpv remote-control resources are missing.")
             }
             Self::InvalidMediaUrl => gettext("The video or subtitle URL is invalid."),
+            Self::ConflictingArguments => gettext("Remove the mpv argument separator from custom player options to use stream headers."),
+            Self::ConflictingHttpHeaders => gettext(
+                "Imported stream headers conflict with custom mpv HTTP header options. Remove --http-header-fields or --stream-lavf-o from your global player options to play this channel.",
+            ),
+            Self::Superseded => gettext("Playback was replaced by a newer request."),
             Self::LaunchFailed => gettext("Failed to start mpv. Check the player installation."),
         }
     }
@@ -52,6 +65,116 @@ impl StartError {
 fn valid_media_inputs(uri: &str, subtitles: Option<&str>) -> bool {
     let valid = |value: &str| !value.trim().is_empty() && !value.chars().any(char::is_control);
     valid(uri) && subtitles.is_none_or(valid)
+}
+
+/// Mpv 0.41 has dedicated --user-agent and --referrer network options.
+/// Imported metadata cannot select generic flags or http-header-fields.
+fn safe_header_value(value: &str, limit: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= limit
+        && value.trim() == value
+        && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+/// Recheck persisted metadata at the subprocess boundary; URL parsers may
+/// normalize control characters, so run byte validation before URL parsing.
+fn safe_referer(value: &str) -> bool {
+    if !safe_header_value(value, 8192) {
+        return false;
+    }
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && url.as_str() == value
+    })
+}
+
+/// One controlled argv element per validated channel-only option.
+/// A bad imported hint is ignored with a value-free warning.
+fn stream_header_options(headers: Option<&StreamHeaders>) -> Vec<String> {
+    let Some(headers) = headers else {
+        return Vec::new();
+    };
+    let mut options = Vec::with_capacity(2);
+    if let Some(value) = headers.user_agent.as_deref() {
+        if safe_header_value(value, 1024) {
+            options.push(format!("--user-agent={value}"));
+        } else {
+            tracing::warn!("Ignoring unsafe imported User-Agent hint");
+        }
+    }
+    if let Some(value) = headers.referer.as_deref() {
+        if safe_referer(value) {
+            options.push(format!("--referrer={value}"));
+        } else {
+            tracing::warn!("Ignoring unsafe imported Referer hint");
+        }
+    }
+    options
+}
+
+/// A user's global argument separator would turn later generated options
+/// into positional inputs. Refuse only the conflicting combination.
+fn global_separator_conflicts(user_arguments: &[String], header_options: &[String]) -> bool {
+    !header_options.is_empty() && user_arguments.iter().any(|arg| arg.trim() == "--")
+}
+
+/// mpv 0.41 combines --referrer with --http-header-fields instead of
+/// resolving duplicate header names. It also applies --stream-lavf-o after
+/// the dedicated --user-agent / --referrer values, allowing FFmpeg's
+/// headers / user_agent dictionary keys to override imported hints.
+/// Conservatively refuse either *entire* option family when a validated
+/// imported hint is active: parsing list modifiers and escaping here could
+/// miss effective overrides. This may also reject benign stream-lavf-o keys.
+/// Never mutate saved preferences or expose their values in diagnostics.
+fn global_http_header_conflicts(user_arguments: &[String], header_options: &[String]) -> bool {
+    !header_options.is_empty()
+        && user_arguments.iter().any(|arg| {
+            let option = arg
+                .trim()
+                .split_once('=')
+                .map_or(arg.trim(), |(name, _)| name);
+            option == "--http-header-fields"
+                || option.starts_with("--http-header-fields-")
+                || option == "--stream-lavf-o"
+                || option.starts_with("--stream-lavf-o-")
+                || option.starts_with("--stream-lavf-o:")
+        })
+}
+
+/// Build a fresh argv per process, with safe per-stream flags after the
+/// user's existing global settings but before the -- media separator.
+fn player_argv(
+    user_arguments: &[String],
+    input_argument: &str,
+    script_argument: &str,
+    subtitles_argument: Option<&str>,
+    title_argument: &str,
+    header_options: &[String],
+    uri: &str,
+) -> Vec<String> {
+    let mut args = vec![MPV.to_owned()];
+    args.extend(
+        user_arguments
+            .iter()
+            .map(|argument| argument.trim())
+            .filter(|argument| !argument.is_empty())
+            .map(str::to_owned),
+    );
+    args.extend([
+        OSC_MOUSE_THRESHOLD.to_owned(),
+        input_argument.to_owned(),
+        script_argument.to_owned(),
+    ]);
+    args.extend(subtitles_argument.map(str::to_owned));
+    args.extend(header_options.iter().cloned());
+    args.push(title_argument.to_owned());
+    args.push("--".to_owned());
+    args.push(uri.to_owned());
+    args
 }
 
 /// SIGTERM, lets mpv shut down gracefully.
@@ -84,19 +207,29 @@ pub async fn play(
     title: &str,
     uri: &str,
     subtitles: Option<&str>,
+    stream_headers: Option<&StreamHeaders>,
+    request_serial: u64,
     on_exit: impl FnOnce() + 'static,
 ) -> Result<(), StartError> {
-    // Keep stop/start atomic across asynchronous playback requests.
+    // Keep stop/start atomic; reject stale requests before and after awaiting
+    // termination so a delayed older caller cannot supersede a newer one.
     let lock = PLAY_LOCK.with(Clone::clone);
     let _guard = lock.lock().await;
+    if !TvApplication::get().playback_request_is_current(request_serial) {
+        return Err(StartError::Superseded);
+    }
     stop().await;
-    start(title, uri, subtitles, on_exit)
+    if !TvApplication::get().playback_request_is_current(request_serial) {
+        return Err(StartError::Superseded);
+    }
+    start(title, uri, subtitles, stream_headers, on_exit)
 }
 
 fn start(
     title: &str,
     uri: &str,
     subtitles: Option<&str>,
+    stream_headers: Option<&StreamHeaders>,
     on_exit: impl FnOnce() + 'static,
 ) -> Result<(), StartError> {
     if !valid_media_inputs(uri, subtitles) {
@@ -108,6 +241,15 @@ fn start(
 
     let settings = TvSettings::get();
     let arguments = settings.mpv_arguments();
+    let header_options = stream_header_options(stream_headers);
+    // A global -- would make generated flags positional filenames. Refuse
+    // that combination without changing the user's saved mpv settings.
+    if global_separator_conflicts(&arguments, &header_options) {
+        return Err(StartError::ConflictingArguments);
+    }
+    if global_http_header_conflicts(&arguments, &header_options) {
+        return Err(StartError::ConflictingHttpHeaders);
+    }
     let title_argument = format!("--force-media-title={title}");
     let subtitles_argument = subtitles.map(|url| format!("--sub-file={url}"));
 
@@ -125,27 +267,18 @@ fn start(
     let input_argument = format!("--input-conf={}", input_conf.display());
     let script_argument = format!("--script={}", script.display());
 
-    let argv: Vec<&OsStr> = [MPV]
-        .into_iter()
-        .chain(
-            arguments
-                .iter()
-                .map(|argument| argument.trim())
-                .filter(|argument| !argument.is_empty()),
-        )
-        // Keep the stock mouse OSC enabled, but avoid opening it on the
-        // synthetic initial mouse event when the player window is created.
-        // --script-opt adds one option (unlike --script-opts, which replaces
-        // the whole list) and does not suppress user's other script options.
-        .chain([
-            OSC_MOUSE_THRESHOLD,
-            input_argument.as_str(),
-            script_argument.as_str(),
-        ])
-        .chain(subtitles_argument.iter().map(String::as_str))
-        .chain([title_argument.as_str(), "--", uri])
-        .map(OsStr::new)
-        .collect();
+    // Preserve the native remote and OSC flags, GLib subprocess lifetime,
+    // global user options and the media separator.
+    let command = player_argv(
+        &arguments,
+        &input_argument,
+        &script_argument,
+        subtitles_argument.as_deref(),
+        &title_argument,
+        &header_options,
+        uri,
+    );
+    let argv: Vec<&OsStr> = command.iter().map(OsStr::new).collect();
 
     // User-provided mpv flags, titles, media and subtitle URLs can contain
     // credentials or identifying parameters. Never print argv values.
@@ -291,6 +424,213 @@ mod redaction_tests {
     use super::*;
 
     #[test]
+    fn hint_validation_rejects_controls_and_bad_referers() {
+        for invalid in [
+            "",
+            " leading",
+            "trailing ",
+            "bad\rvalue",
+            "bad\nvalue",
+            "bad\0value",
+            "bad\tvalue",
+            "☃",
+        ] {
+            assert!(!safe_header_value(invalid, 1024));
+        }
+        assert!(!safe_header_value(&"A".repeat(1025), 1024));
+        for invalid in [
+            "",
+            "ftp://example.invalid/",
+            "http://",
+            "https://user:fake@example.invalid/",
+            "https://example.invalid/#fragment",
+            "https://example.invalid/\r\nInjected: true",
+        ] {
+            assert!(!safe_referer(invalid));
+        }
+        assert!(safe_header_value("Test Agent/1.0", 1024));
+        assert!(safe_referer("https://example.invalid/watch?x=1"));
+    }
+
+    #[test]
+    fn header_flags_are_single_args_and_follow_global_preferences() {
+        let a = StreamHeaders {
+            user_agent: Some("--script=not-an-option".into()),
+            referer: Some("https://example.invalid/page".into()),
+        };
+        let options = stream_header_options(Some(&a));
+        assert_eq!(
+            options,
+            [
+                "--user-agent=--script=not-an-option",
+                "--referrer=https://example.invalid/page",
+            ]
+        );
+        assert!(global_separator_conflicts(&["--".to_owned()], &options));
+        assert!(!global_separator_conflicts(
+            &["--vo=gpu".to_owned()],
+            &options
+        ));
+        assert!(!global_separator_conflicts(&["--".to_owned()], &[]));
+        assert!(global_http_header_conflicts(
+            &["--http-header-fields=Referer: injected".into()],
+            &options
+        ));
+        assert!(global_http_header_conflicts(
+            &["--http-header-fields".into(), "User-Agent: global".into()],
+            &options
+        ));
+        assert!(global_http_header_conflicts(
+            &["--http-header-fields-append=X-Custom: benign".into()],
+            &options
+        ));
+        assert!(!global_http_header_conflicts(
+            &["--http-header-fields=Referer: previous".into()],
+            &[]
+        ));
+        assert!(!global_http_header_conflicts(
+            &["--referrer=https://global.invalid/".into()],
+            &options
+        ));
+        let global = vec!["--user-agent=global".into(), "  ".into()];
+        let argv = player_argv(
+            &global,
+            "--input-conf=/tmp/remote.conf",
+            "--script=/tmp/remote.lua",
+            None,
+            "--force-media-title=Example",
+            &options,
+            "https://example.invalid/video?token=fake",
+        );
+        assert!(
+            argv.iter()
+                .position(|x| x == "--user-agent=global")
+                .unwrap()
+                < argv
+                    .iter()
+                    .position(|x| x == "--user-agent=--script=not-an-option")
+                    .unwrap()
+        );
+        assert_eq!(argv[argv.len() - 2], "--");
+        assert_eq!(
+            argv[argv.len() - 1],
+            "https://example.invalid/video?token=fake"
+        );
+        assert!(argv.contains(&"--input-conf=/tmp/remote.conf".to_owned()));
+        assert!(argv.contains(&"--script=/tmp/remote.lua".to_owned()));
+        assert_eq!(
+            argv.iter().filter(|x| x.starts_with("--referrer=")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn stream_lavf_o_family_is_blocked_only_with_valid_imported_hints() {
+        // In mpv 0.41 stream-lavf-o is applied to FFmpeg's dictionary last;
+        // even an apparently unrelated entry is refused conservatively.
+        let user_agent = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("FixtureAgent/1".into()),
+            referer: None,
+        }));
+        let referer = stream_header_options(Some(&StreamHeaders {
+            user_agent: None,
+            referer: Some("https://fixture.invalid/watch".into()),
+        }));
+        let both = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("FixtureAgent/1".into()),
+            referer: Some("https://fixture.invalid/watch".into()),
+        }));
+        assert_eq!(user_agent.len(), 1);
+        assert_eq!(referer.len(), 1);
+        assert_eq!(both.len(), 2);
+
+        for global_option in [
+            "--stream-lavf-o=user_agent=GlobalAgent/1",
+            "--stream-lavf-o=headers=Referer: global",
+            "--stream-lavf-o",
+            "--stream-lavf-o-add=user_agent=GlobalAgent/1",
+            "--stream-lavf-o-append=headers=Referer: global",
+            "--stream-lavf-o-set=user_agent=GlobalAgent/1",
+            "--stream-lavf-o-clr",
+            "--stream-lavf-o-del=user_agent",
+            "--stream-lavf-o:ambiguous=1",
+            "--stream-lavf-o=reconnect=1",
+            "--stream-lavf-o=headers=escaped\\,user_agent=GlobalAgent/1",
+        ] {
+            let global = vec![global_option.to_owned()];
+            for imported in [&user_agent, &referer, &both] {
+                assert!(
+                    global_http_header_conflicts(&global, imported),
+                    "must reject stream-lavf-o family: {global_option}"
+                );
+            }
+            // Do not change or reject global configuration on unrelated streams.
+            let saved = global.clone();
+            assert!(!global_http_header_conflicts(&global, &[]));
+            assert_eq!(global, saved);
+        }
+        let separated_value = vec![
+            "--stream-lavf-o".to_owned(),
+            "headers=Referer: global,user_agent=GlobalAgent/1".to_owned(),
+        ];
+        assert!(global_http_header_conflicts(&separated_value, &both));
+
+        // A rejected metadata hint produces no managed header option, and
+        // therefore cannot unexpectedly disable existing global arguments.
+        let invalid = stream_header_options(Some(&StreamHeaders {
+            user_agent: Some("bad\r\nAgent".into()),
+            referer: Some("file:///unsupported".into()),
+        }));
+        assert!(invalid.is_empty());
+        assert!(!global_http_header_conflicts(&separated_value, &invalid));
+        assert!(!global_http_header_conflicts(&separated_value, &[]));
+
+        for unrelated in [
+            "--stream-lavf-probesize=1024",
+            "--user-agent=global",
+            "--referrer=https://global.invalid/",
+            "--vo=gpu",
+        ] {
+            assert!(!global_http_header_conflicts(
+                &[unrelated.to_owned()],
+                &both
+            ));
+        }
+        assert!(global_http_header_conflicts(
+            &["--http-header-fields-append=Referer: global".into()],
+            &both
+        ));
+        assert!(global_separator_conflicts(&["--".into()], &both));
+        assert!(StartError::ConflictingHttpHeaders
+            .message()
+            .contains("--stream-lavf-o"));
+    }
+
+    #[test]
+    fn channel_a_b_live_mediathek_a_has_no_stale_header_flags() {
+        let a = StreamHeaders {
+            user_agent: Some("Channel-A/1".into()),
+            referer: Some("https://example.invalid/a".into()),
+        };
+        let b = StreamHeaders::default();
+        let a1 = stream_header_options(Some(&a));
+        let b1 = stream_header_options(Some(&b));
+        let live = stream_header_options(None);
+        let mediathek = stream_header_options(None);
+        let a2 = stream_header_options(Some(&a));
+        assert_eq!(a1, a2);
+        assert_eq!(a1.len(), 2);
+        assert!(b1.is_empty());
+        assert!(live.is_empty());
+        assert!(mediathek.is_empty());
+        let unsafe_hint = StreamHeaders {
+            user_agent: Some("x\n--profile=bad".into()),
+            referer: Some("file:///etc/passwd".into()),
+        };
+        assert!(stream_header_options(Some(&unsafe_hint)).is_empty());
+    }
+
+    #[test]
     fn private_osc_startup_option_preserves_mouse_controller() {
         assert_eq!(OSC_MOUSE_THRESHOLD, "--script-opt=osc-minmousemove=18");
         assert!(!OSC_MOUSE_THRESHOLD.contains("osc=no"));
@@ -334,6 +674,9 @@ mod redaction_tests {
             StartError::MissingPlayer,
             StartError::MissingRemoteResources,
             StartError::InvalidMediaUrl,
+            StartError::ConflictingArguments,
+            StartError::ConflictingHttpHeaders,
+            StartError::Superseded,
             StartError::LaunchFailed,
         ] {
             assert!(!error.message().contains("fake-secret"));
@@ -366,6 +709,75 @@ mod redaction_tests {
                 assert_eq!(process.exit_status(), expected_status);
             }
         });
+    }
+
+    /// Exercise actual argv through an executable boundary, not only a Vec.
+    /// All fixture values are fabricated; no user-supplied media/credentials.
+    #[cfg(unix)]
+    #[test]
+    fn fake_mpv_executable_captures_isolated_header_argv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "broadcaster-p1-fake-mpv-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let executable = directory.join("fake-mpv");
+        let output = directory.join("argv.txt");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nout=$1\nshift\nprintf '%s\\n' \"$@\" > \"$out\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let headers = StreamHeaders {
+            user_agent: Some("FixtureAgent/1".into()),
+            referer: Some("https://fixture.invalid/page".into()),
+        };
+        let options = stream_header_options(Some(&headers));
+        assert!(!global_http_header_conflicts(&[], &options));
+        let mut command = player_argv(
+            &[],
+            "--input-conf=/tmp/fake-control",
+            "--script=/tmp/fake-remote",
+            None,
+            "--force-media-title=Fixture",
+            &options,
+            "https://fixture.invalid/playlist.m3u8",
+        );
+        command[0] = executable.to_string_lossy().into_owned();
+        // The script's private first argument is its output filename; every
+        // subsequent argument must be exactly the process argv generated.
+        command.insert(1, output.to_string_lossy().into_owned());
+        let argv: Vec<&OsStr> = command.iter().map(OsStr::new).collect();
+        let process = gio::Subprocess::newv(&argv, gio::SubprocessFlags::NONE).unwrap();
+        process.wait(None::<&gio::Cancellable>).unwrap();
+        assert_eq!(process.exit_status(), 0);
+        let captured = std::fs::read_to_string(&output).unwrap();
+        let expected: Vec<&str> = command[2..].iter().map(String::as_str).collect();
+        assert_eq!(captured.lines().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|arg| arg.starts_with("--user-agent="))
+                .count(),
+            1
+        );
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|arg| arg.starts_with("--referrer="))
+                .count(),
+            1
+        );
+        assert_eq!(expected[expected.len() - 2], "--");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
