@@ -20,6 +20,8 @@ pub(crate) mod storage;
 pub(crate) mod view;
 
 #[cfg(test)]
+mod network_tests;
+#[cfg(test)]
 mod parser_tests;
 #[cfg(test)]
 mod service_tests;
