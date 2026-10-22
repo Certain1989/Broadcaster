@@ -514,12 +514,7 @@ fn sync_parent_directory(parent: &Path) -> std::io::Result<()> {
 }
 
 fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult<()> {
-    initialize_new_with(
-        path,
-        fail_at,
-        MIGRATION_001,
-        &sync_parent_directory,
-    )
+    initialize_new_with(path, fail_at, MIGRATION_001, &sync_parent_directory)
 }
 
 // Keep the injection at the actual migration and directory-fsync calls.
@@ -1163,7 +1158,10 @@ mod staged_database_tests {
         let error = initialize_new_with(&path, None, FAILING_SQL, &sync_parent_directory);
         assert_eq!(error, Err(StorageError::StorageFailure));
         assert!(!path.exists(), "failed migration published a partial DB");
-        assert!(fixture.entries().is_empty(), "failed migration left a sidecar");
+        assert!(
+            fixture.entries().is_empty(),
+            "failed migration left a sidecar"
+        );
         // A valid subsequent attempt must succeed with unchanged v1 SQL.
         Storage::at(&path).initialize().unwrap();
         assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
