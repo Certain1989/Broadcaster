@@ -21,13 +21,37 @@ Broadcaster is a lightweight, native Linux application for German public-service
 
 ## Screenshots
 
-<img width="760" alt="Mediathek search results and filters" src="https://github.com/user-attachments/assets/0aa04dc6-f0ec-4ebf-a146-9b3825bd3d59" />
+### Mediathek search
 
-<img width="760" alt="Live TV channel list with programme progress" src="https://github.com/user-attachments/assets/a03f6228-35df-466e-8292-4d958ba27155" />
+Search the Mediathek with broadcaster, duration and sorting filters.
 
-<img width="760" alt="My Channels imported M3U playlist and channel filters" src="https://github.com/user-attachments/assets/b42b2e26-524c-49fd-824e-233e6f4014c5" />
+<img width="760" alt="Mediathek search field, broadcaster and duration filters, and initial search screen" src="docs/screenshots/v0.2.1/mediathek-search.png" />
 
-See the [v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) for more screenshots, including playlist setup and playback controls.
+### On-screen keyboard
+
+Enter search text using a TV remote without needing a physical keyboard.
+
+<img width="760" alt="Mediathek search with the remote-controlled on-screen keyboard open" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+
+### Live TV
+
+Browse the programme list, check progress, and expand programme details.
+
+<img width="760" alt="Live TV channel list showing programme progress and expanded programme details" src="docs/screenshots/v0.2.1/live-tv.png" />
+
+### My Channels
+
+Browse imported IPTV channels and filter by source, group, language or country.
+
+<img width="760" alt="My Channels IPTV list with source, group, language and country filters" src="docs/screenshots/v0.2.1/my-channels.png" />
+
+### Video playback
+
+The existing mpv playback interface is unchanged in v0.2.1.
+
+<img width="760" alt="Broadcaster integrated mpv video player controls" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
+
+See the [v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) for historical screenshots, including playlist setup.
 
 To find playlists for **My Channels**, browse [IPTV-org's country, language and category playlists](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). The Add Playlist dialog links to the same third-party directory; nothing is subscribed automatically. Imported logos are cached on disk (up to 2,048 images or 256 MiB) and unreferenced images are removed after successful playlist refreshes or source deletion; memory textures remain deliberately small to keep remote input responsive.
 
