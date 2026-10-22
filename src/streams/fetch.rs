@@ -311,13 +311,37 @@ pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(
     url: &mut Url,
     resolver: &R,
 ) -> Result<Download, FetchError> {
+    fetch_redirects_with_transport(url, resolver, &ReqwestTransport).await
+}
+
+/// Production always sends through the guarded, per-hop reqwest client.
+/// The test-only transport supplies a synthetic initial public HTTP response
+/// without dialing a real public address, then uses the guarded client on
+/// every subsequent hop to detect an unauthorized local GET.
+#[allow(async_fn_in_trait)]
+pub(super) trait PlaylistTransport {
+    async fn send(&self, client: &Client, url: &Url) -> Result<reqwest::Response, reqwest::Error>;
+}
+
+struct ReqwestTransport;
+impl PlaylistTransport for ReqwestTransport {
+    async fn send(&self, client: &Client, url: &Url) -> Result<reqwest::Response, reqwest::Error> {
+        client.get(url.clone()).send().await
+    }
+}
+
+pub(super) async fn fetch_redirects_with_transport<R: PlaylistResolver, T: PlaylistTransport>(
+    url: &mut Url,
+    resolver: &R,
+    transport: &T,
+) -> Result<Download, FetchError> {
     let mut original_class = None;
     for redirects in 0..=3 {
         let (client, hop_class) = guarded_client(url, original_class, resolver).await?;
         if original_class.is_none() {
             original_class = Some(hop_class);
         }
-        let mut response = client.get(url.clone()).send().await.map_err(|e| {
+        let mut response = transport.send(&client, url).await.map_err(|e| {
             if e.is_timeout() {
                 FetchError::Timeout
             } else {
