@@ -3,7 +3,11 @@
 
 //! Bounded retrieval of user-selected playlists. Never expose a URL, path, header
 //! or dependency error in Debug, Display, tracing or a UI-facing failure.
-use std::{fmt, time::Duration};
+use std::{
+    fmt,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    time::Duration,
+};
 
 use adw::{gio, glib, prelude::*};
 use reqwest::{header::LOCATION, redirect::Policy, Client, Url};
@@ -75,10 +79,153 @@ pub(crate) struct Download {
 
 pub(crate) fn http_client() -> Result<Client, FetchError> {
     Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_secs(5))
         .redirect(Policy::none())
         .build()
         .map_err(|_| FetchError::Network)
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AddressClass {
+    Global,
+    Local,
+}
+
+/// A conservative network-address classification. Documentation, multicast,
+/// unspecified, reserved, tunnel and otherwise ambiguous addresses are
+/// unusable. Only explicitly configured origins may earn local trust.
+fn ipv4_class(ip: Ipv4Addr) -> Option<AddressClass> {
+    let [a, b, c, _] = ip.octets();
+    if a == 0
+        || a >= 224
+        || (a == 192 && b == 0 && matches!(c, 0 | 2))
+        || (a == 192 && b == 88 && c == 99)
+        || (a == 198 && matches!(b, 18 | 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+    {
+        return None;
+    }
+
+    if a == 10
+        || a == 127
+        || (a == 100 && (64..=127).contains(&b))
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..=31).contains(&b))
+        || (a == 192 && b == 168)
+    {
+        Some(AddressClass::Local)
+    } else {
+        Some(AddressClass::Global)
+    }
+}
+
+fn ipv6_class(ip: Ipv6Addr) -> Option<AddressClass> {
+    // Avoid treating mapped RFC1918/loopback addresses as global IPv6.
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return ipv4_class(mapped);
+    }
+    if ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local() {
+        return Some(AddressClass::Local);
+    }
+    let [first, second, ..] = ip.segments();
+    // Only native global unicast is eligible. Exclude documentation,
+    // 6to4, IETF protocol allocations, benchmarking and reserved prefixes.
+    if first & 0xe000 != 0x2000
+        || (first == 0x2001 && (second <= 0x01ff || second == 0x0db8))
+        || first == 0x2002
+        || (first == 0x3fff && second & 0xf000 == 0)
+    {
+        None
+    } else {
+        Some(AddressClass::Global)
+    }
+}
+
+pub(super) fn classify_addresses(addresses: &[SocketAddr]) -> Option<AddressClass> {
+    fn class(ip: IpAddr) -> Option<AddressClass> {
+        match ip {
+            IpAddr::V4(v4) => ipv4_class(v4),
+            IpAddr::V6(v6) => ipv6_class(v6),
+        }
+    }
+    let first = class(addresses.first()?.ip())?;
+    addresses
+        .iter()
+        .all(|address| class(address.ip()) == Some(first))
+        .then_some(first)
+}
+
+pub(super) fn authorize_hop(
+    original: Option<AddressClass>,
+    addresses: &[SocketAddr],
+) -> Result<AddressClass, FetchError> {
+    let hop = classify_addresses(addresses).ok_or(if original.is_some() {
+        FetchError::Redirect
+    } else {
+        FetchError::InvalidOrigin
+    })?;
+    if original == Some(AddressClass::Global) && hop != AddressClass::Global {
+        return Err(FetchError::Redirect);
+    }
+    Ok(hop)
+}
+
+/// Only the addresses returned by this resolver may be passed into the
+/// reqwest client's DNS override. Test implementations inject synthetic DNS.
+#[allow(async_fn_in_trait)]
+pub(super) trait PlaylistResolver {
+    async fn addresses(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, FetchError>;
+}
+
+struct SystemResolver;
+impl PlaylistResolver for SystemResolver {
+    async fn addresses(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, FetchError> {
+        tokio::net::lookup_host((hostname, port))
+            .await
+            .map(|iter| iter.collect())
+            .map_err(|_| FetchError::Network)
+    }
+}
+
+/// A validated address set becomes the **only** dial-eligible address set.
+/// Fresh per-hop clients also prevent connection-pool reuse across trust scopes.
+async fn guarded_client<R: PlaylistResolver>(
+    url: &Url,
+    original: Option<AddressClass>,
+    resolver: &R,
+) -> Result<(Client, AddressClass), FetchError> {
+    let hostname = url.host_str().ok_or(FetchError::InvalidOrigin)?;
+    let port = url.port_or_known_default().ok_or(FetchError::InvalidOrigin)?;
+    let numeric = hostname
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .ok();
+    let mut addresses = if let Some(ip) = numeric {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        resolver.addresses(hostname, port).await?
+    };
+    addresses.sort_unstable();
+    addresses.dedup();
+    let class = authorize_hop(original, &addresses)?;
+
+    // reqwest 0.13.5's no_proxy() disables system/environment and explicitly
+    // configured proxies on this playlist-only client. The per-hop DNS
+    // override binds validation to the exact candidate sockets used by hyper:
+    // no second, unconstrained hostname lookup can change eligibility.
+    let mut builder = Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(Policy::none());
+    if numeric.is_none() {
+        builder = builder.resolve_to_addrs(hostname, &addresses);
+    }
+    let client = builder.build().map_err(|_| FetchError::Network)?;
+    Ok((client, class))
 }
 
 fn valid_url(url: &Url) -> bool {
@@ -115,8 +262,22 @@ async fn fetch_remote_with_timeout(
     }
 }
 
-async fn fetch_redirects(client: &Client, url: &mut Url) -> Result<Download, FetchError> {
+async fn fetch_redirects(_client: &Client, url: &mut Url) -> Result<Download, FetchError> {
+    // The existing service client is retained for API compatibility; a fresh
+    // per-hop pinned client is mandatory, rather than its shared connection pool.
+    fetch_redirects_with_resolver(url, &SystemResolver).await
+}
+
+pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(
+    url: &mut Url,
+    resolver: &R,
+) -> Result<Download, FetchError> {
+    let mut original_class = None;
     for redirects in 0..=3 {
+        let (client, hop_class) = guarded_client(url, original_class, resolver).await?;
+        if original_class.is_none() {
+            original_class = Some(hop_class);
+        }
         let mut response = client.get(url.clone()).send().await.map_err(|e| {
             if e.is_timeout() {
                 FetchError::Timeout
