@@ -6,7 +6,7 @@
 project(
   'broadcaster',
   'rust',
-  version: '0.2.0',
+  version: '0.2.1',
   meson_version: '>= 0.61.0',
 )
 

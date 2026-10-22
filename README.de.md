@@ -15,6 +15,7 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
 - **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
+- **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
 - **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
 
@@ -32,20 +33,21 @@ Weitere Bilder, etwa zum Hinzufügen von Playlists und zur Wiedergabesteuerung, 
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-## Installation von v0.2.0
+## Broadcaster installieren
 
-Aus dem [GitHub-Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) `broadcaster-0.2.0-x86_64.flatpak` für Intel-/AMD-PCs oder `broadcaster-0.2.0-aarch64.flatpak` für ARM64 zusammen mit `SHA256SUMS` herunterladen. Im Download-Verzeichnis ausführen (auf ARM64 `x86_64` durch `aarch64` ersetzen):
+Das veröffentlichte Produktions-Flatpak für die passende Architektur zusammen mit der zugehörigen Datei `SHA256SUMS` von [GitHub Releases](https://github.com/Certain1989/Broadcaster/releases) herunterladen. Das Beispiel verwendet **v0.2.1** für x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen. Diese Dateien sind **erst nach Veröffentlichung von v0.2.1** verfügbar. Solange sie dort noch nicht angeboten werden, kann stattdessen das [veröffentlichte Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) mit dessen Dateinamen und Prüfsummen verwendet werden.
 
 ```bash
-grep 'broadcaster-0.2.0-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.2.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.2.0-x86_64.flatpak
+flatpak install --user ./broadcaster-0.2.1-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
-Zum Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Bei einer systemweiten Installation für einen anderen TV-Benutzer die entsprechenden Befehle mit `sudo flatpak remote-add --system`, `sudo flatpak install --system` und `sudo flatpak uninstall --system` verwenden; das Programm selbst ohne sudo starten.
+Die Prüfsumme gleicht das heruntergeladene Flatpak mit der `SHA256SUMS`-Datei desselben Releases ab. Für ARM64 den passenden Namen in **beiden** Befehlen verwenden. Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Für eine systemweite Installation auf einem separaten TV-Konto die Befehle `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.1-x86_64.flatpak` und `sudo flatpak uninstall --system ...` verwenden; die Anwendung selbst ohne sudo starten.
 
-Benötigt wird GNOME Platform 51, die Flatpak von Flathub beziehen kann. **Broadcaster selbst ist nicht auf Flathub veröffentlicht.** Einzelne Flatpak-Bundles richten keine automatischen Programm-Updates ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von der Entwicklungs-ID `io.github.Certain1989.Broadcaster.Devel`.
+Die Anwendung benötigt GNOME Platform 51; Flatpak kann diese Runtime von Flathub beziehen. **Broadcaster selbst wird nicht über Flathub angeboten.** Eigenständige Flatpak-Bundles richten **keine automatischen Anwendungsupdates** ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von `io.github.Certain1989.Broadcaster.Devel` für Entwicklungsbuilds.
+
 
 ### Schwarzes Bild nach der Flatpak-Installation
 
