@@ -311,6 +311,9 @@ impl PlaylistTransport for SyntheticPublicRedirect {
             self.synthetic_gets.fetch_add(1, Ordering::SeqCst);
             Client::builder()
                 .no_proxy()
+                // This fixture must return the 302 to the production redirect
+                // loop; following it here would bypass that loop entirely.
+                .redirect(Policy::none())
                 .build()
                 .unwrap()
                 .get(format!("http://127.0.0.1:{}/start", self.reply_port))
