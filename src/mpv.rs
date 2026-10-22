@@ -427,7 +427,10 @@ mod redaction_tests {
             ]
         );
         assert!(global_separator_conflicts(&["--".to_owned()], &options));
-        assert!(!global_separator_conflicts(&["--vo=gpu".to_owned()], &options));
+        assert!(!global_separator_conflicts(
+            &["--vo=gpu".to_owned()],
+            &options
+        ));
         assert!(!global_separator_conflicts(&["--".to_owned()], &[]));
         let global = vec!["--user-agent=global".into(), "  ".into()];
         let argv = player_argv(
