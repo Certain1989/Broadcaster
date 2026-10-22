@@ -204,7 +204,7 @@ impl TvApplication {
             let window = self.window();
             let token = window.begin_playback();
             let weak_window = glib::clone::Downgrade::downgrade(&window);
-            if let Err(e) = mpv::play(video.title(), uri, video.subtitle_url(), move || {
+            if let Err(e) = mpv::play(video.title(), uri, video.subtitle_url(), video.stream_headers(), move || {
                 if let Some(window) = weak_window.upgrade() {
                     window.finish_playback(token);
                 }
@@ -423,6 +423,26 @@ mod about_icon_runtime_tests {
 /// The livestream channels, or why they couldn't be loaded.
 pub type LiveChannels = Result<Rc<crate::zapp::ChannelInfoList>, Rc<eyre::Report>>;
 
+/// Fixed, parser-recognized hints for one imported stream only.
+/// Never use derive(Debug): these values may include private identifiers.
+#[derive(Clone, Default)]
+pub struct StreamHeaders {
+    pub(crate) user_agent: Option<String>,
+    pub(crate) referer: Option<String>,
+}
+
+impl StreamHeaders {
+    pub(crate) fn imported(user_agent: Option<String>, referer: Option<String>) -> Self {
+        Self { user_agent, referer }
+    }
+}
+
+impl std::fmt::Debug for StreamHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StreamHeaders(<redacted>)")
+    }
+}
+
 #[derive(Debug)]
 pub enum VideoInfo {
     Live {
@@ -432,6 +452,7 @@ pub enum VideoInfo {
     Stream {
         title: String,
         uri: String,
+        headers: StreamHeaders,
     },
     Mediathek {
         title: String,
@@ -444,6 +465,14 @@ pub enum VideoInfo {
 }
 
 impl VideoInfo {
+    /// The external-program launcher deliberately ignores imported hints.
+    pub fn stream_headers(&self) -> Option<&StreamHeaders> {
+        match self {
+            VideoInfo::Stream { headers, .. } => Some(headers),
+            VideoInfo::Live { .. } | VideoInfo::Mediathek { .. } => None,
+        }
+    }
+
     pub fn subtitle_url(&self) -> Option<&str> {
         match self {
             VideoInfo::Live { .. } | VideoInfo::Stream { .. } => None,
@@ -496,13 +525,16 @@ mod tests {
         let video = VideoInfo::Stream {
             title: "Fabricated Example".into(),
             uri: "https://example.invalid/demo.m3u8".into(),
+            headers: super::StreamHeaders::default(),
         };
         assert_eq!(video.title(), "Fabricated Example");
         assert_eq!(video.uri(), Some("https://example.invalid/demo.m3u8"));
         assert_eq!(video.subtitle_url(), None);
+        assert!(video.stream_headers().is_some());
         let empty = VideoInfo::Stream {
             title: "Empty".into(),
             uri: String::new(),
+            headers: super::StreamHeaders::default(),
         };
         assert_eq!(empty.uri(), None);
     }
