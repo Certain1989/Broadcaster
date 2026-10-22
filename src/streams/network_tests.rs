@@ -16,8 +16,9 @@ use std::{
 use reqwest::{redirect::Policy, Client, Proxy, Url};
 
 use super::fetch::{
-    authorize_hop, classify_addresses, fetch_redirects_with_resolver, AddressClass, FetchError,
-    PinnedResolver, PlaylistResolver,
+    authorize_hop, classify_addresses, fetch_redirects_with_resolver,
+    fetch_redirects_with_transport, AddressClass, FetchError, PinnedResolver, PlaylistResolver,
+    PlaylistTransport,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -291,5 +292,184 @@ async fn unexpected_hostname_cannot_fall_back_to_system_dns() {
             .await
             .is_err(),
         "unrecognized resolver hostname opened a socket"
+    );
+}
+
+/// The synthetic public responder is deliberately substituted *only* for
+/// the first global-classified hop. This permits deterministic 302 responses
+/// without a real Internet server; every later hop uses the production
+/// guarded reqwest client. If the guard mistakenly permits a private GET,
+/// the forbidden loopback listener below will receive it.
+struct SyntheticPublicRedirect {
+    reply_port: u16,
+    synthetic_gets: Arc<AtomicUsize>,
+}
+
+impl PlaylistTransport for SyntheticPublicRedirect {
+    async fn send(&self, client: &Client, url: &Url) -> Result<reqwest::Response, reqwest::Error> {
+        if url.host_str() == Some("public-fixture.invalid") && url.path() == "/start" {
+            self.synthetic_gets.fetch_add(1, Ordering::SeqCst);
+            Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://127.0.0.1:{}/start", self.reply_port))
+                .send()
+                .await
+        } else {
+            client.get(url.clone()).send().await
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_origin_redirects_never_issue_forbidden_private_gets() {
+    for target_kind in ["literal", "hostname", "mixed"] {
+        let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let forbidden_addr = forbidden.local_addr().unwrap();
+        let public_reply = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reply_addr = public_reply.local_addr().unwrap();
+
+        let target_url = match target_kind {
+            "literal" => format!("http://127.0.0.1:{}/secret", forbidden_addr.port()),
+            "hostname" => format!(
+                "http://private-fixture.invalid:{}/secret",
+                forbidden_addr.port()
+            ),
+            "mixed" => format!(
+                "http://mixed-fixture.invalid:{}/secret",
+                forbidden_addr.port()
+            ),
+            _ => unreachable!(),
+        };
+        let first_server = tokio::spawn(async move {
+            let (mut connection, _) = public_reply.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let read = connection.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /start "));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            connection.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let resolver = FixtureResolver {
+            answers: HashMap::from([
+                (
+                    "public-fixture.invalid".to_owned(),
+                    vec![endpoint("8.8.8.8", reply_addr.port())],
+                ),
+                ("private-fixture.invalid".to_owned(), vec![forbidden_addr]),
+                (
+                    "mixed-fixture.invalid".to_owned(),
+                    vec![
+                        forbidden_addr,
+                        endpoint("1.1.1.1", forbidden_addr.port()),
+                    ],
+                ),
+            ]),
+        };
+        let synthetic_gets = Arc::new(AtomicUsize::new(0));
+        let transport = SyntheticPublicRedirect {
+            reply_port: reply_addr.port(),
+            synthetic_gets: synthetic_gets.clone(),
+        };
+        let mut url = Url::parse(&format!(
+            "http://public-fixture.invalid:{}/start",
+            reply_addr.port()
+        ))
+        .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_redirects_with_transport(&mut url, &resolver, &transport),
+        )
+        .await
+        .unwrap();
+        first_server.await.unwrap();
+
+        assert!(
+            matches!(result, Err(FetchError::Redirect)),
+            "unsafe {target_kind} redirect was not rejected"
+        );
+        assert_eq!(
+            synthetic_gets.load(Ordering::SeqCst),
+            1,
+            "the synthetic public origin was not requested"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
+                .await
+                .is_err(),
+            "{target_kind} allowed a forbidden GET to the local socket"
+        );
+    }
+}
+
+struct RebindingResolver {
+    calls: AtomicUsize,
+    global_address: SocketAddr,
+    private_address: SocketAddr,
+}
+
+impl PlaylistResolver for RebindingResolver {
+    async fn addresses(&self, hostname: &str, _port: u16) -> Result<Vec<SocketAddr>, FetchError> {
+        if hostname != "public-fixture.invalid" {
+            return Err(FetchError::Network);
+        }
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(vec![self.global_address])
+        } else {
+            Ok(vec![self.private_address])
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_origin_dns_rebinding_before_second_dial_never_reaches_loopback() {
+    let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forbidden_address = forbidden.local_addr().unwrap();
+    let public_reply = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let reply_port = public_reply.local_addr().unwrap().port();
+    let first_server = tokio::spawn(async move {
+        let (mut connection, _) = public_reply.accept().await.unwrap();
+        let mut request = [0u8; 1024];
+        let _ = connection.read(&mut request).await.unwrap();
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://public-fixture.invalid:{reply_port}/secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        connection.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let resolver = RebindingResolver {
+        calls: AtomicUsize::new(0),
+        global_address: endpoint("8.8.8.8", reply_port),
+        private_address: forbidden_address,
+    };
+    let synthetic_gets = Arc::new(AtomicUsize::new(0));
+    let transport = SyntheticPublicRedirect {
+        reply_port,
+        synthetic_gets: synthetic_gets.clone(),
+    };
+    let mut url = Url::parse(&format!(
+        "http://public-fixture.invalid:{reply_port}/start"
+    ))
+    .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        fetch_redirects_with_transport(&mut url, &resolver, &transport),
+    )
+    .await
+    .unwrap();
+    first_server.await.unwrap();
+
+    assert!(matches!(result, Err(FetchError::Redirect)));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(synthetic_gets.load(Ordering::SeqCst), 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), forbidden.accept())
+            .await
+            .is_err(),
+        "DNS rebinding allowed a forbidden local GET"
     );
 }
