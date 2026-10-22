@@ -96,55 +96,13 @@ impl Storage {
     pub fn initialize(&self) -> StorageResult<()> {
         let path = &self.path;
         ensure_private_parent(path)?;
-        let exists = path.exists();
-        if exists {
-            require_private_file(path)?;
-            // Check identity in READ ONLY mode before any PRAGMA which might write
-            // journal state. Never mutate foreign databases or future versions.
-            let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(|_| StorageError::IncompatibleDatabase)?;
-            let id: i64 = probe
-                .query_row("PRAGMA application_id", [], |r| r.get(0))
-                .map_err(|_| StorageError::CorruptDatabase)?;
-            let version: i64 = probe
-                .query_row("PRAGMA user_version", [], |r| r.get(0))
-                .map_err(|_| StorageError::CorruptDatabase)?;
-            if id != APPLICATION_ID || version != SCHEMA_VERSION {
-                return Err(StorageError::IncompatibleDatabase);
+        match fs::symlink_metadata(path) {
+            Ok(_) => validate_existing(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                initialize_new(path, None)
             }
-            validate_v1_schema_shape(&probe)?;
-            validate_integrity(&probe)?;
-        } else {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(path)
-                    .map_err(|_| StorageError::PermissionDenied)?;
-            }
-            #[cfg(not(unix))]
-            {
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(path)
-                    .map_err(|_| StorageError::PermissionDenied)?;
-            }
-            let conn = Connection::open(path).map_err(|_| StorageError::StorageFailure)?;
-            configure(&conn)?;
-            // An existing empty file is not automatically considered a fresh DB;
-            // this branch runs only for a new file we just created.
-            conn.execute_batch(MIGRATION_001).map_err(|_| {
-                let _ = conn.execute_batch("ROLLBACK");
-                StorageError::StorageFailure
-            })?;
-            validate_v1_schema_shape(&conn)?;
-            validate_integrity(&conn)?;
+            Err(_) => Err(StorageError::PermissionDenied),
         }
-        Ok(())
     }
 
     /// Does not initialize or create a missing database: callers must initialize
@@ -489,6 +447,174 @@ impl ErrorCode {
             Self::Reauthorization => "reauthorization",
             Self::Cancelled => "cancelled",
             Self::Write => "write",
+        }
+    }
+}
+
+/// Durability checkpoints are injectable only by tests. A failed initialization
+/// never deletes or replaces an existing final database, even if a competitor
+/// publishes it while our private staging file is being prepared.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InitCheckpoint {
+    TempCreated,
+    MigrationComplete,
+    BeforePublish,
+    AfterPublish,
+}
+
+fn initialization_checkpoint(
+    failure: Option<InitCheckpoint>,
+    stage: InitCheckpoint,
+) -> StorageResult<()> {
+    if failure == Some(stage) {
+        Err(StorageError::StorageFailure)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_existing(path: &Path) -> StorageResult<()> {
+    require_private_file(path)?;
+    // Never write to a foreign, corrupt, zero-version or future database.
+    // An abandoned version-zero file requires *manual*, non-destructive
+    // recovery: delete/quarantine/migration are not automatic.
+    let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let id: i64 = probe
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(|_| StorageError::CorruptDatabase)?;
+    let version: i64 = probe
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(|_| StorageError::CorruptDatabase)?;
+    if id != APPLICATION_ID || version != SCHEMA_VERSION {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    validate_v1_schema_shape(&probe)?;
+    validate_integrity(&probe)
+}
+
+/// Own only the random temporary inode, never the final database. On failures
+/// or panics, clean our own staging files as best effort, never other files.
+struct StagedDatabase {
+    path: PathBuf,
+}
+impl Drop for StagedDatabase {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let mut name = self.path.as_os_str().to_os_string();
+            name.push(suffix);
+            let _ = fs::remove_file(PathBuf::from(name));
+        }
+    }
+}
+
+fn sync_parent_directory(parent: &Path) -> std::io::Result<()> {
+    fs::File::open(parent)?.sync_all()
+}
+
+fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult<()> {
+    initialize_new_with(path, fail_at, MIGRATION_001, &sync_parent_directory)
+}
+
+// Keep the injection at the actual migration and directory-fsync calls.
+// Production always uses the authoritative migration and real fsync; fixtures
+// can substitute a failing migration or an EIO result from the same boundary.
+fn initialize_new_with(
+    path: &Path,
+    fail_at: Option<InitCheckpoint>,
+    migration_sql: &str,
+    sync_parent: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> StorageResult<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = (path, fail_at, migration_sql, sync_parent);
+        // No replacement-safe and durably synced publisher has been verified
+        // for non-Unix filesystems. Do not create an unsafe final database.
+        Err(StorageError::StorageFailure)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let parent = path.parent().ok_or(StorageError::InvalidInput)?;
+        let name = path.file_name().ok_or(StorageError::InvalidInput)?;
+        // The temporary basename is both unpredictable and unique, with
+        // create_new preventing reuse of a leftover or attacker-made file.
+        let temp_path = parent.join(format!(
+            ".{}-staging-{}",
+            name.to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut creator = fs::OpenOptions::new();
+        let created = creator
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp_path)
+            .map_err(|_| StorageError::PermissionDenied)?;
+        let staged = StagedDatabase {
+            path: temp_path.clone(),
+        };
+        initialization_checkpoint(fail_at, InitCheckpoint::TempCreated)?;
+        drop(created);
+
+        let connection = Connection::open(&temp_path).map_err(|_| StorageError::StorageFailure)?;
+        configure(&connection)?;
+        connection.execute_batch(migration_sql).map_err(|_| {
+            let _ = connection.execute_batch("ROLLBACK");
+            StorageError::StorageFailure
+        })?;
+        validate_v1_schema_shape(&connection)?;
+        validate_integrity(&connection)?;
+        let id: i64 = connection
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if id != APPLICATION_ID || version != SCHEMA_VERSION {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        // A live connection or SQLite sidecar must not be renamed/published.
+        connection
+            .close()
+            .map_err(|_| StorageError::StorageFailure)?;
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let mut name = temp_path.as_os_str().to_os_string();
+            name.push(suffix);
+            if fs::symlink_metadata(PathBuf::from(name)).is_ok() {
+                return Err(StorageError::StorageFailure);
+            }
+        }
+        initialization_checkpoint(fail_at, InitCheckpoint::MigrationComplete)?;
+
+        // Persist the initialized inode and staged name before publication.
+        fs::File::open(&temp_path)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| StorageError::StorageFailure)?;
+        sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
+        initialization_checkpoint(fail_at, InitCheckpoint::BeforePublish)?;
+
+        // Linux hard links provide an atomic no-replace name publication.
+        // Existing final files (including symlinks and empty v0 files) cannot
+        // be overwritten, and unsupported hardlink filesystems fail closed.
+        match fs::hard_link(&temp_path, path) {
+            Ok(()) => {
+                // Final directory durability is mandatory. If sync fails,
+                // return failure but DO NOT remove the now-published DB.
+                sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
+                initialization_checkpoint(fail_at, InitCheckpoint::AfterPublish)?;
+                drop(staged);
+                sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
+                validate_existing(path)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another initializer won the race; never delete/replace it.
+                drop(staged);
+                validate_existing(path)
+            }
+            Err(_) => Err(StorageError::StorageFailure),
         }
     }
 }
@@ -939,5 +1065,252 @@ fn effective_set(
         FacetMode::Auto if !imported.is_empty() => (imported.clone(), FieldOrigin::Imported),
         FacetMode::Auto if !fallback.is_empty() => (fallback.clone(), FieldOrigin::SourceFallback),
         _ => (BTreeSet::new(), FieldOrigin::Unknown),
+    }
+}
+
+#[cfg(test)]
+mod staged_database_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    struct PrivateDir(PathBuf);
+    impl PrivateDir {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("broadcaster-db-stage-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&path).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            Self(path)
+        }
+
+        fn database(&self) -> PathBuf {
+            self.0.join("catalogue.sqlite3")
+        }
+
+        fn entries(&self) -> Vec<String> {
+            fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        }
+    }
+    impl Drop for PrivateDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_initialization_is_durable_private_and_reopenable() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let storage = Storage::at(&path);
+        storage.initialize().unwrap();
+        let entries = fixture.entries();
+        assert_eq!(entries, vec!["catalogue.sqlite3"]);
+        let permissions = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(permissions, 0o600);
+        storage.initialize().unwrap();
+        assert!(storage.list_sources().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn injected_staging_failures_leave_no_final_database_or_own_temp() {
+        for checkpoint in [
+            InitCheckpoint::TempCreated,
+            InitCheckpoint::MigrationComplete,
+            InitCheckpoint::BeforePublish,
+        ] {
+            let fixture = PrivateDir::new();
+            let path = fixture.database();
+            let error = initialize_new(&path, Some(checkpoint)).unwrap_err();
+            assert_eq!(error, StorageError::StorageFailure);
+            assert!(
+                !path.exists(),
+                "failed stage unexpectedly published the database"
+            );
+            assert!(
+                fixture.entries().is_empty(),
+                "failed stage leaked staging files"
+            );
+            Storage::at(path).initialize().unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_migration_transaction_cannot_publish_partial_schema() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        // Deliberately fail an actual SQLite statement AFTER BEGIN and a
+        // successful CREATE, not merely at a checkpoint before migration.
+        const FAILING_SQL: &str = "PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;
+            CREATE TABLE partial_stage_data(v INTEGER);
+            INSERT INTO table_that_does_not_exist VALUES (7);
+            COMMIT;";
+        let error = initialize_new_with(&path, None, FAILING_SQL, &sync_parent_directory);
+        assert_eq!(error, Err(StorageError::StorageFailure));
+        assert!(!path.exists(), "failed migration published a partial DB");
+        assert!(
+            fixture.entries().is_empty(),
+            "failed migration left a sidecar"
+        );
+        // A valid subsequent attempt must succeed with unchanged v1 SQL.
+        Storage::at(&path).initialize().unwrap();
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_sync_io_failure_preserves_publication_boundary() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for fail_on_sync in [1, 2, 3] {
+            let fixture = PrivateDir::new();
+            let path = fixture.database();
+            let sync_calls = AtomicUsize::new(0);
+            let injected_sync = |parent: &Path| -> std::io::Result<()> {
+                let call = sync_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == fail_on_sync {
+                    Err(std::io::Error::from_raw_os_error(5)) // synthetic EIO
+                } else {
+                    sync_parent_directory(parent)
+                }
+            };
+            let error = initialize_new_with(&path, None, MIGRATION_001, &injected_sync);
+            assert_eq!(error, Err(StorageError::StorageFailure));
+            assert_eq!(sync_calls.load(Ordering::SeqCst), fail_on_sync);
+            if fail_on_sync == 1 {
+                assert!(!path.exists(), "prepublish fsync error exposed a final DB");
+                assert!(fixture.entries().is_empty(), "staging file not removed");
+                Storage::at(&path).initialize().unwrap();
+            } else {
+                // Once the no-replace hard link exists, it is user data. Even
+                // a subsequent fsync error must never delete or replace it.
+                assert!(path.exists(), "published data was deleted on EIO");
+                Storage::at(&path).initialize().unwrap();
+                assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failure_after_no_replace_publish_preserves_valid_database() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let error = initialize_new(&path, Some(InitCheckpoint::AfterPublish)).unwrap_err();
+        assert_eq!(error, StorageError::StorageFailure);
+        // After successful atomic publication no cleanup is allowed to remove
+        // the durable winner, even if a later durability phase reports error.
+        let bytes = fs::read(&path).unwrap();
+        assert!(!bytes.is_empty());
+        Storage::at(&path).initialize().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_and_legacy_existing_files_are_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let original = b"not a SQLite database - preserve all original user data";
+        fs::write(&path, original).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::CorruptDatabase | StorageError::IncompatibleDatabase)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(fixture.entries().len() == 1);
+
+        fs::remove_file(&path).unwrap();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE user_original(v TEXT); INSERT INTO user_original VALUES('retain');",
+        )
+        .unwrap();
+        drop(conn);
+        // External rusqlite::Connection::open inherits the process umask
+        // (typically 0644), so make the fixture private before testing the
+        // version-zero refusal rather than tripping the earlier permission gate.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let original = fs::read(&path).unwrap();
+        assert!(matches!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::IncompatibleDatabase)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_final_creator_wins_without_byte_changes() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let content = b"concurrent external user data";
+        fs::write(&path, content).unwrap();
+        let failure = initialize_new(&path, None);
+        assert!(failure.is_err());
+        assert_eq!(fs::read(&path).unwrap(), content);
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn simultaneous_initializers_cannot_replace_winning_database() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let barrier = barrier.clone();
+            let path = path.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                Storage::at(path).initialize()
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+        Storage::at(&path).initialize().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unrelated_stale_staging_file_is_not_deleted() {
+        let fixture = PrivateDir::new();
+        let stale = fixture.0.join(".catalogue.sqlite3-staging-previous-run");
+        let payload = b"old, unknown file. must not be touched.";
+        fs::write(&stale, payload).unwrap();
+        Storage::at(fixture.database()).initialize().unwrap();
+        assert_eq!(fs::read(&stale).unwrap(), payload);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_parent_permissions_refuse_database_creation() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o777)).unwrap();
+        let path = fixture.database();
+        assert_eq!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::PermissionDenied)
+        );
+        assert!(!path.exists());
     }
 }

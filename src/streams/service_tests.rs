@@ -18,7 +18,7 @@ use tokio::{
 use super::{
     model::{ChannelQuery, SourceDefaults},
     service::{RefreshOutcome, ServiceError, SourceSelection, StreamsService},
-    storage::Storage,
+    storage::{Storage, StorageError},
 };
 
 struct Fixture {
@@ -351,4 +351,241 @@ fn local_gio_reselect_preserves_cached_channels_until_atomic_replacement() {
             })
         })
         .unwrap();
+}
+
+#[tokio::test]
+async fn production_startup_purge_keeps_overridden_and_young_missing_channels() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(4)).await;
+    let _source = test
+        .service
+        .add_url(
+            "Retention fixture",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
+        .unwrap();
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    drop(stmt);
+    assert_eq!(ids.len(), 4);
+
+    for (index, since) in [
+        (0, now - 91 * 86400),
+        (1, now - 91 * 86400),
+        (2, now - 89 * 86400),
+    ] {
+        conn.execute(
+            "UPDATE iptv_channels SET is_present=0, missing_since=?1 WHERE id=?2",
+            rusqlite::params![since, ids[index]],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO iptv_channel_overrides (channel_id,display_name_override,updated_at)
+         VALUES (?1,'Kept user edit',?2)",
+        rusqlite::params![ids[1], now],
+    )
+    .unwrap();
+    drop(conn);
+
+    // This runs the real service initialization path, not a detached SQL call.
+    // Its cleanup must occur on the SQLite blocking worker and never touch
+    // overridden or recent missing entries.
+    let reopened = StreamsService::with_storage(Storage::at(&test.path))
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
+        .unwrap();
+    let remaining: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    drop(stmt);
+    assert_eq!(remaining.len(), 3);
+    assert!(
+        !remaining.contains(&ids[0]),
+        "expired unedited tombstone survived"
+    );
+    assert!(remaining.contains(&ids[1]), "user override was deleted");
+    assert!(remaining.contains(&ids[2]), "recent tombstone was deleted");
+    assert!(remaining.contains(&ids[3]), "present channel was deleted");
+    drop(conn);
+
+    assert_eq!(reopened.list_sources().await.unwrap().len(), 1);
+    let _again = StreamsService::with_storage(Storage::at(&test.path))
+        .await
+        .unwrap();
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM iptv_channels", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 3, "startup cleanup is not idempotent");
+}
+
+#[tokio::test]
+async fn retention_daily_gate_failure_retry_clock_shift_and_concurrent_calls() {
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    const DAY: i64 = 86400;
+    let test = Fixture::new().await;
+    let service = &test.service;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    // Guaranteed beyond the initial startup run's successful timestamp.
+    let first_due = now + DAY * 2;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = |counter: Arc<AtomicUsize>| {
+        move |_store: Storage, _at: i64| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        }
+    };
+
+    service
+        .purge_expired_missing_if_due_at(first_due, count(calls.clone()))
+        .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    service
+        .purge_expired_missing_if_due_at(first_due + DAY - 1, count(calls.clone()))
+        .await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "purge ran twice within a day"
+    );
+    service
+        .purge_expired_missing_if_due_at(first_due + DAY, count(calls.clone()))
+        .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    // If SQLite returns an error, keep the catalogue operational and allow
+    // retry on a subsequent successful refresh instead of suppressing it.
+    let fail_at = first_due + DAY * 2;
+    let failing_calls = calls.clone();
+    service
+        .purge_expired_missing_if_due_at(fail_at, move |_store, _at| {
+            failing_calls.fetch_add(1, Ordering::SeqCst);
+            Err(StorageError::StorageFailure)
+        })
+        .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    service
+        .purge_expired_missing_if_due_at(fail_at, count(calls.clone()))
+        .await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        4,
+        "purge failure was not retryable"
+    );
+    assert!(service.list_sources().await.is_ok());
+
+    // Backwards system-clock steps must not cause duplicate retention work.
+    service
+        .purge_expired_missing_if_due_at(fail_at - DAY, count(calls.clone()))
+        .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
+
+    // Two simultaneous successful refreshes must not run duplicate purges.
+    let concurrent_at = fail_at + DAY;
+    let ((), ()) = tokio::join!(
+        service.purge_expired_missing_if_due_at(concurrent_at, count(calls.clone())),
+        service.purge_expired_missing_if_due_at(concurrent_at, count(calls.clone())),
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 5);
+}
+
+#[tokio::test]
+async fn purge_and_refresh_serialize_without_catalogue_loss() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(3)).await;
+    let source = test
+        .service
+        .add_url(
+            "Concurrent retention",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    conn.execute(
+        "UPDATE iptv_channels SET is_present=0, missing_since=?1
+         WHERE source_id=?2 AND playlist_order=0",
+        rusqlite::params![now - 91 * 86400, source.id],
+    )
+    .unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    // Hold an actual SQLite writer lock to force both the purge worker and
+    // refresh transaction to contend, then release the lock together.
+    // A refresh future can hold non-Send GIO types even for URL-backed
+    // sources. Join these local futures rather than requiring tokio::spawn's
+    // Send bound; the SQLite operations still execute on blocking workers.
+    let cleanup = test
+        .service
+        .purge_expired_missing_if_due_at(now + 2 * 86400, |store, at| {
+            store.purge_expired_missing(at)
+        });
+    let refresh = test.service.refresh(&source.id);
+    let release_writer = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        conn.execute_batch("COMMIT").unwrap();
+    };
+    let ((), refresh_result, ()) = tokio::join!(cleanup, refresh, release_writer);
+    assert!(matches!(
+        refresh_result.unwrap(),
+        RefreshOutcome::Committed(_)
+    ));
+
+    // The refresh is still authoritative irrespective of which SQLite writer
+    // reached the lock first. A stale purge cannot wipe refreshed rows.
+    let conn = rusqlite::Connection::open(&test.path).unwrap();
+    let present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM iptv_channels WHERE source_id=?1 AND is_present=1",
+            [&source.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(present, 3);
+    assert_eq!(
+        test.service
+            .query(ChannelQuery::default())
+            .await
+            .unwrap()
+            .total,
+        3
+    );
 }
