@@ -59,7 +59,7 @@ Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren
 
 ## Broadcaster installieren
 
-Das veröffentlichte Produktions-Flatpak für die passende Architektur zusammen mit der zugehörigen Datei `SHA256SUMS` von [GitHub Releases](https://github.com/Certain1989/Broadcaster/releases) herunterladen. Das Beispiel verwendet **v0.2.1** für x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen. Diese Dateien sind **erst nach Veröffentlichung von v0.2.1** verfügbar. Solange sie dort noch nicht angeboten werden, kann stattdessen das [veröffentlichte Release v0.2.0](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) mit dessen Dateinamen und Prüfsummen verwendet werden.
+Das Produktions-Flatpak für die passende Architektur und die zugehörige Datei `SHA256SUMS` vom [veröffentlichten Broadcaster-Release v0.2.1](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.1) herunterladen. Das folgende Beispiel verwendet x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen.
 
 ```bash
 grep 'broadcaster-0.2.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
