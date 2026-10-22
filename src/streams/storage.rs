@@ -509,10 +509,31 @@ impl Drop for StagedDatabase {
     }
 }
 
+fn sync_parent_directory(parent: &Path) -> std::io::Result<()> {
+    fs::File::open(parent)?.sync_all()
+}
+
 fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult<()> {
+    initialize_new_with(
+        path,
+        fail_at,
+        MIGRATION_001,
+        &sync_parent_directory,
+    )
+}
+
+// Keep the injection at the actual migration and directory-fsync calls.
+// Production always uses the authoritative migration and real fsync; fixtures
+// can substitute a failing migration or an EIO result from the same boundary.
+fn initialize_new_with(
+    path: &Path,
+    fail_at: Option<InitCheckpoint>,
+    migration_sql: &str,
+    sync_parent: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> StorageResult<()> {
     #[cfg(not(unix))]
     {
-        let _ = (path, fail_at);
+        let _ = (path, fail_at, migration_sql, sync_parent);
         // No replacement-safe and durably synced publisher has been verified
         // for non-Unix filesystems. Do not create an unsafe final database.
         Err(StorageError::StorageFailure)
@@ -545,7 +566,7 @@ fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult
 
         let connection = Connection::open(&temp_path).map_err(|_| StorageError::StorageFailure)?;
         configure(&connection)?;
-        connection.execute_batch(MIGRATION_001).map_err(|_| {
+        connection.execute_batch(migration_sql).map_err(|_| {
             let _ = connection.execute_batch("ROLLBACK");
             StorageError::StorageFailure
         })?;
@@ -577,9 +598,7 @@ fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult
         fs::File::open(&temp_path)
             .and_then(|file| file.sync_all())
             .map_err(|_| StorageError::StorageFailure)?;
-        fs::File::open(parent)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| StorageError::StorageFailure)?;
+        sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
         initialization_checkpoint(fail_at, InitCheckpoint::BeforePublish)?;
 
         // Linux hard links provide an atomic no-replace name publication.
@@ -589,14 +608,10 @@ fn initialize_new(path: &Path, fail_at: Option<InitCheckpoint>) -> StorageResult
             Ok(()) => {
                 // Final directory durability is mandatory. If sync fails,
                 // return failure but DO NOT remove the now-published DB.
-                fs::File::open(parent)
-                    .and_then(|dir| dir.sync_all())
-                    .map_err(|_| StorageError::StorageFailure)?;
+                sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
                 initialization_checkpoint(fail_at, InitCheckpoint::AfterPublish)?;
                 drop(staged);
-                fs::File::open(parent)
-                    .and_then(|dir| dir.sync_all())
-                    .map_err(|_| StorageError::StorageFailure)?;
+                sync_parent(parent).map_err(|_| StorageError::StorageFailure)?;
                 validate_existing(path)
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1136,6 +1151,60 @@ mod staged_database_tests {
 
     #[cfg(unix)]
     #[test]
+    fn failed_migration_transaction_cannot_publish_partial_schema() {
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        // Deliberately fail an actual SQLite statement AFTER BEGIN and a
+        // successful CREATE, not merely at a checkpoint before migration.
+        const FAILING_SQL: &str = "PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;
+            CREATE TABLE partial_stage_data(v INTEGER);
+            INSERT INTO table_that_does_not_exist VALUES (7);
+            COMMIT;";
+        let error = initialize_new_with(&path, None, FAILING_SQL, &sync_parent_directory);
+        assert_eq!(error, Err(StorageError::StorageFailure));
+        assert!(!path.exists(), "failed migration published a partial DB");
+        assert!(fixture.entries().is_empty(), "failed migration left a sidecar");
+        // A valid subsequent attempt must succeed with unchanged v1 SQL.
+        Storage::at(&path).initialize().unwrap();
+        assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_sync_io_failure_preserves_publication_boundary() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for fail_on_sync in [1, 2, 3] {
+            let fixture = PrivateDir::new();
+            let path = fixture.database();
+            let sync_calls = AtomicUsize::new(0);
+            let injected_sync = |parent: &Path| -> std::io::Result<()> {
+                let call = sync_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == fail_on_sync {
+                    Err(std::io::Error::from_raw_os_error(5)) // synthetic EIO
+                } else {
+                    sync_parent_directory(parent)
+                }
+            };
+            let error = initialize_new_with(&path, None, MIGRATION_001, &injected_sync);
+            assert_eq!(error, Err(StorageError::StorageFailure));
+            assert_eq!(sync_calls.load(Ordering::SeqCst), fail_on_sync);
+            if fail_on_sync == 1 {
+                assert!(!path.exists(), "prepublish fsync error exposed a final DB");
+                assert!(fixture.entries().is_empty(), "staging file not removed");
+                Storage::at(&path).initialize().unwrap();
+            } else {
+                // Once the no-replace hard link exists, it is user data. Even
+                // a subsequent fsync error must never delete or replace it.
+                assert!(path.exists(), "published data was deleted on EIO");
+                Storage::at(&path).initialize().unwrap();
+                assert_eq!(fixture.entries(), vec!["catalogue.sqlite3"]);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn failure_after_no_replace_publish_preserves_valid_database() {
         let fixture = PrivateDir::new();
         let path = fixture.database();
@@ -1159,7 +1228,11 @@ mod staged_database_tests {
         let path = fixture.database();
         let original = b"not a SQLite database - preserve all original user data";
         fs::write(&path, original).unwrap();
-        assert!(Storage::at(&path).initialize().is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            Storage::at(&path).initialize(),
+            Err(StorageError::CorruptDatabase | StorageError::IncompatibleDatabase)
+        ));
         assert_eq!(fs::read(&path).unwrap(), original);
         assert!(fixture.entries().len() == 1);
 
