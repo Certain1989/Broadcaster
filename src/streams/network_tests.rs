@@ -324,7 +324,16 @@ impl PlaylistTransport for SyntheticPublicRedirect {
 
 #[tokio::test]
 async fn public_origin_redirects_never_issue_forbidden_private_gets() {
-    for target_kind in ["literal", "hostname", "mixed"] {
+    for target_kind in [
+        "literal",
+        "hostname",
+        "mixed",
+        "mapped",
+        "ipv6-loopback",
+        "ula",
+        "rfc1918",
+        "linklocal",
+    ] {
         let forbidden = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let forbidden_addr = forbidden.local_addr().unwrap();
         let public_reply = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -340,6 +349,11 @@ async fn public_origin_redirects_never_issue_forbidden_private_gets() {
                 "http://mixed-fixture.invalid:{}/secret",
                 forbidden_addr.port()
             ),
+            "mapped" => format!("http://[::ffff:127.0.0.1]:{}/secret", forbidden_addr.port()),
+            "ipv6-loopback" => format!("http://[::1]:{}/secret", forbidden_addr.port()),
+            "ula" => format!("http://[fd00::1]:{}/secret", forbidden_addr.port()),
+            "rfc1918" => format!("http://10.0.0.1:{}/secret", forbidden_addr.port()),
+            "linklocal" => format!("http://169.254.1.1:{}/secret", forbidden_addr.port()),
             _ => unreachable!(),
         };
         let first_server = tokio::spawn(async move {
@@ -362,10 +376,7 @@ async fn public_origin_redirects_never_issue_forbidden_private_gets() {
                 ("private-fixture.invalid".to_owned(), vec![forbidden_addr]),
                 (
                     "mixed-fixture.invalid".to_owned(),
-                    vec![
-                        forbidden_addr,
-                        endpoint("1.1.1.1", forbidden_addr.port()),
-                    ],
+                    vec![forbidden_addr, endpoint("1.1.1.1", forbidden_addr.port())],
                 ),
             ]),
         };
@@ -451,10 +462,7 @@ async fn public_origin_dns_rebinding_before_second_dial_never_reaches_loopback()
         reply_port,
         synthetic_gets: synthetic_gets.clone(),
     };
-    let mut url = Url::parse(&format!(
-        "http://public-fixture.invalid:{reply_port}/start"
-    ))
-    .unwrap();
+    let mut url = Url::parse(&format!("http://public-fixture.invalid:{reply_port}/start")).unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         fetch_redirects_with_transport(&mut url, &resolver, &transport),
