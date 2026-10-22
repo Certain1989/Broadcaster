@@ -333,8 +333,19 @@ impl StreamsService {
     /// refresh. Never run from list/query or a per-row UI path, and never run
     /// synchronously on the GTK main context. SQLite serializes writers.
     async fn purge_expired_missing_if_due(&self) {
+        self.purge_expired_missing_if_due_at(now(), |store, at| {
+            store.purge_expired_missing(at)
+        })
+        .await;
+    }
+
+    // Injectable clock and blocking DB operation make failure/cadence tests
+    // deterministic. Production always supplies the real current time and SQL.
+    pub(super) async fn purge_expired_missing_if_due_at<F>(&self, at: i64, purge: F)
+    where
+        F: FnOnce(Storage, i64) -> Result<usize, StorageError> + Send + 'static,
+    {
         const DAY: i64 = 24 * 60 * 60;
-        let at = now();
         let last = self.inner.last_purge_at.load(Ordering::Acquire);
         if at.saturating_sub(last) < DAY
             || self
@@ -346,11 +357,7 @@ impl StreamsService {
             return;
         }
         let result = self
-            .db(move |store| {
-                store
-                    .purge_expired_missing(at)
-                    .map_err(ServiceError::Storage)
-            })
+            .db(move |store| purge(store, at).map_err(ServiceError::Storage))
             .await;
         if result.is_err() {
             // Retry is allowed on the next successful refresh. The SQL
