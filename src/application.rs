@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::Rc,
     sync::Arc,
 };
@@ -25,6 +25,24 @@ use crate::{
     zapp::Zapp,
 };
 
+/// Main-thread request order shared by IPTV, Live and Mediathek.
+#[derive(Debug, Default)]
+pub(crate) struct PlaybackRequests {
+    serial: Cell<u64>,
+}
+
+impl PlaybackRequests {
+    fn begin(&self) -> u64 {
+        let serial = self.serial.get().wrapping_add(1);
+        self.serial.set(serial);
+        serial
+    }
+
+    fn is_current(&self, serial: u64) -> bool {
+        self.serial.get() == serial
+    }
+}
+
 mod imp {
 
     use super::*;
@@ -35,6 +53,7 @@ mod imp {
         pub(super) zapp: Arc<Zapp>,
         pub(super) live_channels: AsyncResource<LiveChannels>,
         pub(super) window: RefCell<Option<glib::WeakRef<TvWindow>>>,
+        pub(super) playback_requests: PlaybackRequests,
     }
 
     #[glib::object_subclass]
@@ -153,7 +172,26 @@ impl TvApplication {
         self.imp().live_channels.clone()
     }
 
+    /// Reserve before an asynchronous IPTV detail lookup so later requests win.
+    pub fn begin_playback_request(&self) -> u64 {
+        self.imp().playback_requests.begin()
+    }
+
+    pub fn playback_request_is_current(&self, serial: u64) -> bool {
+        self.imp().playback_requests.is_current(serial)
+    }
+
     pub async fn play(&self, video: VideoInfo) {
+        let serial = self.begin_playback_request();
+        self.play_requested(video, serial).await;
+    }
+
+    /// IPTV resolves metadata asynchronously; do not allocate a second request
+    /// when its already-reserved request reaches this common playback boundary.
+    pub async fn play_requested(&self, video: VideoInfo, serial: u64) {
+        if !self.playback_request_is_current(serial) {
+            return;
+        }
         let Some(uri) = video.uri() else {
             show_error(&gettext("No playable video URL is available"));
             return;
@@ -194,11 +232,17 @@ impl TvApplication {
                 }
             };
 
+            if !self.playback_request_is_current(serial) {
+                return;
+            }
             match player.open(uri.to_owned()).await {
                 Ok(()) => (),
                 Err(_) => show_error(&gettext("Failed to play video stream")),
             }
         } else {
+            if !self.playback_request_is_current(serial) {
+                return;
+            }
             // The managed player is a separate process. Capture the source view
             // before launching, then restore it only when its process exits.
             let window = self.window();
@@ -209,6 +253,7 @@ impl TvApplication {
                 uri,
                 video.subtitle_url(),
                 video.stream_headers(),
+                serial,
                 move || {
                     if let Some(window) = weak_window.upgrade() {
                         window.finish_playback(token);
@@ -220,7 +265,9 @@ impl TvApplication {
                 // A spawn failure has no watcher. Discard this context without
                 // allowing an older playback request to override newer state.
                 window.finish_playback(token);
-                show_error(&e.message());
+                if e != mpv::StartError::Superseded && self.playback_request_is_current(serial) {
+                    show_error(&e.message());
+                }
             }
         }
     }
@@ -569,6 +616,25 @@ mod tests {
             subtitle_url: None,
         };
         assert_eq!(video.uri(), Some("high"));
+    }
+
+    #[test]
+    fn delayed_iptv_requests_cannot_overtake_live_or_mediathek() {
+        let requests = super::PlaybackRequests::default();
+        let pending_a = requests.begin();
+        assert!(requests.is_current(pending_a));
+        let live = requests.begin();
+        assert!(!requests.is_current(pending_a), "delayed A must not replace Live");
+        assert!(requests.is_current(live));
+        let pending_b = requests.begin();
+        let mediathek = requests.begin();
+        assert!(!requests.is_current(pending_b), "delayed B must not replace Mediathek");
+        assert!(!requests.is_current(live));
+        assert!(requests.is_current(mediathek));
+        let pending_c = requests.begin();
+        let pending_d = requests.begin();
+        assert!(!requests.is_current(pending_c), "later IPTV selection wins");
+        assert!(requests.is_current(pending_d));
     }
 
     #[test]
