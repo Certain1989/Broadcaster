@@ -1201,13 +1201,18 @@ impl TvStreamsView {
         let generation = self.imp().generation.get();
         let serial = self.imp().play_serial.get().wrapping_add(1);
         self.imp().play_serial.set(serial);
+        // Reserve before awaiting SQLite so a later Live/Mediathek request
+        // invalidates this pending IPTV resolution across view boundaries.
+        let application = TvApplication::get();
+        let request_serial = application.begin_playback_request();
         spawn(glib::clone!(
             #[weak(rename_to = view)]
             self,
             async move {
                 let result = service.channel_detail(&id).await;
                 let imp = view.imp();
-                if imp.generation.get() != generation
+                if !application.playback_request_is_current(request_serial)
+                    || imp.generation.get() != generation
                     || imp.play_serial.get() != serial
                     || imp.selected_id.borrow().as_deref() != Some(id.as_str())
                 {
@@ -1230,7 +1235,7 @@ impl TvStreamsView {
                         detail.imported.referer,
                     ),
                 };
-                TvApplication::get().play(video).await;
+                application.play_requested(video, request_serial).await;
             }
         ));
     }
