@@ -5,7 +5,12 @@
 
 use std::cell::{Cell, RefCell};
 
-use adw::{gio, glib, gtk, prelude::*, subclass::prelude::*};
+#[cfg(test)]
+thread_local! {
+    static SUPPRESS_LIVE_LOAD: Cell<bool> = const { Cell::new(false) };
+}
+
+use adw::{gdk, gio, glib, gtk, prelude::*, subclass::prelude::*};
 use indexmap::IndexMap;
 use smart_default::SmartDefault;
 
@@ -17,6 +22,215 @@ use crate::{
 
 use super::selector_row::TvLiveChannelSelectorRow;
 
+// A mapped native menu action is the correct focus target, unlike its
+// focusable GtkScrolledWindow container. GTK may use either a private
+// GtkModelButton or a public menu-item accessible role.
+fn is_mapped_menu_action(widget: &gtk::Widget) -> bool {
+    widget.is_mapped()
+        && widget.is_sensitive()
+        && (widget.type_().name() == "GtkModelButton"
+            || matches!(
+                widget.accessible_role(),
+                gtk::AccessibleRole::MenuItem
+                    | gtk::AccessibleRole::MenuItemCheckbox
+                    | gtk::AccessibleRole::MenuItemRadio
+            ))
+}
+
+fn first_mapped_menu_action(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    if is_mapped_menu_action(widget) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(next) = child {
+        if let Some(action) = first_mapped_menu_action(&next) {
+            return Some(action);
+        }
+        child = next.next_sibling();
+    }
+    None
+}
+
+/// Attach a remote handler to the actual menu popover, which is created
+/// after the top-level window scans its initial widget tree. Native menu
+/// arrows, Return and Escape remain GTK-owned.
+pub(super) fn install_channel_menu_remote_handler(button: &gtk::MenuButton) {
+    let Some(popover) = button.popover() else {
+        return;
+    };
+
+    // GTK's popdown can hand focus back after our event handler runs.
+    // Restore the origin only after the popover has finished closing.
+    let restore_focus = std::rc::Rc::new(Cell::new(false));
+    let weak_button = button.downgrade();
+    popover.connect_closed({
+        let restore_focus = restore_focus.clone();
+        move |_| {
+            if restore_focus.replace(false) {
+                let weak_button = weak_button.clone();
+                glib::idle_add_local_once(move || {
+                    if let Some(button) = weak_button.upgrade() {
+                        if button.is_mapped()
+                            && button.is_sensitive()
+                            && !button.popover().is_some_and(|menu| menu.is_mapped())
+                        {
+                            button.grab_focus();
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak_button = button.downgrade();
+    controller.connect_key_pressed(move |_, key, _, modifiers| {
+        if !crate::keyboard::unmodified_remote(modifiers) {
+            return glib::Propagation::Proceed;
+        }
+        let Some(button) = weak_button.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
+        let Some(popover) = button.popover().filter(|menu| menu.is_mapped()) else {
+            return glib::Propagation::Proceed;
+        };
+
+        if matches!(
+            key,
+            gdk::Key::Up | gdk::Key::Down | gdk::Key::Left | gdk::Key::Right
+        ) {
+            // Let GTK move between its native enabled GtkModelButtons.
+            // At a menu boundary, GTK may instead focus the scroll pane;
+            // preserve the last actionable item without consuming the key.
+            let previous = popover
+                .root()
+                .and_then(|root| root.downcast::<gtk::Window>().ok())
+                .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+                .filter(|focus| focus.is_ancestor(&popover) && is_mapped_menu_action(focus))
+                .map(|focus| focus.downgrade());
+            let weak_popover = popover.downgrade();
+            glib::idle_add_local_once(move || {
+                let Some(popover) = weak_popover.upgrade() else {
+                    return;
+                };
+                if !popover.is_mapped() {
+                    return;
+                }
+                let focus = popover
+                    .root()
+                    .and_then(|root| root.downcast::<gtk::Window>().ok())
+                    .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
+                if focus.as_ref().is_some_and(|focus| {
+                    focus.is_ancestor(&popover) && is_mapped_menu_action(focus)
+                }) {
+                    return;
+                }
+                if let Some(previous) = previous.and_then(|weak| weak.upgrade()) {
+                    if previous.is_ancestor(&popover) && is_mapped_menu_action(&previous) {
+                        previous.grab_focus();
+                        return;
+                    }
+                }
+                if let Some(action) = first_mapped_menu_action(popover.upcast_ref()) {
+                    action.grab_focus();
+                }
+            });
+            return glib::Propagation::Proceed;
+        }
+
+        if !matches!(key, gdk::Key::Back | gdk::Key::HomePage) {
+            return glib::Propagation::Proceed;
+        }
+
+        // Resolve the modal before closing the menu and releasing its grab.
+        let dialog = button
+            .ancestor(adw::Dialog::static_type())
+            .and_then(|widget| widget.downcast::<adw::Dialog>().ok());
+        let root = button.root();
+        if key == gdk::Key::Back {
+            restore_focus.set(true);
+            button.popdown();
+        } else {
+            restore_focus.set(false);
+            button.popdown();
+            if let Some(dialog) = dialog {
+                dialog.close();
+            }
+            if let Some(window) =
+                root.and_then(|root| root.downcast::<crate::window::TvWindow>().ok())
+            {
+                // Existing window action and Mediathek focus policy; no global
+                // router edits, no navigation behind the still-open modal.
+                let _ = gtk::prelude::WidgetExt::activate_action(
+                    &window,
+                    "window.show-mediathek",
+                    None,
+                );
+                fn focus_browse(widget: &gtk::Widget) -> bool {
+                    if let Some(view) = widget.downcast_ref::<crate::mediathek::TvMediathekView>() {
+                        view.focus_browse();
+                        return true;
+                    }
+                    let mut child = widget.first_child();
+                    while let Some(next) = child {
+                        if focus_browse(&next) {
+                            return true;
+                        }
+                        child = next.next_sibling();
+                    }
+                    false
+                }
+                focus_browse(window.upcast_ref());
+            }
+        }
+        glib::Propagation::Stop
+    });
+    popover.add_controller(controller);
+
+    // A menu with just one effective action can hand native GTK focus out
+    // to the underlying row during directional navigation, without hiding
+    // its popover. Keep its mapped lifetime as the active focus scope.
+    // EventControllerFocus observes GTK's real focus hierarchy, not key
+    // events, so normal menu arrow/Return handling remains untouched.
+    let focus_controller = gtk::EventControllerFocus::new();
+    let weak_popover = popover.downgrade();
+    focus_controller.connect_leave(move |_| {
+        let weak_popover = weak_popover.clone();
+        // Let GTK finish its current focus transition first. A pending
+        // popdown must not be counteracted by restoring focus to a closed
+        // menu, and weak references cannot retain removed rows.
+        glib::idle_add_local_once(move || {
+            let Some(popover) = weak_popover.upgrade() else {
+                return;
+            };
+            if !popover.is_mapped() {
+                return;
+            }
+            let Some(window) = popover
+                .root()
+                .and_then(|root| root.downcast::<gtk::Window>().ok())
+            else {
+                return;
+            };
+            let still_in_popover =
+                gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focus| {
+                    focus == popover.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&popover)
+                });
+            if !still_in_popover {
+                // Re-enter an actual GTK menu action, not the focusable
+                // scrolling container or the obscured channel list.
+                if let Some(action) = first_mapped_menu_action(popover.upcast_ref()) {
+                    action.grab_focus();
+                } else {
+                    let _ = popover.child_focus(gtk::DirectionType::TabForward);
+                }
+            }
+        });
+    });
+    popover.add_controller(focus_controller);
+}
+
 mod imp {
     use crate::utils::{show_error, spawn, ListStoreExtManual};
 
@@ -27,6 +241,8 @@ mod imp {
     pub struct TvLiveChannelSelector {
         #[template_child]
         pub(super) visible_channel_rows: TemplateChild<gtk::ListBox>,
+        #[template_child]
+        pub(super) sort_button: TemplateChild<gtk::MenuButton>,
         #[template_child]
         pub(super) hidden_channel_rows: TemplateChild<gtk::ListBox>,
 
@@ -147,11 +363,34 @@ mod imp {
                 return;
             };
 
+            // A single user reorder must not persist its transient removal.
+            let was_loading = self.loading.replace(true);
             self.visible_channels.remove(position);
             self.visible_channels.insert(new_position, row);
+            self.loading.set(was_loading);
+            if !was_loading {
+                self.settings.set_live_channels(
+                    self.visible_channels
+                        .iter::<TvLiveChannelSelectorRow>()
+                        .map(|entry| entry.expect("live row").channel_id())
+                        .collect(),
+                );
+            }
             // the row lost the focus when it was removed
             row.grab_focus();
         }
+        #[cfg(test)]
+        pub(super) fn add_synthetic_row(&self, id: &str, name: &str) {
+            let row = TvLiveChannelSelectorRow::new(&ChannelId::from(id.to_owned()), name);
+            row.connect_move_requested(glib::clone!(
+                #[weak(rename_to = slf)]
+                self,
+                move |row, offset| slf.move_row(row, offset)
+            ));
+            row.set_visible(true);
+            self.visible_channels.append(&row);
+        }
+
         fn remove_row(&self, row: &TvLiveChannelSelectorRow) {
             if let Some(pos) = self.visible_channels.find(row) {
                 self.visible_channels.remove(pos)
@@ -209,6 +448,7 @@ mod imp {
     impl ObjectImpl for TvLiveChannelSelector {
         fn constructed(&self) {
             self.parent_constructed();
+            install_channel_menu_remote_handler(&self.sort_button);
 
             self.visible_channel_rows
                 .bind_model(Some(&self.visible_channels), |row| {
@@ -220,11 +460,17 @@ mod imp {
                 });
 
             self.loading.set(true);
-            spawn(glib::clone!(
-                #[weak(rename_to = slf)]
-                self,
-                async move { slf.load().await }
-            ));
+            #[cfg(test)]
+            let suppress_load = SUPPRESS_LIVE_LOAD.with(Cell::get);
+            #[cfg(not(test))]
+            let suppress_load = false;
+            if !suppress_load {
+                spawn(glib::clone!(
+                    #[weak(rename_to = slf)]
+                    self,
+                    async move { slf.load().await }
+                ));
+            }
 
             let settings = self.settings.clone();
             let owner = self.obj().downgrade();
@@ -263,5 +509,663 @@ glib::wrapper! {
 impl TvLiveChannelSelector {
     pub fn new() -> Self {
         glib::Object::new()
+    }
+}
+
+#[cfg(test)]
+mod native_channel_menu_tests {
+    use super::*;
+    use std::{cell::Cell, rc::Rc, time::Duration};
+
+    thread_local! {
+        static INITIAL_X11_FOCUS_SET: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn spin() {
+        for _ in 0..20 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    // X11/XTest injects real GDK key events into a mapped native surface.
+    fn native_key(key: &str) {
+        // Only establish X11 focus for the first key. Re-focusing the last
+        // root child after a popdown targets a now-unmapped popup (BadMatch)
+        // and defeats GTK's real focus restoration.
+        let initial_focus = INITIAL_X11_FOCUS_SET.with(|flag| !flag.replace(true));
+        let script = r#"
+import ctypes as c
+import sys
+x, t = c.CDLL("libX11.so.6"), c.CDLL("libXtst.so.6")
+x.XOpenDisplay.argtypes = [c.c_char_p]
+x.XOpenDisplay.restype = c.c_void_p
+d = x.XOpenDisplay(None)
+assert d, "X11 display missing"
+x.XDefaultRootWindow.argtypes = [c.c_void_p]
+x.XDefaultRootWindow.restype = c.c_ulong
+x.XQueryTree.argtypes = [c.c_void_p, c.c_ulong, c.POINTER(c.c_ulong),
+    c.POINTER(c.c_ulong), c.POINTER(c.POINTER(c.c_ulong)), c.POINTER(c.c_uint)]
+x.XQueryTree.restype = c.c_int
+root = x.XDefaultRootWindow(d)
+ret_root, parent, count = c.c_ulong(), c.c_ulong(), c.c_uint()
+children = c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d, root, c.byref(ret_root), c.byref(parent),
+    c.byref(children), c.byref(count))
+assert count.value, "no mapped GTK window"
+x.XSetInputFocus.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_ulong]
+if sys.argv[2] == "initial":
+    x.XSetInputFocus(d, children[count.value - 1], 1, 0)
+x.XFree.argtypes = [c.c_void_p]
+x.XFree(c.cast(children, c.c_void_p))
+x.XStringToKeysym.argtypes = [c.c_char_p]
+x.XStringToKeysym.restype = c.c_ulong
+x.XKeysymToKeycode.argtypes = [c.c_void_p, c.c_ulong]
+x.XKeysymToKeycode.restype = c.c_uint
+sym = x.XStringToKeysym(sys.argv[1].encode())
+assert sym, "unknown keysym " + sys.argv[1]
+code = x.XKeysymToKeycode(d, sym)
+assert code, "unmapped keysym " + sys.argv[1]
+t.XTestFakeKeyEvent.argtypes = [c.c_void_p, c.c_uint, c.c_int, c.c_ulong]
+assert t.XTestFakeKeyEvent(d, code, 1, 0)
+assert t.XTestFakeKeyEvent(d, code, 0, 0)
+x.XFlush.argtypes = [c.c_void_p]
+x.XFlush(d)
+x.XCloseDisplay.argtypes = [c.c_void_p]
+x.XCloseDisplay(d)
+"#;
+        let focus_mode = if initial_focus { "initial" } else { "keep" };
+        let output = std::process::Command::new("python3")
+            .args(["-c", script, key, focus_mode])
+            .output()
+            .expect("XTest Python driver");
+        assert!(
+            output.status.success(),
+            "native {key} injection: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        spin();
+    }
+
+    fn find_menu(widget: &gtk::Widget, tooltip: &str) -> Option<gtk::MenuButton> {
+        if let Some(button) = widget.downcast_ref::<gtk::MenuButton>() {
+            if button.tooltip_text().as_deref() == Some(tooltip) {
+                return Some(button.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(button) = find_menu(&next, tooltip) {
+                return Some(button);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+
+    fn synthetic_page() -> TvLiveChannelSelector {
+        SUPPRESS_LIVE_LOAD.with(|skip| skip.set(true));
+        let page = TvLiveChannelSelector::new();
+        SUPPRESS_LIVE_LOAD.with(|skip| skip.set(false));
+        for (id, name) in [
+            ("fixture-channel-a", "Alpha"),
+            ("fixture-channel-b", "Bravo"),
+            ("fixture-channel-c", "Charlie"),
+        ] {
+            page.imp().add_synthetic_row(id, name);
+        }
+        page.imp().loading.set(false);
+        page
+    }
+
+    fn menu_owns_focus(window: &crate::window::TvWindow, button: &gtk::MenuButton) -> bool {
+        gtk::prelude::GtkWindowExt::focus(window).is_some_and(|focused| {
+            focused == button.clone().upcast::<gtk::Widget>() || focused.is_ancestor(button)
+        })
+    }
+
+    fn row(page: &TvLiveChannelSelector, index: i32) -> TvLiveChannelSelectorRow {
+        page.imp()
+            .visible_channel_rows
+            .row_at_index(index)
+            .expect("mapped live row")
+            .downcast()
+            .expect("TvLiveChannelSelectorRow")
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_move_menu_native_remote() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        // GtkApplicationWindow registration is only valid after startup.
+        // Register synchronously before constructing the mapped test window.
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "real Preferences subpage");
+
+        let settings = TvSettings::get();
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        settings.connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        let second = row(&page, 1);
+        let button = find_menu(second.upcast_ref(), "Move").expect("Move menu");
+        let popup = button.popover().expect("real PopoverMenu");
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "Return opens menu");
+        native_key("XF86Back");
+        assert!(!popup.is_mapped(), "Back closes Move popup");
+        assert!(page.is_mapped(), "Back retains Preferences subpage");
+        assert!(
+            menu_owns_focus(&win, &button),
+            "Back restores focus into Move button; actual focus: {:?}",
+            gtk::prelude::GtkWindowExt::focus(&win)
+                .as_ref()
+                .map(|widget| widget.type_().name().to_string())
+        );
+        assert_eq!(saves.get(), 0, "dismissal must not reorder");
+
+        // No synthetic grab_focus here: native Return must work after Back.
+        native_key("Return");
+        assert!(popup.is_mapped(), "reopen after Back");
+        native_key("Escape");
+        assert!(!popup.is_mapped(), "native Escape dismisses menu");
+        assert_eq!(saves.get(), 0);
+
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped());
+        native_key("Down");
+        native_key("Return");
+        assert!(!popup.is_mapped(), "Move action closes popup");
+        assert_eq!(saves.get(), 1, "one GSettings commit on move");
+        let final_ids: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_id())
+            .collect();
+        assert_eq!(
+            settings.live_channels(),
+            final_ids,
+            "persisted order must exactly match the final displayed order"
+        );
+        let names: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_name())
+            .collect();
+        assert_ne!(
+            names,
+            ["Alpha", "Bravo", "Charlie"],
+            "native move changes order"
+        );
+
+        let first = row(&page, 0);
+        let last = row(&page, 2);
+        // GtkWidget.activate_action returns success when an action exists,
+        // even if its disabled state prevents a callback. Test the observable
+        // contract instead: no boundary action may reorder or persist.
+        let before_boundary = names.clone();
+        let before_saves = saves.get();
+        let _ = first.activate_action("row.move-up", None);
+        let _ = last.activate_action("row.move-down", None);
+        let after_boundary: Vec<_> = page
+            .imp()
+            .visible_channels
+            .iter::<TvLiveChannelSelectorRow>()
+            .map(|r| r.unwrap().channel_name())
+            .collect();
+        assert_eq!(after_boundary, before_boundary, "boundary cannot reorder");
+        assert_eq!(saves.get(), before_saves, "boundary cannot persist");
+        assert_eq!(
+            settings.live_channels(),
+            final_ids,
+            "invalid boundary actions must leave stored order unchanged"
+        );
+        let last_button = find_menu(last.upcast_ref(), "Move").unwrap();
+        assert!(last_button.grab_focus());
+        native_key("Return");
+        assert!(last_button.popover().unwrap().is_mapped());
+        native_key("XF86Back");
+        assert!(!last_button.popover().unwrap().is_mapped());
+
+        native_key("XF86Back");
+        assert!(!page.is_mapped(), "second Back pops subpage normally");
+        assert!(preferences.is_mapped(), "Preferences retained");
+        preferences.push_subpage(&page);
+        spin();
+        let first_button = find_menu(row(&page, 0).upcast_ref(), "Move").unwrap();
+        assert!(first_button.grab_focus());
+        native_key("Return");
+        assert!(first_button.popover().unwrap().is_mapped());
+        native_key("XF86HomePage");
+        assert!(!first_button.popover().unwrap().is_mapped());
+        assert!(!preferences.is_mapped(), "Home closes Preferences");
+        win.destroy();
+    }
+
+    // Regression probe: exercise the first-row Move popup while it remains
+    // mapped, using the same real XTest path as the Back/Home tests.
+    // Keep this test separate so it can establish a before-fix failure.
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_first_row_move_popup_native_focus_containment() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "real Preferences subpage");
+
+        let first = row(&page, 0);
+        let button = find_menu(first.upcast_ref(), "Move").expect("first Move menu");
+        let popup = button.popover().expect("real GtkPopoverMenu");
+        assert!(button.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "first-row Move popup must be mapped");
+
+        // Inspect the actual mapped GTK menu widget hierarchy, including
+        // effective sensitivity; the action installer alone proves neither
+        // boundary-menu item is interactive.
+        fn inspect(widget: &gtk::Widget, depth: usize) {
+            if depth > 7 {
+                return;
+            }
+            eprintln!(
+                "F02 menu widget depth={} type={} mapped={} sensitive={} focusable={} focused={}",
+                depth,
+                widget.type_().name(),
+                widget.is_mapped(),
+                widget.is_sensitive(),
+                widget.is_focusable(),
+                widget.has_focus()
+            );
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                inspect(&next, depth + 1);
+                child = next.next_sibling();
+            }
+        }
+        inspect(popup.upcast_ref(), 0);
+
+        // No test-induced focus reset between these native directional keys.
+        // Capture the first escape and its exact preceding key.
+        for (step, key) in [
+            "Up", "Down", "Up", "Left", "Right", "Down", "Down", "Up", "Left", "Right", "Up",
+            "Down",
+        ]
+        .iter()
+        .enumerate()
+        {
+            native_key(key);
+            let focused = gtk::prelude::GtkWindowExt::focus(&win);
+            let in_popup = focused.as_ref().is_some_and(|widget| {
+                widget == popup.upcast_ref::<gtk::Widget>() || widget.is_ancestor(&popup)
+            });
+            let in_visible_list = focused
+                .as_ref()
+                .is_some_and(|widget| widget.is_ancestor(&*page.imp().visible_channel_rows));
+            let in_hidden_list = focused
+                .as_ref()
+                .is_some_and(|widget| widget.is_ancestor(&*page.imp().hidden_channel_rows));
+            // GtkPopoverMenu is itself parented beneath its origin ListBox row.
+            // Popup descendants therefore also have list ancestry; that is
+            // not a background focus escape.
+            let escaped_background = !in_popup && (in_visible_list || in_hidden_list);
+            let focus_ancestry = focused
+                .as_ref()
+                .map(|widget| {
+                    let mut names = Vec::new();
+                    let mut node = Some(widget.clone());
+                    while let Some(current) = node {
+                        names.push(current.type_().name().to_string());
+                        node = current.parent();
+                    }
+                    names.join(" <- ")
+                })
+                .unwrap_or_else(|| "NONE".to_string());
+            eprintln!(
+                "F02 step={} key={} mapped={} visible={} popup_focus={} visible_list_ancestry={} hidden_list_ancestry={} background_focus={} GtkWindow::focus={}",
+                step + 1,
+                key,
+                popup.is_mapped(),
+                popup.is_visible(),
+                in_popup,
+                in_visible_list,
+                in_hidden_list,
+                escaped_background,
+                focus_ancestry
+            );
+            assert!(
+                popup.is_mapped() && in_popup && !escaped_background,
+                "F02 first-row focus escaped at native step {} key {}: popup mapped={} focus={}",
+                step + 1,
+                key,
+                popup.is_mapped(),
+                focus_ancestry
+            );
+        }
+        button.popdown();
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped());
+
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        TvSettings::get().connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        fn assert_native_arrows(
+            win: &crate::window::TvWindow,
+            button: &gtk::MenuButton,
+            context: &str,
+        ) {
+            assert!(button.grab_focus(), "{context}: launcher focus");
+            native_key("Return");
+            let popup = button.popover().expect("native PopoverMenu");
+            assert!(popup.is_mapped(), "{context}: popup mapped");
+
+            // Inspect GTK's effective item sensitivity on mapped widgets;
+            // class-installed actions alone are not proof of menu sensitivity.
+            fn inspect_items(widget: &gtk::Widget, context: &str, states: &mut Vec<bool>) {
+                if widget.type_().name() == "GtkModelButton" {
+                    eprintln!(
+                        "F02 {context}: GtkModelButton mapped={} sensitive={}",
+                        widget.is_mapped(),
+                        widget.is_sensitive()
+                    );
+                    states.push(widget.is_sensitive());
+                }
+                let mut child = widget.first_child();
+                while let Some(next) = child {
+                    inspect_items(&next, context, states);
+                    child = next.next_sibling();
+                }
+            }
+            let mut states = Vec::new();
+            inspect_items(popup.upcast_ref(), context, &mut states);
+            let expected = match context {
+                "first-boundary" => [false, true],
+                "last-boundary" => [true, false],
+                _ => [true, true],
+            };
+            assert_eq!(
+                states, expected,
+                "{context}: effective mapped GTK menu item sensitivities"
+            );
+
+            // No manual focus reset during traversal. Containment must
+            // survive repeated attempts to leave the enabled menu action.
+            for (step, key) in ["Up", "Down", "Left", "Right", "Down", "Up", "Right", "Left"]
+                .iter()
+                .enumerate()
+            {
+                native_key(key);
+                let focused = gtk::prelude::GtkWindowExt::focus(win);
+                let in_popup = focused.as_ref().is_some_and(|focus| {
+                    focus == popup.upcast_ref::<gtk::Widget>() || focus.is_ancestor(&popup)
+                });
+                eprintln!(
+                    "F02 {context} step={} key={key} popup_mapped={} popup_focus={} actual_focus={:?}",
+                    step + 1,
+                    popup.is_mapped(),
+                    in_popup,
+                    focused
+                        .as_ref()
+                        .map(|widget| widget.type_().name().to_string())
+                );
+                assert!(
+                    popup.is_mapped() && in_popup,
+                    "{context}: native {key} escaped mapped menu at step {} (focus={:?})",
+                    step + 1,
+                    focused
+                        .as_ref()
+                        .map(|widget| widget.type_().name().to_string())
+                );
+            }
+            native_key("Escape");
+            assert!(!popup.is_mapped(), "{context}: Escape dismisses popup");
+        }
+
+        for (context, button) in [
+            (
+                "first-boundary",
+                find_menu(row(&page, 0).upcast_ref(), "Move").unwrap(),
+            ),
+            (
+                "middle",
+                find_menu(row(&page, 1).upcast_ref(), "Move").unwrap(),
+            ),
+            (
+                "last-boundary",
+                find_menu(row(&page, 2).upcast_ref(), "Move").unwrap(),
+            ),
+            ("header-sort", find_menu(page.upcast_ref(), "Sort").unwrap()),
+        ] {
+            assert_native_arrows(&win, &button, context);
+            assert!(page.is_mapped(), "{context}: Preferences subpage retained");
+            assert_eq!(saves.get(), 0, "{context}: traversal/dismissal cannot save");
+        }
+
+        // Reinsert an already-dismissed row while initial-load suppression
+        // is active, as a model/list binding and weak-lifetime regression.
+        let item = page
+            .imp()
+            .visible_channels
+            .item(1)
+            .unwrap()
+            .downcast::<TvLiveChannelSelectorRow>()
+            .unwrap();
+        let old_button = find_menu(item.upcast_ref(), "Move").unwrap();
+        assert!(old_button.grab_focus());
+        native_key("Return");
+        let old_popup = old_button.popover().unwrap();
+        assert!(old_popup.is_mapped(), "middle popup open before row unmap");
+        let was_loading = page.imp().loading.replace(true);
+        page.imp().visible_channels.remove(1);
+        spin();
+        assert!(
+            !old_popup.is_mapped(),
+            "unmapping a row must not retain an orphaned menu"
+        );
+        page.imp().visible_channels.insert(1, &item);
+        page.imp().loading.set(was_loading);
+        spin();
+        assert_eq!(saves.get(), 0, "model rebind cannot persist");
+        let fresh_button = find_menu(row(&page, 1).upcast_ref(), "Move").unwrap();
+        assert_native_arrows(&win, &fresh_button, "reinserted-middle");
+        assert_eq!(saves.get(), 0, "reopen/dismiss cannot persist");
+
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_first_move_down_reverse_and_middle_up_native_persistence() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        assert!(page.is_mapped(), "mapped real Preferences channel page");
+
+        let settings = TvSettings::get();
+        let saves = Rc::new(Cell::new(0));
+        let observed = saves.clone();
+        settings.connect_live_channels_changed(move |_| {
+            observed.set(observed.get() + 1);
+        });
+
+        fn model_order(page: &TvLiveChannelSelector) -> Vec<ChannelId> {
+            page.imp()
+                .visible_channels
+                .iter::<TvLiveChannelSelectorRow>()
+                .map(|entry| entry.expect("channel row").channel_id())
+                .collect()
+        }
+
+        fn native_move(
+            win: &crate::window::TvWindow,
+            page: &TvLiveChannelSelector,
+            position: i32,
+            arrows: &[&str],
+        ) {
+            let selected = row(page, position);
+            let button = find_menu(selected.upcast_ref(), "Move").expect("Move launcher");
+            assert!(button.grab_focus(), "focus originating Move launcher");
+            native_key("Return");
+            let popup = button.popover().expect("mapped Move popup");
+            assert!(popup.is_mapped(), "Return opens Move popup");
+
+            let focus = gtk::prelude::GtkWindowExt::focus(win).expect("initial menu focus");
+            assert!(
+                focus.is_ancestor(&popup) && is_mapped_menu_action(&focus),
+                "initial menu focus must be on an enabled GTK action"
+            );
+            // Native arrows navigate between actual model actions; check
+            // focus and sensitivity after each key without resetting focus.
+            for arrow in arrows {
+                native_key(arrow);
+                let focus = gtk::prelude::GtkWindowExt::focus(win).expect("menu arrow focus");
+                assert!(
+                    popup.is_mapped() && focus.is_ancestor(&popup) && is_mapped_menu_action(&focus),
+                    "native {arrow} must leave an enabled action focused"
+                );
+            }
+            native_key("Return");
+            assert!(!popup.is_mapped(), "Return executes Move and closes popup");
+        }
+
+        let alpha = ChannelId::from("fixture-channel-a".to_string());
+        let bravo = ChannelId::from("fixture-channel-b".to_string());
+        let charlie = ChannelId::from("fixture-channel-c".to_string());
+        let original = vec![alpha.clone(), bravo.clone(), charlie.clone()];
+        assert_eq!(model_order(&page), original, "original synthetic order");
+        assert_eq!(saves.get(), 0, "initial fixture must not save");
+
+        // Boundary Move Up is disabled, but Move Down must still be
+        // selectable with real remote Down/Return.
+        native_move(&win, &page, 0, &["Down"]);
+        let first_down = vec![bravo.clone(), alpha.clone(), charlie.clone()];
+        assert_eq!(model_order(&page), first_down);
+        assert_eq!(settings.live_channels(), first_down);
+        assert_eq!(saves.get(), 1, "first-row down writes final order once");
+
+        // Move that same row back from the middle to first position.
+        native_move(&win, &page, 1, &["Down", "Up"]);
+        assert_eq!(model_order(&page), original);
+        assert_eq!(settings.live_channels(), original);
+        assert_eq!(saves.get(), 2, "reverse move persists once");
+
+        // The previously middle row can independently become the first.
+        native_move(&win, &page, 1, &["Down", "Up"]);
+        assert_eq!(model_order(&page), first_down);
+        assert_eq!(settings.live_channels(), first_down);
+        assert_eq!(saves.get(), 3, "middle-to-first persists once");
+
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires mapped GTK/Xvfb, XTest and memory GSettings"]
+    fn osk_mapped_gtk_channel_sort_menu_native_remote() {
+        adw::init().expect("GTK display");
+        let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled resources");
+        gio::resources_register(&resources);
+        let app = TvApplication::new();
+        // GtkApplicationWindow registration is only valid after startup.
+        // Register synchronously before constructing the mapped test window.
+        app.register(None::<&gio::Cancellable>)
+            .expect("test application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(1152, 760);
+        win.present();
+        let preferences = crate::preferences::TvPreferencesDialog::new();
+        let page = synthetic_page();
+        preferences.push_subpage(&page);
+        preferences.present(Some(&win));
+        spin();
+        let sort = find_menu(page.upcast_ref(), "Sort").expect("header Sort button");
+        let popup = sort.popover().expect("real Sort PopoverMenu");
+        assert!(sort.grab_focus());
+        native_key("Return");
+        assert!(popup.is_mapped(), "Sort popup mapped");
+        native_key("XF86Back");
+        assert!(!popup.is_mapped(), "Sort should dismiss on native Back");
+        assert!(page.is_mapped(), "Sort Back stays on Preferences subpage");
+        assert!(
+            menu_owns_focus(&win, &sort),
+            "Sort Back restores button focus; actual focus: {:?}",
+            gtk::prelude::GtkWindowExt::focus(&win)
+                .as_ref()
+                .map(|widget| widget.type_().name().to_string())
+        );
+        // Reopen using native Return without a test-induced focus reset.
+        native_key("Return");
+        assert!(popup.is_mapped());
+        native_key("XF86HomePage");
+        assert!(!popup.is_mapped(), "Sort Home closes popup");
+        assert!(!preferences.is_mapped(), "Sort Home closes Preferences");
+        win.destroy();
     }
 }

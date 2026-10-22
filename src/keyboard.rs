@@ -89,12 +89,12 @@ where
     });
 }
 
-/// Layout contract for the existing Add Playlist URL launcher only.
-pub(crate) fn style_add_playlist_url_launcher(button: &gtk::Button) {
+/// Shared compact layout for the paired name and URL launchers in Add Playlist.
+/// Preserve the existing URL hit target while keeping both rows identical.
+pub(crate) fn style_add_playlist_field_launcher(button: &gtk::Button) {
     button.set_icon_name("input-keyboard-symbolic");
-    // GTK's styled allocation on the mapped Add Playlist form is 10px
-    // smaller than the request in each direction (5px inset per side).
-    // Reserve that inset without weakening the 48x44 visible-hit-target test.
+    // The mapped form loses approximately 10px to GTK styling.
+    // Keep the previously verified URL hit target on both paired fields.
     button.set_size_request(58, 54);
     button.set_halign(gtk::Align::End);
 }
@@ -251,9 +251,9 @@ fn label_for(r: usize, c: usize, qwertz: bool, shift: bool, symbols: bool) -> St
     } else {
         match raw {
             "Backspace" => gettext("Backspace"),
-            "Left" => gettext("Caret left"),
+            "Left" => "←".into(),
             "Space" => gettext("Space"),
-            "Right" => gettext("Caret right"),
+            "Right" => "→".into(),
             "Clear" => gettext("Clear"),
             "Done" => gettext("Done"),
             "Cancel" => gettext("Cancel"),
@@ -282,13 +282,25 @@ fn label_for(r: usize, c: usize, qwertz: bool, shift: bool, symbols: bool) -> St
         }
     }
 }
+
+// Keep screen-reader names and hover help descriptive even though the
+// visible caret movement controls are compact arrow symbols.
+fn caret_action_name(r: usize, c: usize) -> Option<String> {
+    match (r, c) {
+        (5, 1) => Some(gettext("Caret left")),
+        (5, 3) => Some(gettext("Caret right")),
+        _ => None,
+    }
+}
+
 fn relabel(keys: &[Vec<glib::WeakRef<gtk::Button>>], qwertz: bool, shift: bool, symbols: bool) {
     for (r, row) in keys.iter().enumerate() {
         for (c, weak) in row.iter().enumerate() {
             if let Some(button) = weak.upgrade() {
                 let label = label_for(r, c, qwertz, shift, symbols);
                 button.set_label(&label);
-                button.set_tooltip_text(Some(&label));
+                let tooltip = caret_action_name(r, c).unwrap_or(label);
+                button.set_tooltip_text(Some(&tooltip));
             }
         }
     }
@@ -426,6 +438,109 @@ fn draft_native_text_has_focus(entry: &gtk::Entry) -> bool {
         .is_some_and(|text| text.has_focus())
 }
 
+// GTK hides GtkText's native insertion caret when focus moves to an OSK
+// button. Paint the same caret in its *actual* GtkText coordinates while a
+// remote key has focus. The overlay never receives events or keyboard focus.
+// When the preview itself is focused, GTK draws its own caret instead.
+fn remote_preview_caret_rect(
+    preview: &gtk::Entry,
+    canvas: &gtk::DrawingArea,
+) -> Option<gtk::graphene::Rect> {
+    if draft_native_text_has_focus(preview) {
+        return None;
+    }
+    let text = preview.delegate().and_downcast::<gtk::Text>()?;
+    if !text.is_mapped() || !canvas.is_mapped() {
+        return None;
+    }
+    // GtkText accounts for proportional fonts, RTL runs and horizontal
+    // scrolling; character counts are not pixel offsets or byte indexes.
+    let position = preview.position().max(0) as usize;
+    let (strong, _) = text.compute_cursor_extents(position);
+    let point = text.compute_point(canvas, &gtk::graphene::Point::new(strong.x(), strong.y()))?;
+    let bounds = text.compute_bounds(canvas)?;
+    if bounds.width() < 2.0 || bounds.height() < 1.0 {
+        return None;
+    }
+    let height = strong.height().max(1.0).min(bounds.height());
+    Some(gtk::graphene::Rect::new(
+        point
+            .x()
+            .clamp(bounds.x(), bounds.x() + bounds.width() - 2.0),
+        point
+            .y()
+            .clamp(bounds.y(), bounds.y() + bounds.height() - height),
+        2.0,
+        height,
+    ))
+}
+
+fn preview_with_persistent_caret(preview: &gtk::Entry) -> gtk::Overlay {
+    let overlay = gtk::Overlay::new();
+    overlay.set_hexpand(true);
+    overlay.set_child(Some(preview));
+    let caret = gtk::DrawingArea::new();
+    caret.add_css_class("osk-persistent-caret");
+    caret.set_can_target(false);
+    caret.set_focusable(false);
+    caret.set_halign(gtk::Align::Fill);
+    caret.set_valign(gtk::Align::Fill);
+    overlay.add_overlay(&caret);
+    overlay.set_clip_overlay(&caret, true);
+
+    let weak_preview = preview.downgrade();
+    caret.set_draw_func(move |canvas, cr, _, _| {
+        let Some(preview) = weak_preview.upgrade() else {
+            return;
+        };
+        let Some(rect) = remote_preview_caret_rect(&preview, canvas) else {
+            return;
+        };
+        // Contrasting edge plus the theme's normal entry foreground makes
+        // the cursor clear on both dark and light themes. Never blink away.
+        let color = preview.color();
+        let x = rect.x() as f64;
+        let y = rect.y() as f64;
+        let height = rect.height() as f64;
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.75);
+        cr.rectangle(x - 1.0, y, 4.0, height);
+        let _ = cr.fill();
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            1.0,
+        );
+        cr.rectangle(x, y, 2.0, height);
+        let _ = cr.fill();
+    });
+
+    // Cursor moves and native edits must update the overlay even if the
+    // preview is not currently focused. Keep only weak references in these
+    // source-side callbacks; teardown follows normal dialog destruction.
+    let weak_caret = caret.downgrade();
+    preview.connect_notify_local(Some("cursor-position"), move |_, _| {
+        if let Some(caret) = weak_caret.upgrade() {
+            caret.queue_draw();
+        }
+    });
+    let weak_caret = caret.downgrade();
+    preview.connect_changed(move |_| {
+        if let Some(caret) = weak_caret.upgrade() {
+            caret.queue_draw();
+        }
+    });
+    if let Some(text) = preview.delegate().and_downcast::<gtk::Text>() {
+        let weak_caret = caret.downgrade();
+        text.connect_has_focus_notify(move |_| {
+            if let Some(caret) = weak_caret.upgrade() {
+                caret.queue_draw();
+            }
+        });
+    }
+    overlay
+}
+
 fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     if !crate::settings::TvSettings::get().osk_enabled() {
         return;
@@ -482,7 +597,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         KeyboardLayout::Text => gtk::InputPurpose::FreeForm,
         KeyboardLayout::Url => gtk::InputPurpose::Url,
     });
-    body.append(&preview);
+    body.append(&preview_with_persistent_caret(&preview));
     // GtkEntry may collapse its native selection as the user moves focus
     // onto an OSK key. Preserve the last live selection so that clicking
     // Caret left/right, Backspace or a character uses the pre-transfer range.
@@ -541,6 +656,10 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
         let mut refs = Vec::new();
         for (c, _) in labels.iter().enumerate() {
             let button = gtk::Button::with_label(&label_for(r, c, false, false, false));
+            if let Some(name) = caret_action_name(r, c) {
+                button.set_tooltip_text(Some(&name));
+                button.update_property(&[gtk::accessible::Property::Label(&name)]);
+            }
             button.add_css_class("osk-key");
             button.set_height_request(42);
             button.set_hexpand(true);
@@ -818,6 +937,13 @@ mod tests {
         assert_eq!(original, "https://example.invalid/?x=1");
         assert_eq!(label_for(3, 7, false, true, false), "ẞ");
         assert_eq!(label_for(1, 5, true, false, false), "z");
+        // Visible caret controls remain arrows across every keyboard mode.
+        for (qwertz, shift, symbols) in [(false, false, false), (true, true, true)] {
+            assert_eq!(label_for(5, 1, qwertz, shift, symbols), "←");
+            assert_eq!(label_for(5, 3, qwertz, shift, symbols), "→");
+        }
+        assert!(caret_action_name(5, 1).is_some());
+        assert!(caret_action_name(5, 3).is_some());
         assert!(ROWS[4].contains(&"%"));
         assert!(ROWS[4].contains(&"/"));
     }

@@ -9,50 +9,66 @@ template $TvMediathekView: Adw.Bin {
     [top]
     Gtk.Box search_toolbar {
       orientation: vertical;
-      spacing: 10;
-      margin-top: 12;
-      margin-bottom: 12;
-      margin-start: 16;
-      margin-end: 16;
+      spacing: 6;
+      margin-top: 8;
+      margin-bottom: 8;
+      margin-start: 12;
+      margin-end: 12;
 
       styles [
         "tv-controls"
       ]
 
-      // Inset controls from the rounded panel instead of restyling them.
+      // The panel's shared CSS padding supplies the complete inner inset.
       Gtk.Box {
         orientation: horizontal;
-        spacing: 10;
-        margin-top: 12;
-        margin-start: 16;
-        margin-end: 16;
+        spacing: 8;
+        margin-top: 0;
+        margin-start: 0;
+        margin-end: 0;
 
         Gtk.SearchEntry search_entry {
           placeholder-text: _("Search the Mediathek");
           hexpand: true;
+          valign: center;
           search-delay: 250;
           text: bind template.query_string bidirectional;
+        }
+
+        Gtk.Button keyboard_button {
+          icon-name: "input-keyboard-symbolic";
+          tooltip-text: _("Open on-screen keyboard");
+          // Match the compact search-row button size in the other views.
+          width-request: 48;
+          height-request: 44;
+          valign: center;
         }
 
         Gtk.ToggleButton {
           icon-name: "search-global-symbolic";
           tooltip-text: _("Search Everywhere");
+          width-request: 48;
+          height-request: 44;
+          valign: center;
           active: bind template.search_everywhere bidirectional;
         }
 
         Gtk.ToggleButton {
           icon-name: "month-symbolic";
           tooltip-text: _("Include Future Shows");
+          width-request: 48;
+          height-request: 44;
+          valign: center;
           active: bind template.include-future bidirectional;
         }
       }
 
       Gtk.Box filters_toolbar {
         orientation: horizontal;
-        spacing: 10;
-        margin-bottom: 12;
-        margin-start: 16;
-        margin-end: 16;
+        spacing: 8;
+        margin-bottom: 0;
+        margin-start: 0;
+        margin-end: 0;
 
         Gtk.Box {
           orientation: horizontal;
@@ -65,7 +81,9 @@ template $TvMediathekView: Adw.Bin {
 
           Gtk.DropDown broadcaster_filter {
             tooltip-text: _("Filter by broadcaster");
-            width-request: 170;
+            // Compact minimum; use surplus space at ordinary TV widths.
+            hexpand: true;
+            width-request: 120;
           }
         }
 
@@ -80,7 +98,8 @@ template $TvMediathekView: Adw.Bin {
 
           Gtk.DropDown duration_filter {
             tooltip-text: _("Filter by duration");
-            width-request: 180;
+            hexpand: true;
+            width-request: 128;
           }
         }
 

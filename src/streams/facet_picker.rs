@@ -597,7 +597,20 @@ impl FacetPicker {
         panel.append(&hint);
         let search = gtk::SearchEntry::new();
         search.set_placeholder_text(Some(&gettext("Search names or codes (optional)")));
-        panel.append(&search);
+        search.set_hexpand(true);
+        let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        search_row.append(&search);
+        let search_keyboard = gtk::Button::new();
+        search_keyboard.set_icon_name("input-keyboard-symbolic");
+        search_keyboard.set_size_request(48, 44);
+        search_keyboard.set_valign(gtk::Align::Center);
+        crate::keyboard::bind_launcher(
+            &search_keyboard,
+            &search,
+            crate::keyboard::KeyboardOptions::default(),
+        );
+        search_row.append(&search_keyboard);
+        panel.append(&search_row);
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("boxed-list");
@@ -764,6 +777,18 @@ impl FacetPicker {
             entry.set_hexpand(true);
             let add = gtk::Button::with_label(&gettext("Add tag"));
             manual_row.append(&entry);
+            let tag_keyboard = gtk::Button::new();
+            tag_keyboard.set_icon_name("input-keyboard-symbolic");
+            tag_keyboard.set_size_request(48, 44);
+            tag_keyboard.set_valign(gtk::Align::Center);
+            crate::keyboard::bind_launcher(
+                &tag_keyboard,
+                &entry,
+                crate::keyboard::KeyboardOptions::default(),
+            );
+            manual_row.append(&tag_keyboard);
+            // Virtual Done edits the field; only the existing Add tag action
+            // validates and applies a manual language tag.
             manual_row.append(&add);
             let manual_error = gtk::Label::new(None);
             manual_error.set_wrap(true);

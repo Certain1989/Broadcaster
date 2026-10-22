@@ -13,7 +13,7 @@ use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use gettextrs::gettext;
 
 use crate::{
-    application::{TvApplication, VideoInfo},
+    application::{StreamHeaders, TvApplication, VideoInfo},
     utils::spawn,
 };
 
@@ -98,6 +98,8 @@ mod imp {
         #[template_child]
         pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
+        pub(super) keyboard_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) filter_bar: TemplateChild<gtk::Box>,
         #[template_child]
         pub(super) advanced_filter_bar: TemplateChild<gtk::Box>,
@@ -136,6 +138,7 @@ mod imp {
         pub(super) selection: OnceCell<gtk::SingleSelection>,
         pub(super) query: RefCell<ChannelQuery>,
         pub(super) generation: Cell<u64>,
+        pub(super) play_serial: Cell<u64>,
         pub(super) search_serial: Cell<u64>,
         pub(super) suppress_controls: Cell<bool>,
         pub(super) in_flight: RefCell<HashSet<u32>>,
@@ -222,6 +225,11 @@ glib::wrapper! {
 impl TvStreamsView {
     fn initialize(&self) {
         let imp = self.imp();
+        crate::keyboard::bind_launcher(
+            &imp.keyboard_button,
+            &imp.search_entry.get(),
+            crate::keyboard::KeyboardOptions::default(),
+        );
         let rows = StreamRows::new();
         let selection = gtk::SingleSelection::new(Some(rows.clone()));
         selection.set_autoselect(true);
@@ -1182,18 +1190,61 @@ impl TvStreamsView {
         if !safe {
             return;
         }
-        self.imp().selected_id.replace(Some(channel.id));
+        self.imp().selected_id.replace(Some(channel.id.clone()));
         #[cfg(test)]
         if self.imp().fake_player_enabled.get() {
             let calls = self.imp().fake_player_calls.get();
             self.imp().fake_player_calls.set(calls + 1);
             return;
         }
-        let video = VideoInfo::Stream {
-            title: channel.visible_name,
-            uri: channel.stream_url,
+        // The virtualized row intentionally does not contain imported hints.
+        // Resolve the full persisted detail only after Play is requested.
+        let Some(service) = self.service() else {
+            tracing::warn!("Selected channel details are unavailable for playback");
+            return;
         };
-        spawn(async move { TvApplication::get().play(video).await });
+        let id = channel.id;
+        let uri = channel.stream_url;
+        let generation = self.imp().generation.get();
+        let serial = self.imp().play_serial.get().wrapping_add(1);
+        self.imp().play_serial.set(serial);
+        // Reserve before awaiting SQLite so a later Live/Mediathek request
+        // invalidates this pending IPTV resolution across view boundaries.
+        let application = TvApplication::get();
+        let request_serial = application.begin_playback_request();
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let result = service.channel_detail(&id).await;
+                let imp = view.imp();
+                if !application.playback_request_is_current(request_serial)
+                    || imp.generation.get() != generation
+                    || imp.play_serial.get() != serial
+                    || imp.selected_id.borrow().as_deref() != Some(id.as_str())
+                {
+                    return;
+                }
+                let Ok(detail) = result else {
+                    // Never emit storage errors, channel URLs or imported values.
+                    tracing::warn!("Unable to load selected channel for playback");
+                    return;
+                };
+                if detail.effective.id != id || detail.effective.stream_url != uri {
+                    // The stream was edited while the asynchronous query ran.
+                    return;
+                }
+                let video = VideoInfo::Stream {
+                    title: detail.effective.visible_name,
+                    uri: detail.effective.stream_url,
+                    headers: StreamHeaders::imported(
+                        detail.imported.user_agent,
+                        detail.imported.referer,
+                    ),
+                };
+                application.play_requested(video, request_serial).await;
+            }
+        ));
     }
 
     pub fn show_add(&self) {
@@ -1379,11 +1430,16 @@ impl TvStreamsView {
     #[cfg(test)]
     pub(crate) fn assert_remote_toolbar_focus_styled(&self) {
         let imp = self.imp();
-        let toolbar = imp.search_entry.parent().expect("search toolbar");
+        let toolbar = imp
+            .search_entry
+            .parent()
+            .and_then(|row| row.parent())
+            .expect("search toolbar");
         assert!(toolbar.has_css_class("tv-streams-controls"));
         assert!(imp.add_button.has_focus(), "Up must focus Add Playlist");
         for control in [
             imp.search_entry.upcast_ref::<gtk::Widget>(),
+            imp.keyboard_button.upcast_ref(),
             imp.source_filter.upcast_ref(),
             imp.group_filter.upcast_ref(),
             imp.sort_filter.upcast_ref(),
@@ -1421,6 +1477,9 @@ impl TvStreamsView {
             imp.clear_button.get().upcast(),
             imp.manage_button.get().upcast(),
             imp.add_button.get().upcast(),
+            // Spatial navigation uses mapped geometry, not vector ordering.
+            // Preserve the existing filter indices in read-only router tests.
+            imp.keyboard_button.get().upcast(),
         ]
     }
 
@@ -1437,8 +1496,9 @@ impl TvStreamsView {
             return false;
         }
         let imp = self.imp();
-        let controls: [&gtk::Widget; 11] = [
+        let controls: [&gtk::Widget; 12] = [
             imp.search_entry.upcast_ref(),
+            imp.keyboard_button.upcast_ref(),
             imp.source_filter.upcast_ref(),
             imp.group_filter.upcast_ref(),
             imp.language_filter.upcast_ref(),

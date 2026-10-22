@@ -26,6 +26,8 @@ mod imp {
         #[template_child]
         switch: TemplateChild<gtk::Switch>,
         #[template_child]
+        move_button: TemplateChild<gtk::MenuButton>,
+        #[template_child]
         drag_source: TemplateChild<gtk::DragSource>,
         #[template_child]
         drop_target: TemplateChild<gtk::DropTarget>,
@@ -112,6 +114,8 @@ mod imp {
                 &self.fallback_icon,
                 16,
             );
+
+            super::super::selector::install_channel_menu_remote_handler(&self.move_button);
         }
         fn signals() -> &'static [Signal] {
             static SIGNALS: OnceLock<[Signal; 2]> = OnceLock::new();

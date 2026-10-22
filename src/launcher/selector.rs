@@ -229,6 +229,20 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
+            // This selector is instantiated separately for the external player
+            // and downloader. Keep Apply and Select as distinct parent actions.
+            let keyboard = gtk::Button::new();
+            keyboard.set_icon_name("input-keyboard-symbolic");
+            keyboard.set_size_request(48, 44);
+            keyboard.set_valign(gtk::Align::Center);
+            keyboard.add_css_class("flat");
+            self.custom_program_entry.add_suffix(&keyboard);
+            crate::keyboard::bind_launcher(
+                &keyboard,
+                &self.custom_program_entry.get(),
+                crate::keyboard::KeyboardOptions::default(),
+            );
+
             self.obj().connect_selected_program_notify(|slf| {
                 if slf.imp().loaded.get() {
                     spawn_clone!(slf => slf.imp().set_program(slf.selected_program().into()))

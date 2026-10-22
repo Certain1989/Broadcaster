@@ -268,6 +268,8 @@ mod imp {
         #[template_child]
         pub(super) search_entry: TemplateChild<gtk::SearchEntry>,
         #[template_child]
+        pub(super) keyboard_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) broadcaster_filter: TemplateChild<gtk::DropDown>,
         #[template_child]
         pub(super) load_more_button: TemplateChild<gtk::Button>,
@@ -385,6 +387,11 @@ mod imp {
 
             let slf = self.obj();
             let settings = TvSettings::get();
+            crate::keyboard::bind_launcher(
+                &self.keyboard_button,
+                &self.search_entry.get(),
+                crate::keyboard::KeyboardOptions::default(),
+            );
             settings
                 .bind_search_everywhere(&*slf, "search-everywhere")
                 .flags(gio::SettingsBindFlags::DEFAULT)
@@ -602,6 +609,7 @@ impl TvMediathekView {
     pub fn focus_vertical_navigation(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
         let imp = self.imp();
         let search = imp.search_entry.upcast_ref::<gtk::Widget>();
+        let keyboard = imp.keyboard_button.upcast_ref::<gtk::Widget>();
         let channel = imp.broadcaster_filter.upcast_ref::<gtk::Widget>();
         let duration = imp.duration_filter.upcast_ref::<gtk::Widget>();
         let sort = imp.sort_button.upcast_ref::<gtk::Widget>();
@@ -636,10 +644,16 @@ impl TvMediathekView {
                 return imp.broadcaster_filter.grab_focus();
             }
             if widget_contains_focus(channel, focused) {
+                return imp.keyboard_button.grab_focus();
+            }
+            if widget_contains_focus(keyboard, focused) {
                 return imp.search_entry.grab_focus();
             }
         } else if key == gtk::gdk::Key::Down {
             if widget_contains_focus(search, focused) {
+                return imp.keyboard_button.grab_focus();
+            }
+            if widget_contains_focus(keyboard, focused) {
                 return imp.broadcaster_filter.grab_focus();
             }
             if widget_contains_focus(channel, focused) {
@@ -663,7 +677,10 @@ impl TvMediathekView {
     /// Geometry, not declaration order, determines each arrow destination.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
         let imp = self.imp();
-        let mut controls = vec![imp.search_entry.get().upcast::<gtk::Widget>()];
+        let mut controls = vec![
+            imp.search_entry.get().upcast::<gtk::Widget>(),
+            imp.keyboard_button.get().upcast::<gtk::Widget>(),
+        ];
         let mut sibling = imp.search_entry.upcast_ref::<gtk::Widget>().next_sibling();
         while let Some(item) = sibling {
             if item.is::<gtk::ToggleButton>() {
@@ -1056,6 +1073,341 @@ mod tests {
     };
     use std::time::Duration;
 
+    /// Verify the real Blueprint toolbar has a satisfiable minimum width
+    /// and keeps all seven keyboard/remote destinations mapped at narrow,
+    /// formerly failing and normal window sizes.
+    #[test]
+    #[ignore = "requires a mapped GTK display and isolated GSettings"]
+    fn gtk_mediathek_toolbar_narrow_allocations() {
+        use super::*;
+
+        let bytes = glib::Bytes::from_static(crate::GRESOURCE_BYTES);
+        let resource = gio::Resource::from_data(&bytes).expect("valid resource bundle");
+        gio::resources_register(&resource);
+        gtk::init().expect("GTK display");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        for width in [600, 630, 760, 1280] {
+            let view: TvMediathekView = glib::Object::new();
+            let window = gtk::Window::new();
+            window.set_default_size(width, 720);
+            window.set_child(Some(&view));
+            window.present();
+            for _ in 0..24 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+            }
+            let (minimum, _, _, _) = view.measure(gtk::Orientation::Horizontal, -1);
+            assert!(
+                minimum <= width,
+                "toolbar requests at least {minimum}px within {width}px viewport"
+            );
+            let imp = view.imp();
+            let filter_row = imp
+                .broadcaster_filter
+                .parent()
+                .expect("broadcaster filter group")
+                .parent()
+                .expect("filter toolbar");
+            let panel = filter_row.parent().expect("toolbar panel");
+            let search_row = imp.search_entry.parent().expect("search row");
+            assert!(
+                panel.has_css_class("tv-controls"),
+                "keep tinted Mediathek panel"
+            );
+            assert_eq!(search_row.parent(), Some(panel.clone()));
+            // GtkWidget::height() is the CSS content-box allocation; the
+            // surface's 10px CSS padding is outside this value. Only the
+            // Blueprint's 6px inter-row gap belongs in this measurement.
+            let vertical_overhead = panel.height() - search_row.height() - filter_row.height();
+            assert!(
+                (0..=10).contains(&vertical_overhead),
+                "toolbar excessive vertical inset at {width}px: panel={} search={} filters={} extra={vertical_overhead}",
+                panel.height(),
+                search_row.height(),
+                filter_row.height()
+            );
+            let controls = view.toolbar_focus_targets();
+            assert_eq!(controls.len(), 7, "all search/filter controls must remain");
+            for control in &controls {
+                assert!(control.is_mapped(), "toolbar control unmapped at {width}px");
+                let bounds = control
+                    .compute_bounds(&view)
+                    .expect("mapped control bounds");
+                assert!(
+                    bounds.x() >= -1.0 && bounds.x() + bounds.width() <= view.width() as f32 + 1.0,
+                    "toolbar control clipped at {width}px: x={} width={} view={}",
+                    bounds.x(),
+                    bounds.width(),
+                    view.width()
+                );
+                assert!(control.grab_focus(), "toolbar control must be reachable");
+            }
+            let keyboard = view.imp().keyboard_button.get();
+            // Remote D-pad focus does not depend on a touch-size hitbox.
+            // Test the real mapped button and its accessible focus target.
+            assert!(
+                keyboard.is_visible() && keyboard.is_sensitive() && keyboard.is_mapped(),
+                "remote launcher must be visible, sensitive and mapped at {width}px"
+            );
+            assert!(
+                keyboard.width() > 0 && keyboard.height() > 0,
+                "remote launcher must have a nonzero allocation at {width}px"
+            );
+            assert!(
+                !keyboard.has_css_class("tv-compact-keyboard-launcher"),
+                "remove the former paint-clipping launcher workaround"
+            );
+            assert!(
+                keyboard.grab_focus() && keyboard.has_focus(),
+                "remote launcher must accept visible GTK focus at {width}px"
+            );
+            // All three icons should have the same compact allocation, rather
+            // than a short icon button next to a taller search entry.
+            for (name, toggle) in [
+                ("Search Everywhere", &controls[2]),
+                ("Include Future Shows", &controls[3]),
+            ] {
+                assert!(
+                    (keyboard.width() - toggle.width()).abs() <= 2
+                        && (keyboard.height() - toggle.height()).abs() <= 2,
+                    "keyboard launcher {}x{} differs from {name} {}x{} at {width}px",
+                    keyboard.width(),
+                    keyboard.height(),
+                    toggle.width(),
+                    toggle.height()
+                );
+            }
+            let search_height = controls[0].height();
+            let icon_height = keyboard.height();
+            assert!(
+                (0..=8).contains(&(search_height - icon_height)),
+                "search and toolbar icon heights unbalanced at {width}px: search={search_height}, icon={icon_height}"
+            );
+            window.destroy();
+        }
+    }
+
+    /// Capture real GTK allocations, rather than comparing height requests,
+    /// for the three themed toolbar variants under one display and scale.
+    #[test]
+    #[ignore = "requires a mapped GTK display and isolated GSettings"]
+    fn gtk_three_view_toolbar_geometry() {
+        use super::*;
+
+        let bytes = glib::Bytes::from_static(crate::GRESOURCE_BYTES);
+        let resource = gio::Resource::from_data(&bytes).expect("valid resource bundle");
+        gio::resources_register(&resource);
+        gtk::init().expect("GTK display");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+
+        // Live's async channel loader expects the normal application context,
+        // even when only its toolbar is being measured.
+        let _app = crate::application::TvApplication::new();
+
+        fn allocate(widget: &impl IsA<gtk::Widget>, width: i32) -> gtk::Window {
+            let window = gtk::Window::new();
+            window.set_default_size(width, 720);
+            window.set_child(Some(widget));
+            window.present();
+            for _ in 0..24 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+            }
+            window
+        }
+
+        fn report(
+            name: &str,
+            width: i32,
+            panel: &gtk::Widget,
+            entry: &gtk::Widget,
+            keyboard: &gtk::Widget,
+            search_row: &gtk::Widget,
+            second_row: Option<&gtk::Widget>,
+        ) {
+            let entry_bounds = entry.compute_bounds(panel).expect("mapped entry");
+            let button_bounds = keyboard.compute_bounds(panel).expect("mapped keyboard");
+            println!(
+                "UX02 geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
+                panel.width(), panel.height(), search_row.height(), entry.width(), entry.height(),
+                entry_bounds.x(), entry_bounds.y(), keyboard.width(), keyboard.height(),
+                button_bounds.x(), button_bounds.y(), second_row.map_or(0, gtk::Widget::height)
+            );
+        }
+
+        for width in [600, 630, 760, 1280] {
+            let mediathek: TvMediathekView = glib::Object::new();
+            let window = allocate(&mediathek, width);
+            let targets = mediathek.toolbar_focus_targets();
+            let search_row = targets[0].parent().expect("Mediathek search row");
+            let panel = search_row.parent().expect("Mediathek panel");
+            let mediathek_entry_height = targets[0].height();
+            let mediathek_keyboard_size = (targets[1].width(), targets[1].height());
+            let mediathek_icon_sizes = [
+                (targets[2].width(), targets[2].height()),
+                (targets[3].width(), targets[3].height()),
+            ];
+            let mediathek_channel_height = targets[4].height();
+            let mediathek_duration_height = targets[5].height();
+            let mediathek_sort_height = targets[6].height();
+            let mediathek_toggle_heights = [targets[2].height(), targets[3].height()];
+            let filter_row = mediathek
+                .imp()
+                .broadcaster_filter
+                .parent()
+                .expect("Mediathek group")
+                .parent()
+                .expect("Mediathek filters");
+            report(
+                "Mediathek",
+                width,
+                &panel,
+                &targets[0],
+                &targets[1],
+                &search_row,
+                Some(&filter_row),
+            );
+            let mediathek_panel_width = panel.width();
+            window.destroy();
+
+            let live: crate::live::TvLiveView = glib::Object::new();
+            let window = allocate(&live, width);
+            // Let the initial asynchronous reload begin, then explicitly
+            // show the offline test toolbar before the GDK allocation tick.
+            live.show_toolbar_for_test();
+            window.queue_allocate();
+            for _ in 0..20 {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            let targets = live.toolbar_focus_targets();
+            assert!(
+                targets.iter().all(gtk::Widget::is_mapped),
+                "Live controls must be mapped before comparing allocations at {width}px"
+            );
+            let live_entry_height = targets[0].height();
+            let live_keyboard_size = (targets[1].width(), targets[1].height());
+            let panel = targets[0].parent().expect("Live panel");
+            report(
+                "Live",
+                width,
+                &panel,
+                &targets[0],
+                &targets[1],
+                &panel,
+                None,
+            );
+            let live_panel_width = panel.width();
+            window.destroy();
+
+            let streams: crate::streams::view::TvStreamsView = glib::Object::new();
+            let window = allocate(&streams, width);
+            let targets = streams.toolbar_focus_targets();
+            let streams_entry_height = targets[0].height();
+            let streams_keyboard = targets.last().expect("My Channels keyboard");
+            let streams_keyboard_size = (streams_keyboard.width(), streams_keyboard.height());
+            let search_row = targets[0].parent().expect("My Channels search row");
+            let panel = search_row.parent().expect("My Channels panel");
+            let filter_row = targets[1].parent().expect("My Channels filters");
+            report(
+                "My Channels",
+                width,
+                &panel,
+                &targets[0],
+                targets.last().expect("My Channels keyboard"),
+                &search_row,
+                Some(&filter_row),
+            );
+            let streams_panel_width = panel.width();
+            let streams_filter_height = targets[1].height();
+            let streams_sort_height = targets[3].height();
+            let streams_action_height = targets[7].height();
+            window.destroy();
+
+            // All three launchers use the same compact size requests, but
+            // actual GTK allocations (and their relationship to the search
+            // entries) establish the visual parity; the two Mediathek toggles
+            // must also match the keyboard in the narrow-allocation test.
+            println!(
+                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
+            );
+            let mediathek_gap = mediathek_entry_height - mediathek_keyboard_size.1;
+            for (name, reference, reference_gap) in [
+                (
+                    "Live",
+                    live_keyboard_size,
+                    live_entry_height - live_keyboard_size.1,
+                ),
+                (
+                    "My Channels",
+                    streams_keyboard_size,
+                    streams_entry_height - streams_keyboard_size.1,
+                ),
+            ] {
+                assert!(
+                    (mediathek_keyboard_size.0 - reference.0).abs() <= 2
+                        && (mediathek_keyboard_size.1 - reference.1).abs() <= 2,
+                    "Mediathek keyboard {mediathek_keyboard_size:?} differs from {name} {reference:?} at {width}px"
+                );
+                assert!(
+                    (mediathek_gap - reference_gap).abs() <= 4,
+                    "search-to-keyboard height balance differs at {width}px: Mediathek gap={mediathek_gap}, {name} gap={reference_gap}"
+                );
+            }
+
+            // GtkWidget widths exclude CSS padding. At equal viewport sizes,
+            // Mediathek and My Channels use identical outer 12px margins and
+            // must expose identical content widths; Live's 6px margins leave
+            // exactly 12px more available for its corresponding content.
+            println!(
+                "UX02 compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
+            );
+            assert!(
+                mediathek_panel_width == streams_panel_width
+                    && live_panel_width == mediathek_panel_width + 12,
+                "different panel content widths at {width}px: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}"
+            );
+            assert!(
+                (mediathek_channel_height - streams_filter_height).abs() <= 6
+                    && (mediathek_duration_height - streams_filter_height).abs() <= 6
+                    && (mediathek_sort_height - streams_sort_height).abs() <= 6
+                    // The search-row icon toggles are comparable to the
+                    // My Channels search-row keyboard, not to its unrelated
+                    // smaller Clear Filters / Manage Sources action buttons.
+                    && mediathek_toggle_heights
+                        .iter()
+                        .all(|h| (*h - streams_keyboard_size.1).abs() <= 2),
+                "Mediathek filters/search icons must match compact My Channels at {width}px"
+            );
+
+            // Compare mapped GtkSearchEntry allocations, not width/height requests.
+            // Distinct theme styling may differ by a few pixels; a stretched
+            // Mediathek field must not be as tall as its keyboard row.
+            assert!(
+                (mediathek_entry_height - live_entry_height).abs() <= 4
+                    && (mediathek_entry_height - streams_entry_height).abs() <= 4,
+                "search height mismatch at {width}px: Mediathek={mediathek_entry_height}, Live={live_entry_height}, My Channels={streams_entry_height}"
+            );
+        }
+    }
+
     #[test]
     fn catalogue_body_limit_accepts_exact_boundary_across_chunks() {
         let mut body = Vec::new();
@@ -1133,6 +1485,8 @@ mod tests {
 
         assert!(imp.search_entry.grab_focus());
         assert!(down());
+        assert_focus(imp.keyboard_button.upcast_ref());
+        assert!(down());
         assert_focus(imp.broadcaster_filter.upcast_ref());
         assert!(down());
         assert_focus(imp.duration_filter.upcast_ref());
@@ -1151,6 +1505,8 @@ mod tests {
         assert_focus(imp.duration_filter.upcast_ref());
         assert!(up());
         assert_focus(imp.broadcaster_filter.upcast_ref());
+        assert!(up());
+        assert_focus(imp.keyboard_button.upcast_ref());
         assert!(up());
         assert_focus(imp.search_entry.upcast_ref());
 

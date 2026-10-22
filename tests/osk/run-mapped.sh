@@ -25,8 +25,18 @@ for case in \
   osk_mapped_gtk_pending_selection_native_backspace \
   osk_mapped_gtk_native_draft_focus_clears_collapsed_selection \
   osk_mapped_gtk_draft_selection_survives_key_focus_transfer \
+  osk_mapped_gtk_caret_visible_with_remote_key_focus \
   osk_mapped_gtk_caret_buttons_collapse_selection \
   osk_mapped_gtk_compact_add_playlist_url_launcher \
+  osk_mapped_gtk_add_playlist_paired_rows_and_footer \
+  osk_mapped_gtk_mpv_row_native_remote_route_and_lifecycle \
+  osk_mapped_gtk_channel_move_menu_native_remote \
+  osk_mapped_gtk_first_row_move_popup_native_focus_containment \
+  osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment \
+  osk_mapped_gtk_first_move_down_reverse_and_middle_up_native_persistence \
+  osk_mapped_gtk_channel_sort_menu_native_remote \
+  gtk_mediathek_toolbar_narrow_allocations \
+  gtk_three_view_toolbar_geometry \
   osk_mapped_gtk_entry_reentrant_signal_trace \
   osk_mapped_gtk_search_reentrant_signal_trace \
   osk_mapped_gtk_entry_row_reentrant_signal_trace \
@@ -40,10 +50,24 @@ for case in \
   osk_mapped_gtk_all_keys_fit_without_scrolling
 do
   log_file="$schema_dir/$case.log"
+  capture=
+  if [ "$case" = gtk_three_view_toolbar_geometry ]; then
+    capture=--nocapture
+  fi
+  if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
+    # Preserve effective GTK menu-item sensitivities as CI evidence on PASS.
+    capture=--nocapture
+  fi
   if xvfb-run -a env G_DEBUG=fatal-criticals GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
     GSETTINGS_SCHEMA_DIR="$schema_dir" \
-    cargo test --locked "$case" -- --ignored --test-threads=1 >"$log_file" 2>&1; then
+    cargo test --locked "$case" -- --ignored --test-threads=1 $capture >"$log_file" 2>&1; then
     printf 'K1 mapped GTK PASS: %s\n' "$case"
+    if [ "$case" = gtk_three_view_toolbar_geometry ]; then
+      grep -E "UX02 (geometry|compact)" "$log_file" || :
+    fi
+    if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
+      grep 'F02 .*GtkModelButton' "$log_file" || :
+    fi
   else
     failed=1
     failed_cases="$failed_cases $case"
