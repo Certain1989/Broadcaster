@@ -110,6 +110,12 @@ fn stream_header_options(headers: Option<&StreamHeaders>) -> Vec<String> {
     options
 }
 
+/// A user's global argument separator would turn later generated options
+/// into positional inputs. Refuse only the conflicting combination.
+fn global_separator_conflicts(user_arguments: &[String], header_options: &[String]) -> bool {
+    !header_options.is_empty() && user_arguments.iter().any(|arg| arg.trim() == "--")
+}
+
 /// Build a fresh argv per process, with safe per-stream flags after the
 /// user's existing global settings but before the -- media separator.
 fn player_argv(
@@ -201,7 +207,7 @@ fn start(
     let header_options = stream_header_options(stream_headers);
     // A global -- would make generated flags positional filenames. Refuse
     // that combination without changing the user's saved mpv settings.
-    if !header_options.is_empty() && arguments.iter().any(|arg| arg.trim() == "--") {
+    if global_separator_conflicts(&arguments, &header_options) {
         return Err(StartError::ConflictingArguments);
     }
     let title_argument = format!("--force-media-title={title}");
@@ -420,6 +426,9 @@ mod redaction_tests {
                 "--referrer=https://example.invalid/page",
             ]
         );
+        assert!(global_separator_conflicts(&["--".to_owned()], &options));
+        assert!(!global_separator_conflicts(&["--vo=gpu".to_owned()], &options));
+        assert!(!global_separator_conflicts(&["--".to_owned()], &[]));
         let global = vec!["--user-agent=global".into(), "  ".into()];
         let argv = player_argv(
             &global,
