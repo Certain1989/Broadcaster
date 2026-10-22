@@ -59,7 +59,7 @@ Broadcaster neither hosts nor supplies media. Stream availability, channel metad
 
 ## Install Broadcaster
 
-Download the published production Flatpak for your architecture, together with the matching `SHA256SUMS`, from [GitHub Releases](https://github.com/Certain1989/Broadcaster/releases). The example below uses **v0.2.1**, for Intel/AMD x86_64; use `aarch64` for ARM64. These files are available only **once v0.2.1 has been released**. If they are not listed yet, use the [published v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0) with its own filenames and checksums instead.
+Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [published Broadcaster v0.2.1 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.1). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64.
 
 ```bash
 grep 'broadcaster-0.2.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
