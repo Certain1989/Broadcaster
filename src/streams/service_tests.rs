@@ -372,13 +372,15 @@ async fn production_startup_purge_keeps_overridden_and_young_missing_channels() 
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     let conn = rusqlite::Connection::open(&test.path).unwrap();
-    let ids = conn
+    let mut stmt = conn
         .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
-        .unwrap()
+        .unwrap();
+    let ids = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
+    drop(stmt);
     assert_eq!(ids.len(), 4);
 
     for (index, since) in [
@@ -407,13 +409,15 @@ async fn production_startup_purge_keeps_overridden_and_young_missing_channels() 
         .await
         .unwrap();
     let conn = rusqlite::Connection::open(&test.path).unwrap();
-    let remaining: Vec<String> = conn
+    let mut stmt = conn
         .prepare("SELECT id FROM iptv_channels ORDER BY playlist_order")
-        .unwrap()
+        .unwrap();
+    let remaining: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))
         .unwrap()
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
+    drop(stmt);
     assert_eq!(remaining.len(), 3);
     assert!(!remaining.contains(&ids[0]), "expired unedited tombstone survived");
     assert!(remaining.contains(&ids[1]), "user override was deleted");
