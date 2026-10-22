@@ -459,9 +459,11 @@ async fn retention_daily_gate_failure_retry_clock_shift_and_concurrent_calls() {
     // Guaranteed beyond the initial startup run's successful timestamp.
     let first_due = now + DAY * 2;
     let calls = Arc::new(AtomicUsize::new(0));
-    let count = |counter: Arc<AtomicUsize>| move |_store: Storage, _at: i64| {
-        counter.fetch_add(1, Ordering::SeqCst);
-        Ok(0)
+    let count = |counter: Arc<AtomicUsize>| {
+        move |_store: Storage, _at: i64| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        }
     };
 
     service
@@ -471,7 +473,11 @@ async fn retention_daily_gate_failure_retry_clock_shift_and_concurrent_calls() {
     service
         .purge_expired_missing_if_due_at(first_due + DAY - 1, count(calls.clone()))
         .await;
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "purge ran twice within a day");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "purge ran twice within a day"
+    );
     service
         .purge_expired_missing_if_due_at(first_due + DAY, count(calls.clone()))
         .await;
@@ -491,7 +497,11 @@ async fn retention_daily_gate_failure_retry_clock_shift_and_concurrent_calls() {
     service
         .purge_expired_missing_if_due_at(fail_at, count(calls.clone()))
         .await;
-    assert_eq!(calls.load(Ordering::SeqCst), 4, "purge failure was not retryable");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        4,
+        "purge failure was not retryable"
+    );
     assert!(service.list_sources().await.is_ok());
 
     // Backwards system-clock steps must not cause duplicate retention work.
@@ -571,7 +581,11 @@ async fn purge_and_refresh_serialize_without_catalogue_loss() {
         .unwrap();
     assert_eq!(present, 3);
     assert_eq!(
-        test.service.query(ChannelQuery::default()).await.unwrap().total,
+        test.service
+            .query(ChannelQuery::default())
+            .await
+            .unwrap()
+            .total,
         3
     );
 }
