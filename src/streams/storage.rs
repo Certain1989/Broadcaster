@@ -1168,6 +1168,10 @@ mod staged_database_tests {
         )
         .unwrap();
         drop(conn);
+        // External rusqlite::Connection::open inherits the process umask
+        // (typically 0644), so make the fixture private before testing the
+        // version-zero refusal rather than tripping the earlier permission gate.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let original = fs::read(&path).unwrap();
         assert!(matches!(
             Storage::at(&path).initialize(),
