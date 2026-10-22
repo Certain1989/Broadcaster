@@ -1153,6 +1153,8 @@ mod staged_database_tests {
     #[cfg(unix)]
     #[test]
     fn invalid_and_legacy_existing_files_are_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+
         let fixture = PrivateDir::new();
         let path = fixture.database();
         let original = b"not a SQLite database - preserve all original user data";
