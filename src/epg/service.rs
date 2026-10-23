@@ -96,6 +96,7 @@ struct Running {
     transfer: GuideCancellation,
     parser: Arc<AtomicBool>,
     stage: GuideStage,
+    scheduled: bool,
 }
 struct Inner {
     registry: GuideSourceRegistry,
@@ -198,7 +199,7 @@ impl GlobalGuideManager {
     ) -> Result<(), GuideServiceError> {
         let _gate = self.inner.admission.lock().await;
         if !enabled {
-            self.cancel(&id).await;
+            self.cancel_scheduled(&id).await;
         }
         self.db(move |registry| registry.set_schedule(&id, enabled, seconds)).await
     }
@@ -212,8 +213,10 @@ impl GlobalGuideManager {
         seconds: i64,
     ) -> Result<(), GuideServiceError> {
         let _gate = self.inner.admission.lock().await;
-        if !enabled || !auto_refresh {
+        if !enabled {
             self.cancel(&id).await;
+        } else if !auto_refresh {
+            self.cancel_scheduled(&id).await;
         }
         self.db(move |registry| {
             registry.update_settings(&id, revision, &name, enabled, auto_refresh, seconds)
@@ -254,9 +257,23 @@ impl GlobalGuideManager {
         // Otherwise a second refresh could race the cancelled worker.
         true
     }
+    async fn cancel_scheduled(&self, id: &str) -> bool {
+        let mut current = self.inner.running.lock().await;
+        let Some(running) = current.get_mut(id) else {
+            return false;
+        };
+        if !running.scheduled || running.stage.terminal() {
+            return false;
+        }
+        running.parser.store(true, Ordering::Release);
+        running.transfer.cancel();
+        true
+    }
+
     async fn start(
         &self,
         id: &str,
+        scheduled: bool,
     ) -> Result<(GuideCancellation, Arc<AtomicBool>), GuideServiceError> {
         let mut current = self.inner.running.lock().await;
         if current
@@ -273,6 +290,7 @@ impl GlobalGuideManager {
                 transfer: transfer.clone(),
                 parser: parser.clone(),
                 stage: GuideStage::Queued,
+                scheduled,
             },
         );
         Ok((transfer, parser))
@@ -330,7 +348,7 @@ impl GlobalGuideManager {
                 return Ok(());
             }
         }
-        let (transfer, parser_cancel) = self.start(&id).await?;
+        let (transfer, parser_cancel) = self.start(&id, scheduled).await?;
         self.transition(&id, GuideStage::Fetching).await?;
         drop(gate);
         let result = self.refresh_one(&id, source, &transfer, &parser_cancel).await;
