@@ -108,6 +108,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     let fetch_parent = parent.clone();
                     refresh.connect_clicked(move |button| {
                         button.set_sensitive(false);
+                        fetch_status.set_text(&gettext("Refreshing guide…"));
                         let manager = fetch_service.clone();
                         let id = id.clone();
                         let listing = fetch_list.clone();
@@ -140,18 +141,17 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     let delete_list = list.clone();
                     let delete_status = status.clone();
                     let delete_parent = parent.clone();
-                    let deleted_id = source.id.clone();
+                    let deleted_source = source.clone();
                     remove.connect_clicked(move |_| {
                         show_delete_confirmation(
                             &delete_parent,
                             delete_service.clone(),
-                            deleted_id.clone(),
+                            deleted_source.clone(),
                             delete_list.clone(),
                             delete_status.clone(),
                         );
                     });
                 }
-                status.set_text("");
             }
             Err(error) => {
                 status.set_text(&format!("{}: {error}", gettext("Unable to load guides")))
@@ -203,6 +203,7 @@ fn show_source_settings(
         move |_| {
             let manager = service.clone();
             let id = source.id.clone();
+            let revision = source.updated_at;
             let new_name = name.text().to_string();
             let new_enabled = enabled.is_active();
             let auto = automatic.is_active();
@@ -216,12 +217,9 @@ fn show_source_settings(
                 #[weak]
                 message,
                 async move {
-                    let result = async {
-                        manager.rename(id.clone(), new_name).await?;
-                        manager.set_schedule(id.clone(), auto, interval).await?;
-                        manager.set_enabled(id, new_enabled).await
-                    }
-                    .await;
+                    let result = manager.update_settings(
+                        id, revision, new_name, new_enabled, auto, interval,
+                    ).await;
                     match result {
                         Ok(()) => {
                             dialog.close();
@@ -240,15 +238,19 @@ fn show_source_settings(
 fn show_delete_confirmation(
     parent: &gtk::Window,
     service: GlobalGuideManager,
-    id: String,
+    source: GuideSource,
     list: gtk::Box,
     status: gtk::Label,
 ) {
+    // Capture exactly the identity and revision displayed before confirmation.
+    let approval = ConfirmedGuideDeletion::after_user_confirmation(&source);
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Remove Programme Guide?"));
     let body = box_column();
-    let message = gtk::Label::new(Some(&gettext(
-        "Removing this guide also deletes its saved schedule, manual guide mappings and playlist guide associations. IPTV playlists and playback settings remain unchanged."
+    let message = gtk::Label::new(Some(&format!(
+        "{}\n{}",
+        source.name,
+        gettext("Removing this guide also deletes its saved schedule, manual guide mappings and playlist guide associations. IPTV playlists and playback settings remain unchanged.")
     )));
     message.set_wrap(true);
     body.append(&message);
@@ -272,7 +274,7 @@ fn show_delete_confirmation(
         error,
         move |_| {
             let manager = service.clone();
-            let id = id.clone();
+            let approval = approval.clone();
             let list = list.clone();
             let status = status.clone();
             let parent = callback_parent.clone();
@@ -282,22 +284,7 @@ fn show_delete_confirmation(
                 #[weak]
                 error,
                 async move {
-                    let result = async {
-                        let source = manager
-                            .list()
-                            .await?
-                            .into_iter()
-                            .find(|s| s.id == id)
-                            .ok_or(super::service::GuideServiceError::Source(
-                                super::sources::RegistryError::NotFound,
-                            ))?;
-                        manager
-                            .delete_confirmed(ConfirmedGuideDeletion::after_user_confirmation(
-                                &source,
-                            ))
-                            .await
-                    }
-                    .await;
+                    let result = manager.delete_confirmed(approval).await;
                     match result {
                         Ok(()) => {
                             dialog.close();
