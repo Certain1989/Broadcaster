@@ -319,7 +319,8 @@ fn parse_xml_stream<R: BufRead>(
                 state.end(&name, source_id)?;
             }
             Event::End(tag) => {
-                let name = std::str::from_utf8(tag.name().as_ref())
+                let tag_name = tag.name();
+                let name = std::str::from_utf8(tag_name.as_ref())
                     .map_err(|_| EpgError::InvalidInput)?;
                 state.end(name, source_id)?;
             }
