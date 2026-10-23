@@ -215,24 +215,30 @@ impl GlobalGuideManager {
         seconds: i64,
     ) -> Result<(), GuideServiceError> {
         let _gate = self.inner.admission.lock().await;
-        if !enabled {
-            self.cancel(&id).await;
-        } else if !auto_refresh {
-            self.cancel_scheduled(&id).await;
-        }
+        let source_id = id.clone();
+        // Commit the SQLite revision-checked mutation while admission is
+        // serialized. A stale/invalid action must not cancel a valid refresh.
         self.db(move |registry| {
             registry.update_settings(&id, revision, &name, enabled, auto_refresh, seconds)
         })
-        .await
+        .await?;
+        if !enabled {
+            self.cancel(&source_id).await;
+        } else if !auto_refresh {
+            self.cancel_scheduled(&source_id).await;
+        }
+        Ok(())
     }
     pub async fn delete_confirmed(
         &self,
         approval: ConfirmedGuideDeletion,
     ) -> Result<(), GuideServiceError> {
         let _gate = self.inner.admission.lock().await;
-        self.cancel(approval.id()).await;
+        let source_id = approval.id().to_owned();
         self.db(move |registry| registry.delete_confirmed(&approval))
-            .await
+            .await?;
+        self.cancel(&source_id).await;
+        Ok(())
     }
     pub async fn due_ids(&self) -> Result<Vec<String>, GuideServiceError> {
         self.db(move |registry| registry.due_source_ids(clock()))
@@ -351,11 +357,25 @@ impl GlobalGuideManager {
             }
         }
         let (transfer, parser_cancel) = self.start(&id, scheduled).await?;
-        self.transition(&id, GuideStage::Fetching).await?;
         drop(gate);
-        let result = self
-            .refresh_one(&id, source, &transfer, &parser_cancel)
-            .await;
+        self.run_registered(id, source, transfer, parser_cancel).await
+    }
+
+    // Every registered slot must pass through terminal handling, including
+    // cancellation before its first Fetching transition.
+    async fn run_registered(
+        &self,
+        id: String,
+        source: PrivateGuideSource,
+        transfer: GuideCancellation,
+        parser_cancel: Arc<AtomicBool>,
+    ) -> Result<(), GuideServiceError> {
+        let result = match self.transition(&id, GuideStage::Fetching).await {
+            Ok(()) => self
+                .refresh_one(&id, source, &transfer, &parser_cancel)
+                .await,
+            Err(error) => Err(error),
+        };
         if let Err(error) = result {
             let error_code = match error {
                 GuideServiceError::Fetch(error) => error.code(),
@@ -624,6 +644,132 @@ mod e2_admission_tests {
                 fs::remove_dir_all(dir).unwrap();
             })
             .await;
+    }
+
+    #[tokio::test]
+    async fn stale_settings_save_preserves_in_flight_refresh_until_valid_disable() {
+        let (dir, manager) = manager();
+        let source = sample(&manager).await;
+        let (transfer, parser) = manager.start(&source.id, false).await.unwrap();
+        manager
+            .transition(&source.id, GuideStage::Fetching)
+            .await
+            .unwrap();
+        // The revision changes after the settings dialog was opened.
+        manager
+            .set_schedule(source.id.clone(), true, DEFAULT_REFRESH_SECONDS)
+            .await
+            .unwrap();
+        let current = manager.inner.registry.get(&source.id).unwrap();
+        assert!(current.updated_at > source.updated_at);
+        assert!(matches!(
+            manager
+                .update_settings(
+                    source.id.clone(),
+                    source.updated_at,
+                    "Stale".into(),
+                    false,
+                    false,
+                    DEFAULT_REFRESH_SECONDS,
+                )
+                .await,
+            Err(GuideServiceError::Source(RegistryError::StaleConfirmation))
+        ));
+        assert!(!transfer.is_cancelled());
+        assert!(!parser.load(Ordering::Acquire));
+        assert_eq!(manager.stage(&source.id).await, GuideStage::Fetching);
+        assert!(manager.inner.registry.get(&source.id).unwrap().enabled);
+
+        manager
+            .update_settings(
+                source.id.clone(),
+                current.updated_at,
+                "Valid".into(),
+                false,
+                false,
+                DEFAULT_REFRESH_SECONDS,
+            )
+            .await
+            .unwrap();
+        assert!(transfer.is_cancelled());
+        assert!(parser.load(Ordering::Acquire));
+        assert!(!manager.inner.registry.get(&source.id).unwrap().enabled);
+        assert!(matches!(
+            manager.start(&source.id, false).await,
+            Err(GuideServiceError::AlreadyRunning)
+        ));
+        manager
+            .terminal(&source.id, &Err(GuideServiceError::Cancelled))
+            .await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_confirmed_deletion_preserves_in_flight_refresh() {
+        let (dir, manager) = manager();
+        let source = sample(&manager).await;
+        let stale = ConfirmedGuideDeletion::after_user_confirmation(&source);
+        let (transfer, parser) = manager.start(&source.id, false).await.unwrap();
+        manager
+            .transition(&source.id, GuideStage::Fetching)
+            .await
+            .unwrap();
+        manager
+            .set_schedule(source.id.clone(), true, DEFAULT_REFRESH_SECONDS)
+            .await
+            .unwrap();
+        let current = manager.inner.registry.get(&source.id).unwrap();
+        assert!(matches!(
+            manager.delete_confirmed(stale).await,
+            Err(GuideServiceError::Source(RegistryError::StaleConfirmation))
+        ));
+        assert!(!transfer.is_cancelled());
+        assert!(!parser.load(Ordering::Acquire));
+        assert_eq!(manager.stage(&source.id).await, GuideStage::Fetching);
+        assert_eq!(manager.inner.registry.get(&source.id).unwrap().id, source.id);
+
+        manager
+            .delete_confirmed(ConfirmedGuideDeletion::after_user_confirmation(&current))
+            .await
+            .unwrap();
+        assert!(transfer.is_cancelled());
+        assert!(parser.load(Ordering::Acquire));
+        assert!(matches!(
+            manager.inner.registry.get(&source.id),
+            Err(RegistryError::NotFound)
+        ));
+        manager
+            .terminal(&source.id, &Err(GuideServiceError::Cancelled))
+            .await;
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_in_queued_slot_becomes_terminal_and_allows_new_refresh() {
+        let (dir, manager) = manager();
+        let source = sample(&manager).await;
+        let id = source.id.clone();
+        let private = manager.inner.registry.get_private(&id).unwrap();
+        let (transfer, parser) = manager.start(&id, false).await.unwrap();
+        assert_eq!(manager.stage(&id).await, GuideStage::Queued);
+        assert!(manager.cancel(&id).await);
+        assert!(matches!(
+            manager.start(&id, false).await,
+            Err(GuideServiceError::AlreadyRunning)
+        ));
+        assert_eq!(
+            manager.run_registered(id.clone(), private, transfer, parser).await,
+            Err(GuideServiceError::Cancelled)
+        );
+        assert_eq!(manager.stage(&id).await, GuideStage::Cancelled);
+        // A later authorized manual refresh must reach its real fetch boundary,
+        // not be rejected as AlreadyRunning by an abandoned queued slot.
+        assert!(matches!(
+            manager.refresh(id.clone()).await,
+            Err(GuideServiceError::Fetch(GuideFetchError::NetworkScopeDenied))
+        ));
+        assert_eq!(manager.stage(&id).await, GuideStage::Failed);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
