@@ -217,9 +217,9 @@ fn show_source_settings(
                 #[weak]
                 message,
                 async move {
-                    let result = manager.update_settings(
-                        id, revision, new_name, new_enabled, auto, interval,
-                    ).await;
+                    let result = manager
+                        .update_settings(id, revision, new_name, new_enabled, auto, interval)
+                        .await;
                     match result {
                         Ok(()) => {
                             dialog.close();

@@ -8,8 +8,8 @@ use super::{
     model::EpgError,
     network::{self, GuideCancellation, GuideFetchError, GuidePayload},
     sources::{
-        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource, RegistryError,
-        SourceOrigin,
+        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource,
+        RegistryError, SourceOrigin,
     },
     xmltv::{decode_xmltv, ParseLimits},
 };
@@ -189,7 +189,8 @@ impl GlobalGuideManager {
         if !enabled {
             self.cancel(&id).await;
         }
-        self.db(move |registry| registry.set_enabled(&id, enabled)).await
+        self.db(move |registry| registry.set_enabled(&id, enabled))
+            .await
     }
     pub async fn set_schedule(
         &self,
@@ -201,7 +202,8 @@ impl GlobalGuideManager {
         if !enabled {
             self.cancel_scheduled(&id).await;
         }
-        self.db(move |registry| registry.set_schedule(&id, enabled, seconds)).await
+        self.db(move |registry| registry.set_schedule(&id, enabled, seconds))
+            .await
     }
     pub async fn update_settings(
         &self,
@@ -220,7 +222,8 @@ impl GlobalGuideManager {
         }
         self.db(move |registry| {
             registry.update_settings(&id, revision, &name, enabled, auto_refresh, seconds)
-        }).await
+        })
+        .await
     }
     pub async fn delete_confirmed(
         &self,
@@ -228,7 +231,8 @@ impl GlobalGuideManager {
     ) -> Result<(), GuideServiceError> {
         let _gate = self.inner.admission.lock().await;
         self.cancel(approval.id()).await;
-        self.db(move |registry| registry.delete_confirmed(&approval)).await
+        self.db(move |registry| registry.delete_confirmed(&approval))
+            .await
     }
     pub async fn due_ids(&self) -> Result<Vec<String>, GuideServiceError> {
         self.db(move |registry| registry.due_source_ids(clock()))
@@ -325,17 +329,15 @@ impl GlobalGuideManager {
         self.refresh_admitted(id, true).await
     }
 
-    async fn refresh_admitted(
-        &self,
-        id: String,
-        scheduled: bool,
-    ) -> Result<(), GuideServiceError> {
+    async fn refresh_admitted(&self, id: String, scheduled: bool) -> Result<(), GuideServiceError> {
         // The same gate covers admission and every revocation/configuration
         // update. The transport is not permitted to race a pending disable,
         // delete, or scheduler opt-out between lookup and slot registration.
         let gate = self.inner.admission.lock().await;
         let source_id = id.clone();
-        let source = self.db(move |registry| registry.get_private(&source_id)).await?;
+        let source = self
+            .db(move |registry| registry.get_private(&source_id))
+            .await?;
         if !source.view.enabled {
             return Err(GuideServiceError::Disabled);
         }
@@ -351,7 +353,9 @@ impl GlobalGuideManager {
         let (transfer, parser_cancel) = self.start(&id, scheduled).await?;
         self.transition(&id, GuideStage::Fetching).await?;
         drop(gate);
-        let result = self.refresh_one(&id, source, &transfer, &parser_cancel).await;
+        let result = self
+            .refresh_one(&id, source, &transfer, &parser_cancel)
+            .await;
         if let Err(error) = result {
             let error_code = match error {
                 GuideServiceError::Fetch(error) => error.code(),
@@ -428,8 +432,12 @@ impl GlobalGuideManager {
                     .connect_private()
                     .map_err(|_| GuideServiceError::Storage)?;
                 replace_guide_snapshot_if_current(
-                    &mut conn, &snapshot, &cancelled, expected_last_success,
-                ).map_err(|error| {
+                    &mut conn,
+                    &snapshot,
+                    &cancelled,
+                    expected_last_success,
+                )
+                .map_err(|error| {
                     if error == EpgError::Cancelled {
                         GuideServiceError::Cancelled
                     } else {
@@ -477,19 +485,32 @@ async fn read_local_bounded(
     if file.uri_scheme().as_deref() != Some("file") {
         return Err(GuideServiceError::LocalAccess);
     }
-    let stream = local_deadline(async {
-        file.read_future(glib::Priority::DEFAULT).await
-            .map_err(|_| GuideServiceError::LocalAccess)
-    }, cancellation, 30).await?;
+    let stream = local_deadline(
+        async {
+            file.read_future(glib::Priority::DEFAULT)
+                .await
+                .map_err(|_| GuideServiceError::LocalAccess)
+        },
+        cancellation,
+        30,
+    )
+    .await?;
     let mut bytes = Vec::new();
     loop {
         if cancellation.is_cancelled() {
             return Err(GuideServiceError::Cancelled);
         }
-        let part = local_deadline(async {
-            stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT).await
-                .map_err(|_| GuideServiceError::LocalAccess)
-        }, cancellation, 30).await?;
+        let part = local_deadline(
+            async {
+                stream
+                    .read_bytes_future(64 * 1024, glib::Priority::DEFAULT)
+                    .await
+                    .map_err(|_| GuideServiceError::LocalAccess)
+            },
+            cancellation,
+            30,
+        )
+        .await?;
         if part.is_empty() {
             break;
         }
@@ -517,7 +538,8 @@ mod e2_admission_tests {
     fn manager() -> (PathBuf, GlobalGuideManager) {
         let dir = std::env::temp_dir().join(format!("epg-admission-{}", Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -537,13 +559,17 @@ mod e2_admission_tests {
         // The public trust scope rejects this loopback IP before any dial;
         // if admission is accidentally allowed, tests see a fetch error
         // rather than Disabled/NotFound or a silent network request.
-        manager.add(
-            "Race".to_owned(),
-            SourceOrigin::entered_remote_url(
-                "http://127.0.0.1:9999/fabricated".to_owned(),
-                network::TrustScope::Public,
-            ).unwrap(),
-        ).await.unwrap()
+        manager
+            .add(
+                "Race".to_owned(),
+                SourceOrigin::entered_remote_url(
+                    "http://127.0.0.1:9999/fabricated".to_owned(),
+                    network::TrustScope::Public,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -560,12 +586,20 @@ mod e2_admission_tests {
         let refresh = tokio::spawn(async move { pending.refresh(id).await });
         drop(gate);
         disable.await.unwrap().unwrap();
-        assert!(matches!(refresh.await.unwrap(), Err(GuideServiceError::Disabled)));
+        assert!(matches!(
+            refresh.await.unwrap(),
+            Err(GuideServiceError::Disabled)
+        ));
         assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
 
         manager.set_enabled(source.id.clone(), true).await.unwrap();
-        let fresh = manager.list().await.unwrap().into_iter()
-            .find(|s| s.id == source.id).unwrap();
+        let fresh = manager
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.id == source.id)
+            .unwrap();
         let approval = ConfirmedGuideDeletion::after_user_confirmation(&fresh);
         let gate = manager.inner.admission.lock().await;
         let pending = manager.clone();
@@ -588,13 +622,17 @@ mod e2_admission_tests {
     async fn real_manager_preserves_last_good_after_bad_gzip_ratio_and_wire_quota() {
         use flate2::{write::GzEncoder, Compression};
         use std::io::Write;
-        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
         let (dir, manager) = manager();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let xml = b"<tv><channel id='f'><display-name>Fiction</display-name></channel>\
             <programme channel='f' start='20300101000000 +0000' stop='20300101010000 +0000'>\
-            <title>Original</title></programme></tv>".to_vec();
+            <title>Original</title></programme></tv>"
+            .to_vec();
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&xml).unwrap();
         let mut broken = gzip.finish().unwrap();
@@ -615,20 +653,33 @@ mod e2_admission_tests {
                 let _ = socket.read(&mut read).await.unwrap();
                 let mut reply = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n",
-                    if declared_oversize { 16 * 1024 * 1024 + 1 } else { body.len() },
-                    if gzip { "Content-Encoding: gzip\r\n" } else { "" }
-                ).into_bytes();
+                    if declared_oversize {
+                        16 * 1024 * 1024 + 1
+                    } else {
+                        body.len()
+                    },
+                    if gzip {
+                        "Content-Encoding: gzip\r\n"
+                    } else {
+                        ""
+                    }
+                )
+                .into_bytes();
                 reply.extend(body);
                 socket.write_all(&reply).await.unwrap();
             }
         });
-        let source = manager.add(
-            "Fixture".into(),
-            SourceOrigin::entered_remote_url(
-                format!("http://127.0.0.1:{port}/guide"),
-                network::TrustScope::ExplicitLan,
-            ).unwrap(),
-        ).await.unwrap();
+        let source = manager
+            .add(
+                "Fixture".into(),
+                SourceOrigin::entered_remote_url(
+                    format!("http://127.0.0.1:{port}/guide"),
+                    network::TrustScope::ExplicitLan,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
         manager.refresh(source.id.clone()).await.unwrap();
         let good = manager.list().await.unwrap().pop().unwrap();
         assert!(good.last_success_at.is_some());
@@ -645,10 +696,13 @@ mod e2_admission_tests {
         let after = manager.list().await.unwrap().pop().unwrap();
         assert_eq!(after.last_success_at, good.last_success_at);
         let conn = manager.inner.registry.connect_private().unwrap();
-        let name: String = conn.query_row(
-            "SELECT title FROM epg_programmes WHERE source_id=?1",
-            [&source.id], |row| row.get(0),
-        ).unwrap();
+        let name: String = conn
+            .query_row(
+                "SELECT title FROM epg_programmes WHERE source_id=?1",
+                [&source.id],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(name, "Original");
         server.await.unwrap();
         drop(conn);
@@ -658,37 +712,49 @@ mod e2_admission_tests {
     #[test]
     fn stalled_local_adapter_times_out_and_pre_cancelled_adapter_aborts() {
         let context = glib::MainContext::new();
-        context.with_thread_default(|| context.block_on(async {
-            let token = GuideCancellation::new();
-            let stalled = std::future::pending::<Result<(), GuideServiceError>>();
-            let result = local_deadline(stalled, &token, 1).await;
-            assert!(matches!(
-                result,
-                Err(GuideServiceError::Fetch(GuideFetchError::Timeout))
-            ));
-            token.cancel();
-            let stalled = std::future::pending::<Result<(), GuideServiceError>>();
-            assert!(matches!(
-                local_deadline(stalled, &token, 1).await,
-                Err(GuideServiceError::Cancelled)
-            ));
-        })).unwrap();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let token = GuideCancellation::new();
+                    let stalled = std::future::pending::<Result<(), GuideServiceError>>();
+                    let result = local_deadline(stalled, &token, 1).await;
+                    assert!(matches!(
+                        result,
+                        Err(GuideServiceError::Fetch(GuideFetchError::Timeout))
+                    ));
+                    token.cancel();
+                    let stalled = std::future::pending::<Result<(), GuideServiceError>>();
+                    assert!(matches!(
+                        local_deadline(stalled, &token, 1).await,
+                        Err(GuideServiceError::Cancelled)
+                    ));
+                })
+            })
+            .unwrap();
     }
 
     #[tokio::test]
     async fn stale_due_list_cannot_fetch_after_schedule_opt_out() {
         let (dir, manager) = manager();
         let source = sample(&manager).await;
-        manager.set_schedule(source.id.clone(), true, 86_400).await.unwrap();
+        manager
+            .set_schedule(source.id.clone(), true, 86_400)
+            .await
+            .unwrap();
         assert_eq!(manager.due_ids().await.unwrap(), vec![source.id.clone()]);
-        manager.set_schedule(source.id.clone(), false, 86_400).await.unwrap();
+        manager
+            .set_schedule(source.id.clone(), false, 86_400)
+            .await
+            .unwrap();
         assert!(manager.refresh_scheduled(source.id.clone()).await.is_ok());
         assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
         // Manual refresh remains admitted despite schedule opt-out, and
         // rejects loopback in public scope before attempting any connection.
         assert!(matches!(
             manager.refresh(source.id.clone()).await,
-            Err(GuideServiceError::Fetch(GuideFetchError::NetworkScopeDenied))
+            Err(GuideServiceError::Fetch(
+                GuideFetchError::NetworkScopeDenied
+            ))
         ));
         fs::remove_dir_all(dir).unwrap();
     }

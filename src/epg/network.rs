@@ -501,21 +501,34 @@ mod tests {
     fn raw_redirect_authorities_are_not_canonicalized_into_trust() {
         let base = Url::parse("https://example.com/a/b").unwrap();
         for location in [
-            "http://127.1/feed", "http://0177.0.0.1/feed",
-            "http://0x7f000001/feed", "http://2130706433/feed",
-            "//127.1/secret", "//user%40example.com/x",
-            "https://user:secret@example.com/", "//evil%2eexample.com/feed",
-            "https://example.com\\@127.0.0.1/", "///127.0.0.1/",
-            "javascript:alert(1)", "https://example.com/%0a#frag",
+            "http://127.1/feed",
+            "http://0177.0.0.1/feed",
+            "http://0x7f000001/feed",
+            "http://2130706433/feed",
+            "//127.1/secret",
+            "//user%40example.com/x",
+            "https://user:secret@example.com/",
+            "//evil%2eexample.com/feed",
+            "https://example.com\\@127.0.0.1/",
+            "///127.0.0.1/",
+            "javascript:alert(1)",
+            "https://example.com/%0a#frag",
         ] {
-            assert!(validate_redirect_location(&base, location).is_err(), "{location}");
+            assert!(
+                validate_redirect_location(&base, location).is_err(),
+                "{location}"
+            );
         }
         assert_eq!(
-            validate_redirect_location(&base, "../guide.xml").unwrap().as_str(),
+            validate_redirect_location(&base, "../guide.xml")
+                .unwrap()
+                .as_str(),
             "https://example.com/guide.xml"
         );
         assert_eq!(
-            validate_redirect_location(&base, "//other.example/guide").unwrap().host_str(),
+            validate_redirect_location(&base, "//other.example/guide")
+                .unwrap()
+                .host_str(),
             Some("other.example")
         );
     }

@@ -226,12 +226,19 @@ async fn production_reqwest_transport_reaches_only_pinned_peer_and_keeps_http_ho
         let read = socket.read(&mut request).await.unwrap();
         let text = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
         assert!(text.contains(&format!("host: epg-peer-test.invalid:{port}")));
-        for forbidden in ["authorization:", "cookie:", "referer:", "x-iptv", "proxy-authorization:"] {
+        for forbidden in [
+            "authorization:",
+            "cookie:",
+            "referer:",
+            "x-iptv",
+            "proxy-authorization:",
+        ] {
             assert!(!text.contains(forbidden), "{forbidden}");
         }
-        socket.write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nTEST"
-        ).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nTEST")
+            .await
+            .unwrap();
     });
     // Unlike ReplyTransport, this uses the supplied production reqwest Client:
     // DNS resolves to the test peer while the URL/Host remains a distinct name.
@@ -241,7 +248,9 @@ async fn production_reqwest_transport_reaches_only_pinned_peer_and_keeps_http_ho
         &GuideCancellation::new(),
         &PinnedLoopbackResolver { port },
         &ReqwestGuideTransport,
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     assert_eq!(payload.bytes, b"TEST");
     server.await.unwrap();
 }
@@ -265,7 +274,12 @@ async fn actual_reqwest_client_refuses_mixed_dns_without_connecting() {
         &GuideCancellation::new(),
         &Mixed,
         &ReqwestGuideTransport,
-    ).await;
+    )
+    .await;
     assert!(matches!(err, Err(GuideFetchError::NetworkScopeDenied)));
-    assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
 }

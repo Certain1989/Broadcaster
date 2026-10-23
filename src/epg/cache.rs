@@ -285,8 +285,9 @@ fn replace_snapshot_inner(
         None if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) => {
             return Err(EpgError::InvalidInput);
         }
-        Some(expected) if last_success != expected
-            || last_success.is_some_and(|last| snapshot.retrieved_utc < last) =>
+        Some(expected)
+            if last_success != expected
+                || last_success.is_some_and(|last| snapshot.retrieved_utc < last) =>
         {
             return Err(EpgError::InvalidInput);
         }
@@ -341,20 +342,25 @@ fn replace_snapshot_inner(
 
 #[cfg(test)]
 mod e2_revision_tests {
-    use super::*;
     use super::super::{
         model::{GuideChannel, GuideSnapshot, Programme},
         network::TrustScope,
         sources::{ConfirmedGuideDeletion, GuideSourceRegistry, RegistryError, SourceOrigin},
     };
+    use super::*;
     use crate::streams::storage::Storage;
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     use uuid::Uuid;
 
     fn registry() -> (PathBuf, GuideSourceRegistry) {
         let dir = std::env::temp_dir().join(format!("epg-revision-{}", Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
         }
@@ -366,12 +372,20 @@ mod e2_revision_tests {
     #[test]
     fn same_second_replacement_preserves_real_freshness_and_increments_cas() {
         let (dir, registry) = registry();
-        let source = registry.add(
-            "Clock", &SourceOrigin::entered_remote_url(
-                "https://example.com/guide".into(), TrustScope::Public,
-            ).unwrap(),
-        ).unwrap();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let source = registry
+            .add(
+                "Clock",
+                &SourceOrigin::entered_remote_url(
+                    "https://example.com/guide".into(),
+                    TrustScope::Public,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let snapshot = |title: &str| GuideSnapshot {
             source_id: source.id.clone(),
             channels: vec![GuideChannel {
@@ -400,9 +414,8 @@ mod e2_revision_tests {
 
         // The admitted predecessor is still the same real second, but the
         // second full replacement gets an independent monotonic revision.
-        replace_guide_snapshot_if_current(
-            &mut conn, &snapshot("Second"), &cancelled, Some(now)
-        ).unwrap();
+        replace_guide_snapshot_if_current(&mut conn, &snapshot("Second"), &cancelled, Some(now))
+            .unwrap();
         let second = registry.get(&source.id).unwrap();
         assert_eq!(second.last_success_at, Some(now));
         assert!(second.updated_at > first.updated_at);
@@ -411,19 +424,29 @@ mod e2_revision_tests {
             registry.delete_confirmed(&old_approval),
             Err(RegistryError::StaleConfirmation),
         );
-        let saved: String = conn.query_row(
-            "SELECT title FROM epg_programmes WHERE source_id=?1",
-            [&source.id], |r| r.get(0),
-        ).unwrap();
+        let saved: String = conn
+            .query_row(
+                "SELECT title FROM epg_programmes WHERE source_id=?1",
+                [&source.id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(saved, "Second");
         // A stale import cannot evict the last-good payload.
         assert!(replace_guide_snapshot_if_current(
-            &mut conn, &snapshot("Rejected"), &cancelled, None
-        ).is_err());
-        let saved: String = conn.query_row(
-            "SELECT title FROM epg_programmes WHERE source_id=?1",
-            [&source.id], |r| r.get(0),
-        ).unwrap();
+            &mut conn,
+            &snapshot("Rejected"),
+            &cancelled,
+            None
+        )
+        .is_err());
+        let saved: String = conn
+            .query_row(
+                "SELECT title FROM epg_programmes WHERE source_id=?1",
+                [&source.id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(saved, "Second");
         drop(conn);
         fs::remove_dir_all(dir).unwrap();
