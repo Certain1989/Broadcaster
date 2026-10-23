@@ -634,6 +634,7 @@ impl<R: Read> Read for MeasuredRead<R> {
 /// Unlike the legacy snapshot API, this never constructs a whole-guide Vec.
 /// The caller commits rows transactionally, and must verify referential
 /// integrity before publication. An error must discard its transaction.
+#[expect(clippy::too_many_arguments, reason = "parser limits, cancellation and two independent sinks form one bounded streaming operation")]
 pub fn decode_xmltv_rows<R: BufRead>(
     input: R,
     source_id: &str,
@@ -741,6 +742,7 @@ where
 
 // Keep the exact same quick-xml event, timestamp, text and DTD semantics as
 // the snapshot parser. Only the validated-row destination differs.
+#[expect(clippy::too_many_arguments, reason = "streaming XMLTV event parser carries validation context and two row sinks")]
 fn parse_xml_stream_rows<R, C, P>(
     input: R,
     source_id: &str,

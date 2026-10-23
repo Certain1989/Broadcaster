@@ -475,86 +475,6 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
     Err(GuideFetchError::RedirectDenied)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn addr(ip: &str) -> SocketAddr {
-        SocketAddr::new(ip.parse().unwrap(), 443)
-    }
-    #[test]
-    fn denies_unsafe_and_repaired_authorities() {
-        for origin in [
-            "http://127.1/epg",
-            "http://0x7f000001/",
-            "http://user:pw@example.com/",
-            "file:///tmp/tv.xml",
-            "https://example.com\\\\@127.0.0.1/",
-            "https://user%40example.com/",
-            "https://[fe80::1%25eth0]/",
-            "https://example.com/#fragment",
-        ] {
-            assert!(validate_remote_url(origin).is_err());
-        }
-        assert!(validate_remote_url("https://example.com/epg.xml.gz?secret=opaque").is_ok());
-    }
-    #[test]
-    fn raw_redirect_authorities_are_not_canonicalized_into_trust() {
-        let base = Url::parse("https://example.com/a/b").unwrap();
-        for location in [
-            "http://127.1/feed",
-            "http://0177.0.0.1/feed",
-            "http://0x7f000001/feed",
-            "http://2130706433/feed",
-            "//127.1/secret",
-            "//user%40example.com/x",
-            "https://user:secret@example.com/",
-            "//evil%2eexample.com/feed",
-            "https://example.com\\@127.0.0.1/",
-            "///127.0.0.1/",
-            "javascript:alert(1)",
-            "https://example.com/%0a#frag",
-        ] {
-            assert!(
-                validate_redirect_location(&base, location).is_err(),
-                "{location}"
-            );
-        }
-        assert_eq!(
-            validate_redirect_location(&base, "../guide.xml")
-                .unwrap()
-                .as_str(),
-            "https://example.com/guide.xml"
-        );
-        assert_eq!(
-            validate_redirect_location(&base, "//other.example/guide")
-                .unwrap()
-                .host_str(),
-            Some("other.example")
-        );
-    }
-
-    #[test]
-    fn all_answers_must_satisfy_scope() {
-        assert!(
-            authorize_addresses(&[addr("1.1.1.1"), addr("10.0.0.1")], TrustScope::Public).is_err()
-        );
-        assert!(authorize_addresses(&[addr("169.254.169.254")], TrustScope::ExplicitLan).is_err());
-        assert!(authorize_addresses(
-            &[addr("10.0.0.1"), addr("127.0.0.1")],
-            TrustScope::ExplicitLan
-        )
-        .is_ok());
-        assert!(authorize_addresses(&[addr("2001:db8::1")], TrustScope::Public).is_err());
-        assert!(authorize_addresses(&[addr("1.1.1.1")], TrustScope::Public).is_ok());
-    }
-    #[test]
-    fn errors_never_embed_private_locator() {
-        let secret = "https://example.com/feed?token=my-private-token";
-        let error = validate_remote_url(&format!("{secret}#broken")).unwrap_err();
-        assert!(!format!("{error:?} {error}").contains("my-private-token"));
-    }
-}
-
 // Engineering candidate limits for streaming transport. Production reads must
 // never buffer a multi-gigabyte XMLTV payload in a Vec.
 const CANDIDATE_COMPRESSED: u64 = 256 * 1024 * 1024;
@@ -682,4 +602,84 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
         return Ok(gzip);
     }
     Err(GuideFetchError::RedirectDenied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn addr(ip: &str) -> SocketAddr {
+        SocketAddr::new(ip.parse().unwrap(), 443)
+    }
+    #[test]
+    fn denies_unsafe_and_repaired_authorities() {
+        for origin in [
+            "http://127.1/epg",
+            "http://0x7f000001/",
+            "http://user:pw@example.com/",
+            "file:///tmp/tv.xml",
+            "https://example.com\\\\@127.0.0.1/",
+            "https://user%40example.com/",
+            "https://[fe80::1%25eth0]/",
+            "https://example.com/#fragment",
+        ] {
+            assert!(validate_remote_url(origin).is_err());
+        }
+        assert!(validate_remote_url("https://example.com/epg.xml.gz?secret=opaque").is_ok());
+    }
+    #[test]
+    fn raw_redirect_authorities_are_not_canonicalized_into_trust() {
+        let base = Url::parse("https://example.com/a/b").unwrap();
+        for location in [
+            "http://127.1/feed",
+            "http://0177.0.0.1/feed",
+            "http://0x7f000001/feed",
+            "http://2130706433/feed",
+            "//127.1/secret",
+            "//user%40example.com/x",
+            "https://user:secret@example.com/",
+            "//evil%2eexample.com/feed",
+            "https://example.com\\@127.0.0.1/",
+            "///127.0.0.1/",
+            "javascript:alert(1)",
+            "https://example.com/%0a#frag",
+        ] {
+            assert!(
+                validate_redirect_location(&base, location).is_err(),
+                "{location}"
+            );
+        }
+        assert_eq!(
+            validate_redirect_location(&base, "../guide.xml")
+                .unwrap()
+                .as_str(),
+            "https://example.com/guide.xml"
+        );
+        assert_eq!(
+            validate_redirect_location(&base, "//other.example/guide")
+                .unwrap()
+                .host_str(),
+            Some("other.example")
+        );
+    }
+
+    #[test]
+    fn all_answers_must_satisfy_scope() {
+        assert!(
+            authorize_addresses(&[addr("1.1.1.1"), addr("10.0.0.1")], TrustScope::Public).is_err()
+        );
+        assert!(authorize_addresses(&[addr("169.254.169.254")], TrustScope::ExplicitLan).is_err());
+        assert!(authorize_addresses(
+            &[addr("10.0.0.1"), addr("127.0.0.1")],
+            TrustScope::ExplicitLan
+        )
+        .is_ok());
+        assert!(authorize_addresses(&[addr("2001:db8::1")], TrustScope::Public).is_err());
+        assert!(authorize_addresses(&[addr("1.1.1.1")], TrustScope::Public).is_ok());
+    }
+    #[test]
+    fn errors_never_embed_private_locator() {
+        let secret = "https://example.com/feed?token=my-private-token";
+        let error = validate_remote_url(&format!("{secret}#broken")).unwrap_err();
+        assert!(!format!("{error:?} {error}").contains("my-private-token"));
+    }
 }

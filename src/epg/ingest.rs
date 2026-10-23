@@ -105,7 +105,7 @@ pub fn import_xmltv<R: BufRead>(
         },
         |p| {
             inserted += 1;
-            if inserted % 1024 == 0 {
+            if inserted.is_multiple_of(1024) {
                 check_budget()?;
             }
             let inserted_row = tx
