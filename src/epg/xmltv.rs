@@ -3,6 +3,12 @@
 
 //! Portable, bounded XMLTV parsing. Input streams and trust decisions are
 //! supplied by separate platform/network/file adapters. XML never performs I/O.
+use super::model::{bounded_text, EpgError, GuideChannel, GuideSnapshot, Programme};
+use flate2::read::MultiGzDecoder;
+use quick_xml::{
+    events::{BytesStart, Event},
+    Reader,
+};
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, BufReader, Cursor, Read},
@@ -11,10 +17,7 @@ use std::{
         Arc,
     },
 };
-use flate2::read::MultiGzDecoder;
-use quick_xml::{events::{BytesStart, Event}, Reader};
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
-use super::model::{bounded_text, EpgError, GuideChannel, GuideSnapshot, Programme};
 
 const MAX_WIRE: usize = 16 * 1024 * 1024;
 const MAX_EXPANDED: usize = 128 * 1024 * 1024;
@@ -45,33 +48,53 @@ impl Default for ParseLimits {
 /// stream, never XMLTV-provided URLs. A 16 MiB wire quota is enforced even if
 /// the original source does not disclose Content-Length.
 pub fn decode_xmltv<R: BufRead>(
-    input: R, source_id: &str, retrieved_utc: i64, gzip: bool,
-    limits: ParseLimits, cancelled: &AtomicBool,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    gzip: bool,
+    limits: ParseLimits,
+    cancelled: &AtomicBool,
 ) -> Result<GuideSnapshot, EpgError> {
     if !bounded_text(source_id, 64)
-        || limits.max_wire_bytes == 0 || limits.max_wire_bytes > MAX_WIRE
-        || limits.max_expanded_bytes == 0 || limits.max_expanded_bytes > MAX_EXPANDED
-        || limits.max_ratio == 0 || limits.max_ratio > 100
-        || limits.max_depth == 0 || limits.max_depth > 64
+        || limits.max_wire_bytes == 0
+        || limits.max_wire_bytes > MAX_WIRE
+        || limits.max_expanded_bytes == 0
+        || limits.max_expanded_bytes > MAX_EXPANDED
+        || limits.max_ratio == 0
+        || limits.max_ratio > 100
+        || limits.max_depth == 0
+        || limits.max_depth > 64
     {
         return Err(EpgError::InvalidInput);
     }
     let mut wire = Vec::new();
     let quota = (limits.max_wire_bytes as u64).saturating_add(1);
-    input.take(quota).read_to_end(&mut wire)
+    input
+        .take(quota)
+        .read_to_end(&mut wire)
         .map_err(|_| EpgError::InvalidInput)?;
-    if wire.len() > limits.max_wire_bytes { return Err(EpgError::OverLimit); }
+    if wire.len() > limits.max_wire_bytes {
+        return Err(EpgError::OverLimit);
+    }
     if wire.is_empty() || cancelled.load(Ordering::Relaxed) {
-        return Err(if wire.is_empty() { EpgError::InvalidInput } else { EpgError::Cancelled });
+        return Err(if wire.is_empty() {
+            EpgError::InvalidInput
+        } else {
+            EpgError::Cancelled
+        });
     }
     let decoder: Box<dyn Read> = if gzip {
-        if !wire.starts_with(&[0x1f, 0x8b]) { return Err(EpgError::InvalidInput); }
+        if !wire.starts_with(&[0x1f, 0x8b]) {
+            return Err(EpgError::InvalidInput);
+        }
         Box::new(MultiGzDecoder::new(Cursor::new(wire.clone())))
     } else {
         Box::new(Cursor::new(wire.clone()))
     };
     let expanded_cap = limits.max_expanded_bytes.min(
-        wire.len().checked_mul(limits.max_ratio).ok_or(EpgError::OverLimit)?
+        wire.len()
+            .checked_mul(limits.max_ratio)
+            .ok_or(EpgError::OverLimit)?,
     );
     let exceeded = Arc::new(AtomicBool::new(false));
     let limited = LimitedRead {
@@ -80,10 +103,15 @@ pub fn decode_xmltv<R: BufRead>(
         exceeded: exceeded.clone(),
     };
     let result = parse_xml_stream(
-        BufReader::new(limited), source_id, retrieved_utc, limits.max_depth,
+        BufReader::new(limited),
+        source_id,
+        retrieved_utc,
+        limits.max_depth,
         cancelled,
     );
-    if exceeded.load(Ordering::Relaxed) { return Err(EpgError::OverLimit); }
+    if exceeded.load(Ordering::Relaxed) {
+        return Err(EpgError::OverLimit);
+    }
     result
 }
 
@@ -95,10 +123,14 @@ struct LimitedRead<R> {
 }
 impl<R: Read> Read for LimitedRead<R> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        if output.is_empty() { return Ok(0); }
+        if output.is_empty() {
+            return Ok(0);
+        }
         if self.remaining == 0 {
             let mut probe = [0u8; 1];
-            if self.inner.read(&mut probe)? == 0 { return Ok(0); }
+            if self.inner.read(&mut probe)? == 0 {
+                return Ok(0);
+            }
             self.exceeded.store(true, Ordering::Relaxed);
             return Err(io::Error::new(io::ErrorKind::InvalidData, "EPG byte limit"));
         }
@@ -141,7 +173,9 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
     let mut attributes = BTreeMap::new();
     for item in tag.attributes().with_checks(true) {
         let item = item.map_err(|_| EpgError::InvalidInput)?;
-        if attributes.len() >= 32 { return Err(EpgError::OverLimit); }
+        if attributes.len() >= 32 {
+            return Err(EpgError::OverLimit);
+        }
         let key = std::str::from_utf8(item.key.as_ref()).map_err(|_| EpgError::InvalidInput)?;
         let value = item.unescape_value().map_err(|_| EpgError::InvalidInput)?;
         if key.starts_with("xmlns") && value.contains("www.w3.org/2001/XInclude") {
@@ -156,29 +190,46 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
 }
 
 impl ParseState {
-    fn begin(&mut self, tag: &BytesStart<'_>, source_id: &str, max_depth: usize)
-        -> Result<(), EpgError>
-    {
+    fn begin(
+        &mut self,
+        tag: &BytesStart<'_>,
+        source_id: &str,
+        max_depth: usize,
+    ) -> Result<(), EpgError> {
         let name = std::str::from_utf8(tag.name().as_ref())
-            .map_err(|_| EpgError::InvalidInput)?.to_owned();
+            .map_err(|_| EpgError::InvalidInput)?
+            .to_owned();
         // Namespace/XInclude processing is deliberately not enabled. Do not
         // silently interpret or dereference namespaced "include" elements.
-        if name.contains(':') { return Err(EpgError::InvalidInput); }
+        if name.contains(':') {
+            return Err(EpgError::InvalidInput);
+        }
         let a = attributes(tag)?;
         if self.tags.is_empty() {
-            if self.seen_root || name != "tv" { return Err(EpgError::InvalidInput); }
+            if self.seen_root || name != "tv" {
+                return Err(EpgError::InvalidInput);
+            }
             self.seen_root = true;
         } else if self.tags.len() == 1 && self.tags[0] == "tv" {
             match name.as_str() {
                 "channel" => {
-                    if self.channels.len() >= MAX_CHANNELS { return Err(EpgError::OverLimit); }
+                    if self.channels.len() >= MAX_CHANNELS {
+                        return Err(EpgError::OverLimit);
+                    }
                     let id = a.get("id").cloned().ok_or(EpgError::InvalidInput)?;
-                    if !bounded_text(&id, 512) { return Err(EpgError::InvalidInput); }
-                    self.channel = Some(PendingChannel { id: id.trim().into(), display_name: None });
+                    if !bounded_text(&id, 512) {
+                        return Err(EpgError::InvalidInput);
+                    }
+                    self.channel = Some(PendingChannel {
+                        id: id.trim().into(),
+                        display_name: None,
+                    });
                 }
                 "programme" => {
                     self.programme_count += 1;
-                    if self.programme_count > MAX_PROGRAMMES { return Err(EpgError::OverLimit); }
+                    if self.programme_count > MAX_PROGRAMMES {
+                        return Err(EpgError::OverLimit);
+                    }
                     self.programme = Some(PendingProgramme {
                         channel: a.get("channel").cloned().unwrap_or_default(),
                         start_utc: a.get("start").and_then(|s| parse_timestamp(s).ok()),
@@ -202,42 +253,53 @@ impl ParseState {
                         "title" if p.title.is_none() => {
                             p.title = Some(String::new());
                             self.capturing = Some(name.clone());
-                        },
+                        }
                         "sub-title" if p.subtitle.is_none() => {
                             p.subtitle = Some(String::new());
                             self.capturing = Some(name.clone());
-                        },
+                        }
                         "desc" if p.description.is_none() => {
                             p.description = Some(String::new());
                             self.capturing = Some(name.clone());
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     }
                 }
             }
         }
         self.tags.push(name);
         self.text_bytes.push(0);
-        if self.tags.len() > max_depth { return Err(EpgError::OverLimit); }
+        if self.tags.len() > max_depth {
+            return Err(EpgError::OverLimit);
+        }
         Ok(())
     }
 
     fn add_text(&mut self, text: &str) -> Result<(), EpgError> {
         if self.tags.is_empty() {
-            if !text.trim().is_empty() { return Err(EpgError::InvalidInput); }
+            if !text.trim().is_empty() {
+                return Err(EpgError::InvalidInput);
+            }
             return Ok(());
         }
         let used = self.text_bytes.last_mut().ok_or(EpgError::InvalidInput)?;
         *used = used.checked_add(text.len()).ok_or(EpgError::OverLimit)?;
-        if *used > MAX_ELEMENT_TEXT { return Err(EpgError::OverLimit); }
-        if self.tags.len() != 3 || self.tags[0] != "tv"
+        if *used > MAX_ELEMENT_TEXT {
+            return Err(EpgError::OverLimit);
+        }
+        if self.tags.len() != 3
+            || self.tags[0] != "tv"
             || self.capturing.as_deref() != self.tags.get(2).map(String::as_str)
-        { return Ok(()); }
+        {
+            return Ok(());
+        }
         match (self.tags[1].as_str(), self.tags[2].as_str()) {
             ("channel", "display-name") => {
                 if let Some(name) = self.channel.as_mut().and_then(|c| c.display_name.as_mut()) {
                     name.push_str(text);
-                    if name.len() > 512 { return Err(EpgError::OverLimit); }
+                    if name.len() > 512 {
+                        return Err(EpgError::OverLimit);
+                    }
                 }
             }
             ("programme", field) => {
@@ -250,7 +312,9 @@ impl ParseState {
                     };
                     if let Some(value) = value {
                         value.push_str(text);
-                        if value.len() > max { return Err(EpgError::OverLimit); }
+                        if value.len() > max {
+                            return Err(EpgError::OverLimit);
+                        }
                     }
                 }
             }
@@ -262,17 +326,31 @@ impl ParseState {
     fn end(&mut self, tag: &str, source_id: &str) -> Result<(), EpgError> {
         let name = self.tags.pop().ok_or(EpgError::InvalidInput)?;
         self.text_bytes.pop();
-        if name != tag { return Err(EpgError::InvalidInput); }
-        if self.capturing.as_deref() == Some(tag) { self.capturing = None; }
+        if name != tag {
+            return Err(EpgError::InvalidInput);
+        }
+        if self.capturing.as_deref() == Some(tag) {
+            self.capturing = None;
+        }
         if tag == "channel" && self.tags == ["tv"] {
             let c = self.channel.take().ok_or(EpgError::InvalidInput)?;
             let name = c.display_name.ok_or(EpgError::InvalidInput)?;
-            if !bounded_text(&name, 512) { return Err(EpgError::InvalidInput); }
+            if !bounded_text(&name, 512) {
+                return Err(EpgError::InvalidInput);
+            }
             let row = GuideChannel {
-                source_id: source_id.to_owned(), channel_id: c.id, display_name: name.trim().into(),
+                source_id: source_id.to_owned(),
+                channel_id: c.id,
+                display_name: name.trim().into(),
             };
-            if let Some(existing) = self.channels.iter().find(|a| a.channel_id == row.channel_id) {
-                if existing != &row { return Err(EpgError::DuplicateChannel); }
+            if let Some(existing) = self
+                .channels
+                .iter()
+                .find(|a| a.channel_id == row.channel_id)
+            {
+                if existing != &row {
+                    return Err(EpgError::DuplicateChannel);
+                }
             } else {
                 self.channels.push(row);
             }
@@ -280,7 +358,9 @@ impl ParseState {
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
-                if start < stop && stop.saturating_sub(start) <= 86_400 && !p.channel.is_empty()
+                if start < stop
+                    && stop.saturating_sub(start) <= 86_400
+                    && !p.channel.is_empty()
                     && bounded_text(&title, 512)
                 {
                     self.programmes.push(Programme {
@@ -300,7 +380,10 @@ impl ParseState {
 }
 
 fn parse_xml_stream<R: BufRead>(
-    input: R, source_id: &str, retrieved_utc: i64, max_depth: usize,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    max_depth: usize,
     cancel: &AtomicBool,
 ) -> Result<GuideSnapshot, EpgError> {
     let mut reader = Reader::from_reader(input);
@@ -308,20 +391,25 @@ fn parse_xml_stream<R: BufRead>(
     let mut b = Vec::new();
     let mut state = ParseState::default();
     loop {
-        if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
-        let event = reader.read_event_into(&mut b).map_err(|_| EpgError::InvalidInput)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
+        let event = reader
+            .read_event_into(&mut b)
+            .map_err(|_| EpgError::InvalidInput)?;
         match event {
             Event::Start(tag) => state.begin(&tag, source_id, max_depth)?,
             Event::Empty(tag) => {
                 let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?.to_owned();
+                    .map_err(|_| EpgError::InvalidInput)?
+                    .to_owned();
                 state.begin(&tag, source_id, max_depth)?;
                 state.end(&name, source_id)?;
             }
             Event::End(tag) => {
                 let tag_name = tag.name();
-                let name = std::str::from_utf8(tag_name.as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?;
+                let name =
+                    std::str::from_utf8(tag_name.as_ref()).map_err(|_| EpgError::InvalidInput)?;
                 state.end(name, source_id)?;
             }
             Event::Text(text) => {
@@ -335,16 +423,22 @@ fn parse_xml_stream<R: BufRead>(
             Event::GeneralRef(entity) => {
                 let decoded = entity.decode().map_err(|_| EpgError::InvalidInput)?;
                 let replacement = match decoded.as_ref() {
-                    "amp" => '&', "lt" => '<', "gt" => '>',
-                    "quot" => '"', "apos" => '\'',
-                    _ => entity.resolve_char_ref()
+                    "amp" => '&',
+                    "lt" => '<',
+                    "gt" => '>',
+                    "quot" => '"',
+                    "apos" => '\'',
+                    _ => entity
+                        .resolve_char_ref()
                         .map_err(|_| EpgError::InvalidInput)?
                         .ok_or(EpgError::InvalidInput)?,
                 };
                 state.add_text(&replacement.to_string())?;
             }
             Event::Decl(decl) => {
-                if state.seen_root { return Err(EpgError::InvalidInput); }
+                if state.seen_root {
+                    return Err(EpgError::InvalidInput);
+                }
                 if let Some(encoding) = decl.encoding() {
                     let encoding = encoding.map_err(|_| EpgError::InvalidInput)?;
                     if !encoding.eq_ignore_ascii_case(b"utf-8") {
@@ -353,7 +447,7 @@ fn parse_xml_stream<R: BufRead>(
                 }
             }
             Event::DocType(_) | Event::PI(_) => return Err(EpgError::InvalidInput),
-            Event::Comment(_) => {},
+            Event::Comment(_) => {}
             Event::Eof => break,
         }
         b.clear();
@@ -363,14 +457,22 @@ fn parse_xml_stream<R: BufRead>(
     }
     state.programmes.sort();
     state.programmes.dedup();
-    if state.channels.is_empty() || state.programmes.is_empty()
+    if state.channels.is_empty()
+        || state.programmes.is_empty()
         || !state.programmes.iter().any(|p| p.stop_utc > retrieved_utc)
     {
         return Err(EpgError::InvalidSchedule);
     }
-    let known = state.channels.iter().map(|c| c.channel_id.as_str())
+    let known = state
+        .channels
+        .iter()
+        .map(|c| c.channel_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    if state.programmes.iter().any(|p| !known.contains(p.channel_id.as_str())) {
+    if state
+        .programmes
+        .iter()
+        .any(|p| !known.contains(p.channel_id.as_str()))
+    {
         return Err(EpgError::MissingChannel);
     }
     Ok(GuideSnapshot {
@@ -384,22 +486,31 @@ fn parse_xml_stream<R: BufRead>(
 /// Full XMLTV programme schedule preserves numeric source offsets in UTC.
 pub fn parse_timestamp(raw: &str) -> Result<i64, EpgError> {
     let raw = raw.trim();
-    if raw.len() < 15 || !raw.is_ascii() { return Err(EpgError::InvalidInput); }
+    if raw.len() < 15 || !raw.is_ascii() {
+        return Err(EpgError::InvalidInput);
+    }
     let stamp = raw.get(..14).ok_or(EpgError::InvalidInput)?;
-    if !stamp.bytes().all(|b| b.is_ascii_digit()) { return Err(EpgError::InvalidInput); }
+    if !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(EpgError::InvalidInput);
+    }
     let number = |start, end| -> Result<u8, EpgError> {
-        stamp[start..end].parse().map_err(|_| EpgError::InvalidInput)
+        stamp[start..end]
+            .parse()
+            .map_err(|_| EpgError::InvalidInput)
     };
     let year: i32 = stamp[0..4].parse().map_err(|_| EpgError::InvalidInput)?;
     let month = Month::try_from(number(4, 6)?).map_err(|_| EpgError::InvalidInput)?;
-    let date = Date::from_calendar_date(year, month, number(6, 8)?)
-        .map_err(|_| EpgError::InvalidInput)?;
+    let date =
+        Date::from_calendar_date(year, month, number(6, 8)?).map_err(|_| EpgError::InvalidInput)?;
     let time = Time::from_hms(number(8, 10)?, number(10, 12)?, number(12, 14)?)
         .map_err(|_| EpgError::InvalidInput)?;
     let offset = raw[14..].trim();
-    let utc_offset = if offset == "Z" { UtcOffset::UTC } else {
+    let utc_offset = if offset == "Z" {
+        UtcOffset::UTC
+    } else {
         let bytes = offset.as_bytes();
-        if bytes.len() != 5 || !matches!(bytes[0], b'+' | b'-')
+        if bytes.len() != 5
+            || !matches!(bytes[0], b'+' | b'-')
             || !bytes[1..].iter().all(|b| b.is_ascii_digit())
         {
             return Err(EpgError::InvalidInput);
@@ -410,15 +521,23 @@ pub fn parse_timestamp(raw: &str) -> Result<i64, EpgError> {
             return Err(EpgError::InvalidInput);
         }
         let sign = if bytes[0] == b'+' { 1 } else { -1 };
-        UtcOffset::from_hms(sign * hour, sign * minutes, 0)
-            .map_err(|_| EpgError::InvalidInput)?
+        UtcOffset::from_hms(sign * hour, sign * minutes, 0).map_err(|_| EpgError::InvalidInput)?
     };
     let epoch = PrimitiveDateTime::new(date, time)
-        .assume_offset(utc_offset).unix_timestamp();
+        .assume_offset(utc_offset)
+        .unix_timestamp();
     let lower = Date::from_calendar_date(2000, Month::January, 1)
-        .map_err(|_| EpgError::InvalidInput)?.midnight().assume_utc().unix_timestamp();
+        .map_err(|_| EpgError::InvalidInput)?
+        .midnight()
+        .assume_utc()
+        .unix_timestamp();
     let upper = Date::from_calendar_date(2100, Month::January, 1)
-        .map_err(|_| EpgError::InvalidInput)?.midnight().assume_utc().unix_timestamp();
-    if epoch < lower || epoch > upper { return Err(EpgError::InvalidInput); }
+        .map_err(|_| EpgError::InvalidInput)?
+        .midnight()
+        .assume_utc()
+        .unix_timestamp();
+    if epoch < lower || epoch > upper {
+        return Err(EpgError::InvalidInput);
+    }
     Ok(epoch)
 }
