@@ -134,6 +134,7 @@ struct ParseState {
     channel: Option<PendingChannel>,
     programme: Option<PendingProgramme>,
     programme_count: usize,
+    capturing: Option<String>,
 }
 
 fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError> {
@@ -190,14 +191,26 @@ impl ParseState {
         } else if self.tags.len() == 2 && self.tags[0] == "tv" {
             if self.tags[1] == "channel" && name == "display-name" {
                 if let Some(channel) = self.channel.as_mut() {
-                    if channel.display_name.is_none() { channel.display_name = Some(String::new()); }
+                    if channel.display_name.is_none() {
+                        channel.display_name = Some(String::new());
+                        self.capturing = Some(name.clone());
+                    }
                 }
             } else if self.tags[1] == "programme" {
                 if let Some(p) = self.programme.as_mut() {
                     match name.as_str() {
-                        "title" if p.title.is_none() => p.title = Some(String::new()),
-                        "sub-title" if p.subtitle.is_none() => p.subtitle = Some(String::new()),
-                        "desc" if p.description.is_none() => p.description = Some(String::new()),
+                        "title" if p.title.is_none() => {
+                            p.title = Some(String::new());
+                            self.capturing = Some(name.clone());
+                        },
+                        "sub-title" if p.subtitle.is_none() => {
+                            p.subtitle = Some(String::new());
+                            self.capturing = Some(name.clone());
+                        },
+                        "desc" if p.description.is_none() => {
+                            p.description = Some(String::new());
+                            self.capturing = Some(name.clone());
+                        },
                         _ => {},
                     }
                 }
@@ -217,7 +230,9 @@ impl ParseState {
         let used = self.text_bytes.last_mut().ok_or(EpgError::InvalidInput)?;
         *used = used.checked_add(text.len()).ok_or(EpgError::OverLimit)?;
         if *used > MAX_ELEMENT_TEXT { return Err(EpgError::OverLimit); }
-        if self.tags.len() != 3 || self.tags[0] != "tv" { return Ok(()); }
+        if self.tags.len() != 3 || self.tags[0] != "tv"
+            || self.capturing.as_deref() != self.tags.get(2).map(String::as_str)
+        { return Ok(()); }
         match (self.tags[1].as_str(), self.tags[2].as_str()) {
             ("channel", "display-name") => {
                 if let Some(name) = self.channel.as_mut().and_then(|c| c.display_name.as_mut()) {
@@ -248,6 +263,7 @@ impl ParseState {
         let name = self.tags.pop().ok_or(EpgError::InvalidInput)?;
         self.text_bytes.pop();
         if name != tag { return Err(EpgError::InvalidInput); }
+        if self.capturing.as_deref() == Some(tag) { self.capturing = None; }
         if tag == "channel" && self.tags == ["tv"] {
             let c = self.channel.take().ok_or(EpgError::InvalidInput)?;
             let name = c.display_name.ok_or(EpgError::InvalidInput)?;
