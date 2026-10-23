@@ -23,7 +23,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 
@@ -124,12 +124,35 @@ impl GlobalGuideManager {
                 .map_err(|_| GuideServiceError::Storage)
         })
         .await?;
-        Ok(Self {
+        let service = Self {
             inner: Arc::new(Inner {
                 registry: GuideSourceRegistry::new(storage),
                 running: Mutex::new(HashMap::new()),
             }),
-        })
+        };
+        service.start_opt_in_scheduler().await;
+        Ok(service)
+    }
+    /// An application-lifetime timer runs only for sources whose user
+    /// explicitly enabled automatic refresh. No daemon or startup network
+    /// contact is required for disabled/non-scheduled guides.
+    async fn start_opt_in_scheduler(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        crate::utils::tokio(async move {
+            // The detached Tokio task exits when the last manager is dropped.
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    let Some(inner) = weak.upgrade() else { break; };
+                    let manager = GlobalGuideManager { inner };
+                    if let Ok(ids) = manager.due_ids().await {
+                        for id in ids {
+                            let _ = manager.refresh(id).await;
+                        }
+                    }
+                }
+            });
+        }).await;
     }
     async fn db<T, F>(&self, task: F) -> Result<T, GuideServiceError>
     where
