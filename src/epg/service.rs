@@ -151,7 +151,8 @@ impl GlobalGuideManager {
         if running.stage.terminal() { return false; }
         running.parser.store(true,Ordering::Release);
         running.transfer.cancel();
-        running.stage = GuideStage::Cancelled;
+        // Keep the in-flight slot occupied until the blocked operation stops.
+        // Otherwise a second refresh could race the cancelled worker.
         true
     }
     async fn start(&self, id: &str) -> Result<(GuideCancellation,Arc<AtomicBool>),
@@ -193,7 +194,6 @@ impl GlobalGuideManager {
     pub async fn refresh(&self, id: String) -> Result<(), GuideServiceError> {
         let (transfer, parser_cancel) = self.start(&id).await?;
         let result = self.refresh_one(&id,&transfer,&parser_cancel).await;
-        self.terminal(&id,&result).await;
         if let Err(error) = result {
             let error_code = match error {
                 GuideServiceError::Fetch(error) => error.code(),
@@ -208,8 +208,12 @@ impl GlobalGuideManager {
             let source_id = id.clone();
             let _ = self.db(move |registry|
                 registry.record_failure(&source_id,error_code)).await;
+            self.terminal(&id,&Err(error)).await;
             Err(error)
-        } else { Ok(()) }
+        } else {
+            self.terminal(&id,&Ok(())).await;
+            Ok(())
+        }
     }
 
     async fn refresh_one(&self, id: &str, transfer: &GuideCancellation,
@@ -233,10 +237,10 @@ impl GlobalGuideManager {
         // E1's strict monotonic success guard refuses equal-second retries.
         // A same-second refresh receives a unique future logical instant;
         // out-of-order refresh jobs are also excluded by source coalescing.
-        let timestamp = clock().max(source.view.last_success_at
-            .and_then(|value| value.checked_add(1))
-            .ok_or(GuideServiceError::Storage)
-            .or_else(|_| Ok::<i64,GuideServiceError>(clock()))?);
+        let next = source.view.last_success_at
+            .map(|value| value.checked_add(1).ok_or(GuideServiceError::Storage))
+            .transpose()?.unwrap_or(0);
+        let timestamp = clock().max(next);
         let source_id = id.to_owned();
         let cancelled = parser_cancel.clone();
         let snapshot = crate::utils::tokio(async move {
