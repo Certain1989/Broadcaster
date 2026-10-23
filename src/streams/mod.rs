@@ -26,6 +26,8 @@ mod parser_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]
+mod storage_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
