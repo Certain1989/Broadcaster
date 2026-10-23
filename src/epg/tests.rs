@@ -205,7 +205,7 @@ fn cache_window_is_offline_and_includes_left_edge_cross_midnight() {
 
 #[test]
 fn exactly_4096_rows_and_one_sentinel_is_bounded() {
-    let mut db = db();
+    let db = db();
     add_source(&db, "guide-4097");
     for i in 0..64 {
         db.execute(
