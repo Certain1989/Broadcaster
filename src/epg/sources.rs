@@ -333,10 +333,11 @@ impl GuideSourceRegistry {
           ORDER BY id",
             )
             .map_err(db)?;
-        stmt.query_map([at], |row| row.get(0))
-            .map_err(db)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db)
+        let rows = stmt
+            .query_map([at], |row| row.get(0))
+            .map_err(db)?;
+        let ids = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
+        Ok(ids)
     }
 }
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GuideSource> {
