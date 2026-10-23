@@ -6,8 +6,8 @@
 pub mod cache;
 pub mod model;
 pub mod network;
-pub mod sources;
 pub mod service;
+pub mod sources;
 #[cfg(test)]
 mod tests;
 pub mod xmltv;
