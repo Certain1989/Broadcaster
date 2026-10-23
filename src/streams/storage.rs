@@ -11,11 +11,12 @@ use std::{
 };
 
 use super::{logo, model::*};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{backup::Backup, params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 pub const APPLICATION_ID: i64 = 0x42524354;
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
+pub const MIGRATION_002: &str = include_str!("migrations/002_epg.sql");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -122,6 +123,7 @@ impl Storage {
             return Err(StorageError::IncompatibleDatabase);
         }
         validate_v1_schema_shape(&conn)?;
+        validate_v2_schema_shape(&conn)?;
         Ok(conn)
     }
 
@@ -475,9 +477,7 @@ fn initialization_checkpoint(
 
 fn validate_existing(path: &Path) -> StorageResult<()> {
     require_private_file(path)?;
-    // Never write to a foreign, corrupt, zero-version or future database.
-    // An abandoned version-zero file requires *manual*, non-destructive
-    // recovery: delete/quarantine/migration are not automatic.
+    // Probe read-only first: foreign, corrupt and version-zero DBs remain untouched.
     let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|_| StorageError::IncompatibleDatabase)?;
     let id: i64 = probe
@@ -486,11 +486,108 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
     let version: i64 = probe
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| StorageError::CorruptDatabase)?;
-    if id != APPLICATION_ID || version != SCHEMA_VERSION {
+    if id != APPLICATION_ID || !(version == 1 || version == SCHEMA_VERSION) {
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&probe)?;
-    validate_integrity(&probe)
+    if version == SCHEMA_VERSION {
+        validate_v2_schema_shape(&probe)?;
+    }
+    validate_integrity(&probe)?;
+    drop(probe);
+    if version == 1 {
+        // The original remains v1 on any failed migration. A durable, independent
+        // SQLite-consistent v1 recovery snapshot is required before the write.
+        upgrade_existing_v1(path)?;
+        let reopened = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| StorageError::StorageFailure)?;
+        validate_v1_schema_shape(&reopened)?;
+        validate_v2_schema_shape(&reopened)?;
+        validate_integrity(&reopened)?;
+        let version: i64 = reopened.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if version != SCHEMA_VERSION {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    Ok(())
+}
+
+/// Upgrade a verified v1 database without replacing its inode or rewriting its
+/// published v1 migration. Preserve an independently reopenable recovery copy.
+/// This function must only run on a blocking worker, never the GTK thread.
+fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
+    let parent = path.parent().ok_or(StorageError::InvalidInput)?;
+    let name = path.file_name().ok_or(StorageError::InvalidInput)?;
+    let backup_path = parent.join(format!(
+        ".{}-v1-recovery-{}.sqlite3",
+        name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let staged_file = opts.open(&backup_path).map_err(|_| StorageError::PermissionDenied)?;
+    drop(staged_file);
+
+    let backup_result = (|| -> StorageResult<()> {
+        let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| StorageError::StorageFailure)?;
+        configure(&source)?;
+        let mut dest = Connection::open_with_flags(
+            &backup_path, OpenFlags::SQLITE_OPEN_READ_WRITE,
+        ).map_err(|_| StorageError::StorageFailure)?;
+        {
+            let backup = Backup::new(&source, &mut dest).map_err(map_sql)?;
+            backup.run_to_completion(128, Duration::from_millis(25), None)
+                .map_err(map_sql)?;
+        }
+        let application_id: i64 = dest.query_row("PRAGMA application_id", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        let version: i64 = dest.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if application_id != APPLICATION_ID || version != 1 {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        validate_v1_schema_shape(&dest)?;
+        validate_integrity(&dest)?;
+        dest.close().map_err(|_| StorageError::StorageFailure)?;
+        fs::File::open(&backup_path).and_then(|f| f.sync_all())
+            .map_err(|_| StorageError::StorageFailure)?;
+        sync_parent_directory(parent).map_err(|_| StorageError::StorageFailure)?;
+        Ok(())
+    })();
+    if let Err(error) = backup_result {
+        // Only our own uniquely created, incomplete backup may be discarded.
+        let _ = fs::remove_file(&backup_path);
+        return Err(error);
+    }
+
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|_| StorageError::StorageFailure)?;
+    configure(&conn)?;
+    let id: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(map_sql)?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(map_sql)?;
+    if id != APPLICATION_ID || version != 1 {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    validate_v1_schema_shape(&conn)?;
+    validate_integrity(&conn)?;
+    conn.execute_batch(MIGRATION_002).map_err(|_| {
+        let _ = conn.execute_batch("ROLLBACK");
+        StorageError::StorageFailure
+    })?;
+    validate_v2_schema_shape(&conn)?;
+    validate_integrity(&conn)?;
+    // The recovery copy is intentionally retained, never silently deleted.
+    // A failure after commit leaves the copy available for operator recovery.
+    Ok(())
 }
 
 /// Own only the random temporary inode, never the final database. On failures
@@ -565,7 +662,19 @@ fn initialize_new_with(
             let _ = connection.execute_batch("ROLLBACK");
             StorageError::StorageFailure
         })?;
+        // A new DB is staged from the unmodified published v1 initializer and
+        // immediately evolved to v2 before being atomically published.
+        let initial_version: i64 = connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if initial_version == 1 {
+            connection.execute_batch(MIGRATION_002).map_err(|_| {
+                let _ = connection.execute_batch("ROLLBACK");
+                StorageError::StorageFailure
+            })?;
+        }
         validate_v1_schema_shape(&connection)?;
+        validate_v2_schema_shape(&connection)?;
         validate_integrity(&connection)?;
         let id: i64 = connection
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -671,6 +780,43 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
             .map(String::as_str)
             .eq(expected.iter().copied())
         {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    Ok(())
+}
+
+fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
+    const TABLES: &[&str] = &[
+        "epg_channel_overrides",
+        "epg_channels",
+        "epg_global_id_aliases",
+        "epg_playlist_links",
+        "epg_programmes",
+        "epg_settings",
+        "epg_sources",
+    ];
+    const INDEXES: &[&str] = &[
+        "idx_epg_aliases_target",
+        "idx_epg_override_guide",
+        "idx_epg_playlist_guide",
+        "idx_epg_programmes_now",
+        "idx_epg_programmes_retention",
+        "idx_epg_programmes_window_stop",
+        "idx_epg_sources_enabled",
+    ];
+    for (kind, pattern, expected) in [
+        ("table", "epg_%", TABLES),
+        ("index", "idx_epg_%", INDEXES),
+    ] {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type=?1 AND name LIKE ?2 ORDER BY name",
+        ).map_err(|_| StorageError::IncompatibleDatabase)?;
+        let actual = stmt.query_map(params![kind, pattern], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::IncompatibleDatabase)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        if !actual.iter().map(String::as_str).eq(expected.iter().copied()) {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
