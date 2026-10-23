@@ -190,7 +190,9 @@ fn show_source_settings(
     close.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| { dialog.close(); }
+        move |_| {
+            dialog.close();
+        }
     ));
     let parent = parent.clone();
     save.connect_clicked(glib::clone!(
@@ -258,7 +260,9 @@ fn show_delete_confirmation(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| { dialog.close(); }
+        move |_| {
+            dialog.close();
+        }
     ));
     let parent = parent.clone();
     remove.connect_clicked(glib::clone!(
@@ -343,7 +347,9 @@ fn show_add(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| { dialog.close(); }
+        move |_| {
+            dialog.close();
+        }
     ));
     let parent = parent.clone();
     save.connect_clicked(glib::clone!(
@@ -436,7 +442,9 @@ pub fn show_guide_manager(parent: &gtk::Window) {
         close.connect_clicked(glib::clone!(
             #[weak]
             dialog,
-            move |_| { dialog.close(); }
+            move |_| {
+                dialog.close();
+            }
         ));
         let svc = service.clone();
         let ls = list.clone();
