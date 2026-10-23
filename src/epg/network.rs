@@ -36,7 +36,7 @@ impl GuideCancellation {
     pub fn is_cancelled(&self) -> bool {
         *self.signal.borrow()
     }
-    async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         let mut receiver = self.signal.subscribe();
         while !*receiver.borrow_and_update() {
             if receiver.changed().await.is_err() {
