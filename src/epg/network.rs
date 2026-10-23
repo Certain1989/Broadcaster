@@ -174,6 +174,37 @@ pub fn validate_remote_url(input: &str) -> Result<Url, GuideFetchError> {
     Ok(url)
 }
 
+/// Reject raw redirect authorities before URL joining can repair them.
+/// Relative references cannot introduce a scheme or authority by ambiguity.
+fn validate_redirect_location(base: &Url, location: &str) -> Result<Url, GuideFetchError> {
+    if location.len() > MAX_URL
+        || location.is_empty()
+        || location.trim() != location
+        || location.chars().any(char::is_control)
+        || location.contains('\\')
+        || location.chars().any(char::is_whitespace)
+        || location.starts_with("///")
+    {
+        return Err(GuideFetchError::RedirectDenied);
+    }
+    let raw = if location.starts_with("//") {
+        format!("{}:{location}", base.scheme())
+    } else if location.starts_with("http://") || location.starts_with("https://") {
+        location.to_owned()
+    } else {
+        // A colon before a path/query/fragment separator is an attempted
+        // scheme (or an ambiguous authority), not a harmless relative path.
+        let prefix = location.split(&['/', '?', '#'][..]).next().unwrap_or("");
+        if prefix.contains(':') {
+            return Err(GuideFetchError::RedirectDenied);
+        }
+        base.join(location)
+            .map_err(|_| GuideFetchError::RedirectDenied)?
+            .to_string()
+    };
+    validate_remote_url(&raw).map_err(|_| GuideFetchError::RedirectDenied)
+}
+
 fn ipv4_class(ip: Ipv4Addr) -> Option<AddressClass> {
     let [a, b, c, _] = ip.octets();
     if a == 127 || a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168) {
@@ -385,11 +416,7 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
                 .ok_or(GuideFetchError::RedirectDenied)?
                 .to_str()
                 .map_err(|_| GuideFetchError::RedirectDenied)?;
-            let joined = url
-                .join(location)
-                .map_err(|_| GuideFetchError::RedirectDenied)?;
-            let next = validate_remote_url(joined.as_str())
-                .map_err(|_| GuideFetchError::RedirectDenied)?;
+            let next = validate_redirect_location(&url, location)?;
             if url.scheme() == "https" && next.scheme() != "https" {
                 return Err(GuideFetchError::RedirectDenied);
             }
@@ -470,6 +497,29 @@ mod tests {
         }
         assert!(validate_remote_url("https://example.com/epg.xml.gz?secret=opaque").is_ok());
     }
+    #[test]
+    fn raw_redirect_authorities_are_not_canonicalized_into_trust() {
+        let base = Url::parse("https://example.com/a/b").unwrap();
+        for location in [
+            "http://127.1/feed", "http://0177.0.0.1/feed",
+            "http://0x7f000001/feed", "http://2130706433/feed",
+            "//127.1/secret", "//user%40example.com/x",
+            "https://user:secret@example.com/", "//evil%2eexample.com/feed",
+            "https://example.com\\@127.0.0.1/", "///127.0.0.1/",
+            "javascript:alert(1)", "https://example.com/%0a#frag",
+        ] {
+            assert!(validate_redirect_location(&base, location).is_err(), "{location}");
+        }
+        assert_eq!(
+            validate_redirect_location(&base, "../guide.xml").unwrap().as_str(),
+            "https://example.com/guide.xml"
+        );
+        assert_eq!(
+            validate_redirect_location(&base, "//other.example/guide").unwrap().host_str(),
+            Some("other.example")
+        );
+    }
+
     #[test]
     fn all_answers_must_satisfy_scope() {
         assert!(
