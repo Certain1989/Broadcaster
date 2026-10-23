@@ -46,10 +46,14 @@ jobs:
           df -h .
       - name: Configure application build
         run: meson setup _build -Dprofile=development
-      - name: Show formatter output for review without pushing from CI
+      - name: Export formatted source via diagnostic logs without writing to GitHub
         run: |
           cargo fmt --all
-          git diff -- src/epg/ingest.rs src/epg/xmltv.rs src/epg/network.rs src/epg/service.rs src/epg/sources.rs src/epg/mod.rs src/streams/storage.rs
+          for f in src/epg/ingest.rs src/epg/xmltv.rs src/epg/network.rs src/epg/service.rs src/epg/sources.rs src/epg/mod.rs src/streams/storage.rs; do
+            echo "R05_FORMAT_START ${f}"
+            base64 -w 2048 "${f}" | sed 's/^/R05_FORMAT_DATA /'
+            echo "R05_FORMAT_END ${f}"
+          done
       - name: Compile opt-in Rust/SQLite diagnostics
         run: cargo test --locked --release --no-run
       - name: Benchmark fabricated DE-size gzip import into SQLite
