@@ -124,6 +124,7 @@ impl ConfirmedGuideDeletion {
     pub fn after_user_confirmation(source: &GuideSource) -> Self {
         Self { id: source.id.clone(), updated_at: source.updated_at }
     }
+    pub(crate) fn id(&self) -> &str { &self.id }
 }
 #[derive(Clone)]
 pub struct GuideSourceRegistry {
@@ -136,6 +137,9 @@ impl fmt::Debug for GuideSourceRegistry {
 }
 impl GuideSourceRegistry {
     pub fn new(storage: Storage) -> Self { Self { storage } }
+    pub(crate) fn connect_private(&self) -> Result<rusqlite::Connection, RegistryError> {
+        self.storage.connect().map_err(|_| RegistryError::Storage)
+    }
 
     /// Call only from a blocking worker, never from GTK MainContext.
     pub fn add(&self, name: &str, origin: &SourceOrigin) -> Result<GuideSource, RegistryError> {
@@ -193,11 +197,11 @@ impl GuideSourceRegistry {
     }
     pub fn rename(&self, id: &str, name: &str) -> Result<(), RegistryError> {
         if !valid_name(name) { return Err(RegistryError::InvalidInput); }
-        self.update("UPDATE epg_sources SET name=?1,updated_at=?2 WHERE id=?3",
+        self.update("UPDATE epg_sources SET name=?1,updated_at=MAX(updated_at+1,?2) WHERE id=?3",
             params![name,clock(),id])
     }
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), RegistryError> {
-        self.update("UPDATE epg_sources SET enabled=?1,updated_at=?2 WHERE id=?3",
+        self.update("UPDATE epg_sources SET enabled=?1,updated_at=MAX(updated_at+1,?2) WHERE id=?3",
             params![enabled as i64,clock(),id])
     }
     pub fn set_schedule(&self, id: &str, enabled: bool, seconds: i64)
@@ -206,7 +210,7 @@ impl GuideSourceRegistry {
             return Err(RegistryError::InvalidInput);
         }
         self.update("UPDATE epg_sources SET auto_refresh=?1,
-            refresh_interval_seconds=?2,updated_at=?3 WHERE id=?4",
+            refresh_interval_seconds=?2,updated_at=MAX(updated_at+1,?3) WHERE id=?4",
             params![enabled as i64,seconds,clock(),id])
     }
     fn update(&self, sql: &str, values: impl rusqlite::Params) -> Result<(), RegistryError> {
