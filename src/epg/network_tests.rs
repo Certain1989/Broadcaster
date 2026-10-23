@@ -283,3 +283,49 @@ async fn actual_reqwest_client_refuses_mixed_dns_without_connecting() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn production_https_keeps_origin_name_in_tls_sni_at_pinned_peer() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut hello = vec![0u8; 8192];
+        let mut used = 0;
+        let hostname = b"epg-peer-test.invalid";
+        while used < hello.len() && !hello[..used].windows(hostname.len()).any(|w| w == hostname) {
+            let n = tokio::time::timeout(
+                Duration::from_secs(3),
+                socket.read(&mut hello[used..]),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(n > 0, "TLS client disconnected before sending SNI");
+            used += n;
+        }
+        assert!(
+            hello[..used].windows(hostname.len()).any(|w| w == hostname),
+            "TLS ClientHello must preserve the authorized hostname, not the pinned IP"
+        );
+        // This peer never speaks real TLS. Production reqwest must reject its
+        // plaintext response rather than accepting an invalid certificate.
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nTEST")
+            .await
+            .unwrap();
+    });
+    let result = fetch_guide_with(
+        &format!("https://epg-peer-test.invalid:{port}/xmltv"),
+        TrustScope::ExplicitLan,
+        &GuideCancellation::new(),
+        &PinnedLoopbackResolver { port },
+        &ReqwestGuideTransport,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(GuideFetchError::Network | GuideFetchError::Timeout)
+    ));
+    server.await.unwrap();
+}
