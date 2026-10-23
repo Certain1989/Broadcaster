@@ -219,10 +219,32 @@ pub fn read_guide_window(
 /// Validate the WHOLE snapshot before touching cached rows. A failed parse,
 /// validation, cancellation or SQLite write leaves the previous success intact.
 /// All original guide programmes (not just now/next) are stored atomically.
+/// The original E1 import remains strict about equal retrieval times.
 pub fn replace_guide_snapshot(
     conn: &mut Connection,
     snapshot: &GuideSnapshot,
     cancel: &AtomicBool,
+) -> Result<(), EpgError> {
+    replace_snapshot_inner(conn, snapshot, cancel, None)
+}
+
+/// E2's coalesced per-source refresher supplies the last success observed at
+/// admission. Allows same-second wall-clock times only when the persisted
+/// predecessor is still exactly the admitted version; never fabricates time.
+pub fn replace_guide_snapshot_if_current(
+    conn: &mut Connection,
+    snapshot: &GuideSnapshot,
+    cancel: &AtomicBool,
+    expected_last_success: Option<i64>,
+) -> Result<(), EpgError> {
+    replace_snapshot_inner(conn, snapshot, cancel, Some(expected_last_success))
+}
+
+fn replace_snapshot_inner(
+    conn: &mut Connection,
+    snapshot: &GuideSnapshot,
+    cancel: &AtomicBool,
+    expected_last_success: Option<Option<i64>>,
 ) -> Result<(), EpgError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(EpgError::Cancelled);
@@ -257,10 +279,18 @@ pub fn replace_guide_snapshot(
     if enabled != 1 {
         return Err(EpgError::Unavailable);
     }
-    // A refresh completed out of order must never evict a newer cache. Equal
-    // timestamps are conservatively refused, even for otherwise valid snapshots.
-    if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) {
-        return Err(EpgError::InvalidInput);
+    // E1 callers still refuse equal timestamps. E2's serialized refresh uses
+    // an admission-time CAS so an out-of-order or stale worker cannot evict data.
+    match expected_last_success {
+        None if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) => {
+            return Err(EpgError::InvalidInput);
+        }
+        Some(expected) if last_success != expected
+            || last_success.is_some_and(|last| snapshot.retrieved_utc < last) =>
+        {
+            return Err(EpgError::InvalidInput);
+        }
+        _ => {}
     }
     tx.execute(
         "DELETE FROM epg_channels WHERE source_id=?1",
@@ -302,7 +332,7 @@ pub fn replace_guide_snapshot(
     }
     tx.execute(
         "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1,
-         last_error_code=NULL,updated_at=?1 WHERE id=?2",
+         last_error_code=NULL,updated_at=MAX(updated_at+1,?1) WHERE id=?2",
         params![snapshot.retrieved_utc, snapshot.source_id],
     )
     .map_err(db)?;
