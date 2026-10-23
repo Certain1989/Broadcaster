@@ -165,7 +165,7 @@ pub fn validate_remote_url(input: &str) -> Result<Url, GuideFetchError> {
     // For DNS hostnames case is insensitive, but URL normalization must not
     // convert an exotic numeric host spelling to an IPv4 literal.
     let normalized = host.trim_start_matches('[').trim_end_matches(']');
-    if raw_host.to_ascii_lowercase() != normalized.to_ascii_lowercase() {
+    if !raw_host.eq_ignore_ascii_case(normalized) {
         return Err(GuideFetchError::InvalidOrigin);
     }
     if raw_host.starts_with('[') || authority.contains('[') != authority.contains(']') {

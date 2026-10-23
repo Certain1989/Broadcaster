@@ -199,7 +199,7 @@ impl GlobalGuideManager {
         &self,
         approval: ConfirmedGuideDeletion,
     ) -> Result<(), GuideServiceError> {
-        self.cancel(&approval.id()).await;
+        self.cancel(approval.id()).await;
         self.db(move |registry| registry.delete_confirmed(&approval))
             .await
     }

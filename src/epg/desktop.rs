@@ -405,7 +405,7 @@ fn show_add(
 
 pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::GuideServiceError> {
     let cell = SHARED_MANAGER.get_or_init(tokio::sync::OnceCell::const_new);
-    cell.get_or_try_init(|| GlobalGuideManager::open())
+    cell.get_or_try_init(GlobalGuideManager::open)
         .await
         .cloned()
 }
