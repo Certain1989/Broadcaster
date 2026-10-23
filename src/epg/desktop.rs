@@ -53,7 +53,9 @@ fn edit_field(label: &str, initial: &str, body: &gtk::Box) -> gtk::Entry {
     line.append(&entry);
     let keyboard = gtk::Button::from_icon_name("input-keyboard-symbolic");
     crate::keyboard::bind_launcher(
-        &keyboard, &entry, crate::keyboard::KeyboardOptions::default()
+        &keyboard,
+        &entry,
+        crate::keyboard::KeyboardOptions::default(),
     );
     line.append(&keyboard);
     body.append(&line);
@@ -63,23 +65,34 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
-                while let Some(child) = list.first_child() { list.remove(&child); }
+                while let Some(child) = list.first_child() {
+                    list.remove(&child);
+                }
                 if sources.is_empty() {
-                    list.append(&gtk::Label::new(Some(&gettext("No programme guides configured"))));
+                    list.append(&gtk::Label::new(Some(&gettext(
+                        "No programme guides configured",
+                    ))));
                 }
                 for source in sources {
                     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
                     row.set_margin_top(8);
                     row.set_margin_bottom(8);
-                    let state = if !source.enabled { gettext("Disabled") }
-                        else if source.last_success_at.is_some() { gettext("Cached guide available") }
-                        else { gettext("Not refreshed yet") };
+                    let state = if !source.enabled {
+                        gettext("Disabled")
+                    } else if source.last_success_at.is_some() {
+                        gettext("Cached guide available")
+                    } else {
+                        gettext("Not refreshed yet")
+                    };
                     let caption = gtk::Label::new(Some(&format!("{} — {}", source.name, state)));
                     caption.set_xalign(0.0);
                     caption.set_wrap(true);
                     row.append(&caption);
                     if let Some(code) = source.last_error_code {
-                        row.append(&gtk::Label::new(Some(&format!("{}: {code}", gettext("Last error")))));
+                        row.append(&gtk::Label::new(Some(&format!(
+                            "{}: {code}",
+                            gettext("Last error")
+                        ))));
                     }
                     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                     let refresh = command(&gettext("Refresh"), &buttons);
@@ -104,7 +117,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                             let result = manager.refresh(id).await;
                             state.set_text(&match result {
                                 Ok(_) => gettext("Guide refreshed"),
-                                Err(error) => format!("{}: {error}", gettext("Refresh failed"))
+                                Err(error) => format!("{}: {error}", gettext("Refresh failed")),
                             });
                             repaint(manager, listing, state, window);
                         });
@@ -116,8 +129,11 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     let settings_source = source.clone();
                     configure.connect_clicked(move |_| {
                         show_source_settings(
-                            &edit_parent, edit_service.clone(), settings_source.clone(),
-                            edit_list.clone(), edit_status.clone()
+                            &edit_parent,
+                            edit_service.clone(),
+                            settings_source.clone(),
+                            edit_list.clone(),
+                            edit_status.clone(),
                         );
                     });
                     let delete_service = service.clone();
@@ -127,20 +143,30 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     let deleted_id = source.id.clone();
                     remove.connect_clicked(move |_| {
                         show_delete_confirmation(
-                            &delete_parent, delete_service.clone(), deleted_id.clone(),
-                            delete_list.clone(), delete_status.clone()
+                            &delete_parent,
+                            delete_service.clone(),
+                            deleted_id.clone(),
+                            delete_list.clone(),
+                            delete_status.clone(),
                         );
                     });
                 }
                 status.set_text("");
             }
-            Err(error) => status.set_text(&format!("{}: {error}", gettext("Unable to load guides")))
+            Err(error) => {
+                status.set_text(&format!("{}: {error}", gettext("Unable to load guides")))
+            }
         }
     });
 }
 
-fn show_source_settings(parent: &gtk::Window, service: GlobalGuideManager,
-    source: GuideSource, list: gtk::Box, status: gtk::Label) {
+fn show_source_settings(
+    parent: &gtk::Window,
+    service: GlobalGuideManager,
+    source: GuideSource,
+    list: gtk::Box,
+    status: gtk::Label,
+) {
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Programme Guide Settings"));
     let body = box_column();
@@ -153,42 +179,69 @@ fn show_source_settings(parent: &gtk::Window, service: GlobalGuideManager,
     body.append(&automatic);
     let hours = gtk::SpinButton::with_range(6.0, 168.0, 1.0);
     hours.set_value(source.refresh_interval_seconds as f64 / 3600.0);
-    body.append(&gtk::Label::new(Some(&gettext("Refresh interval in hours (6–168)"))));
+    body.append(&gtk::Label::new(Some(&gettext(
+        "Refresh interval in hours (6–168)",
+    ))));
     body.append(&hours);
     let message = status_label();
     body.append(&message);
     let save = command(&gettext("Apply"), &body);
     let close = command(&gettext("Close"), &body);
-    close.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    close.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
     let parent = parent.clone();
-    save.connect_clicked(glib::clone!(#[weak] dialog, #[weak] message, move |_| {
-        let manager = service.clone();
-        let id = source.id.clone();
-        let new_name = name.text().to_string();
-        let new_enabled = enabled.is_active();
-        let auto = automatic.is_active();
-        let interval = hours.value_as_int() as i64 * 3600;
-        let list = list.clone();
-        let status = status.clone();
-        let parent = parent.clone();
-        spawn(glib::clone!(#[weak] dialog, #[weak] message, async move {
-            let result = async {
-                manager.rename(id.clone(), new_name).await?;
-                manager.set_schedule(id.clone(), auto, interval).await?;
-                manager.set_enabled(id, new_enabled).await
-            }.await;
-            match result {
-                Ok(()) => { dialog.close(); repaint(manager,list,status,parent); },
-                Err(error) => message.set_text(&error.to_string())
-            }
-        }));
-    }));
+    save.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        message,
+        move |_| {
+            let manager = service.clone();
+            let id = source.id.clone();
+            let new_name = name.text().to_string();
+            let new_enabled = enabled.is_active();
+            let auto = automatic.is_active();
+            let interval = hours.value_as_int() as i64 * 3600;
+            let list = list.clone();
+            let status = status.clone();
+            let parent = parent.clone();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                message,
+                async move {
+                    let result = async {
+                        manager.rename(id.clone(), new_name).await?;
+                        manager.set_schedule(id.clone(), auto, interval).await?;
+                        manager.set_enabled(id, new_enabled).await
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            dialog.close();
+                            repaint(manager, list, status, parent);
+                        }
+                        Err(error) => message.set_text(&error.to_string()),
+                    }
+                }
+            ));
+        }
+    ));
     dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
-fn show_delete_confirmation(parent: &gtk::Window, service: GlobalGuideManager,
-    id: String, list: gtk::Box, status: gtk::Label) {
+fn show_delete_confirmation(
+    parent: &gtk::Window,
+    service: GlobalGuideManager,
+    id: String,
+    list: gtk::Box,
+    status: gtk::Label,
+) {
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Remove Programme Guide?"));
     let body = box_column();
@@ -202,45 +255,82 @@ fn show_delete_confirmation(parent: &gtk::Window, service: GlobalGuideManager,
     let cancel = command(&gettext("Keep Guide"), &body);
     let remove = command(&gettext("Remove Permanently"), &body);
     remove.add_css_class("destructive-action");
-    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
     let parent = parent.clone();
-    remove.connect_clicked(glib::clone!(#[weak] dialog, #[weak] error, move |_| {
-        let manager = service.clone();
-        let id = id.clone();
-        let list = list.clone();
-        let status = status.clone();
-        let parent = parent.clone();
-        spawn(glib::clone!(#[weak] dialog, #[weak] error, async move {
-            let result = async {
-                let source = manager.list().await?.into_iter().find(|s| s.id == id)
-                    .ok_or(super::service::GuideServiceError::Source(
-                        super::sources::RegistryError::NotFound))?;
-                manager.delete_confirmed(
-                    ConfirmedGuideDeletion::after_user_confirmation(&source)).await
-            }.await;
-            match result {
-                Ok(()) => { dialog.close(); repaint(manager,list,status,parent); },
-                Err(reason) => error.set_text(&reason.to_string()),
-            }
-        }));
-    }));
+    remove.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        error,
+        move |_| {
+            let manager = service.clone();
+            let id = id.clone();
+            let list = list.clone();
+            let status = status.clone();
+            let parent = parent.clone();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                error,
+                async move {
+                    let result = async {
+                        let source = manager
+                            .list()
+                            .await?
+                            .into_iter()
+                            .find(|s| s.id == id)
+                            .ok_or(super::service::GuideServiceError::Source(
+                                super::sources::RegistryError::NotFound,
+                            ))?;
+                        manager
+                            .delete_confirmed(ConfirmedGuideDeletion::after_user_confirmation(
+                                &source,
+                            ))
+                            .await
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            dialog.close();
+                            repaint(manager, list, status, parent);
+                        }
+                        Err(reason) => error.set_text(&reason.to_string()),
+                    }
+                }
+            ));
+        }
+    ));
     dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
-fn show_add(parent: &gtk::Window, service: GlobalGuideManager, list: gtk::Box,
-    status: gtk::Label, local: Option<gio::File>) {
+fn show_add(
+    parent: &gtk::Window,
+    service: GlobalGuideManager,
+    list: gtk::Box,
+    status: gtk::Label,
+    local: Option<gio::File>,
+) {
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Add Programme Guide"));
     let body = box_column();
     let name = edit_field(&gettext("Guide name"), "", &body);
     let url = if local.is_none() {
         Some(edit_field(&gettext("XMLTV HTTP(S) URL"), "", &body))
-    } else { None };
+    } else {
+        None
+    };
     let lan = gtk::CheckButton::with_label(&gettext(
-        "I explicitly trust this local-network guide origin"
+        "I explicitly trust this local-network guide origin",
     ));
-    if local.is_none() { body.append(&lan); }
+    if local.is_none() {
+        body.append(&lan);
+    }
     let note = gtk::Label::new(Some(&gettext(
         "Adding a source saves the selected locator privately. No download occurs until you choose Refresh or explicitly enable a schedule."
     )));
@@ -250,40 +340,68 @@ fn show_add(parent: &gtk::Window, service: GlobalGuideManager, list: gtk::Box,
     body.append(&error);
     let save = command(&gettext("Save Guide"), &body);
     let cancel = command(&gettext("Cancel"), &body);
-    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
     let parent = parent.clone();
-    save.connect_clicked(glib::clone!(#[weak] dialog, #[weak] error, move |_| {
-        let origin = if let Some(ref file) = local {
-            SourceOrigin::selected_local_file(file.uri().to_string())
-        } else {
-            let chosen = if lan.is_active() { TrustScope::ExplicitLan }
-                else { TrustScope::Public };
-            SourceOrigin::entered_remote_url(
-                url.as_ref().map(|field|field.text().to_string()).unwrap_or_default(), chosen)
-        };
-        let Ok(origin) = origin else {
-            error.set_text(&gettext("Invalid guide location"));
-            return;
-        };
-        let manager = service.clone();
-        let list = list.clone();
-        let status = status.clone();
-        let parent = parent.clone();
-        let name = name.text().to_string();
-        spawn(glib::clone!(#[weak] dialog, #[weak] error, async move {
-            match manager.add(name,origin).await {
-                Ok(_) => { dialog.close(); repaint(manager,list,status,parent); },
-                Err(reason) => error.set_text(&reason.to_string()),
-            }
-        }));
-    }));
+    save.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        error,
+        move |_| {
+            let origin = if let Some(ref file) = local {
+                SourceOrigin::selected_local_file(file.uri().to_string())
+            } else {
+                let chosen = if lan.is_active() {
+                    TrustScope::ExplicitLan
+                } else {
+                    TrustScope::Public
+                };
+                SourceOrigin::entered_remote_url(
+                    url.as_ref()
+                        .map(|field| field.text().to_string())
+                        .unwrap_or_default(),
+                    chosen,
+                )
+            };
+            let Ok(origin) = origin else {
+                error.set_text(&gettext("Invalid guide location"));
+                return;
+            };
+            let manager = service.clone();
+            let list = list.clone();
+            let status = status.clone();
+            let parent = parent.clone();
+            let name = name.text().to_string();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                error,
+                async move {
+                    match manager.add(name, origin).await {
+                        Ok(_) => {
+                            dialog.close();
+                            repaint(manager, list, status, parent);
+                        }
+                        Err(reason) => error.set_text(&reason.to_string()),
+                    }
+                }
+            ));
+        }
+    ));
     dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
 pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::GuideServiceError> {
     let cell = SHARED_MANAGER.get_or_init(tokio::sync::OnceCell::const_new);
-    cell.get_or_try_init(|| GlobalGuideManager::open()).await.cloned()
+    cell.get_or_try_init(|| GlobalGuideManager::open())
+        .await
+        .cloned()
 }
 pub fn show_guide_manager(parent: &gtk::Window) {
     let parent = parent.clone();
@@ -315,29 +433,34 @@ pub fn show_guide_manager(parent: &gtk::Window) {
         body.append(&scroller);
         let status = status_label();
         body.append(&status);
-        close.connect_clicked(glib::clone!(#[weak] dialog, move |_|dialog.close()));
+        close.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            move |_| dialog.close()
+        ));
         let svc = service.clone();
         let ls = list.clone();
         let st = status.clone();
         let win = parent.clone();
-        add_remote.connect_clicked(move |_|show_add(&win,svc.clone(),ls.clone(),st.clone(),None));
+        add_remote
+            .connect_clicked(move |_| show_add(&win, svc.clone(), ls.clone(), st.clone(), None));
         let svc = service.clone();
         let ls = list.clone();
         let st = status.clone();
         let win = parent.clone();
-        add_local.connect_clicked(move |_|{
-            let svc=svc.clone();
-            let ls=ls.clone();
-            let st=st.clone();
-            let win=win.clone();
+        add_local.connect_clicked(move |_| {
+            let svc = svc.clone();
+            let ls = ls.clone();
+            let st = st.clone();
+            let win = win.clone();
             spawn(async move {
                 if let Ok(file) = gtk::FileDialog::new().open_future(Some(&win)).await {
-                    show_add(&win,svc,ls,st,Some(file));
+                    show_add(&win, svc, ls, st, Some(file));
                 }
             });
         });
         dialog.set_child(Some(&body));
         dialog.present(Some(&parent));
-        repaint(service,list,status,parent);
+        repaint(service, list, status, parent);
     });
 }
