@@ -194,7 +194,7 @@ fn show_source_settings(
             dialog.close();
         }
     ));
-    let parent = parent.clone();
+    let callback_parent = parent.clone();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -209,7 +209,7 @@ fn show_source_settings(
             let interval = hours.value_as_int() as i64 * 3600;
             let list = list.clone();
             let status = status.clone();
-            let parent = parent.clone();
+            let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
@@ -264,7 +264,7 @@ fn show_delete_confirmation(
             dialog.close();
         }
     ));
-    let parent = parent.clone();
+    let callback_parent = parent.clone();
     remove.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -275,7 +275,7 @@ fn show_delete_confirmation(
             let id = id.clone();
             let list = list.clone();
             let status = status.clone();
-            let parent = parent.clone();
+            let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
@@ -351,7 +351,7 @@ fn show_add(
             dialog.close();
         }
     ));
-    let parent = parent.clone();
+    let callback_parent = parent.clone();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -380,7 +380,7 @@ fn show_add(
             let manager = service.clone();
             let list = list.clone();
             let status = status.clone();
-            let parent = parent.clone();
+            let parent = callback_parent.clone();
             let name = name.text().to_string();
             spawn(glib::clone!(
                 #[weak]
