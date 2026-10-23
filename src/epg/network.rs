@@ -475,7 +475,7 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
     Err(GuideFetchError::RedirectDenied)
 }
 
-// Engineering candidate limits for streaming transport. Production reads must
+// Separate compressed/plain bounds for streaming transport. Production reads must
 // never buffer a multi-gigabyte XMLTV payload in a Vec.
 const CANDIDATE_COMPRESSED: u64 = 256 * 1024 * 1024;
 const CANDIDATE_PLAIN: u64 = 2 * 1024 * 1024 * 1024;

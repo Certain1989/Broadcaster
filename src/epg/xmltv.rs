@@ -562,8 +562,7 @@ pub fn parse_timestamp(raw: &str) -> Result<i64, EpgError> {
     Ok(epoch)
 }
 
-/// Engineering-only bounded row-streaming envelope. These values are pending
-/// separate numerical-policy acceptance and must not be presented as an E0 change.
+/// Bounded row-streaming limits, with independent input and expanded XML caps.
 #[derive(Clone, Copy, Debug)]
 pub struct StreamingLimits {
     pub compressed_bytes: usize,
