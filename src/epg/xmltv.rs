@@ -102,7 +102,8 @@ impl<R: Read> Read for LimitedRead<R> {
             self.exceeded.store(true, Ordering::Relaxed);
             return Err(io::Error::new(io::ErrorKind::InvalidData, "EPG byte limit"));
         }
-        let n = self.inner.read(&mut output[..output.len().min(self.remaining)])?;
+        let allowed = output.len().min(self.remaining);
+        let n = self.inner.read(&mut output[..allowed])?;
         self.remaining -= n;
         Ok(n)
     }
