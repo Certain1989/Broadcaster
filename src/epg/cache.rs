@@ -228,23 +228,23 @@ pub fn replace_guide_snapshot(
     replace_snapshot_inner(conn, snapshot, cancel, None)
 }
 
-/// E2's coalesced per-source refresher supplies the last success observed at
-/// admission. Allows same-second wall-clock times only when the persisted
-/// predecessor is still exactly the admitted version; never fabricates time.
+/// E2's refresher supplies the monotonic metadata revision at admission.
+/// Same-second wall-clock refreshes are allowed only while that exact
+/// revision is still current; a competing write cannot evict newer data.
 pub fn replace_guide_snapshot_if_current(
     conn: &mut Connection,
     snapshot: &GuideSnapshot,
     cancel: &AtomicBool,
-    expected_last_success: Option<i64>,
+    expected_revision: i64,
 ) -> Result<(), EpgError> {
-    replace_snapshot_inner(conn, snapshot, cancel, Some(expected_last_success))
+    replace_snapshot_inner(conn, snapshot, cancel, Some(expected_revision))
 }
 
 fn replace_snapshot_inner(
     conn: &mut Connection,
     snapshot: &GuideSnapshot,
     cancel: &AtomicBool,
-    expected_last_success: Option<Option<i64>>,
+    expected_revision: Option<i64>,
 ) -> Result<(), EpgError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(EpgError::Cancelled);
@@ -267,26 +267,27 @@ fn replace_snapshot_inner(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db)?;
-    let persisted: Option<(i64, Option<i64>)> = tx
+    let persisted: Option<(i64, Option<i64>, i64)> = tx
         .query_row(
-            "SELECT enabled,last_success_at FROM epg_sources WHERE id=?1",
+            "SELECT enabled,last_success_at,updated_at FROM epg_sources WHERE id=?1",
             [&snapshot.source_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(db)?;
-    let (enabled, last_success) = persisted.ok_or(EpgError::Unavailable)?;
+    let (enabled, last_success, current_revision) = persisted.ok_or(EpgError::Unavailable)?;
     if enabled != 1 {
         return Err(EpgError::Unavailable);
     }
-    // E1 callers still refuse equal timestamps. E2's serialized refresh uses
-    // an admission-time CAS so an out-of-order or stale worker cannot evict data.
-    match expected_last_success {
+    // Preserve E1's original strict success-timestamp policy. E2 instead
+    // checks the exact source revision, including competing same-second
+    // refreshes, without falsifying the real last-success wall-clock time.
+    match expected_revision {
         None if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) => {
             return Err(EpgError::InvalidInput);
         }
         Some(expected)
-            if last_success != expected
+            if current_revision != expected
                 || last_success.is_some_and(|last| snapshot.retrieved_utc < last) =>
         {
             return Err(EpgError::InvalidInput);
@@ -407,14 +408,25 @@ mod e2_revision_tests {
         let old_approval = ConfirmedGuideDeletion::after_user_confirmation(&source);
         let cancelled = AtomicBool::new(false);
         let mut conn = registry.connect_private().unwrap();
-        replace_guide_snapshot_if_current(&mut conn, &snapshot("First"), &cancelled, None).unwrap();
+        replace_guide_snapshot_if_current(
+            &mut conn,
+            &snapshot("First"),
+            &cancelled,
+            source.updated_at,
+        )
+        .unwrap();
         let first = registry.get(&source.id).unwrap();
         assert_eq!(first.last_success_at, Some(now));
         assert!(first.updated_at > source.updated_at);
 
         // The admitted predecessor is still the same real second, but the
         // second full replacement gets an independent monotonic revision.
-        replace_guide_snapshot_if_current(&mut conn, &snapshot("Second"), &cancelled, Some(now))
+        replace_guide_snapshot_if_current(
+            &mut conn,
+            &snapshot("Second"),
+            &cancelled,
+            first.updated_at,
+        )
             .unwrap();
         let second = registry.get(&source.id).unwrap();
         assert_eq!(second.last_success_at, Some(now));
@@ -437,7 +449,7 @@ mod e2_revision_tests {
             &mut conn,
             &snapshot("Rejected"),
             &cancelled,
-            None
+            source.updated_at
         )
         .is_err());
         let saved: String = conn

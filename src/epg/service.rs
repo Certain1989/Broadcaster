@@ -386,7 +386,7 @@ impl GlobalGuideManager {
         transfer: &GuideCancellation,
         parser_cancel: &Arc<AtomicBool>,
     ) -> Result<(), GuideServiceError> {
-        let expected_last_success = source.view.last_success_at;
+        let expected_revision = source.view.updated_at;
         let payload = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
                 let cancellation = transfer.clone();
@@ -435,7 +435,7 @@ impl GlobalGuideManager {
                     &mut conn,
                     &snapshot,
                     &cancelled,
-                    expected_last_success,
+                    expected_revision,
                 )
                 .map_err(|error| {
                     if error == EpgError::Cancelled {
