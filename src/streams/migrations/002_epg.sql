@@ -1,3 +1,5 @@
+-- SPDX-FileCopyrightText: 2026 Broadcaster contributors
+-- SPDX-License-Identifier: GPL-3.0-or-later
 -- Broadcaster SQLite v1 -> v2 EPG migration.
 -- Preconditions imposed by caller: private DB, application_id=0x42524354,
 -- user_version=1, validated v1 schema, successful recoverable backup.
