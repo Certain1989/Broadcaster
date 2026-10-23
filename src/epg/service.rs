@@ -592,8 +592,8 @@ mod e2_admission_tests {
         let (dir, manager) = manager();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let xml = b"<tv><channel id='f'><display-name>Fiction</display-name></channel>\\
-            <programme channel='f' start='20300101000000 +0000' stop='20300101010000 +0000'>\\
+        let xml = b"<tv><channel id='f'><display-name>Fiction</display-name></channel>\
+            <programme channel='f' start='20300101000000 +0000' stop='20300101010000 +0000'>\
             <title>Original</title></programme></tv>".to_vec();
         let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
         gzip.write_all(&xml).unwrap();
@@ -614,9 +614,9 @@ mod e2_admission_tests {
                 let mut read = [0u8; 2048];
                 let _ = socket.read(&mut read).await.unwrap();
                 let mut reply = format!(
-                    "HTTP/1.1 200 OK\\r\\nContent-Length: {}\\r\\n{}Connection: close\\r\\n\\r\\n",
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n",
                     if declared_oversize { 16 * 1024 * 1024 + 1 } else { body.len() },
-                    if gzip { "Content-Encoding: gzip\\r\\n" } else { "" }
+                    if gzip { "Content-Encoding: gzip\r\n" } else { "" }
                 ).into_bytes();
                 reply.extend(body);
                 socket.write_all(&reply).await.unwrap();
