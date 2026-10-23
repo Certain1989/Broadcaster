@@ -108,6 +108,13 @@ pub fn read_guide_window(
         Value::Integer(start_utc),
     ];
     args.extend(selected.iter().cloned().map(Value::Text));
+    if enabled == 0 {
+        return Ok(BoundedGuidePage {
+            source_id: source_id.to_owned(), selected_guide_channels: selected,
+            start_utc, end_utc, programmes: Vec::new(), truncated: false,
+            last_success_at, freshness: freshness(last_success_at, now_utc), coverage,
+        });
+    }
     let mut stmt = conn.prepare(&sql).map_err(db)?;
     let mut rows = stmt.query(params_from_iter(args.iter())).map_err(db)?;
     let mut programmes = Vec::new();
