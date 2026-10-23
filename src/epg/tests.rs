@@ -279,37 +279,58 @@ fn xmltv_offsets_berlin_dst_entities_and_full_cache() {
       </programme>
       <programme channel="fictional.de" start="20261025033000 +0100"><title>Invalid stop, skip</title></programme>
     </tv>"#;
-    let now=parse_timestamp("20261025020000 +0200").unwrap();
-    let cancel=AtomicBool::new(false);
-    let snap=decode_xmltv(
-        Cursor::new(xml), "fictional-guide", now, false, ParseLimits::default(), &cancel,
-    ).unwrap();
-    assert_eq!(snap.channels.len(),1);
-    assert_eq!(snap.channels[0].display_name,"Fictional & Co");
-    assert_eq!(snap.programmes.len(),2);
-    assert_eq!(snap.programmes[0].title,"Night & Show");
-    assert_eq!(snap.programmes[0].description.as_deref(),Some("Safe literal <script> only"));
-    assert_eq!(snap.programmes[0].stop_utc-snap.programmes[0].start_utc,7_200);
-    let mut db=db();
-    add_source(&db,"fictional-guide");
-    replace_guide_snapshot(&mut db,&snap,&cancel).unwrap();
-    let crossing=read_guide_window(
-        &db,"fictional-guide",&["fictional.de".into()],
-        snap.programmes[0].start_utc+60,snap.programmes[0].stop_utc+60,now,&cancel,
-    ).unwrap();
-    assert_eq!(crossing.programmes.len(),2);
-    assert_eq!(crossing.coverage,Coverage::Partial {
-        observed_start_utc:Some(snap.programmes[0].start_utc),
-        observed_stop_utc:Some(snap.programmes[1].stop_utc),
-    });
+    let now = parse_timestamp("20261025020000 +0200").unwrap();
+    let cancel = AtomicBool::new(false);
+    let snap = decode_xmltv(
+        Cursor::new(xml),
+        "fictional-guide",
+        now,
+        false,
+        ParseLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(snap.channels.len(), 1);
+    assert_eq!(snap.channels[0].display_name, "Fictional & Co");
+    assert_eq!(snap.programmes.len(), 2);
+    assert_eq!(snap.programmes[0].title, "Night & Show");
+    assert_eq!(
+        snap.programmes[0].description.as_deref(),
+        Some("Safe literal <script> only")
+    );
+    assert_eq!(
+        snap.programmes[0].stop_utc - snap.programmes[0].start_utc,
+        7_200
+    );
+    let mut db = db();
+    add_source(&db, "fictional-guide");
+    replace_guide_snapshot(&mut db, &snap, &cancel).unwrap();
+    let crossing = read_guide_window(
+        &db,
+        "fictional-guide",
+        &["fictional.de".into()],
+        snap.programmes[0].start_utc + 60,
+        snap.programmes[0].stop_utc + 60,
+        now,
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(crossing.programmes.len(), 2);
+    assert_eq!(
+        crossing.coverage,
+        Coverage::Partial {
+            observed_start_utc: Some(snap.programmes[0].start_utc),
+            observed_stop_utc: Some(snap.programmes[1].stop_utc),
+        }
+    );
 }
 
 #[test]
 fn malformed_xmltv_and_external_entities_fail_closed() {
     use super::xmltv::{decode_xmltv, ParseLimits};
     use std::io::Cursor;
-    let cancel=AtomicBool::new(false);
-    let valid=r#"<tv><channel id="fixture"><display-name>Fixture</display-name></channel>
+    let cancel = AtomicBool::new(false);
+    let valid = r#"<tv><channel id="fixture"><display-name>Fixture</display-name></channel>
     <programme channel="fixture" start="20261023100000 +0000" stop="20261023110000 +0000">
     <title>Fixture title</title></programme></tv>"#;
     for xml in [
@@ -325,38 +346,74 @@ fn malformed_xmltv_and_external_entities_fail_closed() {
         );
     }
     assert_eq!(
-        decode_xmltv(Cursor::new(valid.as_bytes()), "fictional-guide", 0, false, ParseLimits::default(), &cancel)
-            .unwrap().programmes.len(),1,
+        decode_xmltv(
+            Cursor::new(valid.as_bytes()),
+            "fictional-guide",
+            0,
+            false,
+            ParseLimits::default(),
+            &cancel
+        )
+        .unwrap()
+        .programmes
+        .len(),
+        1,
     );
 }
 
 #[test]
 fn gzip_xmltv_valid_truncated_bomb_and_limits() {
     use super::xmltv::{decode_xmltv, ParseLimits};
-    use std::io::{Cursor, Write};
     use flate2::{write::GzEncoder, Compression};
-    let cancel=AtomicBool::new(false);
-    let xml=b"<tv><channel id='channel'><display-name>Fiction</display-name></channel>\
+    use std::io::{Cursor, Write};
+    let cancel = AtomicBool::new(false);
+    let xml = b"<tv><channel id='channel'><display-name>Fiction</display-name></channel>\
     <programme channel='channel' start='20261023100000 +0000' stop='20261023110000 +0000'>\
     <title>Show</title></programme></tv>";
-    let mut encoder=GzEncoder::new(Vec::new(),Compression::default());
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(xml).unwrap();
-    let compressed=encoder.finish().unwrap();
-    let snap=decode_xmltv(Cursor::new(&compressed),"epg",0,true,ParseLimits::default(),&cancel).unwrap();
-    assert_eq!(snap.programmes.len(),1);
-    assert!(
-        decode_xmltv(Cursor::new(&compressed[..compressed.len()-4]),"epg",0,true,ParseLimits::default(),&cancel).is_err()
-    );
-    let mut encoder=GzEncoder::new(Vec::new(),Compression::best());
-    encoder.write_all(&vec![b'X';300_000]).unwrap();
-    let bomb=encoder.finish().unwrap();
+    let compressed = encoder.finish().unwrap();
+    let snap = decode_xmltv(
+        Cursor::new(&compressed),
+        "epg",
+        0,
+        true,
+        ParseLimits::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(snap.programmes.len(), 1);
+    assert!(decode_xmltv(
+        Cursor::new(&compressed[..compressed.len() - 4]),
+        "epg",
+        0,
+        true,
+        ParseLimits::default(),
+        &cancel
+    )
+    .is_err());
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(&vec![b'X'; 300_000]).unwrap();
+    let bomb = encoder.finish().unwrap();
     assert_eq!(
-        decode_xmltv(Cursor::new(bomb),"epg",0,true,ParseLimits::default(),&cancel)
-            .unwrap_err(), EpgError::OverLimit,
+        decode_xmltv(
+            Cursor::new(bomb),
+            "epg",
+            0,
+            true,
+            ParseLimits::default(),
+            &cancel
+        )
+        .unwrap_err(),
+        EpgError::OverLimit,
     );
-    let limits=ParseLimits { max_wire_bytes: 8, ..ParseLimits::default() };
+    let limits = ParseLimits {
+        max_wire_bytes: 8,
+        ..ParseLimits::default()
+    };
     assert_eq!(
-        decode_xmltv(Cursor::new(xml),"epg",0,false,limits,&cancel).unwrap_err(),EpgError::OverLimit,
+        decode_xmltv(Cursor::new(xml), "epg", 0, false, limits, &cancel).unwrap_err(),
+        EpgError::OverLimit,
     );
 }
 
@@ -365,19 +422,31 @@ fn xmltv_calendar_timezone_and_cancel_reject_unqualified_and_impossible() {
     use super::xmltv::{decode_xmltv, parse_timestamp, ParseLimits};
     use std::io::Cursor;
     for invalid in [
-        "20261025020000","20261025020000 +1500","20261025020000 +1460",
-        "20260230030000 +0100","20261025020000 +1401",
-        "20261025020000 +1", "19000101000000 Z",
+        "20261025020000",
+        "20261025020000 +1500",
+        "20261025020000 +1460",
+        "20260230030000 +0100",
+        "20261025020000 +1401",
+        "20261025020000 +1",
+        "19000101000000 Z",
     ] {
         assert!(parse_timestamp(invalid).is_err(), "{invalid}");
     }
-    let base=parse_timestamp("20261025013000 +0200").unwrap();
-    let repeated=parse_timestamp("20261025013000 +0100").unwrap();
-    assert_eq!(repeated-base,3600);
-    let cancel=AtomicBool::new(true);
-    let xml="<tv><channel id='fixture'/></tv>";
+    let base = parse_timestamp("20261025013000 +0200").unwrap();
+    let repeated = parse_timestamp("20261025013000 +0100").unwrap();
+    assert_eq!(repeated - base, 3600);
+    let cancel = AtomicBool::new(true);
+    let xml = "<tv><channel id='fixture'/></tv>";
     assert_eq!(
-        decode_xmltv(Cursor::new(xml),"guide",0,false,ParseLimits::default(),&cancel)
-            .unwrap_err(), EpgError::Cancelled,
+        decode_xmltv(
+            Cursor::new(xml),
+            "guide",
+            0,
+            false,
+            ParseLimits::default(),
+            &cancel
+        )
+        .unwrap_err(),
+        EpgError::Cancelled,
     );
 }
