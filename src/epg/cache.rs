@@ -427,7 +427,7 @@ mod e2_revision_tests {
             &cancelled,
             first.updated_at,
         )
-            .unwrap();
+        .unwrap();
         let second = registry.get(&source.id).unwrap();
         assert_eq!(second.last_success_at, Some(now));
         assert!(second.updated_at > first.updated_at);

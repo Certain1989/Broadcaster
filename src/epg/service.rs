@@ -576,48 +576,52 @@ mod e2_admission_tests {
     async fn disable_and_delete_revoke_queued_new_admissions() {
         tokio::task::LocalSet::new()
             .run_until(async {
-        let (dir, manager) = manager();
-        let source = sample(&manager).await;
-        let gate = manager.inner.admission.lock().await;
-        let pending = manager.clone();
-        let id = source.id.clone();
-        let disable = tokio::task::spawn_local(async move { pending.set_enabled(id, false).await });
-        tokio::task::yield_now().await;
-        let pending = manager.clone();
-        let id = source.id.clone();
-        let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
-        drop(gate);
-        disable.await.unwrap().unwrap();
-        assert!(matches!(
-            refresh.await.unwrap(),
-            Err(GuideServiceError::Disabled)
-        ));
-        assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
+                let (dir, manager) = manager();
+                let source = sample(&manager).await;
+                let gate = manager.inner.admission.lock().await;
+                let pending = manager.clone();
+                let id = source.id.clone();
+                let disable =
+                    tokio::task::spawn_local(async move { pending.set_enabled(id, false).await });
+                tokio::task::yield_now().await;
+                let pending = manager.clone();
+                let id = source.id.clone();
+                let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
+                drop(gate);
+                disable.await.unwrap().unwrap();
+                assert!(matches!(
+                    refresh.await.unwrap(),
+                    Err(GuideServiceError::Disabled)
+                ));
+                assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
 
-        manager.set_enabled(source.id.clone(), true).await.unwrap();
-        let fresh = manager
-            .list()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|s| s.id == source.id)
-            .unwrap();
-        let approval = ConfirmedGuideDeletion::after_user_confirmation(&fresh);
-        let gate = manager.inner.admission.lock().await;
-        let pending = manager.clone();
-        let deletion = tokio::task::spawn_local(async move { pending.delete_confirmed(approval).await });
-        tokio::task::yield_now().await;
-        let pending = manager.clone();
-        let id = source.id.clone();
-        let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
-        drop(gate);
-        deletion.await.unwrap().unwrap();
-        assert!(matches!(
-            refresh.await.unwrap(),
-            Err(GuideServiceError::Source(RegistryError::NotFound))
-        ));
-        assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
-        fs::remove_dir_all(dir).unwrap();
+                manager.set_enabled(source.id.clone(), true).await.unwrap();
+                let fresh = manager
+                    .list()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| s.id == source.id)
+                    .unwrap();
+                let approval = ConfirmedGuideDeletion::after_user_confirmation(&fresh);
+                let gate = manager.inner.admission.lock().await;
+                let pending = manager.clone();
+                let deletion =
+                    tokio::task::spawn_local(
+                        async move { pending.delete_confirmed(approval).await },
+                    );
+                tokio::task::yield_now().await;
+                let pending = manager.clone();
+                let id = source.id.clone();
+                let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
+                drop(gate);
+                deletion.await.unwrap().unwrap();
+                assert!(matches!(
+                    refresh.await.unwrap(),
+                    Err(GuideServiceError::Source(RegistryError::NotFound))
+                ));
+                assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
+                fs::remove_dir_all(dir).unwrap();
             })
             .await;
     }

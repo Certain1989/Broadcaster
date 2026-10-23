@@ -294,13 +294,10 @@ async fn production_https_keeps_origin_name_in_tls_sni_at_pinned_peer() {
         let mut used = 0;
         let hostname = b"epg-peer-test.invalid";
         while used < hello.len() && !hello[..used].windows(hostname.len()).any(|w| w == hostname) {
-            let n = tokio::time::timeout(
-                Duration::from_secs(3),
-                socket.read(&mut hello[used..]),
-            )
-            .await
-            .unwrap()
-            .unwrap();
+            let n = tokio::time::timeout(Duration::from_secs(3), socket.read(&mut hello[used..]))
+                .await
+                .unwrap()
+                .unwrap();
             assert!(n > 0, "TLS client disconnected before sending SNI");
             used += n;
         }
