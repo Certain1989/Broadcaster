@@ -193,7 +193,6 @@ impl ParseState {
     fn begin(
         &mut self,
         tag: &BytesStart<'_>,
-        source_id: &str,
         max_depth: usize,
     ) -> Result<(), EpgError> {
         let name = std::str::from_utf8(tag.name().as_ref())
@@ -276,6 +275,13 @@ impl ParseState {
     }
 
     fn add_text(&mut self, text: &str) -> Result<(), EpgError> {
+        if text.chars().any(|c| {
+            let u = c as u32;
+            (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
+                || (0x7f..=0x9f).contains(&u)
+        }) {
+            return Err(EpgError::InvalidInput);
+        }
         if self.tags.is_empty() {
             if !text.trim().is_empty() {
                 return Err(EpgError::InvalidInput);
@@ -398,12 +404,12 @@ fn parse_xml_stream<R: BufRead>(
             .read_event_into(&mut b)
             .map_err(|_| EpgError::InvalidInput)?;
         match event {
-            Event::Start(tag) => state.begin(&tag, source_id, max_depth)?,
+            Event::Start(tag) => state.begin(&tag, max_depth)?,
             Event::Empty(tag) => {
                 let name = std::str::from_utf8(tag.name().as_ref())
                     .map_err(|_| EpgError::InvalidInput)?
                     .to_owned();
-                state.begin(&tag, source_id, max_depth)?;
+                state.begin(&tag, max_depth)?;
                 state.end(&name, source_id)?;
             }
             Event::End(tag) => {
