@@ -444,19 +444,29 @@ impl GlobalGuideManager {
     }
 }
 
+/// A GIO adapter may not be able to interrupt an OS syscall. This deadline
+/// bounds the awaiting refresh, not a guarantee about kernel I/O termination.
+async fn local_deadline<T>(
+    pending: impl std::future::Future<Output = Result<T, GuideServiceError>>,
+    cancellation: &GuideCancellation,
+    seconds: u32,
+) -> Result<T, GuideServiceError> {
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(GuideServiceError::Cancelled),
+        _ = glib::timeout_future_seconds(seconds) =>
+            Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
+        result = pending => result,
+    }
+}
+
 /// GIO portal grants remain owned by the desktop adapter; never turn the URI
 /// into a filesystem path, or reopen it during cached schedule queries.
 async fn read_local(
     uri: &str,
     cancellation: &GuideCancellation,
 ) -> Result<GuidePayload, GuideServiceError> {
-    tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => Err(GuideServiceError::Cancelled),
-        _ = glib::timeout_future_seconds(90) =>
-            Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
-        result = read_local_bounded(uri, cancellation) => result,
-    }
+    local_deadline(read_local_bounded(uri, cancellation), cancellation, 90).await
 }
 
 async fn read_local_bounded(
@@ -467,29 +477,19 @@ async fn read_local_bounded(
     if file.uri_scheme().as_deref() != Some("file") {
         return Err(GuideServiceError::LocalAccess);
     }
-    let stream = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
-        _ = glib::timeout_future_seconds(30) =>
-            return Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
-        result = file.read_future(glib::Priority::DEFAULT) => {
-            result.map_err(|_| GuideServiceError::LocalAccess)?
-        }
-    };
+    let stream = local_deadline(async {
+        file.read_future(glib::Priority::DEFAULT).await
+            .map_err(|_| GuideServiceError::LocalAccess)
+    }, cancellation, 30).await?;
     let mut bytes = Vec::new();
     loop {
         if cancellation.is_cancelled() {
             return Err(GuideServiceError::Cancelled);
         }
-        let part = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
-            _ = glib::timeout_future_seconds(30) =>
-                return Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
-            result = stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT) => {
-                result.map_err(|_| GuideServiceError::LocalAccess)?
-            }
-        };
+        let part = local_deadline(async {
+            stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT).await
+                .map_err(|_| GuideServiceError::LocalAccess)
+        }, cancellation, 30).await?;
         if part.is_empty() {
             break;
         }
@@ -653,6 +653,26 @@ mod e2_admission_tests {
         server.await.unwrap();
         drop(conn);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stalled_local_adapter_times_out_and_pre_cancelled_adapter_aborts() {
+        let context = glib::MainContext::new();
+        context.with_thread_default(|| context.block_on(async {
+            let token = GuideCancellation::new();
+            let stalled = std::future::pending::<Result<(), GuideServiceError>>();
+            let result = local_deadline(stalled, &token, 1).await;
+            assert!(matches!(
+                result,
+                Err(GuideServiceError::Fetch(GuideFetchError::Timeout))
+            ));
+            token.cancel();
+            let stalled = std::future::pending::<Result<(), GuideServiceError>>();
+            assert!(matches!(
+                local_deadline(stalled, &token, 1).await,
+                Err(GuideServiceError::Cancelled)
+            ));
+        })).unwrap();
     }
 
     #[tokio::test]
