@@ -223,7 +223,6 @@ fn epg_capacity_us_baseline_rejection() {
     fs::remove_dir_all(dir).unwrap();
 }
 
-
 fn write_plain_fixture(path: &Path, channels: usize, programmes: usize) {
     let mut writer = BufWriter::new(File::create(path).expect("create plain XMLTV fixture"));
     fixture(&mut writer, channels, programmes);
@@ -232,7 +231,11 @@ fn write_plain_fixture(path: &Path, channels: usize, programmes: usize) {
 
 fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gzip: bool) {
     let dir = test_directory(scenario);
-    let path = dir.join(if gzip { "fixture.xml.gz" } else { "fixture.xml" });
+    let path = dir.join(if gzip {
+        "fixture.xml.gz"
+    } else {
+        "fixture.xml"
+    });
     let start = Instant::now();
     if gzip {
         write_gzip_fixture(&path, channels, programmes);
@@ -252,16 +255,28 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
         &mut conn,
         BufReader::new(File::open(&path).unwrap()),
         "fixture",
-        0, 1, gzip, &cancelled,
-    ).expect("complete streaming XMLTV import must succeed");
+        0,
+        1,
+        gzip,
+        &cancelled,
+    )
+    .expect("complete streaming XMLTV import must succeed");
     assert_eq!(rows.channels, channels);
     assert_eq!(rows.programmes, programmes);
-    let persisted: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
-        [], |r| r.get(0)
-    ).unwrap();
+    let persisted: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(persisted as usize, programmes);
-    report(scenario, "streamed_sqlite_committed", start.elapsed().as_millis(), &dir);
+    report(
+        scenario,
+        "streamed_sqlite_committed",
+        start.elapsed().as_millis(),
+        &dir,
+    );
     drop(conn);
     fs::remove_dir_all(dir).unwrap();
 }

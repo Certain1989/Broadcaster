@@ -16,7 +16,9 @@ use std::{
 };
 
 const MAX_OPERATION: Duration = Duration::from_secs(90 * 60);
-const MAX_DATABASE_AND_WAL: u64 = 8 * 1024 * 1024 * 1024;
+// Reserve a full 2 GiB for the largest permitted plain-XML staging file.
+// The active DB (old + replacement), WAL and input therefore fit <= 8 GiB.
+const MAX_DATABASE_AND_WAL: u64 = 6 * 1024 * 1024 * 1024;
 
 fn storage_error(_: rusqlite::Error) -> EpgError {
     EpgError::Storage
