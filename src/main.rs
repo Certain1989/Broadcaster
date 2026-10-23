@@ -8,6 +8,8 @@
 mod application;
 mod channel_icons;
 #[allow(dead_code)]
+mod epg;
+#[allow(dead_code)]
 mod config {
     include!(concat!(env!("OUT_DIR"), "/config.rs"));
 }

@@ -11,11 +11,14 @@ use std::{
 };
 
 use super::{logo, model::*};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{
+    backup::Backup, params, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
+};
 
 pub const APPLICATION_ID: i64 = 0x42524354;
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
+pub const MIGRATION_002: &str = include_str!("migrations/002_epg.sql");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -122,6 +125,7 @@ impl Storage {
             return Err(StorageError::IncompatibleDatabase);
         }
         validate_v1_schema_shape(&conn)?;
+        validate_v2_schema_shape(&conn)?;
         Ok(conn)
     }
 
@@ -475,9 +479,7 @@ fn initialization_checkpoint(
 
 fn validate_existing(path: &Path) -> StorageResult<()> {
     require_private_file(path)?;
-    // Never write to a foreign, corrupt, zero-version or future database.
-    // An abandoned version-zero file requires *manual*, non-destructive
-    // recovery: delete/quarantine/migration are not automatic.
+    // Probe read-only first: foreign, corrupt and version-zero DBs remain untouched.
     let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|_| StorageError::IncompatibleDatabase)?;
     let id: i64 = probe
@@ -486,11 +488,127 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
     let version: i64 = probe
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| StorageError::CorruptDatabase)?;
-    if id != APPLICATION_ID || version != SCHEMA_VERSION {
+    if id != APPLICATION_ID || !(version == 1 || version == SCHEMA_VERSION) {
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&probe)?;
-    validate_integrity(&probe)
+    if version == SCHEMA_VERSION {
+        validate_v2_schema_shape(&probe)?;
+    }
+    validate_integrity(&probe)?;
+    drop(probe);
+    if version == 1 {
+        // The original remains v1 on any failed migration. A durable, independent
+        // SQLite-consistent v1 recovery snapshot is required before the write.
+        upgrade_existing_v1(path)?;
+        let reopened = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| StorageError::StorageFailure)?;
+        validate_v1_schema_shape(&reopened)?;
+        validate_v2_schema_shape(&reopened)?;
+        validate_integrity(&reopened)?;
+        let version: i64 = reopened
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if version != SCHEMA_VERSION {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    Ok(())
+}
+
+/// Upgrade a verified v1 database without replacing its inode or rewriting its
+/// published v1 migration. Preserve an independently reopenable recovery copy.
+/// This function must only run on a blocking worker, never the GTK thread.
+fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
+    upgrade_existing_v1_with(path, MIGRATION_002, false)
+}
+
+fn upgrade_existing_v1_with(
+    path: &Path,
+    migration_sql: &str,
+    inject_backup_failure: bool,
+) -> StorageResult<()> {
+    let parent = path.parent().ok_or(StorageError::InvalidInput)?;
+    let name = path.file_name().ok_or(StorageError::InvalidInput)?;
+    let backup_path = parent.join(format!(
+        ".{}-v1-recovery-{}.sqlite3",
+        name.to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let staged_file = opts
+        .open(&backup_path)
+        .map_err(|_| StorageError::PermissionDenied)?;
+    drop(staged_file);
+
+    let backup_result = (|| -> StorageResult<()> {
+        if inject_backup_failure {
+            return Err(StorageError::StorageFailure);
+        }
+        let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|_| StorageError::StorageFailure)?;
+        configure(&source)?;
+        let mut dest = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|_| StorageError::StorageFailure)?;
+        {
+            let backup = Backup::new(&source, &mut dest).map_err(map_sql)?;
+            backup
+                .run_to_completion(128, Duration::from_millis(25), None)
+                .map_err(map_sql)?;
+        }
+        let application_id: i64 = dest
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        let version: i64 = dest
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if application_id != APPLICATION_ID || version != 1 {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        validate_v1_schema_shape(&dest)?;
+        validate_integrity(&dest)?;
+        dest.close().map_err(|_| StorageError::StorageFailure)?;
+        fs::File::open(&backup_path)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| StorageError::StorageFailure)?;
+        sync_parent_directory(parent).map_err(|_| StorageError::StorageFailure)?;
+        Ok(())
+    })();
+    if let Err(error) = backup_result {
+        // Only our own uniquely created, incomplete backup may be discarded.
+        let _ = fs::remove_file(&backup_path);
+        return Err(error);
+    }
+
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|_| StorageError::StorageFailure)?;
+    configure(&conn)?;
+    let id: i64 = conn
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
+        .map_err(map_sql)?;
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(map_sql)?;
+    if id != APPLICATION_ID || version != 1 {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    validate_v1_schema_shape(&conn)?;
+    validate_integrity(&conn)?;
+    conn.execute_batch(migration_sql).map_err(|_| {
+        let _ = conn.execute_batch("ROLLBACK");
+        StorageError::StorageFailure
+    })?;
+    validate_v2_schema_shape(&conn)?;
+    validate_integrity(&conn)?;
+    // The recovery copy is intentionally retained, never silently deleted.
+    // A failure after commit leaves the copy available for operator recovery.
+    Ok(())
 }
 
 /// Own only the random temporary inode, never the final database. On failures
@@ -565,7 +683,19 @@ fn initialize_new_with(
             let _ = connection.execute_batch("ROLLBACK");
             StorageError::StorageFailure
         })?;
+        // A new DB is staged from the unmodified published v1 initializer and
+        // immediately evolved to v2 before being atomically published.
+        let initial_version: i64 = connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(map_sql)?;
+        if initial_version == 1 {
+            connection.execute_batch(MIGRATION_002).map_err(|_| {
+                let _ = connection.execute_batch("ROLLBACK");
+                StorageError::StorageFailure
+            })?;
+        }
         validate_v1_schema_shape(&connection)?;
+        validate_v2_schema_shape(&connection)?;
         validate_integrity(&connection)?;
         let id: i64 = connection
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -674,7 +804,317 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
+    validate_reference_schema(conn, TABLES, false)
+}
+
+fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
+    const TABLES: &[&str] = &[
+        "epg_channel_overrides",
+        "epg_channels",
+        "epg_global_id_aliases",
+        "epg_playlist_links",
+        "epg_programmes",
+        "epg_settings",
+        "epg_sources",
+    ];
+    const INDEXES: &[&str] = &[
+        "idx_epg_aliases_target",
+        "idx_epg_override_guide",
+        "idx_epg_playlist_guide",
+        "idx_epg_programmes_now",
+        "idx_epg_programmes_retention",
+        "idx_epg_programmes_window_stop",
+        "idx_epg_sources_enabled",
+    ];
+    for (kind, pattern, expected) in [("table", "epg_%", TABLES), ("index", "idx_epg_%", INDEXES)] {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type=?1 AND name LIKE ?2 ORDER BY name")
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        let actual = stmt
+            .query_map(params![kind, pattern], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::IncompatibleDatabase)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        if !actual
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied())
+        {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    validate_reference_schema(conn, TABLES, true)
+}
+
+/// Check structural SQLite invariants against the actual published initializer
+/// and approved v2 SQL. This uses SQLite's parsed schema (columns, keys, FK
+/// actions, index columns/collations and uniqueness) rather than comparing
+/// entire CREATE statements or trusting object names alone.
+fn validate_reference_schema(
+    actual: &Connection,
+    tables: &[&str],
+    include_epg: bool,
+) -> StorageResult<()> {
+    let reference = Connection::open_in_memory().map_err(|_| StorageError::IncompatibleDatabase)?;
+    reference
+        .execute_batch(MIGRATION_001)
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    if include_epg {
+        reference
+            .execute_batch(MIGRATION_002)
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+    }
+    for table in tables {
+        if table_shape(actual, table)? != table_shape(&reference, table)? {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct TableShape {
+    columns: Vec<Vec<rusqlite::types::Value>>,
+    foreign_keys: Vec<Vec<rusqlite::types::Value>>,
+    checks: Vec<Vec<SchemaToken>>,
+    indexes: Vec<String>,
+}
+
+fn quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn pragma_rows(
+    conn: &Connection,
+    statement: &str,
+    count: usize,
+) -> StorageResult<Vec<Vec<rusqlite::types::Value>>> {
+    let mut stmt = conn
+        .prepare(statement)
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let rows = stmt
+        .query_map([], |row| {
+            (0..count)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| StorageError::IncompatibleDatabase)
+}
+
+/// Normalise whitespace and SQL keyword case, not quoted string literal data.
+fn normalise_sql(sql: &str) -> String {
+    let mut out = String::new();
+    let mut literal = false;
+    for c in sql.chars() {
+        if c == '\'' {
+            literal = !literal;
+            out.push(c);
+        } else if literal {
+            out.push(c);
+        } else if !c.is_whitespace() {
+            out.extend(c.to_lowercase());
+        }
+    }
+    out
+}
+
+/// SQLite-aware lexer for CHECK extraction. Whitespace and comments are
+/// separators, not enforceable tokens. Literal contents are not normalised.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SchemaToken {
+    Word(String),
+    Literal(String),
+    QuotedIdentifier(String),
+    Symbol(u8),
+}
+
+fn schema_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$') || byte >= 0x80
+}
+
+fn schema_tokens(sql: &str) -> StorageResult<Vec<SchemaToken>> {
+    let bytes = sql.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b if b.is_ascii_whitespace() => i += 1,
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                let mut terminated = false;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                        i += 2;
+                        terminated = true;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !terminated {
+                    return Err(StorageError::IncompatibleDatabase);
+                }
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                i += 2;
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'\'' | b'"' | b'\x60' | b'[' => {
+                let start = i;
+                let delimiter = bytes[i];
+                let closing = if delimiter == b'[' { b']' } else { delimiter };
+                i += 1;
+                let mut terminated = false;
+                while i < bytes.len() {
+                    if bytes[i] == closing {
+                        if closing != b']' && bytes.get(i + 1) == Some(&closing) {
+                            i += 2;
+                        } else {
+                            i += 1;
+                            terminated = true;
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                if !terminated {
+                    return Err(StorageError::IncompatibleDatabase);
+                }
+                let contents = sql[start..i].to_owned();
+                tokens.push(if delimiter == b'\'' {
+                    SchemaToken::Literal(contents)
+                } else {
+                    SchemaToken::QuotedIdentifier(contents)
+                });
+            }
+            b if schema_word_byte(b) => {
+                let start = i;
+                while i < bytes.len() && schema_word_byte(bytes[i]) {
+                    i += 1;
+                }
+                tokens.push(SchemaToken::Word(sql[start..i].to_lowercase()));
+            }
+            0 => return Err(StorageError::IncompatibleDatabase),
+            punctuation => {
+                tokens.push(SchemaToken::Symbol(punctuation));
+                i += 1;
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+/// Compare token sequences within balanced, enforceable CHECK expressions.
+/// Comments cannot supply a CHECK keyword, parentheses or expression content.
+/// Separating tokens also prevents whitespace removal from merging identifiers.
+fn check_clauses(sql: &str) -> StorageResult<Vec<Vec<SchemaToken>>> {
+    let tokens = schema_tokens(sql)?;
+    let mut clauses = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if !matches!(&tokens[i], SchemaToken::Word(word) if word == "check") {
+            i += 1;
+            continue;
+        }
+        if !matches!(tokens.get(i + 1), Some(SchemaToken::Symbol(b'('))) {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        let start = i + 2;
+        let mut cursor = start;
+        let mut depth = 1usize;
+        while cursor < tokens.len() {
+            match &tokens[cursor] {
+                SchemaToken::Symbol(b'(') => depth += 1,
+                SchemaToken::Symbol(b')') => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        if depth != 0 {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        clauses.push(tokens[start..cursor].to_vec());
+        i = cursor + 1;
+    }
+    clauses.sort();
+    Ok(clauses)
+}
+
+fn table_shape(conn: &Connection, table: &str) -> StorageResult<TableShape> {
+    let escaped = quoted_identifier(table);
+    let columns = pragma_rows(conn, &format!("PRAGMA table_xinfo({escaped})"), 7)?;
+    if columns.is_empty() {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    let foreign_keys = pragma_rows(conn, &format!("PRAGMA foreign_key_list({escaped})"), 8)?;
+    let definition: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let checks = check_clauses(&definition)?;
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA index_list({escaped})"))
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let listed = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|_| StorageError::IncompatibleDatabase)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let mut indexes = Vec::new();
+    for (name, unique, origin, partial) in listed {
+        let entries = pragma_rows(
+            conn,
+            &format!("PRAGMA index_xinfo({})", quoted_identifier(&name)),
+            6,
+        )?;
+        let predicate = if partial != 0 {
+            let ddl: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name=?1",
+                    [&name],
+                    |row| row.get(0),
+                )
+                .map_err(|_| StorageError::IncompatibleDatabase)?;
+            normalise_sql(&ddl)
+                .split_once("where")
+                .map(|(_, clause)| clause.to_owned())
+                .ok_or(StorageError::IncompatibleDatabase)?
+        } else {
+            String::new()
+        };
+        // Automatic index names are SQLite implementation details; compare
+        // their actual key/uniqueness semantics rather than incidental names.
+        let explicit_name = if origin == "c" { name.as_str() } else { "" };
+        indexes.push(format!(
+            "{explicit_name:?}|{unique}|{origin}|{partial}|{entries:?}|{predicate}"
+        ));
+    }
+    indexes.sort();
+    Ok(TableShape {
+        columns,
+        foreign_keys,
+        checks,
+        indexes,
+    })
 }
 
 fn validate_integrity(conn: &Connection) -> StorageResult<()> {
@@ -1302,6 +1742,64 @@ mod staged_database_tests {
 
     #[cfg(unix)]
     #[test]
+    fn injected_backup_and_post_create_migration_failures_preserve_v1() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(MIGRATION_001).unwrap();
+        db.execute(
+            "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('p1','Fictional','local_file','/fake',1,1)",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        // Refuse before the recoverable backup is complete, without touching v1.
+        assert_eq!(
+            upgrade_existing_v1_with(&path, MIGRATION_002, true),
+            Err(StorageError::StorageFailure),
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        // Execute all the real migration statements inside BEGIN IMMEDIATE,
+        // then force a SQL error before COMMIT to verify transactional rollback.
+        let injected = MIGRATION_002.replace(
+            "PRAGMA user_version = 2;",
+            "INSERT INTO nonexistent_epg_failure_point VALUES(7);\nPRAGMA user_version = 2;",
+        );
+        assert_eq!(
+            upgrade_existing_v1_with(&path, &injected, false),
+            Err(StorageError::StorageFailure),
+        );
+        let reopened = Connection::open(&path).unwrap();
+        let version: i64 = reopened
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let preserved: String = reopened
+            .query_row("SELECT name FROM iptv_sources WHERE id='p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(preserved, "Fictional");
+        let epg_exists: i64 = reopened
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='epg_sources'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(epg_exists, 0);
+        drop(reopened);
+        Storage::at(path).initialize().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unsafe_parent_permissions_refuse_database_creation() {
         use std::os::unix::fs::PermissionsExt;
         let fixture = PrivateDir::new();
@@ -1312,5 +1810,36 @@ mod staged_database_tests {
             Err(StorageError::PermissionDenied)
         );
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)]
+mod schema_check_lexer_tests {
+    use super::check_clauses;
+
+    #[test]
+    fn true_checks_preserve_quoted_literals_and_ignore_spoofed_tokens() {
+        let genuine = "CREATE TABLE probe (\"CHECK (quoted)\" TEXT, \x60CHECK (backtick)\x60 TEXT, [CHECK (bracket)] TEXT, value TEXT CHECK (value != '-- CHECK (fake)' AND value != '/* CHECK (fake) */' AND value != 'it''s (quoted)'))";
+        let authentic = check_clauses(genuine).unwrap();
+        assert_eq!(authentic.len(), 1);
+        let block = genuine.replace("value TEXT CHECK", "value TEXT /* CHECK (0) */ CHECK");
+        let line = genuine.replace("value TEXT CHECK", "value TEXT -- CHECK (0)\n CHECK");
+        assert_eq!(check_clauses(&block).unwrap(), authentic);
+        assert_eq!(check_clauses(&line).unwrap(), authentic);
+        assert!(check_clauses("CREATE TABLE probe (\"CHECK (x)\" TEXT, \x60CHECK (y)\x60 TEXT, [CHECK (z)] TEXT, value TEXT /* CHECK (1) */)").unwrap().is_empty());
+    }
+
+    #[test]
+    fn unterminated_sql_tokens_and_checks_fail_closed() {
+        for malformed in [
+            "CREATE TABLE probe (a TEXT CHECK (a > 0",
+            "CREATE TABLE probe (a TEXT /* CHECK (a > 0)",
+            "CREATE TABLE probe (a TEXT CHECK (a != 'unfinished))",
+            "CREATE TABLE probe (\"unfinished TEXT CHECK (1))",
+            "CREATE TABLE probe (\x60unfinished TEXT CHECK (1))",
+            "CREATE TABLE probe ([unfinished TEXT CHECK (1))",
+        ] {
+            assert!(check_clauses(malformed).is_err(), "{malformed}");
+        }
     }
 }
