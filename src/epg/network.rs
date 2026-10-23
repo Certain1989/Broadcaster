@@ -455,10 +455,16 @@ mod tests {
     }
     #[test]
     fn denies_unsafe_and_repaired_authorities() {
-        for origin in ["http://127.1/epg", "http://0x7f000001/", "http://user:pw@example.com/",
-            "file:///tmp/tv.xml", "https://example.com\\@127.0.0.1/",
-            "https://user%40example.com/", "https://[fe80::1%25eth0]/",
-            "https://example.com/#fragment"] {
+        for origin in [
+            "http://127.1/epg",
+            "http://0x7f000001/",
+            "http://user:pw@example.com/",
+            "file:///tmp/tv.xml",
+            "https://example.com\\\\@127.0.0.1/",
+            "https://user%40example.com/",
+            "https://[fe80::1%25eth0]/",
+            "https://example.com/#fragment",
+        ] {
             assert!(validate_remote_url(origin).is_err());
         }
         assert!(validate_remote_url("https://example.com/epg.xml.gz?secret=opaque").is_ok());
