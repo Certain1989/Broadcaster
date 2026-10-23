@@ -8,8 +8,7 @@ use super::{
     model::EpgError,
     network::{self, GuideCancellation, GuideFetchError, GuidePayload},
     sources::{
-        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, RegistryError,
-        SourceOrigin,
+        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, RegistryError, SourceOrigin,
     },
     xmltv::{decode_xmltv, ParseLimits},
 };
@@ -143,7 +142,9 @@ impl GlobalGuideManager {
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(60)).await;
-                    let Some(inner) = weak.upgrade() else { break; };
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
                     let manager = GlobalGuideManager { inner };
                     if let Ok(ids) = manager.due_ids().await {
                         for id in ids {
@@ -152,7 +153,8 @@ impl GlobalGuideManager {
                     }
                 }
             });
-        }).await;
+        })
+        .await;
     }
     async fn db<T, F>(&self, task: F) -> Result<T, GuideServiceError>
     where
