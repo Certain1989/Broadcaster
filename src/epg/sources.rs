@@ -289,6 +289,41 @@ impl GuideSourceRegistry {
             params![enabled as i64, seconds, clock(), id],
         )
     }
+    /// One settings save, one SQLite statement, and a compare-and-swap against
+    /// the version actually displayed when the dialog was opened.
+    pub fn update_settings(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        name: &str,
+        enabled: bool,
+        auto_refresh: bool,
+        seconds: i64,
+    ) -> Result<(), RegistryError> {
+        if !valid_name(name) || !(MIN_REFRESH_SECONDS..=MAX_REFRESH_SECONDS).contains(&seconds) {
+            return Err(RegistryError::InvalidInput);
+        }
+        let conn = self.storage.connect().map_err(|_| RegistryError::Storage)?;
+        let updated = conn.execute(
+            "UPDATE epg_sources SET name=?1,enabled=?2,auto_refresh=?3,
+              refresh_interval_seconds=?4,updated_at=MAX(updated_at+1,?5)
+              WHERE id=?6 AND updated_at=?7",
+            params![name, enabled as i64, auto_refresh as i64, seconds, clock(), id, expected_revision],
+        ).map_err(|e| match e {
+            rusqlite::Error::SqliteFailure(ref detail, _)
+                if detail.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                RegistryError::AlreadyExists
+            }
+            _ => RegistryError::Storage,
+        })?;
+        if updated == 0 {
+            Err(RegistryError::StaleConfirmation)
+        } else {
+            Ok(())
+        }
+    }
+
     fn update(&self, sql: &str, values: impl rusqlite::Params) -> Result<(), RegistryError> {
         let conn = self.storage.connect().map_err(|_| RegistryError::Storage)?;
         if conn.execute(sql, values).map_err(db)? == 0 {
@@ -409,6 +444,35 @@ mod tests {
         assert!(store.list().unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn settings_cas_is_atomic_and_old_dialogs_cannot_overwrite() {
+        let (dir, store) = temp_store();
+        let first = store.add("Original", &SourceOrigin::entered_remote_url(
+            "https://example.com/guide".into(), TrustScope::Public
+        ).unwrap()).unwrap();
+        assert_eq!(store.update_settings(
+            &first.id, first.updated_at, "Invalid partial", false, true, 3600
+        ), Err(RegistryError::InvalidInput));
+        let unchanged = store.get(&first.id).unwrap();
+        assert_eq!(unchanged.name, "Original");
+        assert!(unchanged.enabled);
+        assert!(!unchanged.auto_refresh);
+        store.update_settings(
+            &first.id, first.updated_at, "Updated", true, true, DEFAULT_REFRESH_SECONDS
+        ).unwrap();
+        let latest = store.get(&first.id).unwrap();
+        assert!(latest.updated_at > first.updated_at);
+        assert!(latest.auto_refresh);
+        assert_eq!(store.update_settings(
+            &first.id, first.updated_at, "Clobbered", false, false, DEFAULT_REFRESH_SECONDS
+        ), Err(RegistryError::StaleConfirmation));
+        assert_eq!(store.get(&first.id).unwrap().name, "Updated");
+        let stale_delete = ConfirmedGuideDeletion::after_user_confirmation(&first);
+        assert_eq!(store.delete_confirmed(&stale_delete), Err(RegistryError::StaleConfirmation));
+        assert_eq!(store.get(&first.id).unwrap().name, "Updated");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn only_conservative_opt_in_refresh_schedule_is_accepted() {
         let (dir, store) = temp_store();
