@@ -4,11 +4,12 @@
 //! Asynchronous, application-wide XMLTV coordinator. It never consults M3U
 //! hints, stream headers, Live programmes or view repaint/focus events.
 use super::{
-    cache::replace_guide_snapshot,
+    cache::replace_guide_snapshot_if_current,
     model::EpgError,
     network::{self, GuideCancellation, GuideFetchError, GuidePayload},
     sources::{
-        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, RegistryError, SourceOrigin,
+        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource, RegistryError,
+        SourceOrigin,
     },
     xmltv::{decode_xmltv, ParseLimits},
 };
@@ -99,6 +100,8 @@ struct Running {
 struct Inner {
     registry: GuideSourceRegistry,
     running: Mutex<HashMap<String, Running>>,
+    /// Serializes source authorization/revocation with request admission.
+    admission: Mutex<()>,
 }
 #[derive(Clone)]
 pub struct GlobalGuideManager {
@@ -127,6 +130,7 @@ impl GlobalGuideManager {
             inner: Arc::new(Inner {
                 registry: GuideSourceRegistry::new(storage),
                 running: Mutex::new(HashMap::new()),
+                admission: Mutex::new(()),
             }),
         };
         service.start_opt_in_scheduler();
@@ -146,7 +150,7 @@ impl GlobalGuideManager {
                 let manager = GlobalGuideManager { inner };
                 if let Ok(ids) = manager.due_ids().await {
                     for id in ids {
-                        let _ = manager.refresh(id).await;
+                        let _ = manager.refresh_scheduled(id).await;
                     }
                 }
             }
@@ -180,11 +184,11 @@ impl GlobalGuideManager {
         self.db(move |registry| registry.rename(&id, &name)).await
     }
     pub async fn set_enabled(&self, id: String, enabled: bool) -> Result<(), GuideServiceError> {
+        let _gate = self.inner.admission.lock().await;
         if !enabled {
             self.cancel(&id).await;
         }
-        self.db(move |registry| registry.set_enabled(&id, enabled))
-            .await
+        self.db(move |registry| registry.set_enabled(&id, enabled)).await
     }
     pub async fn set_schedule(
         &self,
@@ -192,16 +196,36 @@ impl GlobalGuideManager {
         enabled: bool,
         seconds: i64,
     ) -> Result<(), GuideServiceError> {
-        self.db(move |registry| registry.set_schedule(&id, enabled, seconds))
-            .await
+        let _gate = self.inner.admission.lock().await;
+        if !enabled {
+            self.cancel(&id).await;
+        }
+        self.db(move |registry| registry.set_schedule(&id, enabled, seconds)).await
+    }
+    pub async fn update_settings(
+        &self,
+        id: String,
+        revision: i64,
+        name: String,
+        enabled: bool,
+        auto_refresh: bool,
+        seconds: i64,
+    ) -> Result<(), GuideServiceError> {
+        let _gate = self.inner.admission.lock().await;
+        if !enabled || !auto_refresh {
+            self.cancel(&id).await;
+        }
+        self.db(move |registry| {
+            registry.update_settings(&id, revision, &name, enabled, auto_refresh, seconds)
+        }).await
     }
     pub async fn delete_confirmed(
         &self,
         approval: ConfirmedGuideDeletion,
     ) -> Result<(), GuideServiceError> {
+        let _gate = self.inner.admission.lock().await;
         self.cancel(approval.id()).await;
-        self.db(move |registry| registry.delete_confirmed(&approval))
-            .await
+        self.db(move |registry| registry.delete_confirmed(&approval)).await
     }
     pub async fn due_ids(&self) -> Result<Vec<String>, GuideServiceError> {
         self.db(move |registry| registry.due_source_ids(clock()))
@@ -276,8 +300,40 @@ impl GlobalGuideManager {
     /// No request is made by adding or listing sources: call only from an
     /// explicit Refresh control or a separately opted-in schedule.
     pub async fn refresh(&self, id: String) -> Result<(), GuideServiceError> {
+        self.refresh_admitted(id, false).await
+    }
+
+    async fn refresh_scheduled(&self, id: String) -> Result<(), GuideServiceError> {
+        self.refresh_admitted(id, true).await
+    }
+
+    async fn refresh_admitted(
+        &self,
+        id: String,
+        scheduled: bool,
+    ) -> Result<(), GuideServiceError> {
+        // The same gate covers admission and every revocation/configuration
+        // update. The transport is not permitted to race a pending disable,
+        // delete, or scheduler opt-out between lookup and slot registration.
+        let gate = self.inner.admission.lock().await;
+        let source_id = id.clone();
+        let source = self.db(move |registry| registry.get_private(&source_id)).await?;
+        if !source.view.enabled {
+            return Err(GuideServiceError::Disabled);
+        }
+        if scheduled {
+            if !source.view.auto_refresh {
+                return Ok(());
+            }
+            let due = self.due_ids().await?;
+            if !due.contains(&id) {
+                return Ok(());
+            }
+        }
         let (transfer, parser_cancel) = self.start(&id).await?;
-        let result = self.refresh_one(&id, &transfer, &parser_cancel).await;
+        self.transition(&id, GuideStage::Fetching).await?;
+        drop(gate);
+        let result = self.refresh_one(&id, source, &transfer, &parser_cancel).await;
         if let Err(error) = result {
             let error_code = match error {
                 GuideServiceError::Fetch(error) => error.code(),
@@ -304,17 +360,11 @@ impl GlobalGuideManager {
     async fn refresh_one(
         &self,
         id: &str,
+        source: PrivateGuideSource,
         transfer: &GuideCancellation,
         parser_cancel: &Arc<AtomicBool>,
     ) -> Result<(), GuideServiceError> {
-        let source_id = id.to_owned();
-        let source = self
-            .db(move |registry| registry.get_private(&source_id))
-            .await?;
-        if !source.view.enabled {
-            return Err(GuideServiceError::Disabled);
-        }
-        self.transition(id, GuideStage::Fetching).await?;
+        let expected_last_success = source.view.last_success_at;
         let payload = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
                 let cancellation = transfer.clone();
@@ -326,16 +376,9 @@ impl GlobalGuideManager {
             SourceOrigin::LocalFile(locator) => read_local(&locator, transfer).await?,
         };
         self.transition(id, GuideStage::Decoding).await?;
-        // E1's strict monotonic success guard refuses equal-second retries.
-        // A same-second refresh receives a unique future logical instant;
-        // out-of-order refresh jobs are also excluded by source coalescing.
-        let next = source
-            .view
-            .last_success_at
-            .map(|value| value.checked_add(1).ok_or(GuideServiceError::Storage))
-            .transpose()?
-            .unwrap_or(0);
-        let timestamp = clock().max(next);
+        // Record actual wall-clock retrieval time; cache ordering is enforced
+        // by the admission-time last-success CAS, not a fabricated future time.
+        let timestamp = clock();
         let source_id = id.to_owned();
         let cancelled = parser_cancel.clone();
         let snapshot = crate::utils::tokio(async move {
@@ -366,7 +409,9 @@ impl GlobalGuideManager {
                 let mut conn = store
                     .connect_private()
                     .map_err(|_| GuideServiceError::Storage)?;
-                replace_guide_snapshot(&mut conn, &snapshot, &cancelled).map_err(|error| {
+                replace_guide_snapshot_if_current(
+                    &mut conn, &snapshot, &cancelled, expected_last_success,
+                ).map_err(|error| {
                     if error == EpgError::Cancelled {
                         GuideServiceError::Cancelled
                     } else {
@@ -387,6 +432,19 @@ async fn read_local(
     uri: &str,
     cancellation: &GuideCancellation,
 ) -> Result<GuidePayload, GuideServiceError> {
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(GuideServiceError::Cancelled),
+        _ = glib::timeout_future_seconds(90) =>
+            Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
+        result = read_local_bounded(uri, cancellation) => result,
+    }
+}
+
+async fn read_local_bounded(
+    uri: &str,
+    cancellation: &GuideCancellation,
+) -> Result<GuidePayload, GuideServiceError> {
     let file = gio::File::for_uri(uri);
     if file.uri_scheme().as_deref() != Some("file") {
         return Err(GuideServiceError::LocalAccess);
@@ -394,6 +452,8 @@ async fn read_local(
     let stream = tokio::select! {
         biased;
         _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
+        _ = glib::timeout_future_seconds(30) =>
+            return Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
         result = file.read_future(glib::Priority::DEFAULT) => {
             result.map_err(|_| GuideServiceError::LocalAccess)?
         }
@@ -406,6 +466,8 @@ async fn read_local(
         let part = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
+            _ = glib::timeout_future_seconds(30) =>
+                return Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
             result = stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT) => {
                 result.map_err(|_| GuideServiceError::LocalAccess)?
             }
