@@ -7,6 +7,8 @@ pub mod cache;
 pub mod desktop;
 pub mod model;
 pub mod network;
+#[cfg(test)]
+mod network_tests;
 pub mod service;
 pub mod sources;
 #[cfg(test)]
