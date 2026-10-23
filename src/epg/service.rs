@@ -572,18 +572,20 @@ mod e2_admission_tests {
             .unwrap()
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn disable_and_delete_revoke_queued_new_admissions() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
         let (dir, manager) = manager();
         let source = sample(&manager).await;
         let gate = manager.inner.admission.lock().await;
         let pending = manager.clone();
         let id = source.id.clone();
-        let disable = tokio::spawn(async move { pending.set_enabled(id, false).await });
+        let disable = tokio::task::spawn_local(async move { pending.set_enabled(id, false).await });
         tokio::task::yield_now().await;
         let pending = manager.clone();
         let id = source.id.clone();
-        let refresh = tokio::spawn(async move { pending.refresh(id).await });
+        let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
         drop(gate);
         disable.await.unwrap().unwrap();
         assert!(matches!(
@@ -603,11 +605,11 @@ mod e2_admission_tests {
         let approval = ConfirmedGuideDeletion::after_user_confirmation(&fresh);
         let gate = manager.inner.admission.lock().await;
         let pending = manager.clone();
-        let deletion = tokio::spawn(async move { pending.delete_confirmed(approval).await });
+        let deletion = tokio::task::spawn_local(async move { pending.delete_confirmed(approval).await });
         tokio::task::yield_now().await;
         let pending = manager.clone();
         let id = source.id.clone();
-        let refresh = tokio::spawn(async move { pending.refresh(id).await });
+        let refresh = tokio::task::spawn_local(async move { pending.refresh(id).await });
         drop(gate);
         deletion.await.unwrap().unwrap();
         assert!(matches!(
@@ -616,6 +618,8 @@ mod e2_admission_tests {
         ));
         assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
         fs::remove_dir_all(dir).unwrap();
+            })
+            .await;
     }
 
     #[tokio::test]
