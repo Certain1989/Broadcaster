@@ -1455,6 +1455,56 @@ mod staged_database_tests {
         assert_eq!(fs::read(&stale).unwrap(), payload);
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn injected_backup_and_post_create_migration_failures_preserve_v1() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = PrivateDir::new();
+        let path = fixture.database();
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(MIGRATION_001).unwrap();
+        db.execute(
+            "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('p1','Fictional','local_file','/fake',1,1)", [],
+        ).unwrap();
+        drop(db);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        // Refuse before the recoverable backup is complete, without touching v1.
+        assert_eq!(
+            upgrade_existing_v1_with(&path, MIGRATION_002, true),
+            Err(StorageError::StorageFailure),
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        // Execute all the real migration statements inside BEGIN IMMEDIATE,
+        // then force a SQL error before COMMIT to verify transactional rollback.
+        let injected = MIGRATION_002.replace(
+            "PRAGMA user_version = 2;",
+            "INSERT INTO nonexistent_epg_failure_point VALUES(7);\nPRAGMA user_version = 2;",
+        );
+        assert_eq!(
+            upgrade_existing_v1_with(&path, &injected, false),
+            Err(StorageError::StorageFailure),
+        );
+        let reopened = Connection::open(&path).unwrap();
+        let version: i64 = reopened.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 1);
+        let preserved: String = reopened.query_row(
+            "SELECT name FROM iptv_sources WHERE id='p1'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(preserved, "Fictional");
+        let epg_exists: i64 = reopened.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='epg_sources'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(epg_exists, 0);
+        drop(reopened);
+        Storage::at(path).initialize().unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn unsafe_parent_permissions_refuse_database_creation() {
