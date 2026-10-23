@@ -119,7 +119,9 @@ pub fn read_guide_window(
         "SELECT COUNT(*) FROM epg_channels WHERE source_id=?1 AND channel_id IN ({ids_sql})"
     );
     let count: i64 = conn
-        .query_row(&count_sql, params_from_iter(selected_args.iter()), |r| r.get(0))
+        .query_row(&count_sql, params_from_iter(selected_args.iter()), |r| {
+            r.get(0)
+        })
         .map_err(db)?;
     if count != selected.len() as i64 {
         return Err(EpgError::InvalidInput);

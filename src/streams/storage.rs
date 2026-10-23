@@ -855,8 +855,7 @@ fn validate_reference_schema(
     tables: &[&str],
     include_epg: bool,
 ) -> StorageResult<()> {
-    let reference =
-        Connection::open_in_memory().map_err(|_| StorageError::IncompatibleDatabase)?;
+    let reference = Connection::open_in_memory().map_err(|_| StorageError::IncompatibleDatabase)?;
     reference
         .execute_batch(MIGRATION_001)
         .map_err(|_| StorageError::IncompatibleDatabase)?;
