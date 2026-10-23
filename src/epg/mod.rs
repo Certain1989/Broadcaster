@@ -5,6 +5,7 @@
 //! No GTK, networking, file picking or operating-system event loop belongs here.
 pub mod cache;
 pub mod model;
+pub mod network;
 #[cfg(test)]
 mod tests;
 pub mod xmltv;
