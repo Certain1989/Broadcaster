@@ -338,3 +338,94 @@ fn replace_snapshot_inner(
     .map_err(db)?;
     tx.commit().map_err(db)
 }
+
+#[cfg(test)]
+mod e2_revision_tests {
+    use super::*;
+    use super::super::{
+        model::{GuideChannel, GuideSnapshot, Programme},
+        network::TrustScope,
+        sources::{ConfirmedGuideDeletion, GuideSourceRegistry, RegistryError, SourceOrigin},
+    };
+    use crate::streams::storage::Storage;
+    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use uuid::Uuid;
+
+    fn registry() -> (PathBuf, GuideSourceRegistry) {
+        let dir = std::env::temp_dir().join(format!("epg-revision-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let storage = Storage::at(dir.join("db.sqlite3"));
+        storage.initialize().unwrap();
+        (dir, GuideSourceRegistry::new(storage))
+    }
+
+    #[test]
+    fn same_second_replacement_preserves_real_freshness_and_increments_cas() {
+        let (dir, registry) = registry();
+        let source = registry.add(
+            "Clock", &SourceOrigin::entered_remote_url(
+                "https://example.com/guide".into(), TrustScope::Public,
+            ).unwrap(),
+        ).unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let snapshot = |title: &str| GuideSnapshot {
+            source_id: source.id.clone(),
+            channels: vec![GuideChannel {
+                source_id: source.id.clone(),
+                channel_id: "one".to_owned(),
+                display_name: "One".to_owned(),
+            }],
+            programmes: vec![Programme {
+                source_id: source.id.clone(),
+                channel_id: "one".to_owned(),
+                start_utc: now,
+                stop_utc: now + 3600,
+                title: title.to_owned(),
+                subtitle: None,
+                description: None,
+            }],
+            retrieved_utc: now,
+        };
+        let old_approval = ConfirmedGuideDeletion::after_user_confirmation(&source);
+        let cancelled = AtomicBool::new(false);
+        let mut conn = registry.connect_private().unwrap();
+        replace_guide_snapshot_if_current(&mut conn, &snapshot("First"), &cancelled, None).unwrap();
+        let first = registry.get(&source.id).unwrap();
+        assert_eq!(first.last_success_at, Some(now));
+        assert!(first.updated_at > source.updated_at);
+
+        // The admitted predecessor is still the same real second, but the
+        // second full replacement gets an independent monotonic revision.
+        replace_guide_snapshot_if_current(
+            &mut conn, &snapshot("Second"), &cancelled, Some(now)
+        ).unwrap();
+        let second = registry.get(&source.id).unwrap();
+        assert_eq!(second.last_success_at, Some(now));
+        assert!(second.updated_at > first.updated_at);
+        assert_eq!(freshness(second.last_success_at, now), Freshness::Fresh);
+        assert_eq!(
+            registry.delete_confirmed(&old_approval),
+            Err(RegistryError::StaleConfirmation),
+        );
+        let saved: String = conn.query_row(
+            "SELECT title FROM epg_programmes WHERE source_id=?1",
+            [&source.id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(saved, "Second");
+        // A stale import cannot evict the last-good payload.
+        assert!(replace_guide_snapshot_if_current(
+            &mut conn, &snapshot("Rejected"), &cancelled, None
+        ).is_err());
+        let saved: String = conn.query_row(
+            "SELECT title FROM epg_programmes WHERE source_id=?1",
+            [&source.id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(saved, "Second");
+        drop(conn);
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
