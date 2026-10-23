@@ -498,7 +498,7 @@ mod focus_tests {
         assert!(close.grab_focus());
         let _ = body.child_focus(gtk::DirectionType::Down);
         assert!(!scroller.has_focus());
-        assert!(window.focus().is_some_and(|focused| focused.is_visible()));
+        assert!(gtk::prelude::GtkWindowExt::focus(&window).is_some_and(|focused| focused.is_visible()));
         assert!(add.grab_focus());
         window.close();
     }
