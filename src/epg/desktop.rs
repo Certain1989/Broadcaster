@@ -37,6 +37,15 @@ fn command(label: &str, parent: &gtk::Box) -> gtk::Button {
     parent.append(&button);
     button
 }
+// The viewport must never become a D-pad stop when there are no guide rows.
+// Its actual row buttons remain focusable when sources have been added.
+fn guide_list_scroller() -> gtk::ScrolledWindow {
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_focusable(false);
+    scroller.set_vexpand(true);
+    scroller
+}
+
 fn title(dialog: &adw::Dialog, label: &str) {
     dialog.set_title(label);
     dialog.set_content_width(560);
@@ -419,8 +428,7 @@ pub fn show_guide_manager(parent: &gtk::Window) {
         let add_local = command(&gettext("Choose Local XMLTV"), &actions);
         let close = command(&gettext("Close"), &actions);
         body.append(&actions);
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_vexpand(true);
+        let scroller = guide_list_scroller();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
         scroller.set_child(Some(&list));
         body.append(&scroller);
@@ -458,4 +466,40 @@ pub fn show_guide_manager(parent: &gtk::Window) {
         dialog.present(Some(&parent));
         repaint(service, list, status, parent);
     });
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    // Opt-in: xvfb-run -a env GDK_BACKEND=x11 cargo test
+    // --locked gtk_empty_guide_manager_directional_focus -- --ignored --test-threads=1
+    #[test]
+    #[ignore = "requires a mapped GTK display (Xvfb)"]
+    fn gtk_empty_guide_manager_directional_focus() {
+        gtk::init().expect("GTK display");
+        let window = gtk::Window::new();
+        let body = box_column();
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let add = command("Add URL", &actions);
+        let close = command("Close", &actions);
+        body.append(&actions);
+        let scroller = guide_list_scroller();
+        scroller.set_child(Some(&gtk::Label::new(Some("No guides configured"))));
+        body.append(&scroller);
+        window.set_child(Some(&body));
+        window.present();
+        let context = glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+        assert!(window.is_mapped());
+        assert!(!scroller.is_focusable());
+        assert!(close.grab_focus());
+        let _ = body.child_focus(gtk::DirectionType::Down);
+        assert!(!scroller.has_focus());
+        assert!(window.focus().is_some_and(|focused| focused.is_visible()));
+        assert!(add.grab_focus());
+        window.close();
+    }
 }
