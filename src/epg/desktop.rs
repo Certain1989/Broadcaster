@@ -281,12 +281,15 @@ fn show_add(parent: &gtk::Window, service: GlobalGuideManager, list: gtk::Box,
     dialog.present(Some(parent));
 }
 
+pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::GuideServiceError> {
+    let cell = SHARED_MANAGER.get_or_init(tokio::sync::OnceCell::const_new);
+    cell.get_or_try_init(|| GlobalGuideManager::open()).await.cloned()
+}
 pub fn show_guide_manager(parent: &gtk::Window) {
     let parent = parent.clone();
     spawn(async move {
-        let cell = SHARED_MANAGER.get_or_init(tokio::sync::OnceCell::const_new);
-        let service = match cell.get_or_try_init(|| GlobalGuideManager::open()).await {
-            Ok(service) => service.clone(),
+        let service = match ensure_started().await {
+            Ok(service) => service,
             Err(_) => {
                 crate::utils::show_error("Unable to open programme guide configuration");
                 return;
