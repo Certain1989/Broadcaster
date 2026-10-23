@@ -449,6 +449,10 @@ impl TvStreamsView {
                     Ok(service) => {
                         view.imp().service.replace(Some(service));
                         view.reload();
+                        // Initialize the optional EPG scheduler only after the
+                        // shared SQLite catalogue has opened successfully.
+                        // Unconfigured guides cause no network access.
+                        let _ = crate::epg::desktop::ensure_started().await;
                     }
                     Err(_) => view.imp().results_stack.set_visible_child_name("error"),
                 }
