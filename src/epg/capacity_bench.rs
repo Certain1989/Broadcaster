@@ -89,7 +89,7 @@ fn peak_rss_kib() -> Option<u64> {
 }
 
 fn disk_db(dir: &Path) -> Connection {
-    let mut conn = Connection::open(dir.join("cache.sqlite3")).unwrap();
+    let conn = Connection::open(dir.join("cache.sqlite3")).unwrap();
     conn.execute_batch(crate::streams::storage::MIGRATION_001)
         .unwrap();
     conn.execute_batch(crate::streams::storage::MIGRATION_002)
