@@ -208,7 +208,7 @@ fn ipv6_class(ip: Ipv6Addr) -> Option<AddressClass> {
     }
     let [first, second, ..] = ip.segments();
     if first & 0xe000 != 0x2000
-        || (first == 0x2001 && second <= 0x01ff)
+        || (first == 0x2001 && (second <= 0x01ff || second == 0x0db8))
         || first == 0x2002
         || first == 0x3fff
     {

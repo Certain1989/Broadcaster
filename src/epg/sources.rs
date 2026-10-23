@@ -372,6 +372,11 @@ mod tests {
     fn temp_store() -> (PathBuf, GuideSourceRegistry) {
         let dir = std::env::temp_dir().join(format!("epg-source-{}", Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let db = Storage::at(dir.join("db.sqlite3"));
         db.initialize().unwrap();
         (dir, GuideSourceRegistry::new(db))
