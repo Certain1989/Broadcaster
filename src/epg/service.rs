@@ -552,6 +552,7 @@ async fn read_local_bounded(
 #[cfg(test)]
 mod e2_admission_tests {
     use super::*;
+    use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};
     use uuid::Uuid;
 
