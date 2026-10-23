@@ -276,9 +276,12 @@ fn spoofed_v1_index_name_refuses_migration_without_modifying_original() {
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
 }
 
-
 fn replace_exact_once(sql: &str, expected: &str, replacement: &str) -> String {
-    assert_eq!(sql.matches(expected).count(), 1, "expected one SQL fixture anchor");
+    assert_eq!(
+        sql.matches(expected).count(),
+        1,
+        "expected one SQL fixture anchor"
+    );
     sql.replacen(expected, replacement, 1)
 }
 
@@ -343,7 +346,8 @@ fn actual_v1_check_with_internal_comment_still_upgrades_and_reopens() {
     let dir = Sandbox::new();
     let path = dir.path();
     let checked = "CHECK (length(id) BETWEEN 1 AND 64)";
-    let decorated = "CHECK (length(id) /* quoted 'CHECK (wrong)' and -- are comments */ BETWEEN 1 AND 64)";
+    let decorated =
+        "CHECK (length(id) /* quoted 'CHECK (wrong)' and -- are comments */ BETWEEN 1 AND 64)";
     let v1 = MIGRATION_001.replacen(checked, decorated, 1);
     seed_real_v1_with_sql(&path, &v1);
     let storage = Storage::at(path.clone());

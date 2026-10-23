@@ -1813,7 +1813,6 @@ mod staged_database_tests {
     }
 }
 
-
 #[cfg(test)]
 mod schema_check_lexer_tests {
     use super::check_clauses;
