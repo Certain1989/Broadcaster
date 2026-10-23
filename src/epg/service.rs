@@ -358,7 +358,8 @@ impl GlobalGuideManager {
         }
         let (transfer, parser_cancel) = self.start(&id, scheduled).await?;
         drop(gate);
-        self.run_registered(id, source, transfer, parser_cancel).await
+        self.run_registered(id, source, transfer, parser_cancel)
+            .await
     }
 
     // Every registered slot must pass through terminal handling, including
@@ -371,9 +372,10 @@ impl GlobalGuideManager {
         parser_cancel: Arc<AtomicBool>,
     ) -> Result<(), GuideServiceError> {
         let result = match self.transition(&id, GuideStage::Fetching).await {
-            Ok(()) => self
-                .refresh_one(&id, source, &transfer, &parser_cancel)
-                .await,
+            Ok(()) => {
+                self.refresh_one(&id, source, &transfer, &parser_cancel)
+                    .await
+            }
             Err(error) => Err(error),
         };
         if let Err(error) = result {
@@ -727,7 +729,10 @@ mod e2_admission_tests {
         assert!(!transfer.is_cancelled());
         assert!(!parser.load(Ordering::Acquire));
         assert_eq!(manager.stage(&source.id).await, GuideStage::Fetching);
-        assert_eq!(manager.inner.registry.get(&source.id).unwrap().id, source.id);
+        assert_eq!(
+            manager.inner.registry.get(&source.id).unwrap().id,
+            source.id
+        );
 
         manager
             .delete_confirmed(ConfirmedGuideDeletion::after_user_confirmation(&current))
@@ -759,7 +764,9 @@ mod e2_admission_tests {
             Err(GuideServiceError::AlreadyRunning)
         ));
         assert_eq!(
-            manager.run_registered(id.clone(), private, transfer, parser).await,
+            manager
+                .run_registered(id.clone(), private, transfer, parser)
+                .await,
             Err(GuideServiceError::Cancelled)
         );
         assert_eq!(manager.stage(&id).await, GuideStage::Cancelled);
@@ -767,7 +774,9 @@ mod e2_admission_tests {
         // not be rejected as AlreadyRunning by an abandoned queued slot.
         assert!(matches!(
             manager.refresh(id.clone()).await,
-            Err(GuideServiceError::Fetch(GuideFetchError::NetworkScopeDenied))
+            Err(GuideServiceError::Fetch(
+                GuideFetchError::NetworkScopeDenied
+            ))
         ));
         assert_eq!(manager.stage(&id).await, GuideStage::Failed);
         fs::remove_dir_all(dir).unwrap();
