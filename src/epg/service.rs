@@ -6,9 +6,9 @@
 use super::{
     cache::replace_guide_snapshot,
     model::EpgError,
-    network::{self, GuideCancellation, GuideFetchError, GuidePayload, TrustScope},
+    network::{self, GuideCancellation, GuideFetchError, GuidePayload},
     sources::{
-        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, RegistryError, SourceKind,
+        ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, RegistryError,
         SourceOrigin,
     },
     xmltv::{decode_xmltv, ParseLimits},
