@@ -11,7 +11,9 @@ use std::{
 };
 
 use super::{logo, model::*};
-use rusqlite::{backup::Backup, params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{
+    backup::Backup, params, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
+};
 
 pub const APPLICATION_ID: i64 = 0x42524354;
 pub const SCHEMA_VERSION: i64 = 2;
@@ -504,7 +506,8 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
         validate_v1_schema_shape(&reopened)?;
         validate_v2_schema_shape(&reopened)?;
         validate_integrity(&reopened)?;
-        let version: i64 = reopened.query_row("PRAGMA user_version", [], |r| r.get(0))
+        let version: i64 = reopened
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(map_sql)?;
         if version != SCHEMA_VERSION {
             return Err(StorageError::IncompatibleDatabase);
@@ -521,7 +524,9 @@ fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
 }
 
 fn upgrade_existing_v1_with(
-    path: &Path, migration_sql: &str, inject_backup_failure: bool,
+    path: &Path,
+    migration_sql: &str,
+    inject_backup_failure: bool,
 ) -> StorageResult<()> {
     let parent = path.parent().ok_or(StorageError::InvalidInput)?;
     let name = path.file_name().ok_or(StorageError::InvalidInput)?;
@@ -537,7 +542,9 @@ fn upgrade_existing_v1_with(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let staged_file = opts.open(&backup_path).map_err(|_| StorageError::PermissionDenied)?;
+    let staged_file = opts
+        .open(&backup_path)
+        .map_err(|_| StorageError::PermissionDenied)?;
     drop(staged_file);
 
     let backup_result = (|| -> StorageResult<()> {
@@ -547,17 +554,19 @@ fn upgrade_existing_v1_with(
         let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|_| StorageError::StorageFailure)?;
         configure(&source)?;
-        let mut dest = Connection::open_with_flags(
-            &backup_path, OpenFlags::SQLITE_OPEN_READ_WRITE,
-        ).map_err(|_| StorageError::StorageFailure)?;
+        let mut dest = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|_| StorageError::StorageFailure)?;
         {
             let backup = Backup::new(&source, &mut dest).map_err(map_sql)?;
-            backup.run_to_completion(128, Duration::from_millis(25), None)
+            backup
+                .run_to_completion(128, Duration::from_millis(25), None)
                 .map_err(map_sql)?;
         }
-        let application_id: i64 = dest.query_row("PRAGMA application_id", [], |r| r.get(0))
+        let application_id: i64 = dest
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
             .map_err(map_sql)?;
-        let version: i64 = dest.query_row("PRAGMA user_version", [], |r| r.get(0))
+        let version: i64 = dest
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(map_sql)?;
         if application_id != APPLICATION_ID || version != 1 {
             return Err(StorageError::IncompatibleDatabase);
@@ -565,7 +574,8 @@ fn upgrade_existing_v1_with(
         validate_v1_schema_shape(&dest)?;
         validate_integrity(&dest)?;
         dest.close().map_err(|_| StorageError::StorageFailure)?;
-        fs::File::open(&backup_path).and_then(|f| f.sync_all())
+        fs::File::open(&backup_path)
+            .and_then(|f| f.sync_all())
             .map_err(|_| StorageError::StorageFailure)?;
         sync_parent_directory(parent).map_err(|_| StorageError::StorageFailure)?;
         Ok(())
@@ -579,9 +589,11 @@ fn upgrade_existing_v1_with(
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .map_err(|_| StorageError::StorageFailure)?;
     configure(&conn)?;
-    let id: i64 = conn.query_row("PRAGMA application_id", [], |r| r.get(0))
+    let id: i64 = conn
+        .query_row("PRAGMA application_id", [], |r| r.get(0))
         .map_err(map_sql)?;
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(map_sql)?;
     if id != APPLICATION_ID || version != 1 {
         return Err(StorageError::IncompatibleDatabase);
@@ -814,18 +826,20 @@ fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
         "idx_epg_programmes_window_stop",
         "idx_epg_sources_enabled",
     ];
-    for (kind, pattern, expected) in [
-        ("table", "epg_%", TABLES),
-        ("index", "idx_epg_%", INDEXES),
-    ] {
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type=?1 AND name LIKE ?2 ORDER BY name",
-        ).map_err(|_| StorageError::IncompatibleDatabase)?;
-        let actual = stmt.query_map(params![kind, pattern], |row| row.get::<_, String>(0))
+    for (kind, pattern, expected) in [("table", "epg_%", TABLES), ("index", "idx_epg_%", INDEXES)] {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type=?1 AND name LIKE ?2 ORDER BY name")
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        let actual = stmt
+            .query_map(params![kind, pattern], |row| row.get::<_, String>(0))
             .map_err(|_| StorageError::IncompatibleDatabase)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| StorageError::IncompatibleDatabase)?;
-        if !actual.iter().map(String::as_str).eq(expected.iter().copied()) {
+        if !actual
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied())
+        {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
@@ -1455,7 +1469,6 @@ mod staged_database_tests {
         assert_eq!(fs::read(&stale).unwrap(), payload);
     }
 
-
     #[cfg(unix)]
     #[test]
     fn injected_backup_and_post_create_migration_failures_preserve_v1() {
@@ -1466,8 +1479,10 @@ mod staged_database_tests {
         db.execute_batch(MIGRATION_001).unwrap();
         db.execute(
             "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
-             VALUES('p1','Fictional','local_file','/fake',1,1)", [],
-        ).unwrap();
+             VALUES('p1','Fictional','local_file','/fake',1,1)",
+            [],
+        )
+        .unwrap();
         drop(db);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         let original = fs::read(&path).unwrap();
@@ -1490,16 +1505,23 @@ mod staged_database_tests {
             Err(StorageError::StorageFailure),
         );
         let reopened = Connection::open(&path).unwrap();
-        let version: i64 = reopened.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let version: i64 = reopened
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(version, 1);
-        let preserved: String = reopened.query_row(
-            "SELECT name FROM iptv_sources WHERE id='p1'", [], |r| r.get(0),
-        ).unwrap();
+        let preserved: String = reopened
+            .query_row("SELECT name FROM iptv_sources WHERE id='p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(preserved, "Fictional");
-        let epg_exists: i64 = reopened.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='epg_sources'",
-            [], |r| r.get(0),
-        ).unwrap();
+        let epg_exists: i64 = reopened
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='epg_sources'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(epg_exists, 0);
         drop(reopened);
         Storage::at(path).initialize().unwrap();
