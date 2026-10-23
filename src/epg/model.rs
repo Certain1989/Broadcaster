@@ -37,7 +37,11 @@ pub struct GuideSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Certainty { Exact, Missing, Ambiguous }
+pub enum Certainty {
+    Exact,
+    Missing,
+    Ambiguous,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NowNext {
@@ -82,17 +86,19 @@ pub fn bounded_text(s: &str, max: usize) -> bool {
         && s.len() <= max
         && !s.chars().any(|c| {
             let u = c as u32;
-            (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
-                || (0x7f..=0x9f).contains(&u)
+            (u < 0x20 && c != '\n' && c != '\t' && c != '\r') || (0x7f..=0x9f).contains(&u)
         })
 }
 
 /// Snapshot validation is entirely independent of a guide's network/file origin.
 /// Validated intervals are retained in their entirety; none are trimmed to now/next.
 pub fn validate_snapshot(snapshot: &GuideSnapshot) -> Result<(), EpgError> {
-    if snapshot.source_id.is_empty() || snapshot.source_id.len() > 64
-        || snapshot.channels.is_empty() || snapshot.channels.len() > 10_000
-        || snapshot.programmes.is_empty() || snapshot.programmes.len() > 250_000
+    if snapshot.source_id.is_empty()
+        || snapshot.source_id.len() > 64
+        || snapshot.channels.is_empty()
+        || snapshot.channels.len() > 10_000
+        || snapshot.programmes.is_empty()
+        || snapshot.programmes.len() > 250_000
     {
         return Err(EpgError::InvalidSchedule);
     }
@@ -114,9 +120,15 @@ pub fn validate_snapshot(snapshot: &GuideSnapshot) -> Result<(), EpgError> {
         }
         if !bounded_text(&programme.title, 512)
             || programme.subtitle.as_deref().is_some_and(|s| s.len() > 512)
-            || programme.description.as_deref().is_some_and(|s| s.len() > 2048)
+            || programme
+                .description
+                .as_deref()
+                .is_some_and(|s| s.len() > 2048)
             || programme.stop_utc <= programme.start_utc
-            || programme.stop_utc.checked_sub(programme.start_utc).is_none_or(|s| s > 86_400)
+            || programme
+                .stop_utc
+                .checked_sub(programme.start_utc)
+                .is_none_or(|s| s > 86_400)
         {
             return Err(EpgError::InvalidSchedule);
         }
@@ -127,36 +139,55 @@ pub fn validate_snapshot(snapshot: &GuideSnapshot) -> Result<(), EpgError> {
 /// Half-open intervals. A competing current record suppresses misleading progress.
 /// Following entries remain available even when the current interval is unknown.
 pub fn select_programmes(
-    programmes: &[Programme], guide_channel_id: &str, now_utc: i64,
+    programmes: &[Programme],
+    guide_channel_id: &str,
+    now_utc: i64,
 ) -> NowNext {
-    let mut current: Vec<&Programme> = programmes.iter()
-        .filter(|p| p.channel_id == guide_channel_id
-            && p.start_utc <= now_utc && now_utc < p.stop_utc)
+    let mut current: Vec<&Programme> = programmes
+        .iter()
+        .filter(|p| {
+            p.channel_id == guide_channel_id && p.start_utc <= now_utc && now_utc < p.stop_utc
+        })
         .collect();
-    current.sort_by(|a,b| (a.start_utc,a.stop_utc,&a.title)
-        .cmp(&(b.start_utc,b.stop_utc,&b.title)));
+    current.sort_by(|a, b| {
+        (a.start_utc, a.stop_utc, &a.title).cmp(&(b.start_utc, b.stop_utc, &b.title))
+    });
     current.dedup();
     let certainty = match current.len() {
         0 => Certainty::Missing,
         1 => Certainty::Exact,
         _ => Certainty::Ambiguous,
     };
-    let chosen = if certainty == Certainty::Exact { Some((*current[0]).clone()) } else { None };
-    let progress = chosen.as_ref().map(|p| {
-        (now_utc - p.start_utc) as f64 / (p.stop_utc - p.start_utc) as f64
-    });
-    let mut future: Vec<&Programme> = programmes.iter()
+    let chosen = if certainty == Certainty::Exact {
+        Some((*current[0]).clone())
+    } else {
+        None
+    };
+    let progress = chosen
+        .as_ref()
+        .map(|p| (now_utc - p.start_utc) as f64 / (p.stop_utc - p.start_utc) as f64);
+    let mut future: Vec<&Programme> = programmes
+        .iter()
         .filter(|p| p.channel_id == guide_channel_id && p.start_utc > now_utc)
         .collect();
-    future.sort_by(|a,b| (a.start_utc,a.stop_utc,&a.title)
-        .cmp(&(b.start_utc,b.stop_utc,&b.title)));
+    future.sort_by(|a, b| {
+        (a.start_utc, a.stop_utc, &a.title).cmp(&(b.start_utc, b.stop_utc, &b.title))
+    });
     future.dedup();
     let next_ambiguous = future.first().is_some_and(|first| {
-        future.iter().filter(|p| p.start_utc == first.start_utc).count() > 1
+        future
+            .iter()
+            .filter(|p| p.start_utc == first.start_utc)
+            .count()
+            > 1
     });
     NowNext {
         current: chosen,
-        next: if next_ambiguous { None } else { future.first().map(|p| (**p).clone()) },
+        next: if next_ambiguous {
+            None
+        } else {
+            future.first().map(|p| (**p).clone())
+        },
         certainty,
         next_ambiguous,
         progress_fraction: progress,
