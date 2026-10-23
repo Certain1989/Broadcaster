@@ -116,7 +116,7 @@ pub fn validate_snapshot(snapshot: &GuideSnapshot) -> Result<(), EpgError> {
             || programme.subtitle.as_deref().is_some_and(|s| s.len() > 512)
             || programme.description.as_deref().is_some_and(|s| s.len() > 2048)
             || programme.stop_utc <= programme.start_utc
-            || programme.stop_utc - programme.start_utc > 86_400
+            || programme.stop_utc.checked_sub(programme.start_utc).is_none_or(|s| s > 86_400)
         {
             return Err(EpgError::InvalidSchedule);
         }
@@ -141,7 +141,7 @@ pub fn select_programmes(
         1 => Certainty::Exact,
         _ => Certainty::Ambiguous,
     };
-    let chosen = if certainty == Certainty::Exact { Some(current[0].clone()) } else { None };
+    let chosen = if certainty == Certainty::Exact { Some((*current[0]).clone()) } else { None };
     let progress = chosen.as_ref().map(|p| {
         (now_utc - p.start_utc) as f64 / (p.stop_utc - p.start_utc) as f64
     });
@@ -156,7 +156,7 @@ pub fn select_programmes(
     });
     NowNext {
         current: chosen,
-        next: if next_ambiguous { None } else { future.first().map(|p| (*p).clone()) },
+        next: if next_ambiguous { None } else { future.first().map(|p| (**p).clone()) },
         certainty,
         next_ambiguous,
         progress_fraction: progress,
