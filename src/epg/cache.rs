@@ -3,22 +3,35 @@
 
 //! Offline SQLite adapter. External downloads, XML/file parsing, GTK and fetching
 //! are forbidden inside a window read. All calls are synchronous/blocking-worker only.
+use super::model::{bounded_text, validate_snapshot, EpgError, GuideSnapshot, Programme};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OptionalExtension, TransactionBehavior,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicBool, Ordering},
 };
-use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension, TransactionBehavior};
-use super::model::{bounded_text, validate_snapshot, EpgError, GuideSnapshot, Programme};
 
-fn db(_: rusqlite::Error) -> EpgError { EpgError::Storage }
+fn db(_: rusqlite::Error) -> EpgError {
+    EpgError::Storage
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Freshness { NeverFetched, Fresh, Aging, Stale, Unknown }
+pub enum Freshness {
+    NeverFetched,
+    Fresh,
+    Aging,
+    Stale,
+    Unknown,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coverage {
     /// Missing listings never establish that a channel is off-air.
-    Partial { observed_start_utc: Option<i64>, observed_stop_utc: Option<i64> },
+    Partial {
+        observed_start_utc: Option<i64>,
+        observed_stop_utc: Option<i64>,
+    },
     NoData,
     Disabled,
 }
@@ -53,13 +66,26 @@ fn freshness(last: Option<i64>, now: i64) -> Freshness {
 /// Calling code must dispatch off GTK MainContext and may set 'cancel' at any
 /// time. A SQL page is bounded to 4,097 rows, then truncated to 4,096.
 pub fn read_guide_window(
-    conn: &Connection, source_id: &str, guide_channel_ids: &[String],
-    start_utc: i64, end_utc: i64, now_utc: i64, cancel: &AtomicBool,
+    conn: &Connection,
+    source_id: &str,
+    guide_channel_ids: &[String],
+    start_utc: i64,
+    end_utc: i64,
+    now_utc: i64,
+    cancel: &AtomicBool,
 ) -> Result<BoundedGuidePage, EpgError> {
-    if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
-    let width = end_utc.checked_sub(start_utc).ok_or(EpgError::InvalidInput)?;
-    if width <= 0 || width > 172_800 || source_id.is_empty() || source_id.len() > 64
-        || guide_channel_ids.is_empty() || guide_channel_ids.len() > 64
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
+    let width = end_utc
+        .checked_sub(start_utc)
+        .ok_or(EpgError::InvalidInput)?;
+    if width <= 0
+        || width > 172_800
+        || source_id.is_empty()
+        || source_id.len() > 64
+        || guide_channel_ids.is_empty()
+        || guide_channel_ids.len() > 64
     {
         return Err(EpgError::InvalidInput);
     }
@@ -70,15 +96,22 @@ pub fn read_guide_window(
         }
     }
     let selected: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
-    let source: Option<(i64, Option<i64>)> = conn.query_row(
-        "SELECT enabled,last_success_at FROM epg_sources WHERE id=?1",
-        [source_id], |r| Ok((r.get(0)?,r.get(1)?)),
-    ).optional().map_err(db)?;
+    let source: Option<(i64, Option<i64>)> = conn
+        .query_row(
+            "SELECT enabled,last_success_at FROM epg_sources WHERE id=?1",
+            [source_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(db)?;
     let (enabled, last_success_at) = source.ok_or(EpgError::Unavailable)?;
-    let observed: (Option<i64>, Option<i64>) = conn.query_row(
-        "SELECT MIN(start_utc),MAX(stop_utc) FROM epg_programmes WHERE source_id=?1",
-        [source_id], |r| Ok((r.get(0)?,r.get(1)?)),
-    ).map_err(db)?;
+    let observed: (Option<i64>, Option<i64>) = conn
+        .query_row(
+            "SELECT MIN(start_utc),MAX(stop_utc) FROM epg_programmes WHERE source_id=?1",
+            [source_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(db)?;
     let coverage = if enabled == 0 {
         Coverage::Disabled
     } else if observed.0.is_none() {
@@ -93,7 +126,8 @@ pub fn read_guide_window(
     // Indices are generated locally, never from untrusted programme fields.
     let placeholders = (0..selected.len())
         .map(|i| format!("?{}", i + 4))
-        .collect::<Vec<_>>().join(",");
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!(
         "SELECT source_id,channel_id,start_utc,stop_utc,title,subtitle,description
          FROM epg_programmes
@@ -110,16 +144,24 @@ pub fn read_guide_window(
     args.extend(selected.iter().cloned().map(Value::Text));
     if enabled == 0 {
         return Ok(BoundedGuidePage {
-            source_id: source_id.to_owned(), selected_guide_channels: selected,
-            start_utc, end_utc, programmes: Vec::new(), truncated: false,
-            last_success_at, freshness: freshness(last_success_at, now_utc), coverage,
+            source_id: source_id.to_owned(),
+            selected_guide_channels: selected,
+            start_utc,
+            end_utc,
+            programmes: Vec::new(),
+            truncated: false,
+            last_success_at,
+            freshness: freshness(last_success_at, now_utc),
+            coverage,
         });
     }
     let mut stmt = conn.prepare(&sql).map_err(db)?;
     let mut rows = stmt.query(params_from_iter(args.iter())).map_err(db)?;
     let mut programmes = Vec::new();
     while let Some(r) = rows.next().map_err(db)? {
-        if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
         programmes.push(Programme {
             source_id: r.get(0).map_err(db)?,
             channel_id: r.get(1).map_err(db)?,
@@ -130,13 +172,21 @@ pub fn read_guide_window(
             description: r.get(6).map_err(db)?,
         });
     }
-    if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
     let truncated = programmes.len() > 4096;
     programmes.truncate(4096);
     Ok(BoundedGuidePage {
-        source_id: source_id.to_owned(), selected_guide_channels: selected,
-        start_utc, end_utc, programmes, truncated, last_success_at,
-        freshness: freshness(last_success_at, now_utc), coverage,
+        source_id: source_id.to_owned(),
+        selected_guide_channels: selected,
+        start_utc,
+        end_utc,
+        programmes,
+        truncated,
+        last_success_at,
+        freshness: freshness(last_success_at, now_utc),
+        coverage,
     })
 }
 
@@ -144,47 +194,85 @@ pub fn read_guide_window(
 /// validation, cancellation or SQLite write leaves the previous success intact.
 /// All original guide programmes (not just now/next) are stored atomically.
 pub fn replace_guide_snapshot(
-    conn: &mut Connection, snapshot: &GuideSnapshot, cancel: &AtomicBool,
+    conn: &mut Connection,
+    snapshot: &GuideSnapshot,
+    cancel: &AtomicBool,
 ) -> Result<(), EpgError> {
-    if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
     validate_snapshot(snapshot)?;
     let mut unique = BTreeMap::new();
     for p in &snapshot.programmes {
-        let key = (&p.source_id,&p.channel_id,p.start_utc,p.stop_utc,&p.title);
+        let key = (
+            &p.source_id,
+            &p.channel_id,
+            p.start_utc,
+            p.stop_utc,
+            &p.title,
+        );
         match unique.insert(key, p) {
             Some(other) if other != p => return Err(EpgError::InvalidSchedule),
             _ => {}
         }
     }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db)?;
-    let exists: Option<i64> = tx.query_row(
-        "SELECT enabled FROM epg_sources WHERE id=?1",
-        [&snapshot.source_id], |r| r.get(0),
-    ).optional().map_err(db)?;
-    if exists != Some(1) { return Err(EpgError::Unavailable); }
-    tx.execute("DELETE FROM epg_channels WHERE source_id=?1", [&snapshot.source_id])
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db)?;
+    let exists: Option<i64> = tx
+        .query_row(
+            "SELECT enabled FROM epg_sources WHERE id=?1",
+            [&snapshot.source_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    if exists != Some(1) {
+        return Err(EpgError::Unavailable);
+    }
+    tx.execute(
+        "DELETE FROM epg_channels WHERE source_id=?1",
+        [&snapshot.source_id],
+    )
+    .map_err(db)?;
     for channel in &snapshot.channels {
-        if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
         tx.execute(
             "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES (?1,?2,?3)",
-            params![channel.source_id,channel.channel_id,channel.display_name],
-        ).map_err(db)?;
+            params![channel.source_id, channel.channel_id, channel.display_name],
+        )
+        .map_err(db)?;
     }
     for p in unique.values() {
-        if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
         tx.execute(
             "INSERT INTO epg_programmes
              (source_id,channel_id,start_utc,stop_utc,title,subtitle,description)
              VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![p.source_id,p.channel_id,p.start_utc,p.stop_utc,p.title,p.subtitle,p.description],
-        ).map_err(db)?;
+            params![
+                p.source_id,
+                p.channel_id,
+                p.start_utc,
+                p.stop_utc,
+                p.title,
+                p.subtitle,
+                p.description
+            ],
+        )
+        .map_err(db)?;
     }
-    if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
     tx.execute(
         "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1,
          last_error_code=NULL,updated_at=?1 WHERE id=?2",
-        params![snapshot.retrieved_utc,snapshot.source_id],
-    ).map_err(db)?;
+        params![snapshot.retrieved_utc, snapshot.source_id],
+    )
+    .map_err(db)?;
     tx.commit().map_err(db)
 }
