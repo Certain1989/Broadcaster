@@ -395,19 +395,25 @@ async fn read_local(
     if file.uri_scheme().as_deref() != Some("file") {
         return Err(GuideServiceError::LocalAccess);
     }
-    let stream = file
-        .read_future(glib::Priority::DEFAULT)
-        .await
-        .map_err(|_| GuideServiceError::LocalAccess)?;
+    let stream = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
+        result = file.read_future(glib::Priority::DEFAULT) => {
+            result.map_err(|_| GuideServiceError::LocalAccess)?
+        }
+    };
     let mut bytes = Vec::new();
     loop {
         if cancellation.is_cancelled() {
             return Err(GuideServiceError::Cancelled);
         }
-        let part = stream
-            .read_bytes_future(64 * 1024, glib::Priority::DEFAULT)
-            .await
-            .map_err(|_| GuideServiceError::LocalAccess)?;
+        let part = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => return Err(GuideServiceError::Cancelled),
+            result = stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT) => {
+                result.map_err(|_| GuideServiceError::LocalAccess)?
+            }
+        };
         if part.is_empty() {
             break;
         }
