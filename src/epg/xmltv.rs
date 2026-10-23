@@ -190,11 +190,7 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
 }
 
 impl ParseState {
-    fn begin(
-        &mut self,
-        tag: &BytesStart<'_>,
-        max_depth: usize,
-    ) -> Result<(), EpgError> {
+    fn begin(&mut self, tag: &BytesStart<'_>, max_depth: usize) -> Result<(), EpgError> {
         let name = std::str::from_utf8(tag.name().as_ref())
             .map_err(|_| EpgError::InvalidInput)?
             .to_owned();
@@ -277,8 +273,7 @@ impl ParseState {
     fn add_text(&mut self, text: &str) -> Result<(), EpgError> {
         if text.chars().any(|c| {
             let u = c as u32;
-            (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
-                || (0x7f..=0x9f).contains(&u)
+            (u < 0x20 && c != '\n' && c != '\t' && c != '\r') || (0x7f..=0x9f).contains(&u)
         }) {
             return Err(EpgError::InvalidInput);
         }
