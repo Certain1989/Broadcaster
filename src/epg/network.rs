@@ -406,8 +406,9 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
             .get(CONTENT_ENCODING)
             .map(|v| v.to_str().map_err(|_| GuideFetchError::Encoding))
             .transpose()?
-            .unwrap_or("identity");
-        if !matches!(encoding, "identity" | "gzip") {
+            .unwrap_or("identity")
+            .to_owned();
+        if !matches!(encoding.as_str(), "identity" | "gzip") {
             return Err(GuideFetchError::Encoding);
         }
         if response
