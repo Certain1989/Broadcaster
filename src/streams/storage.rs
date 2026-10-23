@@ -876,7 +876,7 @@ fn validate_reference_schema(
 struct TableShape {
     columns: Vec<Vec<rusqlite::types::Value>>,
     foreign_keys: Vec<Vec<rusqlite::types::Value>>,
-    checks: Vec<String>,
+    checks: Vec<Vec<SchemaToken>>,
     indexes: Vec<String>,
 }
 
@@ -920,72 +920,129 @@ fn normalise_sql(sql: &str) -> String {
     out
 }
 
-/// Extract balanced CHECK expressions, keeping quoted literals verbatim.
-/// Whole-statement text comparisons reject harmless SQL formatting variants.
-fn check_clauses(sql: &str) -> StorageResult<Vec<String>> {
+/// SQLite-aware lexer for CHECK extraction. Whitespace and comments are
+/// separators, not enforceable tokens. Literal contents are not normalised.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SchemaToken {
+    Word(String),
+    Literal(String),
+    QuotedIdentifier(String),
+    Symbol(u8),
+}
+
+fn schema_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$') || byte >= 0x80
+}
+
+fn schema_tokens(sql: &str) -> StorageResult<Vec<SchemaToken>> {
     let bytes = sql.as_bytes();
-    let mut clauses = Vec::new();
+    let mut tokens = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'\'' {
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\'' {
-                    if bytes.get(i + 1) == Some(&b'\'') {
+        match bytes[i] {
+            b if b.is_ascii_whitespace() => i += 1,
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                let mut terminated = false;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
                         i += 2;
-                    } else {
-                        i += 1;
+                        terminated = true;
                         break;
                     }
-                } else {
+                    i += 1;
+                }
+                if !terminated {
+                    return Err(StorageError::IncompatibleDatabase);
+                }
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                i += 2;
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
                     i += 1;
                 }
             }
-            continue;
-        }
-        if i + 5 > bytes.len()
-            || !bytes[i..i + 5].eq_ignore_ascii_case(b"check")
-            || (i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
-            || bytes
-                .get(i + 5)
-                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        {
-            i += 1;
-            continue;
-        }
-        let mut start = i + 5;
-        while bytes.get(start).is_some_and(|c| c.is_ascii_whitespace()) {
-            start += 1;
-        }
-        if bytes.get(start) != Some(&b'(') {
-            i += 1;
-            continue;
-        }
-        let mut cursor = start;
-        let mut depth = 0i32;
-        let mut literal = false;
-        loop {
-            match bytes.get(cursor) {
-                Some(b'\'') => {
-                    if literal && bytes.get(cursor + 1) == Some(&b'\'') {
-                        cursor += 1;
+            b'\'' | b'"' | b'\x60' | b'[' => {
+                let start = i;
+                let delimiter = bytes[i];
+                let closing = if delimiter == b'[' { b']' } else { delimiter };
+                i += 1;
+                let mut terminated = false;
+                while i < bytes.len() {
+                    if bytes[i] == closing {
+                        if closing != b']' && bytes.get(i + 1) == Some(&closing) {
+                            i += 2;
+                        } else {
+                            i += 1;
+                            terminated = true;
+                            break;
+                        }
                     } else {
-                        literal = !literal;
+                        i += 1;
                     }
                 }
-                Some(b'(') if !literal => depth += 1,
-                Some(b')') if !literal => {
+                if !terminated {
+                    return Err(StorageError::IncompatibleDatabase);
+                }
+                let contents = sql[start..i].to_owned();
+                tokens.push(if delimiter == b'\'' {
+                    SchemaToken::Literal(contents)
+                } else {
+                    SchemaToken::QuotedIdentifier(contents)
+                });
+            }
+            b if schema_word_byte(b) => {
+                let start = i;
+                while i < bytes.len() && schema_word_byte(bytes[i]) {
+                    i += 1;
+                }
+                tokens.push(SchemaToken::Word(sql[start..i].to_lowercase()));
+            }
+            0 => return Err(StorageError::IncompatibleDatabase),
+            punctuation => {
+                tokens.push(SchemaToken::Symbol(punctuation));
+                i += 1;
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+/// Compare token sequences within balanced, enforceable CHECK expressions.
+/// Comments cannot supply a CHECK keyword, parentheses or expression content.
+/// Separating tokens also prevents whitespace removal from merging identifiers.
+fn check_clauses(sql: &str) -> StorageResult<Vec<Vec<SchemaToken>>> {
+    let tokens = schema_tokens(sql)?;
+    let mut clauses = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if !matches!(&tokens[i], SchemaToken::Word(word) if word == "check") {
+            i += 1;
+            continue;
+        }
+        if !matches!(tokens.get(i + 1), Some(SchemaToken::Symbol(b'('))) {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        let start = i + 2;
+        let mut cursor = start;
+        let mut depth = 1usize;
+        while cursor < tokens.len() {
+            match &tokens[cursor] {
+                SchemaToken::Symbol(b'(') => depth += 1,
+                SchemaToken::Symbol(b')') => {
                     depth -= 1;
                     if depth == 0 {
                         break;
                     }
                 }
-                None => return Err(StorageError::IncompatibleDatabase),
                 _ => {}
             }
             cursor += 1;
         }
-        clauses.push(normalise_sql(&sql[start + 1..cursor]));
+        if depth != 0 {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        clauses.push(tokens[start..cursor].to_vec());
         i = cursor + 1;
     }
     clauses.sort();
@@ -1753,5 +1810,37 @@ mod staged_database_tests {
             Err(StorageError::PermissionDenied)
         );
         assert!(!path.exists());
+    }
+}
+
+
+#[cfg(test)]
+mod schema_check_lexer_tests {
+    use super::check_clauses;
+
+    #[test]
+    fn true_checks_preserve_quoted_literals_and_ignore_spoofed_tokens() {
+        let genuine = "CREATE TABLE probe (\"CHECK (quoted)\" TEXT, \x60CHECK (backtick)\x60 TEXT, [CHECK (bracket)] TEXT, value TEXT CHECK (value != '-- CHECK (fake)' AND value != '/* CHECK (fake) */' AND value != 'it''s (quoted)'))";
+        let authentic = check_clauses(genuine).unwrap();
+        assert_eq!(authentic.len(), 1);
+        let block = genuine.replace("value TEXT CHECK", "value TEXT /* CHECK (0) */ CHECK");
+        let line = genuine.replace("value TEXT CHECK", "value TEXT -- CHECK (0)\n CHECK");
+        assert_eq!(check_clauses(&block).unwrap(), authentic);
+        assert_eq!(check_clauses(&line).unwrap(), authentic);
+        assert!(check_clauses("CREATE TABLE probe (\"CHECK (x)\" TEXT, \x60CHECK (y)\x60 TEXT, [CHECK (z)] TEXT, value TEXT /* CHECK (1) */)").unwrap().is_empty());
+    }
+
+    #[test]
+    fn unterminated_sql_tokens_and_checks_fail_closed() {
+        for malformed in [
+            "CREATE TABLE probe (a TEXT CHECK (a > 0",
+            "CREATE TABLE probe (a TEXT /* CHECK (a > 0)",
+            "CREATE TABLE probe (a TEXT CHECK (a != 'unfinished))",
+            "CREATE TABLE probe (\"unfinished TEXT CHECK (1))",
+            "CREATE TABLE probe (\x60unfinished TEXT CHECK (1))",
+            "CREATE TABLE probe ([unfinished TEXT CHECK (1))",
+        ] {
+            assert!(check_clauses(malformed).is_err(), "{malformed}");
+        }
     }
 }

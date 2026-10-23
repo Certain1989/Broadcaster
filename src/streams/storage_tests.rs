@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Disposable on-disk migration fixtures using the actual published v1 SQL.
-use super::storage::{Storage, APPLICATION_ID, MIGRATION_001, SCHEMA_VERSION};
+use super::storage::{Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, SCHEMA_VERSION};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::PathBuf};
 
@@ -32,8 +32,12 @@ impl Drop for Sandbox {
 }
 
 fn seed_real_v1(path: &PathBuf) {
+    seed_real_v1_with_sql(path, MIGRATION_001);
+}
+
+fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
     let db = Connection::open(path).unwrap();
-    db.execute_batch(MIGRATION_001).unwrap();
+    db.execute_batch(migration).unwrap();
     db.execute(
         "INSERT INTO iptv_sources
          (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -270,4 +274,101 @@ fn spoofed_v1_index_name_refuses_migration_without_modifying_original() {
     assert!(Storage::at(path.clone()).initialize().is_err());
     assert_eq!(fs::read(&path).unwrap(), before);
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+}
+
+
+fn replace_exact_once(sql: &str, expected: &str, replacement: &str) -> String {
+    assert_eq!(sql.matches(expected).count(), 1, "expected one SQL fixture anchor");
+    sql.replacen(expected, replacement, 1)
+}
+
+#[cfg(unix)]
+#[test]
+fn commented_out_v1_or_v2_checks_refuse_without_mutation_or_recovery_files() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let checked_id = "id TEXT NOT NULL PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 64)";
+    for line_comment in [false, true] {
+        let unguarded_id = if line_comment {
+            "id TEXT NOT NULL PRIMARY KEY -- CHECK (length(id) BETWEEN 1 AND 64)\n    "
+        } else {
+            "id TEXT NOT NULL PRIMARY KEY /* CHECK (length(id) BETWEEN 1 AND 64) */"
+        };
+        for spoof_v2 in [false, true] {
+            let dir = Sandbox::new();
+            let path = dir.path();
+            if spoof_v2 {
+                seed_real_v1(&path);
+                let original = format!("CREATE TABLE epg_sources (\n    {checked_id},");
+                let spoof = format!("CREATE TABLE epg_sources (\n    {unguarded_id},");
+                let modified_v2 = replace_exact_once(MIGRATION_002, &original, &spoof);
+                let db = Connection::open(&path).unwrap();
+                db.execute_batch(&modified_v2).unwrap();
+            } else {
+                let original = format!("CREATE TABLE iptv_sources (\n    {checked_id},");
+                let spoof = format!("CREATE TABLE iptv_sources (\n    {unguarded_id},");
+                let modified_v1 = replace_exact_once(MIGRATION_001, &original, &spoof);
+                seed_real_v1_with_sql(&path, &modified_v1);
+            }
+            let before = fs::read(&path).unwrap();
+            let inode = fs::metadata(&path).unwrap().ino();
+            assert!(Storage::at(path.clone()).initialize().is_err());
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+            assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+            let conn = Connection::open(&path).unwrap();
+            let version: i64 = conn
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, if spoof_v2 { 2 } else { 1 });
+            let retained: (String, String, String) = conn
+                .query_row(
+                    "SELECT c.user_agent,c.http_referer,o.display_name_override FROM iptv_channels c JOIN iptv_channel_overrides o ON o.channel_id=c.id WHERE c.id='stream-one'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(retained.0, "Example-Test-UA");
+            assert_eq!(retained.1, "https://invalid.example/");
+            assert_eq!(retained.2, "Owner title");
+            drop(conn);
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn actual_v1_check_with_internal_comment_still_upgrades_and_reopens() {
+    let dir = Sandbox::new();
+    let path = dir.path();
+    let checked = "CHECK (length(id) BETWEEN 1 AND 64)";
+    let decorated = "CHECK (length(id) /* quoted 'CHECK (wrong)' and -- are comments */ BETWEEN 1 AND 64)";
+    let v1 = MIGRATION_001.replacen(checked, decorated, 1);
+    seed_real_v1_with_sql(&path, &v1);
+    let storage = Storage::at(path.clone());
+    storage.initialize().unwrap();
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    let retained: (String, String, String) = conn
+        .query_row(
+            "SELECT c.user_agent,c.http_referer,o.display_name_override FROM iptv_channels c JOIN iptv_channel_overrides o ON o.channel_id=c.id WHERE c.id='stream-one'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(retained.0, "Example-Test-UA");
+    assert_eq!(retained.1, "https://invalid.example/");
+    assert_eq!(retained.2, "Owner title");
+    drop(conn);
+    let backups = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("-v1-recovery-"))
+        .count();
+    assert_eq!(backups, 1);
 }
