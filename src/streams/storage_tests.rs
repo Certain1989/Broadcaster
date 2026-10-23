@@ -3,7 +3,7 @@
 
 //! Disposable on-disk migration fixtures using the actual published v1 SQL.
 use super::storage::{Storage, APPLICATION_ID, MIGRATION_001, SCHEMA_VERSION};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::PathBuf};
 
 struct Sandbox(PathBuf);
