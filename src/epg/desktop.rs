@@ -234,7 +234,7 @@ fn show_source_settings(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(&parent));
+    dialog.present(Some(parent));
 }
 
 fn show_delete_confirmation(
@@ -310,7 +310,7 @@ fn show_delete_confirmation(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(&parent));
+    dialog.present(Some(parent));
 }
 
 fn show_add(
@@ -400,7 +400,7 @@ fn show_add(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(&parent));
+    dialog.present(Some(parent));
 }
 
 pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::GuideServiceError> {
