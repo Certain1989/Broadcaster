@@ -555,7 +555,6 @@ mod tests {
     }
 }
 
-
 // Engineering candidate limits for streaming transport. Production reads must
 // never buffer a multi-gigabyte XMLTV payload in a Vec.
 const CANDIDATE_COMPRESSED: u64 = 256 * 1024 * 1024;
@@ -581,8 +580,11 @@ pub async fn fetch_guide_spooled(
 }
 
 async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
-    mut url: Url, scope: TrustScope, resolver: &R,
-    transport: &T, path: &std::path::Path,
+    mut url: Url,
+    scope: TrustScope,
+    resolver: &R,
+    transport: &T,
+    path: &std::path::Path,
 ) -> Result<bool, GuideFetchError> {
     use tokio::io::AsyncWriteExt;
     for redirects in 0..=3 {
@@ -592,9 +594,12 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             if redirects == 3 || scope == TrustScope::ExplicitLan {
                 return Err(GuideFetchError::RedirectDenied);
             }
-            let location = response.headers().get(LOCATION)
+            let location = response
+                .headers()
+                .get(LOCATION)
                 .ok_or(GuideFetchError::RedirectDenied)?
-                .to_str().map_err(|_| GuideFetchError::RedirectDenied)?;
+                .to_str()
+                .map_err(|_| GuideFetchError::RedirectDenied)?;
             let next = validate_redirect_location(&url, location)?;
             if url.scheme() == "https" && next.scheme() != "https" {
                 return Err(GuideFetchError::RedirectDenied);
@@ -602,23 +607,38 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             url = next;
             continue;
         }
-        if !response.status().is_success() { return Err(GuideFetchError::HttpStatus); }
-        let encoding = response.headers().get(CONTENT_ENCODING)
+        if !response.status().is_success() {
+            return Err(GuideFetchError::HttpStatus);
+        }
+        let encoding = response
+            .headers()
+            .get(CONTENT_ENCODING)
             .map(|v| v.to_str().map_err(|_| GuideFetchError::Encoding))
-            .transpose()?.unwrap_or("identity");
-        if !matches!(encoding, "identity" | "gzip") {
+            .transpose()?
+            .unwrap_or("identity").to_owned();
+        if !matches!(encoding.as_str(), "identity" | "gzip") {
             return Err(GuideFetchError::Encoding);
         }
-        let declared = response.headers().get(CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
-        let preliminary_cap = if encoding == "gzip" { CANDIDATE_COMPRESSED } else { CANDIDATE_PLAIN };
+        let declared = response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let preliminary_cap = if encoding == "gzip" {
+            CANDIDATE_COMPRESSED
+        } else {
+            CANDIDATE_PLAIN
+        };
         if declared.is_some_and(|n| n > preliminary_cap) {
             return Err(GuideFetchError::Oversize);
         }
         // Never overwrite an existing source file or follow symlinks. The
         // caller supplies a random path in its private SQLite data directory.
-        let file = std::fs::OpenOptions::new().write(true).create_new(true)
-            .open(path).map_err(|_| GuideFetchError::Network)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|_| GuideFetchError::Network)?;
         let mut file = tokio::fs::File::from_std(file);
         let mut total = 0_u64;
         let mut header = [0_u8; 2];
@@ -626,18 +646,33 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
         let mut gzip = encoding == "gzip";
         loop {
             let chunk = tokio::time::timeout(Duration::from_secs(30), response.chunk())
-                .await.map_err(|_| GuideFetchError::Timeout)?
+                .await
+                .map_err(|_| GuideFetchError::Timeout)?
                 .map_err(|_| GuideFetchError::Network)?;
-            let Some(chunk) = chunk else { break; };
+            let Some(chunk) = chunk else {
+                break;
+            };
             for &b in chunk.iter().take(2_usize.saturating_sub(header_bytes)) {
                 header[header_bytes] = b;
                 header_bytes += 1;
             }
-            if header_bytes == 2 && header == [0x1f, 0x8b] { gzip = true; }
-            let cap = if gzip { CANDIDATE_COMPRESSED } else { CANDIDATE_PLAIN };
-            total = total.checked_add(chunk.len() as u64).ok_or(GuideFetchError::Oversize)?;
-            if total > cap { return Err(GuideFetchError::Oversize); }
-            file.write_all(&chunk).await.map_err(|_| GuideFetchError::Network)?;
+            if header_bytes == 2 && header == [0x1f, 0x8b] {
+                gzip = true;
+            }
+            let cap = if gzip {
+                CANDIDATE_COMPRESSED
+            } else {
+                CANDIDATE_PLAIN
+            };
+            total = total
+                .checked_add(chunk.len() as u64)
+                .ok_or(GuideFetchError::Oversize)?;
+            if total > cap {
+                return Err(GuideFetchError::Oversize);
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| GuideFetchError::Network)?;
         }
         if total == 0 || (encoding == "gzip" && header != [0x1f, 0x8b]) {
             return Err(GuideFetchError::Encoding);

@@ -404,17 +404,26 @@ impl GlobalGuideManager {
     }
 
     async fn refresh_one(
-        &self, id: &str, source: PrivateGuideSource,
-        transfer: &GuideCancellation, parser_cancel: &Arc<AtomicBool>,
+        &self,
+        id: &str,
+        source: PrivateGuideSource,
+        transfer: &GuideCancellation,
+        parser_cancel: &Arc<AtomicBool>,
     ) -> Result<(), GuideServiceError> {
         // Heavy EPG imports cannot multiply to exhaust the application's RAM.
         // Deny rather than creating an unbounded pending-job queue.
-        let _heavy = self.inner.heavy_imports.clone().try_acquire_owned()
+        let _heavy = self
+            .inner
+            .heavy_imports
+            .clone()
+            .try_acquire_owned()
             .map_err(|_| GuideServiceError::AlreadyRunning)?;
         let path = self.inner.registry.spool_path();
         struct RemoveSpool(std::path::PathBuf);
         impl Drop for RemoveSpool {
-            fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
         }
         let _cleanup = RemoveSpool(path.clone());
         let expected_revision = source.view.updated_at;
@@ -424,10 +433,12 @@ impl GlobalGuideManager {
                 let target = path.clone();
                 crate::utils::tokio(async move {
                     network::fetch_guide_spooled(&locator, trust, &cancellation, &target).await
-                }).await?
+                })
+                .await?
             }
-            SourceOrigin::LocalFile(locator) =>
-                read_local_spooled(&locator, transfer, &path).await?,
+            SourceOrigin::LocalFile(locator) => {
+                read_local_spooled(&locator, transfer, &path).await?
+            }
         };
         self.transition(id, GuideStage::Decoding).await?;
         // Timestamp reflects completed retrieval, never a fabricated future.
@@ -439,22 +450,32 @@ impl GlobalGuideManager {
         let cancelled = parser_cancel.clone();
         crate::utils::tokio(async move {
             tokio::task::spawn_blocking(move || {
-                let file = std::fs::File::open(&path)
-                    .map_err(|_| GuideServiceError::LocalAccess)?;
-                let mut conn = store.connect_private()
+                let file =
+                    std::fs::File::open(&path).map_err(|_| GuideServiceError::LocalAccess)?;
+                let mut conn = store
+                    .connect_private()
                     .map_err(|_| GuideServiceError::Storage)?;
                 import_xmltv(
-                    &mut conn, BufReader::new(file), &source_id, timestamp,
-                    expected_revision, gzip, &cancelled,
-                ).map_err(|error| match error {
+                    &mut conn,
+                    BufReader::new(file),
+                    &source_id,
+                    timestamp,
+                    expected_revision,
+                    gzip,
+                    &cancelled,
+                )
+                .map_err(|error| match error {
                     EpgError::Cancelled => GuideServiceError::Cancelled,
                     EpgError::OverLimit => GuideServiceError::Fetch(GuideFetchError::Oversize),
                     EpgError::Storage => GuideServiceError::Storage,
                     _ => GuideServiceError::InvalidXml,
                 })?;
                 Ok(())
-            }).await.map_err(|_| GuideServiceError::WorkerFailed)?
-        }).await
+            })
+            .await
+            .map_err(|_| GuideServiceError::WorkerFailed)?
+        })
+        .await
     }
 }
 
@@ -477,54 +498,87 @@ async fn local_deadline<T>(
 /// GIO portal grants remain owned by the desktop adapter. A 64 KiB
 /// streaming copy avoids resident-memory growth on plain multi-GB guides.
 async fn read_local_spooled(
-    uri: &str, cancellation: &GuideCancellation, target: &Path,
+    uri: &str,
+    cancellation: &GuideCancellation,
+    target: &Path,
 ) -> Result<bool, GuideServiceError> {
     local_deadline(
         read_local_spooled_inner(uri, cancellation, target),
-        cancellation, 90 * 60,
-    ).await
+        cancellation,
+        90 * 60,
+    )
+    .await
 }
 async fn read_local_spooled_inner(
-    uri: &str, cancellation: &GuideCancellation, target: &Path,
+    uri: &str,
+    cancellation: &GuideCancellation,
+    target: &Path,
 ) -> Result<bool, GuideServiceError> {
     let file = gio::File::for_uri(uri);
     if file.uri_scheme().as_deref() != Some("file") {
         return Err(GuideServiceError::LocalAccess);
     }
     let stream = local_deadline(
-        async { file.read_future(glib::Priority::DEFAULT).await
-            .map_err(|_| GuideServiceError::LocalAccess) },
-        cancellation, 30,
-    ).await?;
+        async {
+            file.read_future(glib::Priority::DEFAULT)
+                .await
+                .map_err(|_| GuideServiceError::LocalAccess)
+        },
+        cancellation,
+        30,
+    )
+    .await?;
     let mut out = std::fs::OpenOptions::new()
-        .write(true).create_new(true).open(target)
+        .write(true)
+        .create_new(true)
+        .open(target)
         .map_err(|_| GuideServiceError::LocalAccess)?;
     let mut total = 0_u64;
     let mut magic = [0_u8; 2];
     let mut prefix = 0_usize;
     let mut gzip = false;
     loop {
-        if cancellation.is_cancelled() { return Err(GuideServiceError::Cancelled); }
+        if cancellation.is_cancelled() {
+            return Err(GuideServiceError::Cancelled);
+        }
         let part = local_deadline(
-            async { stream.read_bytes_future(64 * 1024, glib::Priority::DEFAULT).await
-                .map_err(|_| GuideServiceError::LocalAccess) },
-            cancellation, 30,
-        ).await?;
-        if part.is_empty() { break; }
+            async {
+                stream
+                    .read_bytes_future(64 * 1024, glib::Priority::DEFAULT)
+                    .await
+                    .map_err(|_| GuideServiceError::LocalAccess)
+            },
+            cancellation,
+            30,
+        )
+        .await?;
+        if part.is_empty() {
+            break;
+        }
         for &b in part.as_ref().iter().take(2_usize.saturating_sub(prefix)) {
             magic[prefix] = b;
             prefix += 1;
         }
-        if prefix == 2 && magic == [0x1f, 0x8b] { gzip = true; }
-        total = total.checked_add(part.len() as u64)
+        if prefix == 2 && magic == [0x1f, 0x8b] {
+            gzip = true;
+        }
+        total = total
+            .checked_add(part.len() as u64)
             .ok_or(GuideServiceError::Fetch(GuideFetchError::Oversize))?;
-        let limit = if gzip { 256_u64 * 1024 * 1024 } else { 2_u64 * 1024 * 1024 * 1024 };
+        let limit = if gzip {
+            256_u64 * 1024 * 1024
+        } else {
+            2_u64 * 1024 * 1024 * 1024
+        };
         if total > limit {
             return Err(GuideServiceError::Fetch(GuideFetchError::Oversize));
         }
-        out.write_all(part.as_ref()).map_err(|_| GuideServiceError::LocalAccess)?;
+        out.write_all(part.as_ref())
+            .map_err(|_| GuideServiceError::LocalAccess)?;
     }
-    if total == 0 { return Err(GuideServiceError::InvalidXml); }
+    if total == 0 {
+        return Err(GuideServiceError::InvalidXml);
+    }
     out.flush().map_err(|_| GuideServiceError::LocalAccess)?;
     Ok(gzip)
 }
@@ -797,7 +851,7 @@ mod e2_admission_tests {
                 let mut reply = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n",
                     if declared_oversize {
-                        2_i64 * 1024 * 1024 * 1024 + 1
+                        2_usize * 1024 * 1024 * 1024 + 1
                     } else {
                         body.len()
                     },

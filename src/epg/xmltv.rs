@@ -405,7 +405,11 @@ fn parse_xml_stream<R: BufRead>(
     let mut reader = Reader::from_reader(input);
     reader.config_mut().check_end_names = true;
     let mut b = Vec::new();
-    let mut state = ParseState { max_channels: MAX_CHANNELS, max_programmes: MAX_PROGRAMMES, ..ParseState::default() };
+    let mut state = ParseState {
+        max_channels: MAX_CHANNELS,
+        max_programmes: MAX_PROGRAMMES,
+        ..ParseState::default()
+    };
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(EpgError::Cancelled);
@@ -558,7 +562,6 @@ pub fn parse_timestamp(raw: &str) -> Result<i64, EpgError> {
     Ok(epoch)
 }
 
-
 /// Engineering-only bounded row-streaming envelope. These values are pending
 /// separate numerical-policy acceptance and must not be presented as an E0 change.
 #[derive(Clone, Copy, Debug)]
@@ -596,12 +599,16 @@ struct MeasuredRead<R> {
 }
 impl<R: Read> Read for MeasuredRead<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() { return Ok(0); }
+        if buffer.is_empty() {
+            return Ok(0);
+        }
         let used = self.seen.get();
         let available = self.cap.saturating_sub(used);
         if available == 0 {
             let mut probe = [0_u8; 1];
-            if self.input.read(&mut probe)? == 0 { return Ok(0); }
+            if self.input.read(&mut probe)? == 0 {
+                return Ok(0);
+            }
             self.exceeded.set(true);
             return Err(io::Error::new(io::ErrorKind::InvalidData, "XMLTV capacity"));
         }
@@ -614,7 +621,10 @@ impl<R: Read> Read for MeasuredRead<R> {
             // cannot outrun inspected compressed bytes by an unbounded factor.
             if total > wire.get().saturating_mul(*max_ratio) {
                 self.exceeded.set(true);
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "XMLTV expansion"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "XMLTV expansion",
+                ));
             }
         }
         Ok(n)
@@ -636,40 +646,75 @@ pub fn decode_xmltv_rows<R: BufRead>(
 ) -> Result<StreamedRows, EpgError> {
     use std::{cell::Cell, rc::Rc};
     if !bounded_text(source_id, 64)
-        || limits.compressed_bytes == 0 || limits.compressed_bytes > 256 * 1024 * 1024
-        || limits.expanded_bytes == 0 || limits.expanded_bytes > 2 * 1024 * 1024 * 1024
-        || limits.ratio == 0 || limits.ratio > 200
-        || limits.channels == 0 || limits.channels > 100_000
-        || limits.programmes == 0 || limits.programmes > 5_000_000
-    { return Err(EpgError::InvalidInput); }
+        || limits.compressed_bytes == 0
+        || limits.compressed_bytes > 256 * 1024 * 1024
+        || limits.expanded_bytes == 0
+        || limits.expanded_bytes > 2 * 1024 * 1024 * 1024
+        || limits.ratio == 0
+        || limits.ratio > 200
+        || limits.channels == 0
+        || limits.channels > 100_000
+        || limits.programmes == 0
+        || limits.programmes > 5_000_000
+    {
+        return Err(EpgError::InvalidInput);
+    }
     let wire = Rc::new(Cell::new(0_usize));
     let expanded = Rc::new(Cell::new(0_usize));
     let over = Rc::new(Cell::new(false));
     let input = MeasuredRead {
-        input, seen: wire.clone(), exceeded: over.clone(),
+        input,
+        seen: wire.clone(),
+        exceeded: over.clone(),
         // Plain XML is *not* subject to the compressed-size limit.
-        cap: if gzip { limits.compressed_bytes } else { limits.expanded_bytes },
+        cap: if gzip {
+            limits.compressed_bytes
+        } else {
+            limits.expanded_bytes
+        },
         ratio: None,
     };
     let decoded: Box<dyn Read + '_> = if gzip {
         Box::new(MultiGzDecoder::new(input))
-    } else { Box::new(input) };
+    } else {
+        Box::new(input)
+    };
     let expanded_reader = MeasuredRead {
-        input: decoded, seen: expanded.clone(), exceeded: over.clone(),
+        input: decoded,
+        seen: expanded.clone(),
+        exceeded: over.clone(),
         cap: limits.expanded_bytes,
-        ratio: if gzip { Some((wire.clone(), limits.ratio)) } else { None },
+        ratio: if gzip {
+            Some((wire.clone(), limits.ratio))
+        } else {
+            None
+        },
     };
     let result = parse_xml_stream_rows(
-        BufReader::new(expanded_reader), source_id, retrieved_utc,
-        limits.channels, limits.programmes, cancelled, on_channel, on_programme,
+        BufReader::new(expanded_reader),
+        source_id,
+        retrieved_utc,
+        limits.channels,
+        limits.programmes,
+        cancelled,
+        on_channel,
+        on_programme,
     );
-    if over.get() { Err(EpgError::OverLimit) } else { result }
+    if over.get() {
+        Err(EpgError::OverLimit)
+    } else {
+        result
+    }
 }
 
 fn emit_stream_row<C, P>(
-    state: &mut ParseState, tag: &str, retrieved_utc: i64,
-    counts: &mut StreamedRows, future: &mut bool,
-    on_channel: &mut C, on_programme: &mut P,
+    state: &mut ParseState,
+    tag: &str,
+    retrieved_utc: i64,
+    counts: &mut StreamedRows,
+    future: &mut bool,
+    on_channel: &mut C,
+    on_programme: &mut P,
 ) -> Result<(), EpgError>
 where
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
@@ -697,9 +742,14 @@ where
 // Keep the exact same quick-xml event, timestamp, text and DTD semantics as
 // the snapshot parser. Only the validated-row destination differs.
 fn parse_xml_stream_rows<R, C, P>(
-    input: R, source_id: &str, retrieved_utc: i64,
-    max_channels: usize, max_programmes: usize,
-    cancel: &AtomicBool, mut on_channel: C, mut on_programme: P,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    max_channels: usize,
+    max_programmes: usize,
+    cancel: &AtomicBool,
+    mut on_channel: C,
+    mut on_programme: P,
 ) -> Result<StreamedRows, EpgError>
 where
     R: BufRead,
@@ -709,28 +759,55 @@ where
     let mut reader = Reader::from_reader(input);
     reader.config_mut().check_end_names = true;
     let mut b = Vec::new();
-    let mut state = ParseState { max_channels, max_programmes, ..ParseState::default() };
-    let mut rows = StreamedRows { channels: 0, programmes: 0 };
+    let mut state = ParseState {
+        max_channels,
+        max_programmes,
+        ..ParseState::default()
+    };
+    let mut rows = StreamedRows {
+        channels: 0,
+        programmes: 0,
+    };
     let mut has_future = false;
     loop {
-        if cancel.load(Ordering::Relaxed) { return Err(EpgError::Cancelled); }
-        let event = reader.read_event_into(&mut b).map_err(|_| EpgError::InvalidInput)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
+        let event = reader
+            .read_event_into(&mut b)
+            .map_err(|_| EpgError::InvalidInput)?;
         match event {
             Event::Start(tag) => state.begin(&tag, 64)?,
             Event::Empty(tag) => {
                 let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?.to_owned();
+                    .map_err(|_| EpgError::InvalidInput)?
+                    .to_owned();
                 state.begin(&tag, 64)?;
                 state.end(&name, source_id)?;
-                emit_stream_row(&mut state, &name, retrieved_utc,
-                    &mut rows, &mut has_future, &mut on_channel, &mut on_programme)?;
+                emit_stream_row(
+                    &mut state,
+                    &name,
+                    retrieved_utc,
+                    &mut rows,
+                    &mut has_future,
+                    &mut on_channel,
+                    &mut on_programme,
+                )?;
             }
             Event::End(tag) => {
                 let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?.to_owned();
+                    .map_err(|_| EpgError::InvalidInput)?
+                    .to_owned();
                 state.end(&name, source_id)?;
-                emit_stream_row(&mut state, &name, retrieved_utc,
-                    &mut rows, &mut has_future, &mut on_channel, &mut on_programme)?;
+                emit_stream_row(
+                    &mut state,
+                    &name,
+                    retrieved_utc,
+                    &mut rows,
+                    &mut has_future,
+                    &mut on_channel,
+                    &mut on_programme,
+                )?;
             }
             Event::Text(text) => {
                 let decoded = text.decode().map_err(|_| EpgError::InvalidInput)?;
@@ -743,14 +820,22 @@ where
             Event::GeneralRef(entity) => {
                 let decoded = entity.decode().map_err(|_| EpgError::InvalidInput)?;
                 let replacement = match decoded.as_ref() {
-                    "amp" => '&', "lt" => '<', "gt" => '>', "quot" => '"', "apos" => '\'',
-                    _ => entity.resolve_char_ref().map_err(|_| EpgError::InvalidInput)?
+                    "amp" => '&',
+                    "lt" => '<',
+                    "gt" => '>',
+                    "quot" => '"',
+                    "apos" => '\'',
+                    _ => entity
+                        .resolve_char_ref()
+                        .map_err(|_| EpgError::InvalidInput)?
                         .ok_or(EpgError::InvalidInput)?,
                 };
                 state.add_text(&replacement.to_string())?;
             }
             Event::Decl(decl) => {
-                if state.seen_root { return Err(EpgError::InvalidInput); }
+                if state.seen_root {
+                    return Err(EpgError::InvalidInput);
+                }
                 if let Some(encoding) = decl.encoding() {
                     let encoding = encoding.map_err(|_| EpgError::InvalidInput)?;
                     if !encoding.eq_ignore_ascii_case(b"utf-8") {
@@ -764,8 +849,13 @@ where
         }
         b.clear();
     }
-    if !state.seen_root || !state.tags.is_empty()
-        || rows.channels == 0 || rows.programmes == 0 || !has_future
-    { return Err(EpgError::InvalidSchedule); }
+    if !state.seen_root
+        || !state.tags.is_empty()
+        || rows.channels == 0
+        || rows.programmes == 0
+        || !has_future
+    {
+        return Err(EpgError::InvalidSchedule);
+    }
     Ok(rows)
 }

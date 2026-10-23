@@ -93,7 +93,9 @@ impl Storage {
 
     /// Ephemeral EPG download staging shares the private database directory.
     pub(crate) fn epg_spool_path(&self) -> PathBuf {
-        self.path.parent().expect("database has a parent directory")
+        self.path
+            .parent()
+            .expect("database has a parent directory")
             .join(format!(".epg-{}.part", uuid::Uuid::new_v4()))
     }
 
