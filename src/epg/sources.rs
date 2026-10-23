@@ -153,6 +153,7 @@ impl fmt::Debug for PrivateGuideSource {
             .finish()
     }
 }
+#[derive(Clone)]
 pub struct ConfirmedGuideDeletion {
     id: String,
     updated_at: i64,
