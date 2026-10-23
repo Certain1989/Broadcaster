@@ -585,6 +585,77 @@ mod e2_admission_tests {
     }
 
     #[tokio::test]
+    async fn real_manager_preserves_last_good_after_bad_gzip_ratio_and_wire_quota() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        let (dir, manager) = manager();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let xml = b"<tv><channel id='f'><display-name>Fiction</display-name></channel>\\
+            <programme channel='f' start='20300101000000 +0000' stop='20300101010000 +0000'>\\
+            <title>Original</title></programme></tv>".to_vec();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&xml).unwrap();
+        let mut broken = gzip.finish().unwrap();
+        broken.truncate(3);
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&vec![b' '; 1_000_000]).unwrap();
+        let ratio_bomb = gzip.finish().unwrap();
+        let replies = vec![
+            (xml, false, false),
+            (broken, true, false),
+            (ratio_bomb, true, false),
+            (Vec::new(), false, true),
+        ];
+        let server = tokio::spawn(async move {
+            for (body, gzip, declared_oversize) in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut read = [0u8; 2048];
+                let _ = socket.read(&mut read).await.unwrap();
+                let mut reply = format!(
+                    "HTTP/1.1 200 OK\\r\\nContent-Length: {}\\r\\n{}Connection: close\\r\\n\\r\\n",
+                    if declared_oversize { 16 * 1024 * 1024 + 1 } else { body.len() },
+                    if gzip { "Content-Encoding: gzip\\r\\n" } else { "" }
+                ).into_bytes();
+                reply.extend(body);
+                socket.write_all(&reply).await.unwrap();
+            }
+        });
+        let source = manager.add(
+            "Fixture".into(),
+            SourceOrigin::entered_remote_url(
+                format!("http://127.0.0.1:{port}/guide"),
+                network::TrustScope::ExplicitLan,
+            ).unwrap(),
+        ).await.unwrap();
+        manager.refresh(source.id.clone()).await.unwrap();
+        let good = manager.list().await.unwrap().pop().unwrap();
+        assert!(good.last_success_at.is_some());
+        for _ in 0..2 {
+            assert!(manager.refresh(source.id.clone()).await.is_err());
+            let after = manager.list().await.unwrap().pop().unwrap();
+            assert_eq!(after.last_success_at, good.last_success_at);
+            assert!(after.last_error_code.is_some());
+        }
+        assert!(matches!(
+            manager.refresh(source.id.clone()).await,
+            Err(GuideServiceError::Fetch(GuideFetchError::Oversize))
+        ));
+        let after = manager.list().await.unwrap().pop().unwrap();
+        assert_eq!(after.last_success_at, good.last_success_at);
+        let conn = manager.inner.registry.connect_private().unwrap();
+        let name: String = conn.query_row(
+            "SELECT title FROM epg_programmes WHERE source_id=?1",
+            [&source.id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(name, "Original");
+        server.await.unwrap();
+        drop(conn);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn stale_due_list_cannot_fetch_after_schedule_opt_out() {
         let (dir, manager) = manager();
         let source = sample(&manager).await;
