@@ -46,6 +46,10 @@ jobs:
           df -h .
       - name: Configure application build
         run: meson setup _build -Dprofile=development
+      - name: Show formatter output for review without pushing from CI
+        run: |
+          cargo fmt --all
+          git diff -- src/epg/ingest.rs src/epg/xmltv.rs src/epg/network.rs src/epg/service.rs src/epg/sources.rs src/epg/mod.rs src/streams/storage.rs
       - name: Compile opt-in Rust/SQLite diagnostics
         run: cargo test --locked --release --no-run
       - name: Benchmark fabricated DE-size gzip import into SQLite

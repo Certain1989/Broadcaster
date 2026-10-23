@@ -183,6 +183,9 @@ impl GuideSourceRegistry {
     pub fn new(storage: Storage) -> Self {
         Self { storage }
     }
+    pub(crate) fn spool_path(&self) -> std::path::PathBuf {
+        self.storage.epg_spool_path()
+    }
     pub(crate) fn connect_private(&self) -> Result<rusqlite::Connection, RegistryError> {
         self.storage.connect().map_err(|_| RegistryError::Storage)
     }
