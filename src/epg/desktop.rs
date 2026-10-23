@@ -113,9 +113,10 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     let edit_list = list.clone();
                     let edit_status = status.clone();
                     let edit_parent = parent.clone();
+                    let settings_source = source.clone();
                     configure.connect_clicked(move |_| {
                         show_source_settings(
-                            &edit_parent, edit_service.clone(), source.clone(),
+                            &edit_parent, edit_service.clone(), settings_source.clone(),
                             edit_list.clone(), edit_status.clone()
                         );
                     });
