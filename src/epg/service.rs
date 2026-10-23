@@ -489,3 +489,98 @@ async fn read_local_bounded(
     let gzip = bytes.starts_with(&[0x1f, 0x8b]);
     Ok(GuidePayload { bytes, gzip })
 }
+
+#[cfg(test)]
+mod e2_admission_tests {
+    use super::*;
+    use std::{fs, path::PathBuf};
+    use uuid::Uuid;
+
+    fn manager() -> (PathBuf, GlobalGuideManager) {
+        let dir = std::env::temp_dir().join(format!("epg-admission-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let store = Storage::at(dir.join("db.sqlite3"));
+        store.initialize().unwrap();
+        let manager = GlobalGuideManager {
+            inner: Arc::new(Inner {
+                registry: GuideSourceRegistry::new(store),
+                running: Mutex::new(HashMap::new()),
+                admission: Mutex::new(()),
+            }),
+        };
+        (dir, manager)
+    }
+
+    async fn sample(manager: &GlobalGuideManager) -> GuideSource {
+        // The public trust scope rejects this loopback IP before any dial;
+        // if admission is accidentally allowed, tests see a fetch error
+        // rather than Disabled/NotFound or a silent network request.
+        manager.add(
+            "Race".to_owned(),
+            SourceOrigin::entered_remote_url(
+                "http://127.0.0.1:9999/fabricated".to_owned(),
+                network::TrustScope::Public,
+            ).unwrap(),
+        ).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn disable_and_delete_revoke_queued_new_admissions() {
+        let (dir, manager) = manager();
+        let source = sample(&manager).await;
+        let gate = manager.inner.admission.lock().await;
+        let pending = manager.clone();
+        let id = source.id.clone();
+        let disable = tokio::spawn(async move { pending.set_enabled(id, false).await });
+        tokio::task::yield_now().await;
+        let pending = manager.clone();
+        let id = source.id.clone();
+        let refresh = tokio::spawn(async move { pending.refresh(id).await });
+        drop(gate);
+        disable.await.unwrap().unwrap();
+        assert!(matches!(refresh.await.unwrap(), Err(GuideServiceError::Disabled)));
+        assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
+
+        manager.set_enabled(source.id.clone(), true).await.unwrap();
+        let fresh = manager.list().await.unwrap().into_iter()
+            .find(|s| s.id == source.id).unwrap();
+        let approval = ConfirmedGuideDeletion::after_user_confirmation(&fresh);
+        let gate = manager.inner.admission.lock().await;
+        let pending = manager.clone();
+        let deletion = tokio::spawn(async move { pending.delete_confirmed(approval).await });
+        tokio::task::yield_now().await;
+        let pending = manager.clone();
+        let id = source.id.clone();
+        let refresh = tokio::spawn(async move { pending.refresh(id).await });
+        drop(gate);
+        deletion.await.unwrap().unwrap();
+        assert!(matches!(
+            refresh.await.unwrap(),
+            Err(GuideServiceError::Source(RegistryError::NotFound))
+        ));
+        assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_due_list_cannot_fetch_after_schedule_opt_out() {
+        let (dir, manager) = manager();
+        let source = sample(&manager).await;
+        manager.set_schedule(source.id.clone(), true, 86_400).await.unwrap();
+        assert_eq!(manager.due_ids().await.unwrap(), vec![source.id.clone()]);
+        manager.set_schedule(source.id.clone(), false, 86_400).await.unwrap();
+        assert!(manager.refresh_scheduled(source.id.clone()).await.is_ok());
+        assert_eq!(manager.stage(&source.id).await, GuideStage::Idle);
+        // Manual refresh remains admitted despite schedule opt-out, and
+        // rejects loopback in public scope before attempting any connection.
+        assert!(matches!(
+            manager.refresh(source.id.clone()).await,
+            Err(GuideServiceError::Fetch(GuideFetchError::NetworkScopeDenied))
+        ));
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
