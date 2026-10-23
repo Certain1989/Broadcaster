@@ -190,7 +190,7 @@ fn show_source_settings(
     close.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| { dialog.close(); }
     ));
     let parent = parent.clone();
     save.connect_clicked(glib::clone!(
@@ -232,7 +232,7 @@ fn show_source_settings(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(parent));
+    dialog.present(Some(&parent));
 }
 
 fn show_delete_confirmation(
@@ -258,7 +258,7 @@ fn show_delete_confirmation(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| { dialog.close(); }
     ));
     let parent = parent.clone();
     remove.connect_clicked(glib::clone!(
@@ -306,7 +306,7 @@ fn show_delete_confirmation(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(parent));
+    dialog.present(Some(&parent));
 }
 
 fn show_add(
@@ -343,7 +343,7 @@ fn show_add(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| { dialog.close(); }
     ));
     let parent = parent.clone();
     save.connect_clicked(glib::clone!(
@@ -394,7 +394,7 @@ fn show_add(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(parent));
+    dialog.present(Some(&parent));
 }
 
 pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::GuideServiceError> {
@@ -436,7 +436,7 @@ pub fn show_guide_manager(parent: &gtk::Window) {
         close.connect_clicked(glib::clone!(
             #[weak]
             dialog,
-            move |_| dialog.close()
+            move |_| { dialog.close(); }
         ));
         let svc = service.clone();
         let ls = list.clone();
