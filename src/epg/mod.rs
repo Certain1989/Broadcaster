@@ -4,6 +4,8 @@
 //! Platform-neutral XMLTV programme domain and cached SQLite adapter.
 //! No GTK, networking, file picking or operating-system event loop belongs here.
 pub mod cache;
+#[cfg(test)]
+mod capacity_bench;
 pub mod desktop;
 pub mod model;
 pub mod network;
