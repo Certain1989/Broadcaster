@@ -75,7 +75,7 @@ pub enum SourceKind {
     LocalFile,
     RemoteUrl,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GuideSource {
     pub id: String,
     pub name: String,
@@ -88,6 +88,16 @@ pub struct GuideSource {
     pub last_attempt_at: Option<i64>,
     pub last_success_at: Option<i64>,
     pub last_error_code: Option<&'static str>,
+}
+impl fmt::Debug for GuideSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GuideSource")
+            .field("id", &self.id)
+            .field("name", &"<redacted>")
+            .field("kind", &self.kind)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 /// Private locator descriptor: Debug deliberately cannot reveal a URL token
 /// or local portal path.
