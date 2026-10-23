@@ -517,6 +517,12 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
 /// published v1 migration. Preserve an independently reopenable recovery copy.
 /// This function must only run on a blocking worker, never the GTK thread.
 fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
+    upgrade_existing_v1_with(path, MIGRATION_002, false)
+}
+
+fn upgrade_existing_v1_with(
+    path: &Path, migration_sql: &str, inject_backup_failure: bool,
+) -> StorageResult<()> {
     let parent = path.parent().ok_or(StorageError::InvalidInput)?;
     let name = path.file_name().ok_or(StorageError::InvalidInput)?;
     let backup_path = parent.join(format!(
@@ -535,6 +541,9 @@ fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
     drop(staged_file);
 
     let backup_result = (|| -> StorageResult<()> {
+        if inject_backup_failure {
+            return Err(StorageError::StorageFailure);
+        }
         let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|_| StorageError::StorageFailure)?;
         configure(&source)?;
@@ -579,7 +588,7 @@ fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
     }
     validate_v1_schema_shape(&conn)?;
     validate_integrity(&conn)?;
-    conn.execute_batch(MIGRATION_002).map_err(|_| {
+    conn.execute_batch(migration_sql).map_err(|_| {
         let _ = conn.execute_batch("ROLLBACK");
         StorageError::StorageFailure
     })?;
