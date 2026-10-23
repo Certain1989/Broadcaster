@@ -67,29 +67,41 @@ pub fn decode_xmltv<R: BufRead>(
     {
         return Err(EpgError::InvalidInput);
     }
+    // Cancellation is observed between bounded reads, not during a blocking
+    // adapter read; transport timeouts/abort are the source adapter's duty.
+    let mut input = input;
     let mut wire = Vec::new();
-    let quota = (limits.max_wire_bytes as u64).saturating_add(1);
-    input
-        .take(quota)
-        .read_to_end(&mut wire)
-        .map_err(|_| EpgError::InvalidInput)?;
-    if wire.len() > limits.max_wire_bytes {
-        return Err(EpgError::OverLimit);
+    let mut chunk = [0u8; 8192];
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
+        let remaining = limits.max_wire_bytes - wire.len();
+        let requested = chunk.len().min(remaining + 1);
+        let bytes = input
+            .read(&mut chunk[..requested])
+            .map_err(|_| EpgError::InvalidInput)?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(EpgError::Cancelled);
+        }
+        if bytes == 0 {
+            break;
+        }
+        if bytes > remaining {
+            return Err(EpgError::OverLimit);
+        }
+        wire.extend_from_slice(&chunk[..bytes]);
     }
-    if wire.is_empty() || cancelled.load(Ordering::Relaxed) {
-        return Err(if wire.is_empty() {
-            EpgError::InvalidInput
-        } else {
-            EpgError::Cancelled
-        });
+    if wire.is_empty() {
+        return Err(EpgError::InvalidInput);
     }
-    let decoder: Box<dyn Read> = if gzip {
+    let decoder: Box<dyn Read + '_> = if gzip {
         if !wire.starts_with(&[0x1f, 0x8b]) {
             return Err(EpgError::InvalidInput);
         }
-        Box::new(MultiGzDecoder::new(Cursor::new(wire.clone())))
+        Box::new(MultiGzDecoder::new(Cursor::new(wire.as_slice())))
     } else {
-        Box::new(Cursor::new(wire.clone()))
+        Box::new(Cursor::new(wire.as_slice()))
     };
     let expanded_cap = limits.max_expanded_bytes.min(
         wire.len()
@@ -162,6 +174,8 @@ struct ParseState {
     text_bytes: Vec<usize>,
     seen_root: bool,
     channels: Vec<GuideChannel>,
+    channel_lookup: BTreeMap<String, String>,
+    channel_declarations: usize,
     programmes: Vec<Programme>,
     channel: Option<PendingChannel>,
     programme: Option<PendingProgramme>,
@@ -208,9 +222,10 @@ impl ParseState {
         } else if self.tags.len() == 1 && self.tags[0] == "tv" {
             match name.as_str() {
                 "channel" => {
-                    if self.channels.len() >= MAX_CHANNELS {
+                    if self.channel_declarations >= MAX_CHANNELS {
                         return Err(EpgError::OverLimit);
                     }
+                    self.channel_declarations += 1;
                     let id = a.get("id").cloned().ok_or(EpgError::InvalidInput)?;
                     if !bounded_text(&id, 512) {
                         return Err(EpgError::InvalidInput);
@@ -344,15 +359,13 @@ impl ParseState {
                 channel_id: c.id,
                 display_name: name.trim().into(),
             };
-            if let Some(existing) = self
-                .channels
-                .iter()
-                .find(|a| a.channel_id == row.channel_id)
-            {
-                if existing != &row {
+            if let Some(existing_name) = self.channel_lookup.get(&row.channel_id) {
+                if existing_name != &row.display_name {
                     return Err(EpgError::DuplicateChannel);
                 }
             } else {
+                self.channel_lookup
+                    .insert(row.channel_id.clone(), row.display_name.clone());
                 self.channels.push(row);
             }
         }

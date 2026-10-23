@@ -202,3 +202,62 @@ fn foreign_or_version_zero_database_is_never_upgraded() {
     assert!(Storage::at(path.clone()).initialize().is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
 }
+
+
+#[cfg(unix)]
+#[test]
+fn spoofed_v2_names_cannot_bypass_column_index_or_constraint_validation() {
+    let dir = Sandbox::new();
+    let path = dir.path();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(MIGRATION_001).unwrap();
+    for table in [
+        "epg_sources", "epg_channels", "epg_programmes", "epg_playlist_links",
+        "epg_channel_overrides", "epg_settings", "epg_global_id_aliases",
+    ] {
+        conn.execute_batch(&format!("CREATE TABLE {table} (arbitrary INTEGER)"))
+            .unwrap();
+    }
+    for index in [
+        "idx_epg_aliases_target", "idx_epg_override_guide",
+        "idx_epg_playlist_guide", "idx_epg_programmes_now",
+        "idx_epg_programmes_retention", "idx_epg_programmes_window_stop",
+        "idx_epg_sources_enabled",
+    ] {
+        conn.execute_batch(&format!(
+            "CREATE INDEX {index} ON epg_sources(arbitrary)"
+        )).unwrap();
+    }
+    conn.execute_batch("PRAGMA user_version=2").unwrap();
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+    let fk_violations: Option<String> = conn.query_row(
+        "PRAGMA foreign_key_check", [], |r| r.get(0)
+    ).optional().unwrap();
+    assert_eq!(integrity, "ok");
+    assert!(fk_violations.is_none());
+    drop(conn);
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(Storage::at(path.clone()).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn spoofed_v1_index_name_refuses_migration_without_modifying_original() {
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP INDEX idx_iptv_channels_source_tvgid;
+         CREATE INDEX idx_iptv_channels_source_tvgid ON iptv_channels(source_id);",
+    ).unwrap();
+    drop(conn);
+    let before = fs::read(&path).unwrap();
+    assert!(Storage::at(path.clone()).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+}

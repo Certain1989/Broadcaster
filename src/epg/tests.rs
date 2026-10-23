@@ -35,7 +35,7 @@ fn programme(source: &str, channel: &str, a: i64, b: i64, title: &str) -> Progra
 fn snapshot(source: &str) -> GuideSnapshot {
     GuideSnapshot {
         source_id: source.into(),
-        retrieved_utc: 1_800_000_000,
+        retrieved_utc: 200,
         channels: vec![GuideChannel {
             source_id: source.into(),
             channel_id: "epg.example".into(),
@@ -449,4 +449,184 @@ fn xmltv_calendar_timezone_and_cancel_reject_unqualified_and_impossible() {
         .unwrap_err(),
         EpgError::Cancelled,
     );
+}
+
+#[test]
+fn xmltv_channel_declarations_are_bounded_including_duplicates() {
+    use super::xmltv::{decode_xmltv, ParseLimits};
+    use std::io::Cursor;
+
+    fn fixture(repeats: usize) -> String {
+        let mut xml = String::from("<tv>");
+        for i in 0..9000 {
+            xml.push_str(&format!(
+                "<channel id='ch{i}'><display-name>Test</display-name></channel>"
+            ));
+        }
+        for _ in 0..repeats {
+            xml.push_str("<channel id='ch8999'><display-name>Test</display-name></channel>");
+        }
+        xml.push_str("<programme channel='ch8999' start='20261023100000 +0000' \
+            stop='20261023110000 +0000'><title>Show</title></programme></tv>");
+        xml
+    }
+    let cancelled = AtomicBool::new(false);
+    let at_limit = decode_xmltv(
+        Cursor::new(fixture(1000)), "epg", 0, false, ParseLimits::default(), &cancelled
+    ).unwrap();
+    assert_eq!(at_limit.channels.len(), 9000);
+    assert_eq!(
+        decode_xmltv(
+            Cursor::new(fixture(1001)), "epg", 0, false, ParseLimits::default(), &cancelled
+        ).unwrap_err(),
+        EpgError::OverLimit
+    );
+    let small = "<tv><channel id='x'><display-name>One</display-name></channel>\
+                 <channel id='x'><display-name>Two</display-name></channel>\
+                 <programme channel='x' start='20261023100000 +0000' \
+                 stop='20261023110000 +0000'><title>Show</title></programme></tv>";
+    assert_eq!(
+        decode_xmltv(Cursor::new(small), "epg", 0, false, ParseLimits::default(), &cancelled)
+            .unwrap_err(),
+        EpgError::DuplicateChannel
+    );
+}
+
+#[test]
+fn xmltv_cancellation_during_wire_read_stops_without_draining() {
+    use super::xmltv::{decode_xmltv, ParseLimits};
+    use std::{cell::Cell, io::{BufReader, Read}, rc::Rc};
+
+    struct CancelOnFirstRead<'a> {
+        cancelled: &'a AtomicBool,
+        reads: Rc<Cell<usize>>,
+    }
+    impl Read for CancelOnFirstRead<'_> {
+        fn read(&mut self, dst: &mut [u8]) -> std::io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            dst[..4].copy_from_slice(b"<tv>");
+            self.cancelled.store(true, Ordering::SeqCst);
+            Ok(4)
+        }
+    }
+    let cancelled = AtomicBool::new(false);
+    let reads = Rc::new(Cell::new(0));
+    let input = BufReader::new(CancelOnFirstRead {
+        cancelled: &cancelled,
+        reads: reads.clone(),
+    });
+    assert_eq!(
+        decode_xmltv(input, "guide", 0, false, ParseLimits::default(), &cancelled).unwrap_err(),
+        EpgError::Cancelled
+    );
+    assert_eq!(reads.get(), 1);
+}
+
+#[test]
+fn snapshot_persistence_rejects_all_past_without_touching_last_good() {
+    let mut conn = db();
+    add_source(&conn, "guide");
+    let cancelled = AtomicBool::new(false);
+    replace_guide_snapshot(&mut conn, &snapshot("guide"), &cancelled).unwrap();
+    conn.execute(
+        "INSERT INTO epg_global_id_aliases \
+         (guide_source_id,iptv_tvg_id,guide_channel_id,updated_at) \
+         VALUES ('guide','sample.tvg','epg.example',200)",
+        [],
+    ).unwrap();
+    let mut old = snapshot("guide");
+    old.retrieved_utc = 1_000_000;
+    old.programmes[0].title = "All past".into();
+    assert_eq!(
+        replace_guide_snapshot(&mut conn, &old, &cancelled),
+        Err(EpgError::InvalidSchedule)
+    );
+    let (success, count): (i64, i64) = conn.query_row(
+        "SELECT last_success_at, \
+         (SELECT COUNT(*) FROM epg_programmes WHERE source_id='guide') \
+         FROM epg_sources WHERE id='guide'",
+        [], |r| Ok((r.get(0)?, r.get(1)?))
+    ).unwrap();
+    assert_eq!((success, count), (200, 3));
+    let alias: String = conn.query_row(
+        "SELECT guide_channel_id FROM epg_global_id_aliases \
+         WHERE guide_source_id='guide' AND iptv_tvg_id='sample.tvg'",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(alias, "epg.example");
+}
+
+#[test]
+fn cache_window_membership_and_selected_only_bounds() {
+    let mut conn = db();
+    add_source(&conn, "guide");
+    let cancelled = AtomicBool::new(false);
+    replace_guide_snapshot(&mut conn, &snapshot("guide"), &cancelled).unwrap();
+    conn.execute("INSERT INTO epg_channels \
+        (source_id,channel_id,display_name) VALUES ('guide','empty','Empty')", []).unwrap();
+    let empty = read_guide_window(
+        &conn, "guide", &["empty".into()], 0, 1000, 201, &cancelled
+    ).unwrap();
+    assert!(empty.programmes.is_empty());
+    assert_eq!(empty.coverage, Coverage::NoData);
+    assert_eq!(
+        read_guide_window(&conn, "guide", &["unknown".into()], 0, 1000, 201, &cancelled)
+            .unwrap_err(),
+        EpgError::InvalidInput
+    );
+    let selected = read_guide_window(
+        &conn, "guide", &["empty".into(), "epg.example".into()], 0, 1000, 201, &cancelled
+    ).unwrap();
+    assert_eq!(selected.programmes.len(), 2);
+    assert_eq!(
+        selected.coverage,
+        Coverage::Partial {
+            observed_start_utc: Some(100),
+            observed_stop_utc: Some(87_000)
+        }
+    );
+    conn.execute("INSERT INTO epg_channels \
+        (source_id,channel_id,display_name) VALUES ('guide','unselected','Unselected')", []).unwrap();
+    conn.execute("INSERT INTO epg_programmes \
+        (source_id,channel_id,start_utc,stop_utc,title) \
+        VALUES ('guide','unselected',-100000,-99999,'Unrelated')", []).unwrap();
+    let after = read_guide_window(
+        &conn, "guide", &["epg.example".into()], 0, 1000, 201, &cancelled
+    ).unwrap();
+    assert_eq!(after.coverage, selected.coverage);
+}
+
+#[test]
+fn later_success_wins_out_of_order_and_same_second_refreshes() {
+    let mut conn = db();
+    add_source(&conn, "guide");
+    let cancelled = AtomicBool::new(false);
+    let mut first = snapshot("guide");
+    first.retrieved_utc = 201;
+    replace_guide_snapshot(&mut conn, &first, &cancelled).unwrap();
+    let mut newer = snapshot("guide");
+    newer.retrieved_utc = 202;
+    newer.programmes[0].title = "Newer".into();
+    replace_guide_snapshot(&mut conn, &newer, &cancelled).unwrap();
+    let mut older = snapshot("guide");
+    older.retrieved_utc = 201;
+    older.programmes[0].title = "Older".into();
+    assert_eq!(
+        replace_guide_snapshot(&mut conn, &older, &cancelled),
+        Err(EpgError::InvalidInput)
+    );
+    older.retrieved_utc = 202;
+    assert_eq!(
+        replace_guide_snapshot(&mut conn, &older, &cancelled),
+        Err(EpgError::InvalidInput)
+    );
+    let success: i64 = conn.query_row(
+        "SELECT last_success_at FROM epg_sources WHERE id='guide'", [], |r| r.get(0)
+    ).unwrap();
+    let title: String = conn.query_row(
+        "SELECT title FROM epg_programmes WHERE source_id='guide' AND start_utc=100",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(success, 202);
+    assert_eq!(title, "Newer");
 }

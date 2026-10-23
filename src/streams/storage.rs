@@ -804,7 +804,7 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
-    Ok(())
+    validate_reference_schema(conn, TABLES, false)
 }
 
 fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
@@ -843,7 +843,222 @@ fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
+    validate_reference_schema(conn, TABLES, true)
+}
+
+/// Check structural SQLite invariants against the actual published initializer
+/// and approved v2 SQL. This uses SQLite's parsed schema (columns, keys, FK
+/// actions, index columns/collations and uniqueness) rather than comparing
+/// entire CREATE statements or trusting object names alone.
+fn validate_reference_schema(
+    actual: &Connection,
+    tables: &[&str],
+    include_epg: bool,
+) -> StorageResult<()> {
+    let reference =
+        Connection::open_in_memory().map_err(|_| StorageError::IncompatibleDatabase)?;
+    reference
+        .execute_batch(MIGRATION_001)
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    if include_epg {
+        reference
+            .execute_batch(MIGRATION_002)
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+    }
+    for table in tables {
+        if table_shape(actual, table)? != table_shape(&reference, table)? {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+struct TableShape {
+    columns: Vec<Vec<rusqlite::types::Value>>,
+    foreign_keys: Vec<Vec<rusqlite::types::Value>>,
+    checks: Vec<String>,
+    indexes: Vec<String>,
+}
+
+fn quoted_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+fn pragma_rows(
+    conn: &Connection,
+    statement: &str,
+    count: usize,
+) -> StorageResult<Vec<Vec<rusqlite::types::Value>>> {
+    let mut stmt = conn
+        .prepare(statement)
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let rows = stmt
+        .query_map([], |row| {
+            (0..count)
+                .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| StorageError::IncompatibleDatabase)
+}
+
+/// Normalise whitespace and SQL keyword case, not quoted string literal data.
+fn normalise_sql(sql: &str) -> String {
+    let mut out = String::new();
+    let mut literal = false;
+    for c in sql.chars() {
+        if c == '\'' {
+            literal = !literal;
+            out.push(c);
+        } else if literal {
+            out.push(c);
+        } else if !c.is_whitespace() {
+            out.extend(c.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Extract balanced CHECK expressions, keeping quoted literals verbatim.
+/// Whole-statement text comparisons reject harmless SQL formatting variants.
+fn check_clauses(sql: &str) -> StorageResult<Vec<String>> {
+    let bytes = sql.as_bytes();
+    let mut clauses = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\'' {
+                    if bytes.get(i + 1) == Some(&b'\'') {
+                        i += 2;
+                    } else {
+                        i += 1;
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if i + 5 > bytes.len()
+            || !bytes[i..i + 5].eq_ignore_ascii_case(b"check")
+            || (i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_'))
+            || bytes
+                .get(i + 5)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        {
+            i += 1;
+            continue;
+        }
+        let mut start = i + 5;
+        while bytes.get(start).is_some_and(|c| c.is_ascii_whitespace()) {
+            start += 1;
+        }
+        if bytes.get(start) != Some(&b'(') {
+            i += 1;
+            continue;
+        }
+        let mut cursor = start;
+        let mut depth = 0i32;
+        let mut literal = false;
+        loop {
+            match bytes.get(cursor) {
+                Some(b'\'') => {
+                    if literal && bytes.get(cursor + 1) == Some(&b'\'') {
+                        cursor += 1;
+                    } else {
+                        literal = !literal;
+                    }
+                }
+                Some(b'(') if !literal => depth += 1,
+                Some(b')') if !literal => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                None => return Err(StorageError::IncompatibleDatabase),
+                _ => {}
+            }
+            cursor += 1;
+        }
+        clauses.push(normalise_sql(&sql[start + 1..cursor]));
+        i = cursor + 1;
+    }
+    clauses.sort();
+    Ok(clauses)
+}
+
+fn table_shape(conn: &Connection, table: &str) -> StorageResult<TableShape> {
+    let escaped = quoted_identifier(table);
+    let columns = pragma_rows(conn, &format!("PRAGMA table_xinfo({escaped})"), 7)?;
+    if columns.is_empty() {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    let foreign_keys = pragma_rows(conn, &format!("PRAGMA foreign_key_list({escaped})"), 8)?;
+    let definition: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+            [table],
+            |row| row.get(0),
+        )
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let checks = check_clauses(&definition)?;
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA index_list({escaped})"))
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let listed = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|_| StorageError::IncompatibleDatabase)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let mut indexes = Vec::new();
+    for (name, unique, origin, partial) in listed {
+        let entries = pragma_rows(
+            conn,
+            &format!("PRAGMA index_xinfo({})", quoted_identifier(&name)),
+            6,
+        )?;
+        let predicate = if partial != 0 {
+            let ddl: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='index' AND name=?1",
+                    [&name],
+                    |row| row.get(0),
+                )
+                .map_err(|_| StorageError::IncompatibleDatabase)?;
+            normalise_sql(&ddl)
+                .split_once("where")
+                .map(|(_, clause)| clause.to_owned())
+                .ok_or(StorageError::IncompatibleDatabase)?
+        } else {
+            String::new()
+        };
+        // Automatic index names are SQLite implementation details; compare
+        // their actual key/uniqueness semantics rather than incidental names.
+        let explicit_name = if origin == "c" { name.as_str() } else { "" };
+        indexes.push(format!(
+            "{explicit_name:?}|{unique}|{origin}|{partial}|{entries:?}|{predicate}"
+        ));
+    }
+    indexes.sort();
+    Ok(TableShape {
+        columns,
+        foreign_keys,
+        checks,
+        indexes,
+    })
 }
 
 fn validate_integrity(conn: &Connection) -> StorageResult<()> {

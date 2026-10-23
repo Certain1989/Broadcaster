@@ -105,12 +105,36 @@ pub fn read_guide_window(
         .optional()
         .map_err(db)?;
     let (enabled, last_success_at) = source.ok_or(EpgError::Unavailable)?;
+    // Unknown IDs must not inherit the apparent coverage of unrelated channels.
+    // The aggregate min/max describes selected channels only; it is not proof
+    // that every selected channel or gap has complete listings.
+    let ids_sql = (0..selected.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect::<Vec<_>>()
+        .join(",");
+    let selected_args = std::iter::once(Value::Text(source_id.to_owned()))
+        .chain(selected.iter().cloned().map(Value::Text))
+        .collect::<Vec<_>>();
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM epg_channels WHERE source_id=?1 AND channel_id IN ({ids_sql})"
+    );
+    let count: i64 = conn
+        .query_row(&count_sql, params_from_iter(selected_args.iter()), |r| r.get(0))
+        .map_err(db)?;
+    if count != selected.len() as i64 {
+        return Err(EpgError::InvalidInput);
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
+    let bounds_sql = format!(
+        "SELECT MIN(start_utc), MAX(stop_utc) FROM epg_programmes
+         WHERE source_id=?1 AND channel_id IN ({ids_sql})"
+    );
     let observed: (Option<i64>, Option<i64>) = conn
-        .query_row(
-            "SELECT MIN(start_utc),MAX(stop_utc) FROM epg_programmes WHERE source_id=?1",
-            [source_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .query_row(&bounds_sql, params_from_iter(selected_args.iter()), |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .map_err(db)?;
     let coverage = if enabled == 0 {
         Coverage::Disabled
@@ -219,16 +243,22 @@ pub fn replace_guide_snapshot(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db)?;
-    let exists: Option<i64> = tx
+    let persisted: Option<(i64, Option<i64>)> = tx
         .query_row(
-            "SELECT enabled FROM epg_sources WHERE id=?1",
+            "SELECT enabled,last_success_at FROM epg_sources WHERE id=?1",
             [&snapshot.source_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(db)?;
-    if exists != Some(1) {
+    let (enabled, last_success) = persisted.ok_or(EpgError::Unavailable)?;
+    if enabled != 1 {
         return Err(EpgError::Unavailable);
+    }
+    // A refresh completed out of order must never evict a newer cache. Equal
+    // timestamps are conservatively refused, even for otherwise valid snapshots.
+    if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) {
+        return Err(EpgError::InvalidInput);
     }
     tx.execute(
         "DELETE FROM epg_channels WHERE source_id=?1",

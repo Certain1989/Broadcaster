@@ -133,6 +133,13 @@ pub fn validate_snapshot(snapshot: &GuideSnapshot) -> Result<(), EpgError> {
             return Err(EpgError::InvalidSchedule);
         }
     }
+    if !snapshot
+        .programmes
+        .iter()
+        .any(|programme| programme.stop_utc > snapshot.retrieved_utc)
+    {
+        return Err(EpgError::InvalidSchedule);
+    }
     Ok(())
 }
 
