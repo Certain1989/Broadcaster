@@ -58,3 +58,24 @@ jobs:
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_us_baseline_rejection -- --ignored --nocapture --test-threads=1
           df -h .
+
+      - name: Benchmark streamed DE-sized plain XMLTV
+        timeout-minutes: 12
+        run: |
+          /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_de_plain_streamed_success -- --ignored --nocapture --test-threads=1
+          df -h .
+      - name: Benchmark streamed US-sized gzip XMLTV
+        timeout-minutes: 12
+        run: |
+          /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_us_streamed_success -- --ignored --nocapture --test-threads=1
+          df -h .
+      - name: Benchmark streamed ten-country-shaped gzip XMLTV
+        timeout-minutes: 12
+        run: |
+          /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_combined_gzip_streamed_success -- --ignored --nocapture --test-threads=1
+          df -h .
+      - name: Benchmark streamed ten-country-shaped plain XMLTV
+        timeout-minutes: 12
+        run: |
+          /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_combined_plain_streamed_success -- --ignored --nocapture --test-threads=1
+          df -h .

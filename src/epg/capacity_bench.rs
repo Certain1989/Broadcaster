@@ -6,6 +6,7 @@
 //! Run only in the dedicated, bounded capacity CI workflow.
 use super::{
     cache::replace_guide_snapshot,
+    ingest::import_xmltv,
     model::{EpgError, GuideChannel, GuideSnapshot, Programme},
     xmltv::{decode_xmltv, ParseLimits},
 };
@@ -220,4 +221,83 @@ fn epg_capacity_us_baseline_rejection() {
     assert_eq!((count, title.as_str()), (1, "Previous guide"));
     drop(conn);
     fs::remove_dir_all(dir).unwrap();
+}
+
+
+fn write_plain_fixture(path: &Path, channels: usize, programmes: usize) {
+    let mut writer = BufWriter::new(File::create(path).expect("create plain XMLTV fixture"));
+    fixture(&mut writer, channels, programmes);
+    writer.flush().unwrap();
+}
+
+fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gzip: bool) {
+    let dir = test_directory(scenario);
+    let path = dir.join(if gzip { "fixture.xml.gz" } else { "fixture.xml" });
+    let start = Instant::now();
+    if gzip {
+        write_gzip_fixture(&path, channels, programmes);
+    } else {
+        write_plain_fixture(&path, channels, programmes);
+    }
+    println!(
+        "EPG_CAPACITY scenario={scenario} fixture_channels={channels} \
+         fixture_programmes={programmes} gzip={gzip} input_bytes={} generator_ms={}",
+        file_bytes(&path),
+        start.elapsed().as_millis()
+    );
+    let mut conn = disk_db(&dir);
+    let cancelled = AtomicBool::new(false);
+    let start = Instant::now();
+    let rows = import_xmltv(
+        &mut conn,
+        BufReader::new(File::open(&path).unwrap()),
+        "fixture",
+        0, 1, gzip, &cancelled,
+    ).expect("complete streaming XMLTV import must succeed");
+    assert_eq!(rows.channels, channels);
+    assert_eq!(rows.programmes, programmes);
+    let persisted: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(persisted as usize, programmes);
+    report(scenario, "streamed_sqlite_committed", start.elapsed().as_millis(), &dir);
+    drop(conn);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "bounded opt-in release importer benchmark; fabricated XMLTV only"]
+fn epg_capacity_de_plain_streamed_success() {
+    streamed_capacity_case("de-plain", 2_000, 100_000, false);
+}
+
+#[test]
+#[ignore = "bounded opt-in release importer benchmark; fabricated XMLTV only"]
+fn epg_capacity_us_streamed_success() {
+    streamed_capacity_case("us-stream", 12_511, 1_158_755, true);
+}
+
+#[test]
+#[ignore = "bounded opt-in release importer benchmark; fabricated XMLTV only"]
+fn epg_capacity_combined_gzip_streamed_success() {
+    streamed_capacity_case("combined-gzip", 16_796, 1_886_110, true);
+}
+
+#[test]
+#[ignore = "bounded opt-in release importer benchmark; fabricated XMLTV only"]
+fn epg_capacity_combined_plain_streamed_success() {
+    streamed_capacity_case("combined-plain", 16_796, 1_886_110, false);
+}
+
+#[test]
+#[ignore = "manual growth scenario only; verify disk/time admission before invoking"]
+fn epg_capacity_growth_3m_manual() {
+    streamed_capacity_case("growth-3m", 17_000, 3_000_000, true);
+}
+
+#[test]
+#[ignore = "manual near-ceiling scenario only; never run on an undersized shared runner"]
+fn epg_capacity_near_ceiling_5m_manual() {
+    streamed_capacity_case("near-5m", 100_000, 5_000_000, true);
 }
