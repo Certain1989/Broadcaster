@@ -5,7 +5,7 @@
 //! external HTTP requests or real subscriptions are used.
 use super::network::{
     fetch_guide, fetch_guide_with, GuideCancellation, GuideFetchError, GuideResolver,
-    GuideTransport, TrustScope,
+    GuideTransport, ReqwestGuideTransport, TrustScope,
 };
 use reqwest::{redirect::Policy, Client, Response, Url};
 use std::{
@@ -203,4 +203,69 @@ async fn cancellation_aborts_body_stall_instead_of_waiting_for_timeout() {
         .unwrap();
     assert!(matches!(result, Err(GuideFetchError::Cancelled)));
     task.abort();
+}
+
+struct PinnedLoopbackResolver {
+    port: u16,
+}
+impl GuideResolver for PinnedLoopbackResolver {
+    async fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, GuideFetchError> {
+        assert_eq!(host, "epg-peer-test.invalid");
+        assert_eq!(port, self.port);
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], self.port))])
+    }
+}
+
+#[tokio::test]
+async fn production_reqwest_transport_reaches_only_pinned_peer_and_keeps_http_host() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = vec![0u8; 4096];
+        let read = socket.read(&mut request).await.unwrap();
+        let text = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
+        assert!(text.contains(&format!("host: epg-peer-test.invalid:{port}")));
+        for forbidden in ["authorization:", "cookie:", "referer:", "x-iptv", "proxy-authorization:"] {
+            assert!(!text.contains(forbidden), "{forbidden}");
+        }
+        socket.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nTEST"
+        ).await.unwrap();
+    });
+    // Unlike ReplyTransport, this uses the supplied production reqwest Client:
+    // DNS resolves to the test peer while the URL/Host remains a distinct name.
+    let payload = fetch_guide_with(
+        &format!("http://epg-peer-test.invalid:{port}/xmltv"),
+        TrustScope::ExplicitLan,
+        &GuideCancellation::new(),
+        &PinnedLoopbackResolver { port },
+        &ReqwestGuideTransport,
+    ).await.unwrap();
+    assert_eq!(payload.bytes, b"TEST");
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn actual_reqwest_client_refuses_mixed_dns_without_connecting() {
+    struct Mixed;
+    impl GuideResolver for Mixed {
+        async fn resolve(&self, _: &str, port: u16) -> Result<Vec<SocketAddr>, GuideFetchError> {
+            Ok(vec![
+                SocketAddr::from(([127, 0, 0, 1], port)),
+                SocketAddr::from(([8, 8, 8, 8], port)),
+            ])
+        }
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let err = fetch_guide_with(
+        &format!("http://epg-peer-test.invalid:{port}/xmltv"),
+        TrustScope::ExplicitLan,
+        &GuideCancellation::new(),
+        &Mixed,
+        &ReqwestGuideTransport,
+    ).await;
+    assert!(matches!(err, Err(GuideFetchError::NetworkScopeDenied)));
+    assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
 }
