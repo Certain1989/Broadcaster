@@ -6,6 +6,7 @@
 pub mod cache;
 pub mod model;
 pub mod network;
+pub mod sources;
 #[cfg(test)]
 mod tests;
 pub mod xmltv;
