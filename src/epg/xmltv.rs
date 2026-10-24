@@ -861,10 +861,7 @@ where
             if let Some(row) = state.programmes.pop() {
                 counts.programmes += 1;
                 *future |= row.stop_utc > retrieved_utc;
-                on_programme(
-                    row,
-                    std::mem::take(&mut state.last_programme_truncation),
-                )?;
+                on_programme(row, std::mem::take(&mut state.last_programme_truncation))?;
             }
         }
         _ => {}
@@ -1124,7 +1121,10 @@ mod formatted_xmltv_regression {
         assert_eq!(p.channel_id, "identity");
         assert_eq!(p.stop_utc - p.start_utc, 3600);
         assert_eq!(p.title, "T".repeat(511));
-        assert_eq!(p.subtitle.as_deref(), Some(format!("{}é", "S".repeat(510)).as_str()));
+        assert_eq!(
+            p.subtitle.as_deref(),
+            Some(format!("{}é", "S".repeat(510)).as_str())
+        );
         assert_eq!(stats.truncated_channel_names, 1);
         assert_eq!(stats.truncated_titles, 1);
         assert_eq!(stats.truncated_subtitles, 1);
@@ -1155,11 +1155,13 @@ mod formatted_xmltv_regression {
 
     #[test]
     fn invalid_xml_entities_controls_and_doctype_stay_rejected() {
-        let base = |title: &str| format!(
-            "<tv><channel id='c'><display-name>C</display-name></channel>\
+        let base = |title: &str| {
+            format!(
+                "<tv><channel id='c'><display-name>C</display-name></channel>\
              <programme channel='c' start='20300101000000 +0000'\
              stop='20300101010000 +0000'><title>{title}</title></programme></tv>"
-        );
+            )
+        };
         for xml in [
             base("A&#x1;B"),
             base("A&#xGG;B"),
@@ -1167,10 +1169,16 @@ mod formatted_xmltv_regression {
             base("A<![CDATA[unterminated"),
         ] {
             assert!(decode_xmltv_rows(
-                Cursor::new(xml.as_bytes()), "synthetic", 0, false,
-                StreamingLimits::candidate(), &AtomicBool::new(false),
-                |_| Ok(()), |_, _| Ok(()),
-            ).is_err());
+                Cursor::new(xml.as_bytes()),
+                "synthetic",
+                0,
+                false,
+                StreamingLimits::candidate(),
+                &AtomicBool::new(false),
+                |_| Ok(()),
+                |_, _| Ok(()),
+            )
+            .is_err());
         }
     }
 
