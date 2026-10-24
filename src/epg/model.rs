@@ -52,10 +52,37 @@ pub struct NowNext {
     pub progress_fraction: Option<f64>,
 }
 
+/// Static user-safe capacity reason; never put source or XML content here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitKind {
+    Wire, Expanded, Ratio, Attributes, Depth, Channels, Programmes,
+    XmlText, ChannelName, Title, Subtitle, Description, Database, Duration,
+}
+impl LimitKind {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Wire => "oversize_wire",
+            Self::Expanded => "oversize_expanded",
+            Self::Ratio => "oversize_ratio",
+            Self::Attributes => "oversize_attributes",
+            Self::Depth => "oversize_depth",
+            Self::Channels => "oversize_channels",
+            Self::Programmes => "oversize_programmes",
+            Self::XmlText => "oversize_xml_text",
+            Self::ChannelName => "oversize_channel_name",
+            Self::Title => "oversize_title",
+            Self::Subtitle => "oversize_subtitle",
+            Self::Description => "oversize_description",
+            Self::Database => "oversize_database",
+            Self::Duration => "oversize_duration",
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpgError {
     InvalidInput,
     OverLimit,
+    Capacity(LimitKind),
     DuplicateChannel,
     MissingChannel,
     InvalidSchedule,
@@ -69,7 +96,7 @@ impl std::fmt::Display for EpgError {
         // Do not include private guide URLs, programme text, or SQL errors.
         f.write_str(match self {
             Self::InvalidInput => "Invalid EPG input",
-            Self::OverLimit => "EPG input exceeded a safety limit",
+            Self::OverLimit | Self::Capacity(_) => "EPG input exceeded a safety limit",
             Self::DuplicateChannel => "Inconsistent guide channel declaration",
             Self::MissingChannel => "Programme channel is not declared in its guide",
             Self::InvalidSchedule => "The guide has no valid programme schedule",

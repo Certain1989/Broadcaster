@@ -5,7 +5,7 @@
 //! hints, stream headers, Live programmes or view repaint/focus events.
 use super::{
     ingest::import_xmltv,
-    model::EpgError,
+    model::{EpgError, LimitKind},
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
         ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource,
@@ -49,6 +49,7 @@ pub enum GuideServiceError {
     Source(RegistryError),
     Fetch(GuideFetchError),
     InvalidXml,
+    Capacity(LimitKind),
     Storage,
     Disabled,
     AlreadyRunning,
@@ -62,6 +63,7 @@ impl fmt::Display for GuideServiceError {
             Self::Source(error) => return write!(f, "{error}"),
             Self::Fetch(error) => return write!(f, "{error}"),
             Self::InvalidXml => "invalid_xml",
+            Self::Capacity(kind) => return f.write_str(kind.code()),
             Self::Storage => "storage_failed",
             Self::Disabled => "source_disabled",
             Self::AlreadyRunning => "refresh_in_progress",
@@ -384,6 +386,7 @@ impl GlobalGuideManager {
             let error_code = match error {
                 GuideServiceError::Fetch(error) => error.code(),
                 GuideServiceError::InvalidXml => "invalid_xml",
+                GuideServiceError::Capacity(kind) => kind.code(),
                 GuideServiceError::Storage => "storage_failed",
                 GuideServiceError::LocalAccess => "local_access",
                 GuideServiceError::Cancelled => "cancelled",
@@ -467,6 +470,7 @@ impl GlobalGuideManager {
                 .map_err(|error| match error {
                     EpgError::Cancelled => GuideServiceError::Cancelled,
                     EpgError::OverLimit => GuideServiceError::Fetch(GuideFetchError::Oversize),
+                    EpgError::Capacity(kind) => GuideServiceError::Capacity(kind),
                     EpgError::Storage => GuideServiceError::Storage,
                     _ => GuideServiceError::InvalidXml,
                 })?;

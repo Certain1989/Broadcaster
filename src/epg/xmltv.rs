@@ -877,7 +877,7 @@ where
 
 #[cfg(test)]
 mod formatted_xmltv_regression {
-    use super::{decode_xmltv_rows, StreamingLimits};
+    use super::{decode_xmltv_rows, EpgError, LimitKind, StreamingLimits};
     use std::{fmt::Write as _, io::Cursor, sync::atomic::AtomicBool};
 
     /// Mirrors ordinary indented XMLTV with roughly 75,000 programmes.
@@ -925,8 +925,28 @@ mod formatted_xmltv_regression {
     }
 
     #[test]
+    fn overlong_xmltv_description_has_a_precise_safe_capacity_reason() {
+        let xml = format!(
+            "<tv><channel id='c'><display-name>Channel</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>Programme</title>\
+             <desc>{}</desc></programme></tv>",
+            "d".repeat(2049),
+        );
+        let cancelled = AtomicBool::new(false);
+        let result = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
+            StreamingLimits::candidate(), &cancelled, |_| Ok(()), |_| Ok(()),
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            EpgError::Capacity(LimitKind::Description)
+        );
+        assert_eq!(LimitKind::Description.code(), "oversize_description");
+    }
+
+    #[test]
     fn oversized_actual_leaf_text_is_still_rejected() {
-        use super::super::model::EpgError;
         let mut xml = String::from("<tv><channel id='de'><display-name>");
         xml.push_str(&"X".repeat(1_048_577));
         xml.push_str("</display-name></channel></tv>");

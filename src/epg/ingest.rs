@@ -5,7 +5,7 @@
 //! Runs only on a blocking worker. A failed parse or cancelled import rolls
 //! back all changes, retaining the prior complete guide for offline readers.
 use super::{
-    model::EpgError,
+    model::{EpgError, LimitKind},
     xmltv::{decode_xmltv_rows, StreamedRows, StreamingLimits},
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -74,7 +74,7 @@ pub fn import_xmltv<R: BufRead>(
             return Err(EpgError::Cancelled);
         }
         if started.elapsed() >= MAX_OPERATION {
-            return Err(EpgError::OverLimit);
+            return Err(EpgError::Capacity(LimitKind::Duration));
         }
         if !database.is_empty() {
             let db = std::fs::metadata(&database).map(|m| m.len()).unwrap_or(0);
@@ -82,7 +82,7 @@ pub fn import_xmltv<R: BufRead>(
                 .map(|m| m.len())
                 .unwrap_or(0);
             if db.saturating_add(wal) > MAX_DATABASE_AND_WAL {
-                return Err(EpgError::OverLimit);
+                return Err(EpgError::Capacity(LimitKind::Database));
             }
         }
         Ok(())
