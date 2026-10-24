@@ -245,7 +245,7 @@ fn confirm_shared_guide(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| { dialog.close(); }
     ));
     let parent = parent.clone();
     confirm.connect_clicked(glib::clone!(
@@ -286,7 +286,7 @@ fn confirm_shared_guide(
         }
     ));
     dialog.set_child(Some(&body));
-    dialog.present(Some(parent));
+    dialog.present(Some(&parent));
 }
 
 fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window) {
