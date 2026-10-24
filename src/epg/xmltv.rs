@@ -3,7 +3,9 @@
 
 //! Portable, bounded XMLTV parsing. Input streams and trust decisions are
 //! supplied by separate platform/network/file adapters. XML never performs I/O.
-use super::model::{bounded_text, EpgError, GuideChannel, GuideSnapshot, Programme};
+use super::model::{
+    bounded_text, EpgError, GuideChannel, GuideSnapshot, LimitKind, Programme,
+};
 use flate2::read::MultiGzDecoder;
 use quick_xml::{
     events::{BytesStart, Event},
@@ -124,7 +126,10 @@ pub fn decode_xmltv<R: BufRead>(
     if exceeded.load(Ordering::Relaxed) {
         return Err(EpgError::OverLimit);
     }
-    result
+    result.map_err(|error| match error {
+        EpgError::Capacity(_) => EpgError::OverLimit,
+        other => other,
+    })
 }
 
 /// Detects over-cap data rather than synthesizing EOF at exactly the quota.
@@ -190,7 +195,7 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
     for item in tag.attributes().with_checks(true) {
         let item = item.map_err(|_| EpgError::InvalidInput)?;
         if attributes.len() >= 32 {
-            return Err(EpgError::OverLimit);
+            return Err(EpgError::Capacity(LimitKind::Attributes));
         }
         let key = std::str::from_utf8(item.key.as_ref()).map_err(|_| EpgError::InvalidInput)?;
         let value = item.unescape_value().map_err(|_| EpgError::InvalidInput)?;
@@ -198,7 +203,7 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
             return Err(EpgError::InvalidInput);
         }
         if key.len() > 512 || value.len() > MAX_ELEMENT_TEXT {
-            return Err(EpgError::OverLimit);
+            return Err(EpgError::Capacity(LimitKind::Attributes));
         }
         attributes.insert(key.to_owned(), value.into_owned());
     }
@@ -225,7 +230,7 @@ impl ParseState {
             match name.as_str() {
                 "channel" => {
                     if self.channel_declarations >= self.max_channels {
-                        return Err(EpgError::OverLimit);
+                        return Err(EpgError::Capacity(LimitKind::Channels));
                     }
                     self.channel_declarations += 1;
                     let id = a.get("id").cloned().ok_or(EpgError::InvalidInput)?;
@@ -240,7 +245,7 @@ impl ParseState {
                 "programme" => {
                     self.programme_count += 1;
                     if self.programme_count > self.max_programmes {
-                        return Err(EpgError::OverLimit);
+                        return Err(EpgError::Capacity(LimitKind::Programmes));
                     }
                     self.programme = Some(PendingProgramme {
                         channel: a.get("channel").cloned().unwrap_or_default(),
@@ -282,7 +287,7 @@ impl ParseState {
         self.tags.push(name);
         self.text_bytes.push(0);
         if self.tags.len() > max_depth {
-            return Err(EpgError::OverLimit);
+            return Err(EpgError::Capacity(LimitKind::Depth));
         }
         Ok(())
     }
@@ -309,9 +314,11 @@ impl ParseState {
             return Ok(());
         }
         let used = self.text_bytes.last_mut().ok_or(EpgError::InvalidInput)?;
-        *used = used.checked_add(text.len()).ok_or(EpgError::OverLimit)?;
+        *used = used
+            .checked_add(text.len())
+            .ok_or(EpgError::Capacity(LimitKind::XmlText))?;
         if *used > MAX_ELEMENT_TEXT {
-            return Err(EpgError::OverLimit);
+            return Err(EpgError::Capacity(LimitKind::XmlText));
         }
         if self.tags.len() != 3
             || self.tags[0] != "tv"
@@ -324,7 +331,7 @@ impl ParseState {
                 if let Some(name) = self.channel.as_mut().and_then(|c| c.display_name.as_mut()) {
                     name.push_str(text);
                     if name.len() > 512 {
-                        return Err(EpgError::OverLimit);
+                        return Err(EpgError::Capacity(LimitKind::ChannelName));
                     }
                 }
             }
@@ -339,7 +346,13 @@ impl ParseState {
                     if let Some(value) = value {
                         value.push_str(text);
                         if value.len() > max {
-                            return Err(EpgError::OverLimit);
+                            let reason = match field {
+                                "title" => LimitKind::Title,
+                                "sub-title" => LimitKind::Subtitle,
+                                "desc" => LimitKind::Description,
+                                _ => LimitKind::XmlText,
+                            };
+                            return Err(EpgError::Capacity(reason));
                         }
                     }
                 }
@@ -600,7 +613,8 @@ pub struct StreamedRows {
 struct MeasuredRead<R> {
     input: R,
     seen: std::rc::Rc<std::cell::Cell<usize>>,
-    exceeded: std::rc::Rc<std::cell::Cell<bool>>,
+    exceeded: std::rc::Rc<std::cell::Cell<Option<LimitKind>>>,
+    cap_kind: LimitKind,
     cap: usize,
     ratio: Option<(std::rc::Rc<std::cell::Cell<usize>>, usize)>,
 }
@@ -616,7 +630,7 @@ impl<R: Read> Read for MeasuredRead<R> {
             if self.input.read(&mut probe)? == 0 {
                 return Ok(0);
             }
-            self.exceeded.set(true);
+            self.exceeded.set(Some(self.cap_kind));
             return Err(io::Error::new(io::ErrorKind::InvalidData, "XMLTV capacity"));
         }
         let requested = buffer.len().min(available);
@@ -627,7 +641,7 @@ impl<R: Read> Read for MeasuredRead<R> {
             // Check on every decoder read, not merely at EOF. Decoded bytes
             // cannot outrun inspected compressed bytes by an unbounded factor.
             if total > wire.get().saturating_mul(*max_ratio) {
-                self.exceeded.set(true);
+                self.exceeded.set(Some(LimitKind::Ratio));
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "XMLTV expansion",
@@ -672,7 +686,7 @@ pub fn decode_xmltv_rows<R: BufRead>(
     }
     let wire = Rc::new(Cell::new(0_usize));
     let expanded = Rc::new(Cell::new(0_usize));
-    let over = Rc::new(Cell::new(false));
+    let over = Rc::new(Cell::new(None::<LimitKind>));
     let input = MeasuredRead {
         input,
         seen: wire.clone(),
@@ -684,6 +698,11 @@ pub fn decode_xmltv_rows<R: BufRead>(
             limits.expanded_bytes
         },
         ratio: None,
+        cap_kind: if gzip {
+            LimitKind::Wire
+        } else {
+            LimitKind::Expanded
+        },
     };
     let decoded: Box<dyn Read + '_> = if gzip {
         Box::new(MultiGzDecoder::new(input))
@@ -695,6 +714,7 @@ pub fn decode_xmltv_rows<R: BufRead>(
         seen: expanded.clone(),
         exceeded: over.clone(),
         cap: limits.expanded_bytes,
+        cap_kind: LimitKind::Expanded,
         ratio: if gzip {
             Some((wire.clone(), limits.ratio))
         } else {
@@ -711,8 +731,8 @@ pub fn decode_xmltv_rows<R: BufRead>(
         on_channel,
         on_programme,
     );
-    if over.get() {
-        Err(EpgError::OverLimit)
+    if let Some(reason) = over.get() {
+        Err(EpgError::Capacity(reason))
     } else {
         result
     }
@@ -967,6 +987,6 @@ mod formatted_xmltv_regression {
             |_| Ok(()),
             |_| Ok(()),
         );
-        assert_eq!(outcome.unwrap_err(), EpgError::OverLimit);
+        assert_eq!(outcome.unwrap_err(), EpgError::Capacity(LimitKind::XmlText));
     }
 }
