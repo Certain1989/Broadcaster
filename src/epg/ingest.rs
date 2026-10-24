@@ -231,8 +231,6 @@ pub fn import_xmltv<R: BufRead>(
     )
     .map_err(storage_error)?;
     check_budget()?;
-    #[cfg(test)]
-    super::capacity_bench::capture_o01_temp(&tx).map_err(storage_error)?;
     tx.execute_batch("DROP TABLE temp.epg_import_truncated_keys;")
         .map_err(storage_error)?;
     tx.commit().map_err(storage_error)?;
