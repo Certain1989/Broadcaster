@@ -42,8 +42,14 @@ fn guide_problem(code: &str) -> String {
         }
         "oversize_database" => gettext("The guide exceeds the database storage limit."),
         "oversize_duration" => gettext("The guide import took too long."),
-        "oversize_title" | "oversize_subtitle" | "oversize_channel_name" => {
-            gettext("A programme title or channel name exceeds the safety limit.")
+        "oversize_title" => {
+            gettext("A programme title in this guide exceeds the 512-byte limit.")
+        }
+        "oversize_subtitle" => {
+            gettext("A programme subtitle in this guide exceeds the 512-byte limit.")
+        }
+        "oversize_channel_name" => {
+            gettext("A channel display name in this guide exceeds the 512-byte limit.")
         }
         "oversize_depth"
         | "oversize_attributes"
@@ -153,11 +159,17 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     caption.set_wrap(true);
                     row.append(&caption);
                     if let Some(code) = source.last_error_code {
-                        row.append(&gtk::Label::new(Some(&format!(
+                        let failure = gtk::Label::new(Some(&format!(
                             "{}: {}",
                             gettext("Last refresh failed"),
                             guide_problem(code)
-                        ))));
+                        )));
+                        failure.set_xalign(0.0);
+                        failure.set_wrap(true);
+                        failure.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                        failure.set_max_width_chars(48);
+                        failure.set_hexpand(true);
+                        row.append(&failure);
                     }
                     if source.last_success_at.is_some() {
                         let count = service.truncated_descriptions(&source.id).await;
