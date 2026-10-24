@@ -995,8 +995,12 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |p| { descriptions.push(p.description); Ok(()) },
-        ).unwrap();
+            |p| {
+                descriptions.push(p.description);
+                Ok(())
+            },
+        )
+        .unwrap();
         assert_eq!(result.programmes, 2);
         assert_eq!(result.truncated_descriptions, 1);
         assert_eq!(descriptions[0].as_deref(), Some("x".repeat(2047).as_str()));
@@ -1014,10 +1018,19 @@ mod formatted_xmltv_regression {
         let cancelled = AtomicBool::new(false);
         let mut descriptions = Vec::new();
         let rows = decode_xmltv_rows(
-            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
-            StreamingLimits::candidate(), &cancelled, |_| Ok(()),
-            |p| { descriptions.push(p.description); Ok(()) },
-        ).unwrap();
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &cancelled,
+            |_| Ok(()),
+            |p| {
+                descriptions.push(p.description);
+                Ok(())
+            },
+        )
+        .unwrap();
         assert_eq!(rows.truncated_descriptions, 0);
         assert_eq!(descriptions[0].as_ref().unwrap().len(), 2048);
     }
@@ -1032,9 +1045,16 @@ mod formatted_xmltv_regression {
         );
         let cancelled = AtomicBool::new(false);
         let error = decode_xmltv_rows(
-            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
-            StreamingLimits::candidate(), &cancelled, |_| Ok(()), |_| Ok(()),
-        ).unwrap_err();
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &cancelled,
+            |_| Ok(()),
+            |_| Ok(()),
+        )
+        .unwrap_err();
         assert_eq!(error, EpgError::Capacity(LimitKind::XmlText));
     }
 
