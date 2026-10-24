@@ -1565,7 +1565,6 @@ mod tests {
         assert_eq!(count, 0, "TEMP state must be absent after import");
     }
 
-
     // Small fabricated guides. This count represents later duplicate entries
     // that disagree with retained metadata, not distinct programme identities.
     fn assert_optional_duplicate_case(
@@ -1619,7 +1618,10 @@ mod tests {
     #[test]
     fn optional_metadata_conflicts_are_fieldwise_and_order_invariant() {
         assert_optional_duplicate_case(
-            &[(Some("Equal"), Some("Equal")), (Some("Equal"), Some("Equal"))],
+            &[
+                (Some("Equal"), Some("Equal")),
+                (Some("Equal"), Some("Equal")),
+            ],
             Some("Equal"),
             Some("Equal"),
             0,
@@ -1655,13 +1657,21 @@ mod tests {
     #[test]
     fn conflicting_optional_fields_remain_cleared_after_three_and_four_entries() {
         assert_optional_duplicate_case(
-            &[(Some("A"), Some("Equal")), (Some("B"), Some("Equal")), (Some("A"), Some("Equal"))],
+            &[
+                (Some("A"), Some("Equal")),
+                (Some("B"), Some("Equal")),
+                (Some("A"), Some("Equal")),
+            ],
             None,
             Some("Equal"),
             2,
         );
         assert_optional_duplicate_case(
-            &[(Some("C"), Some("Equal")), (Some("B"), Some("Equal")), (Some("A"), Some("Equal"))],
+            &[
+                (Some("C"), Some("Equal")),
+                (Some("B"), Some("Equal")),
+                (Some("A"), Some("Equal")),
+            ],
             None,
             Some("Equal"),
             2,
@@ -1678,19 +1688,32 @@ mod tests {
             3,
         );
         assert_optional_duplicate_case(
-            &[(None, Some("Equal")), (Some("A"), Some("Equal")), (None, Some("Equal"))],
+            &[
+                (None, Some("Equal")),
+                (Some("A"), Some("Equal")),
+                (None, Some("Equal")),
+            ],
             None,
             Some("Equal"),
             1,
         );
         assert_optional_duplicate_case(
-            &[(Some("A"), Some("Equal")), (None, Some("Equal")), (Some("A"), Some("Equal"))],
+            &[
+                (Some("A"), Some("Equal")),
+                (None, Some("Equal")),
+                (Some("A"), Some("Equal")),
+            ],
             None,
             Some("Equal"),
             2,
         );
         assert_optional_duplicate_case(
-            &[(None, None), (Some("A"), Some("B")), (None, None), (Some("A"), Some("B"))],
+            &[
+                (None, None),
+                (Some("A"), Some("B")),
+                (None, None),
+                (Some("A"), Some("B")),
+            ],
             None,
             None,
             2,
@@ -1773,7 +1796,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(saved, (None, Some("Same".to_owned())));
-
     }
 
     #[test]
