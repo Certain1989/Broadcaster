@@ -933,6 +933,7 @@ fn decode_xmltv_rows_internal<R: BufRead>(
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "validated row event carries separate retained and omission sinks")]
 fn emit_stream_row<C, P, O>(
     state: &mut ParseState,
     tag: &str,
@@ -1113,8 +1114,7 @@ where
     if !state.seen_root
         || !state.tags.is_empty()
         || rows.channels == 0
-        || rows.programmes == 0
-        || !has_future
+        || (!allow_c1_omission && (rows.programmes == 0 || !has_future))
     {
         return Err(EpgError::InvalidSchedule);
     }
