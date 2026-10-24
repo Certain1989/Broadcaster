@@ -682,6 +682,87 @@ fn confirm_epg_mapping(
     dialog.present(Some(parent));
 }
 
+pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
+    let (Some(window), Some(streams)) =
+        (view.root().and_downcast::<gtk::Window>(), view.service())
+    else { return };
+    spawn(glib::clone!(
+        #[weak] view,
+        async move {
+            let Ok(detail) = streams.channel_detail(&id).await else { return };
+            let Ok(manager) = crate::epg::desktop::ensure_started().await else { return };
+            let Ok(guides) = manager.list().await else { return };
+            let dialog = adw::Dialog::new();
+            dialog.set_title(&gettext("Programme Mapping"));
+            dialog.set_content_width(530);
+            let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+            body.set_margin_top(16);
+            body.set_margin_bottom(16);
+            body.set_margin_start(16);
+            body.set_margin_end(16);
+            label(&gettext("Select an existing guide and enter the exact XMLTV channel ID. Name suggestions never create a mapping."), &body);
+            let names: Vec<String> = guides.iter().map(|g| {
+                if g.enabled { g.name.clone() } else {
+                    format!("{} ({})", g.name, gettext("disabled"))
+                }
+            }).collect();
+            let choices: Vec<&str> = names.iter().map(String::as_str).collect();
+            let picker = gtk::DropDown::from_strings(&choices);
+            picker.set_sensitive(!guides.is_empty());
+            body.append(&picker);
+            label(&gettext("Exact XMLTV channel ID (case-sensitive)"), &body);
+            let channel = text("");
+            editable_control(&channel, &body);
+            let error = gtk::Label::new(None);
+            error.set_xalign(0.0);
+            error.set_wrap(true);
+            body.append(&error);
+            let single = gtk::Button::with_label(&gettext("Use for this stream"));
+            let shared = gtk::Button::with_label(
+                &gettext("Use for all streams with this exact tvg-id")
+            );
+            single.set_sensitive(!guides.is_empty());
+            shared.set_sensitive(
+                !guides.is_empty() && detail.imported.tvg_id.as_deref().is_some_and(|s| !s.is_empty())
+            );
+            let close = gtk::Button::with_label(&gettext("Close"));
+            for control in [&single, &shared, &close] {
+                control.set_halign(gtk::Align::Start);
+                body.append(control);
+            }
+            close.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+            for (button, action) in [
+                (single, MappingAction::Row),
+                (shared, MappingAction::ExactAlias),
+            ] {
+                let guides = guides.clone();
+                let picker = picker.clone();
+                let channel = channel.clone();
+                let error = error.clone();
+                let window = window.clone();
+                let stable_id = detail.effective.id.clone();
+                button.connect_clicked(glib::clone!(
+                    #[weak] view,
+                    move |_| {
+                        let Some(guide) = guides.get(picker.selected() as usize) else { return };
+                        let id = channel.text().to_string();
+                        if id.is_empty() || id.len() > 512 || id.trim() != id
+                            || id.chars().any(char::is_control) {
+                            error.set_text(&gettext("Enter a valid exact XMLTV channel ID"));
+                            return;
+                        }
+                        confirm_epg_mapping(
+                            &view, &window, action, stable_id.clone(), guide.id.clone(), id,
+                        );
+                    }
+                ));
+            }
+            dialog.set_child(Some(&body));
+            dialog.present(Some(&window));
+        }
+    ));
+}
+
 #[cfg(test)]
 pub(crate) fn assert_synthetic_editor_form() {
     use self::model_for_test::*;
