@@ -219,10 +219,7 @@ pub fn match_in_source(
     // Fold each catalogue entry once, regardless of the number of name hints.
     let mut candidates = channels
         .iter()
-        .filter(|c| {
-            c.source_id == *id
-                && wanted.contains(&normalized_name(&c.display_name))
-        })
+        .filter(|c| c.source_id == *id && wanted.contains(&normalized_name(&c.display_name)))
         .map(|c| c.channel_id.as_str())
         .collect::<Vec<_>>();
     candidates.sort_unstable();
