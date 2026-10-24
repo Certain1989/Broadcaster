@@ -55,8 +55,20 @@ pub struct NowNext {
 /// Static user-safe capacity reason; never put source or XML content here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitKind {
-    Wire, Expanded, Ratio, Attributes, Depth, Channels, Programmes,
-    XmlText, ChannelName, Title, Subtitle, Description, Database, Duration,
+    Wire,
+    Expanded,
+    Ratio,
+    Attributes,
+    Depth,
+    Channels,
+    Programmes,
+    XmlText,
+    ChannelName,
+    Title,
+    Subtitle,
+    Description,
+    Database,
+    Duration,
 }
 impl LimitKind {
     pub const fn code(self) -> &'static str {

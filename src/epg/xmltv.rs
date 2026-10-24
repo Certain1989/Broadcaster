@@ -935,8 +935,14 @@ mod formatted_xmltv_regression {
         );
         let cancelled = AtomicBool::new(false);
         let result = decode_xmltv_rows(
-            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
-            StreamingLimits::candidate(), &cancelled, |_| Ok(()), |_| Ok(()),
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &cancelled,
+            |_| Ok(()),
+            |_| Ok(()),
         );
         assert_eq!(
             result.unwrap_err(),
