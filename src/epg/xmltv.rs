@@ -707,6 +707,8 @@ pub struct StreamedRows {
     pub truncated_titles: usize,
     pub truncated_subtitles: usize,
     pub truncated_channel_names: usize,
+    /// Conflicting repeated-row occurrences, not unique programme identities.
+    pub conflicting_duplicate_rows: usize,
 }
 
 struct MeasuredRead<R> {
@@ -907,6 +909,7 @@ where
         truncated_titles: 0,
         truncated_subtitles: 0,
         truncated_channel_names: 0,
+        conflicting_duplicate_rows: 0,
     };
     let mut has_future = false;
     loop {

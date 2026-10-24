@@ -55,7 +55,10 @@ fn guide_problem(code: &str) -> String {
         | "oversize_xml_text"
         | "oversize_channels"
         | "oversize_programmes" => gettext("The guide exceeds the XMLTV safety limits."),
-        "invalid_xml" | "encoding" => gettext("The file is not valid UTF-8 XMLTV data."),
+        "invalid_xml" => gettext(
+            "The guide could not be imported because it contains unsupported or inconsistent XMLTV data.",
+        ),
+        "encoding" => gettext("The guide is not valid UTF-8 XMLTV data."),
         "disk_full" => gettext(
             "The guide could not be saved because there is not enough available disk space. Any previously saved guide is still available."
         ),
@@ -117,6 +120,17 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
             "{} {}",
             counts.truncated_descriptions,
             gettext("programme descriptions were shortened to fit the 2,048-byte limit."),
+        ));
+    }
+    if counts.conflicting_duplicate_rows == 1 {
+        messages.push(gettext(
+            "One repeated programme had conflicting optional metadata; inconsistent fields were omitted.",
+        ));
+    } else if counts.conflicting_duplicate_rows > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.conflicting_duplicate_rows,
+            gettext("repeated programme entries had conflicting optional metadata; inconsistent fields were omitted."),
         ));
     }
     messages

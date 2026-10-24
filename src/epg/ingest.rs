@@ -274,6 +274,7 @@ fn import_xmltv_inner<R: BufRead>(
     let mut retained_title_shortened = 0_usize;
     let mut retained_subtitle_shortened = 0_usize;
     let mut retained_description_shortened = 0_usize;
+    let mut conflicting_duplicate_rows = 0_usize;
     let check_budget = || -> Result<(), EpgError> {
         if cancelled.load(Ordering::Acquire) {
             return Err(EpgError::Cancelled);
@@ -381,8 +382,25 @@ fn import_xmltv_inner<R: BufRead>(
                         |r| r.get(0),
                     )
                     .map_err(storage_error)?;
-                if prior_shortened != 0 || (prior.1, prior.2) != (p.subtitle, p.description) {
+                // Shortened metadata can hide a distinct complete title or
+                // differences beyond the retained prefix: reject it as before.
+                if prior_shortened != 0 {
                     return Err(EpgError::InvalidSchedule);
+                }
+                let subtitle_conflict = prior.1 != p.subtitle;
+                let description_conflict = prior.2 != p.description;
+                if subtitle_conflict || description_conflict {
+                    // NULL is absorbing; a later duplicate cannot restore a
+                    // field omitted because earlier metadata disagreed.
+                    tx.execute(
+                        "UPDATE epg_programmes
+                         SET subtitle=CASE WHEN ?1 THEN NULL ELSE subtitle END,
+                             description=CASE WHEN ?2 THEN NULL ELSE description END
+                         WHERE rowid=?3",
+                        params![subtitle_conflict, description_conflict, prior.0],
+                    )
+                    .map_err(storage_error)?;
+                    conflicting_duplicate_rows = conflicting_duplicate_rows.saturating_add(1);
                 }
             }
             Ok(())
@@ -394,6 +412,7 @@ fn import_xmltv_inner<R: BufRead>(
     rows.truncated_titles = retained_title_shortened;
     rows.truncated_subtitles = retained_subtitle_shortened;
     rows.truncated_descriptions = retained_description_shortened;
+    rows.conflicting_duplicate_rows = conflicting_duplicate_rows;
     check_budget()?;
 
     // Deferred FKs protect commit. This explicit check supplies the same
@@ -864,6 +883,7 @@ mod tests {
                 truncated_titles: 0,
                 truncated_subtitles: 0,
                 truncated_channel_names: 0,
+                conflicting_duplicate_rows: 0,
             }
         );
         let failed = import_xmltv(
