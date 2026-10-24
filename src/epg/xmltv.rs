@@ -175,6 +175,21 @@ struct PendingProgramme {
     subtitle_truncated: bool,
 }
 
+/// Compact provenance for display fields shortened by the streaming parser.
+/// Required to reject ambiguous SQLite duplicate-key collisions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProgrammeTruncation {
+    pub title: bool,
+    pub subtitle: bool,
+    pub description: bool,
+}
+
+impl ProgrammeTruncation {
+    pub fn any(self) -> bool {
+        self.title || self.subtitle || self.description
+    }
+}
+
 #[derive(Default)]
 struct ParseState {
     tags: Vec<String>,
@@ -191,7 +206,7 @@ struct ParseState {
     truncated_titles: usize,
     truncated_subtitles: usize,
     truncated_channel_names: usize,
-    last_programme_title_truncated: bool,
+    last_programme_truncation: ProgrammeTruncation,
     allow_description_truncation: bool,
     allow_display_truncation: bool,
     max_channels: usize,
@@ -457,14 +472,18 @@ impl ParseState {
         }
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
-            self.last_programme_title_truncated = false;
+            self.last_programme_truncation = ProgrammeTruncation::default();
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
                 if start < stop
                     && stop.saturating_sub(start) <= 86_400
                     && !p.channel.is_empty()
                     && bounded_text(&title, 512)
                 {
-                    self.last_programme_title_truncated = p.title_truncated;
+                    self.last_programme_truncation = ProgrammeTruncation {
+                        title: p.title_truncated,
+                        subtitle: p.subtitle_truncated,
+                        description: p.description_truncated,
+                    };
                     if p.title_truncated {
                         self.truncated_titles += 1;
                     }
@@ -677,7 +696,8 @@ impl StreamingLimits {
         }
     }
 }
-/// Count completed validated rows (not a claim about unique SQLite PKs).
+/// Parser counts validated rows; the SQLite importer reconciles deduplication
+/// before returning these statistics to the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamedRows {
     pub channels: usize,
@@ -746,7 +766,7 @@ pub fn decode_xmltv_rows<R: BufRead>(
     limits: StreamingLimits,
     cancelled: &AtomicBool,
     on_channel: impl FnMut(GuideChannel) -> Result<(), EpgError>,
-    on_programme: impl FnMut(Programme, bool) -> Result<(), EpgError>,
+    on_programme: impl FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
 ) -> Result<StreamedRows, EpgError> {
     use std::{cell::Cell, rc::Rc};
     if !bounded_text(source_id, 64)
@@ -828,7 +848,7 @@ fn emit_stream_row<C, P>(
 ) -> Result<(), EpgError>
 where
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
-    P: FnMut(Programme, bool) -> Result<(), EpgError>,
+    P: FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
 {
     match tag {
         "channel" if state.tags == ["tv"] => {
@@ -843,7 +863,7 @@ where
                 *future |= row.stop_utc > retrieved_utc;
                 on_programme(
                     row,
-                    std::mem::take(&mut state.last_programme_title_truncated),
+                    std::mem::take(&mut state.last_programme_truncation),
                 )?;
             }
         }
@@ -871,7 +891,7 @@ fn parse_xml_stream_rows<R, C, P>(
 where
     R: BufRead,
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
-    P: FnMut(Programme, bool) -> Result<(), EpgError>,
+    P: FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
 {
     let mut reader = Reader::from_reader(input);
     reader.config_mut().check_end_names = true;
@@ -1038,6 +1058,120 @@ mod formatted_xmltv_regression {
         assert_eq!(stats.truncated_subtitles, 0);
         assert_eq!(stats.truncated_channel_names, 0);
         assert_eq!((channels, programmes), (1, PROGRAMMES));
+    }
+
+    #[test]
+    fn display_field_boundaries_and_fragmented_entities_remain_utf8_safe() {
+        for bytes in [511, 512, 513] {
+            let title = "T".repeat(bytes);
+            let xml = format!(
+                "<tv><channel id='c'><display-name>Channel</display-name></channel>\
+                 <programme channel='c' start='20300101000000 +0000'\
+                 stop='20300101010000 +0000'><title>{title}</title></programme></tv>"
+            );
+            let mut captured = None;
+            let stats = decode_xmltv_rows(
+                Cursor::new(xml.as_bytes()),
+                "synthetic",
+                0,
+                false,
+                StreamingLimits::candidate(),
+                &AtomicBool::new(false),
+                |_| Ok(()),
+                |row, flags| {
+                    captured = Some((row.title, flags.title));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let (stored, shortened) = captured.unwrap();
+            assert_eq!(stored.len(), bytes.min(512));
+            assert_eq!(shortened, bytes > 512);
+            assert_eq!(stats.truncated_titles, usize::from(bytes > 512));
+        }
+        let xml = format!(
+            "<tv><channel id='identity'><display-name>{}&amp;<![CDATA[é]]></display-name></channel>\
+             <programme channel='identity' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{}<![CDATA[é]]>&#65;</title>\
+             <sub-title>{}&#233;<![CDATA[Z]]></sub-title></programme></tv>",
+            "N".repeat(511),
+            "T".repeat(511),
+            "S".repeat(510),
+        );
+        let mut channel = None;
+        let mut programme = None;
+        let stats = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |c| {
+                channel = Some(c);
+                Ok(())
+            },
+            |p, flags| {
+                programme = Some((p, flags));
+                Ok(())
+            },
+        )
+        .unwrap();
+        let channel = channel.unwrap();
+        let (p, flags) = programme.unwrap();
+        assert_eq!(channel.channel_id, "identity");
+        assert_eq!(channel.display_name, format!("{}&", "N".repeat(511)));
+        assert_eq!(p.channel_id, "identity");
+        assert_eq!(p.stop_utc - p.start_utc, 3600);
+        assert_eq!(p.title, "T".repeat(511));
+        assert_eq!(p.subtitle.as_deref(), Some(format!("{}é", "S".repeat(510)).as_str()));
+        assert_eq!(stats.truncated_channel_names, 1);
+        assert_eq!(stats.truncated_titles, 1);
+        assert_eq!(stats.truncated_subtitles, 1);
+        assert!(flags.title && flags.subtitle && !flags.description);
+    }
+
+    #[test]
+    fn oversized_decoded_title_still_fails_after_prefix_shortening() {
+        let xml = format!(
+            "<tv><channel id='c'><display-name>C</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{}</title></programme></tv>",
+            "T".repeat(1_048_577),
+        );
+        let err = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |_| Ok(()),
+            |_, _| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(err, EpgError::Capacity(LimitKind::XmlText));
+    }
+
+    #[test]
+    fn invalid_xml_entities_controls_and_doctype_stay_rejected() {
+        let base = |title: &str| format!(
+            "<tv><channel id='c'><display-name>C</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{title}</title></programme></tv>"
+        );
+        for xml in [
+            base("A&#x1;B"),
+            base("A&#xGG;B"),
+            base("A&#xE9;B").replace("</tv>", "<!DOCTYPE tv></tv>"),
+            base("A<![CDATA[unterminated"),
+        ] {
+            assert!(decode_xmltv_rows(
+                Cursor::new(xml.as_bytes()), "synthetic", 0, false,
+                StreamingLimits::candidate(), &AtomicBool::new(false),
+                |_| Ok(()), |_, _| Ok(()),
+            ).is_err());
+        }
     }
 
     #[test]
