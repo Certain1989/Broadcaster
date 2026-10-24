@@ -11,7 +11,10 @@ use std::sync::{
 use tokio::sync::Semaphore;
 
 use crate::{
-    epg::{bindings::{read_semantic_now_next, SemanticProgrammeState}, model::EpgError},
+    epg::{
+        bindings::{read_semantic_now_next, SemanticProgrammeState},
+        model::EpgError,
+    },
     streams::storage::Storage,
 };
 
@@ -103,9 +106,7 @@ impl ProjectionService {
             })
             .await
             {
-                Ok(result) if !cancelled.load(Ordering::Acquire) => {
-                    ProjectionOutcome::Read(result)
-                }
+                Ok(result) if !cancelled.load(Ordering::Acquire) => ProjectionOutcome::Read(result),
                 _ => ProjectionOutcome::Cancelled,
             }
         })
