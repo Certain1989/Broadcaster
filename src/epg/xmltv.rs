@@ -1132,6 +1132,94 @@ mod formatted_xmltv_regression {
     }
 
     #[test]
+    fn subtitle_and_channel_name_thresholds_preserve_ids_and_utc_times() {
+        for bytes in [511_usize, 512, 513] {
+            let xml = format!(
+                "<tv><channel id='literal.id'><display-name>{}</display-name></channel>\
+                 <programme channel='literal.id' start='20300101000000 +0000'\
+                 stop='20300101010000 +0000'><title>Ordinary</title>\
+                 <sub-title>{}</sub-title></programme></tv>",
+                "N".repeat(bytes),
+                "S".repeat(bytes),
+            );
+            let mut channel = None;
+            let mut programme = None;
+            let stats = decode_xmltv_rows(
+                Cursor::new(xml.as_bytes()),
+                "synthetic",
+                0,
+                false,
+                StreamingLimits::candidate(),
+                &AtomicBool::new(false),
+                |c| {
+                    channel = Some(c);
+                    Ok(())
+                },
+                |p, flags| {
+                    programme = Some((p, flags));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let c = channel.unwrap();
+            let (p, flags) = programme.unwrap();
+            assert_eq!(c.channel_id, "literal.id");
+            assert_eq!(p.channel_id, "literal.id");
+            assert_eq!(p.stop_utc - p.start_utc, 3600);
+            assert_eq!(p.title, "Ordinary");
+            assert_eq!(c.display_name, "N".repeat(bytes.min(512)));
+            assert_eq!(p.subtitle.as_deref(), Some("S".repeat(bytes.min(512)).as_str()));
+            assert_eq!(stats.truncated_channel_names, usize::from(bytes > 512));
+            assert_eq!(stats.truncated_subtitles, usize::from(bytes > 512));
+            assert_eq!(stats.truncated_titles, 0);
+            assert_eq!(flags.subtitle, bytes > 512);
+            assert!(!flags.title && !flags.description);
+        }
+    }
+
+    #[test]
+    fn valid_hex_reference_cdata_and_named_entity_cross_byte_limit_safely() {
+        let xml = format!(
+            "<tv><channel id='literal.id'><display-name>Normal</display-name></channel>\
+             <programme channel='literal.id' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'>\
+             <title>{}&#xE9;<![CDATA[é]]>&amp;Z</title></programme></tv>",
+            "T".repeat(507),
+        );
+        let mut channel_id = None;
+        let mut programme = None;
+        let stats = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |c| {
+                channel_id = Some(c.channel_id);
+                Ok(())
+            },
+            |p, flags| {
+                programme = Some((p, flags));
+                Ok(())
+            },
+        )
+        .unwrap();
+        let (p, flags) = programme.unwrap();
+        let expected = format!("{}éé&", "T".repeat(507));
+        assert_eq!(channel_id.as_deref(), Some("literal.id"));
+        assert_eq!(p.channel_id, "literal.id");
+        assert_eq!(p.stop_utc - p.start_utc, 3600);
+        assert_eq!(p.title, expected);
+        assert_eq!(p.title.len(), 512);
+        assert!(flags.title);
+        assert!(!flags.subtitle && !flags.description);
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.truncated_titles, 1);
+        assert_eq!(stats.truncated_channel_names, 0);
+    }
+
+    #[test]
     fn oversized_decoded_title_still_fails_after_prefix_shortening() {
         let xml = format!(
             "<tv><channel id='c'><display-name>C</display-name></channel>\
