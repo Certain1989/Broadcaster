@@ -592,6 +592,96 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
     ));
 }
 
+#[derive(Clone, Copy)]
+enum MappingAction {
+    Row,
+    ExactAlias,
+}
+
+async fn save_epg_mapping(
+    action: MappingAction, row: String, source: String, target: String,
+) -> Result<(), &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::bindings::{
+                set_global_alias, set_row_mapping, ConfirmedGlobalMapping, ConfirmedRowMapping,
+            };
+            let mut conn = super::storage::Storage::new()
+                .connect().map_err(|_| "Cannot open programme data")?;
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |t| t.as_secs() as i64);
+            let result = match action {
+                MappingAction::Row => set_row_mapping(
+                    &mut conn, ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                    &row, &source, &target, at,
+                ),
+                MappingAction::ExactAlias => set_global_alias(
+                    &mut conn,
+                    ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
+                    &row, &source, &target, at,
+                ),
+            };
+            result.map_err(|_| "Guide target missing or selection changed")
+        }).await.map_err(|_| "Programme mapping worker unavailable")?
+    }).await
+}
+
+fn confirm_epg_mapping(
+    view: &TvStreamsView, parent: &gtk::Window, action: MappingAction,
+    row: String, source: String, target: String,
+) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&gettext("Confirm Programme Mapping"));
+    dialog.set_content_width(460);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(16);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+    label(&match action {
+        MappingAction::Row => gettext("Confirm mapping for THIS stream only?"),
+        MappingAction::ExactAlias => gettext("Confirm mapping for ALL streams with this exact case-sensitive tvg-id across playlists selecting this guide?"),
+    }, &body);
+    let error = gtk::Label::new(None);
+    body.append(&error);
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let approve = gtk::Button::with_label(&match action {
+        MappingAction::Row => gettext("Confirm This Stream Only"),
+        MappingAction::ExactAlias => gettext("Confirm All Matching Streams"),
+    });
+    approve.add_css_class("suggested-action");
+    body.append(&cancel);
+    body.append(&approve);
+    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    approve.connect_clicked(glib::clone!(
+        #[weak] dialog, #[weak] error, #[weak] approve, #[weak] view,
+        move |_| {
+            approve.set_sensitive(false);
+            let row = row.clone();
+            let source = source.clone();
+            let target = target.clone();
+            spawn(glib::clone!(
+                #[weak] dialog, #[weak] error, #[weak] approve, #[weak] view,
+                async move {
+                    match save_epg_mapping(action, row, source, target).await {
+                        Ok(()) => {
+                            dialog.close();
+                            view.epg_changed();
+                        }
+                        Err(reason) => {
+                            error.set_text(&gettext(reason));
+                            approve.set_sensitive(true);
+                        }
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.set_child(Some(&body));
+    dialog.present(Some(parent));
+}
+
 #[cfg(test)]
 pub(crate) fn assert_synthetic_editor_form() {
     use self::model_for_test::*;
