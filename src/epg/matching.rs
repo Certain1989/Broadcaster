@@ -77,20 +77,42 @@ pub enum MatchMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchDecision {
     Unconfigured,
-    Disabled { source_id: String },
-    Unavailable { source_id: String },
-    Unmatched { source_id: String },
-    Ambiguous { source_id: String },
-    MissingTarget { source_id: String, channel_id: String },
+    Disabled {
+        source_id: String,
+    },
+    Unavailable {
+        source_id: String,
+    },
+    Unmatched {
+        source_id: String,
+    },
+    Ambiguous {
+        source_id: String,
+    },
+    MissingTarget {
+        source_id: String,
+        channel_id: String,
+    },
     /// MUST be confirmed before creating either a per-row override or a global alias.
-    Suggested { source_id: String, channel_id: String },
-    Matched { source_id: String, channel_id: String, method: MatchMethod },
+    Suggested {
+        source_id: String,
+        channel_id: String,
+    },
+    Matched {
+        source_id: String,
+        channel_id: String,
+        method: MatchMethod,
+    },
 }
 
 impl MatchDecision {
     pub fn confirmed_target(&self) -> Option<(&str, &str)> {
         match self {
-            Self::Matched { source_id, channel_id, .. } => Some((source_id, channel_id)),
+            Self::Matched {
+                source_id,
+                channel_id,
+                ..
+            } => Some((source_id, channel_id)),
             _ => None,
         }
     }
@@ -120,15 +142,25 @@ pub fn match_in_source(
     };
     let id = &source.guide_source_id;
     if availability == GuideAvailability::Disabled {
-        return MatchDecision::Disabled { source_id: id.clone() };
+        return MatchDecision::Disabled {
+            source_id: id.clone(),
+        };
     }
     if availability == GuideAvailability::NotFetched {
-        return MatchDecision::Unavailable { source_id: id.clone() };
+        return MatchDecision::Unavailable {
+            source_id: id.clone(),
+        };
     }
-    let contains = |target: &str| channels.iter().any(|c| c.source_id == *id && c.channel_id == target);
+    let contains = |target: &str| {
+        channels
+            .iter()
+            .any(|c| c.source_id == *id && c.channel_id == target)
+    };
     if let Some(target) = override_target {
         if target.guide_source_id != *id {
-            return MatchDecision::Unavailable { source_id: id.clone() };
+            return MatchDecision::Unavailable {
+                source_id: id.clone(),
+            };
         }
         return if contains(&target.guide_channel_id) {
             MatchDecision::Matched {
@@ -151,7 +183,10 @@ pub fn match_in_source(
                 method: MatchMethod::ConfirmedGlobalAlias,
             }
         } else {
-            MatchDecision::MissingTarget { source_id: id.clone(), channel_id: target.to_owned() }
+            MatchDecision::MissingTarget {
+                source_id: id.clone(),
+                channel_id: target.to_owned(),
+            }
         };
     }
     if let Some(tvg_id) = row.tvg_id.as_deref().filter(|s| !s.trim().is_empty()) {
@@ -176,15 +211,28 @@ pub fn match_in_source(
     if !display_name.is_empty() && !wanted.contains(&display_name) {
         wanted.push(display_name);
     }
-    let mut candidates = channels.iter()
-        .filter(|c| c.source_id == *id && wanted.iter().any(|name| *name == normalized_name(&c.display_name)))
+    let mut candidates = channels
+        .iter()
+        .filter(|c| {
+            c.source_id == *id
+                && wanted
+                    .iter()
+                    .any(|name| *name == normalized_name(&c.display_name))
+        })
         .map(|c| c.channel_id.as_str())
         .collect::<Vec<_>>();
     candidates.sort_unstable();
     candidates.dedup();
     match candidates.as_slice() {
-        [] => MatchDecision::Unmatched { source_id: id.clone() },
-        [only] => MatchDecision::Suggested { source_id: id.clone(), channel_id: (*only).to_owned() },
-        _ => MatchDecision::Ambiguous { source_id: id.clone() },
+        [] => MatchDecision::Unmatched {
+            source_id: id.clone(),
+        },
+        [only] => MatchDecision::Suggested {
+            source_id: id.clone(),
+            channel_id: (*only).to_owned(),
+        },
+        _ => MatchDecision::Ambiguous {
+            source_id: id.clone(),
+        },
     }
 }
