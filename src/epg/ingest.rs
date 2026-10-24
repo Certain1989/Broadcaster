@@ -241,7 +241,11 @@ pub fn import_xmltv<R: BufRead>(
 mod tests {
     use super::*;
     use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
-    use std::{cell::Cell, io::{self, BufReader, Cursor, Read}, rc::Rc};
+    use std::{
+        cell::Cell,
+        io::{self, BufReader, Cursor, Read},
+        rc::Rc,
+    };
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -766,8 +770,8 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        let original_programme: (String, i64, i64, String, Option<String>, Option<String>) =
-            conn.query_row(
+        let original_programme: (String, i64, i64, String, Option<String>, Option<String>) = conn
+            .query_row(
                 "SELECT channel_id, start_utc, stop_utc, title, subtitle, description
                  FROM epg_programmes WHERE source_id='source'",
                 [],
@@ -820,7 +824,10 @@ mod tests {
             &cancel,
         );
         assert_eq!(failed.unwrap_err(), EpgError::Cancelled);
-        assert!(fired.get(), "cancellation must occur after an actual staged INSERT");
+        assert!(
+            fired.get(),
+            "cancellation must occur after an actual staged INSERT"
+        );
         assert_eq!(TEST_STAGED_INSERTS.with(|count| count.get()), 1);
         let retained_channel: (String, String) = conn
             .query_row(
@@ -829,8 +836,8 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        let retained_programme: (String, i64, i64, String, Option<String>, Option<String>) =
-            conn.query_row(
+        let retained_programme: (String, i64, i64, String, Option<String>, Option<String>) = conn
+            .query_row(
                 "SELECT channel_id,start_utc,stop_utc,title,subtitle,description
                  FROM epg_programmes WHERE source_id='source'",
                 [],
