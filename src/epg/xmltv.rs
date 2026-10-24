@@ -1113,8 +1113,7 @@ where
     }
     if !state.seen_root
         || !state.tags.is_empty()
-        || rows.channels == 0
-        || (!allow_c1_omission && (rows.programmes == 0 || !has_future))
+        || (!allow_c1_omission && (rows.channels == 0 || rows.programmes == 0 || !has_future))
     {
         return Err(EpgError::InvalidSchedule);
     }
