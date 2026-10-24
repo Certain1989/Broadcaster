@@ -864,6 +864,15 @@ mod tests {
         assert_eq!(retained_channel, original_channel);
         assert_eq!(retained_programme, original_programme);
         assert_eq!(retained_metadata, original_metadata);
+        let (channels, programmes): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM epg_channels WHERE source_id='source'),
+                        (SELECT COUNT(*) FROM epg_programmes WHERE source_id='source')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((channels, programmes), (1, 1));
         assert_eq!(original_programme.3, "Cached");
         let leaked: i64 = conn
             .query_row(
