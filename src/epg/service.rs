@@ -6,6 +6,7 @@
 use super::{
     ingest::import_xmltv,
     model::{EpgError, LimitKind},
+    xmltv::StreamedRows,
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
         ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource,
@@ -104,7 +105,7 @@ struct Inner {
     registry: GuideSourceRegistry,
     running: Mutex<HashMap<String, Running>>,
     /// Session-only successful-import warnings; no schema/contract migration.
-    truncated_descriptions: Mutex<HashMap<String, usize>>,
+    truncated_descriptions: Mutex<HashMap<String, StreamedRows>>,
     /// Serializes source authorization/revocation with request admission.
     admission: Mutex<()>,
     heavy_imports: Arc<Semaphore>,
@@ -181,14 +182,10 @@ impl GlobalGuideManager {
         .await
     }
     /// Most recent successful refresh this app session; zero after restart.
-    pub async fn truncated_descriptions(&self, id: &str) -> usize {
-        self.inner
-            .truncated_descriptions
-            .lock()
-            .await
-            .get(id)
-            .copied()
-            .unwrap_or(0)
+    /// Truncation counts from the last successful import in this session.
+    /// A failed import never publishes an incomplete warning count.
+    pub async fn truncation_counts(&self, id: &str) -> Option<StreamedRows> {
+        self.inner.truncated_descriptions.lock().await.get(id).copied()
     }
 
     pub async fn list(&self) -> Result<Vec<GuideSource>, GuideServiceError> {
@@ -518,7 +515,7 @@ impl GlobalGuideManager {
             .truncated_descriptions
             .lock()
             .await
-            .insert(id.to_owned(), rows.truncated_descriptions);
+            .insert(id.to_owned(), rows);
         Ok(())
     }
 }

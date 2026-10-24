@@ -11,6 +11,7 @@ use super::{
     network::TrustScope,
     service::GlobalGuideManager,
     sources::{ConfirmedGuideDeletion, GuideSource, SourceOrigin},
+    xmltv::StreamedRows,
 };
 
 use crate::utils::spawn;
@@ -65,15 +66,46 @@ fn guide_problem(code: &str) -> String {
     }
 }
 
-fn truncation_message(count: usize) -> String {
-    if count == 1 {
-        gettext("One programme description was shortened to fit the 2,048-byte limit.")
-    } else {
-        format!(
-            "{count} {}",
-            gettext("programme descriptions were shortened to fit the 2,048-byte limit.")
-        )
+/// Form sentences only from validated, source-independent counters.
+fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
+    let mut messages = Vec::new();
+    if counts.truncated_titles == 1 {
+        messages.push(gettext("One programme title was shortened to fit the 512-byte limit."));
+    } else if counts.truncated_titles > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.truncated_titles,
+            gettext("programme titles were shortened to fit the 512-byte limit."),
+        ));
     }
+    if counts.truncated_subtitles == 1 {
+        messages.push(gettext("One programme subtitle was shortened to fit the 512-byte limit."));
+    } else if counts.truncated_subtitles > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.truncated_subtitles,
+            gettext("programme subtitles were shortened to fit the 512-byte limit."),
+        ));
+    }
+    if counts.truncated_channel_names == 1 {
+        messages.push(gettext("One channel display name was shortened to fit the 512-byte limit."));
+    } else if counts.truncated_channel_names > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.truncated_channel_names,
+            gettext("channel display names were shortened to fit the 512-byte limit."),
+        ));
+    }
+    if counts.truncated_descriptions == 1 {
+        messages.push(gettext("One programme description was shortened to fit the 2,048-byte limit."));
+    } else if counts.truncated_descriptions > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.truncated_descriptions,
+            gettext("programme descriptions were shortened to fit the 2,048-byte limit."),
+        ));
+    }
+    messages
 }
 
 fn box_column() -> gtk::Box {
@@ -170,12 +202,14 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         row.append(&failure);
                     }
                     if source.last_success_at.is_some() {
-                        let count = service.truncated_descriptions(&source.id).await;
-                        if count > 0 {
-                            let warning = gtk::Label::new(Some(&truncation_message(count)));
-                            warning.set_wrap(true);
-                            warning.set_xalign(0.0);
-                            row.append(&warning);
+                        if let Some(counts) = service.truncation_counts(&source.id).await {
+                            for message in truncation_messages(&counts) {
+                                let warning = gtk::Label::new(Some(&message));
+                                warning.set_wrap(true);
+                                warning.set_xalign(0.0);
+                                warning.set_max_width_chars(48);
+                                row.append(&warning);
+                            }
                         }
                     }
                     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -202,15 +236,15 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                             let result = manager.refresh(id.clone()).await;
                             let message = match result {
                                 Ok(()) => {
-                                    let count = manager.truncated_descriptions(&id).await;
-                                    if count == 0 {
+                                    let details = manager
+                                        .truncation_counts(&id)
+                                        .await
+                                        .map(|counts| truncation_messages(&counts))
+                                        .unwrap_or_default();
+                                    if details.is_empty() {
                                         gettext("Guide refreshed")
                                     } else {
-                                        format!(
-                                            "{} {}",
-                                            gettext("Guide refreshed."),
-                                            truncation_message(count)
-                                        )
+                                        format!("{} {}", gettext("Guide refreshed."), details.join(" "))
                                     }
                                 }
                                 Err(error) => format!(

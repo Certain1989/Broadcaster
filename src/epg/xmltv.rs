@@ -160,6 +160,7 @@ impl<R: Read> Read for LimitedRead<R> {
 struct PendingChannel {
     id: String,
     display_name: Option<String>,
+    display_name_truncated: bool,
 }
 #[derive(Default)]
 struct PendingProgramme {
@@ -170,6 +171,8 @@ struct PendingProgramme {
     subtitle: Option<String>,
     description: Option<String>,
     description_truncated: bool,
+    title_truncated: bool,
+    subtitle_truncated: bool,
 }
 
 #[derive(Default)]
@@ -178,14 +181,19 @@ struct ParseState {
     text_bytes: Vec<usize>,
     seen_root: bool,
     channels: Vec<GuideChannel>,
-    channel_lookup: BTreeMap<String, String>,
+    channel_lookup: BTreeMap<String, (String, bool)>,
     channel_declarations: usize,
     programmes: Vec<Programme>,
     channel: Option<PendingChannel>,
     programme: Option<PendingProgramme>,
     programme_count: usize,
     truncated_descriptions: usize,
+    truncated_titles: usize,
+    truncated_subtitles: usize,
+    truncated_channel_names: usize,
+    last_programme_title_truncated: bool,
     allow_description_truncation: bool,
+    allow_display_truncation: bool,
     max_channels: usize,
     max_programmes: usize,
     capturing: Option<String>,
@@ -209,6 +217,31 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
         attributes.insert(key.to_owned(), value.into_owned());
     }
     Ok(attributes)
+}
+
+/// Append only a complete UTF-8 prefix. Even after reaching the bound,
+/// subsequent text, CDATA and numeric references are still fully parsed and
+/// checked against the independent decoded XML-element text budget.
+fn append_bounded(
+    value: &mut String,
+    text: &str,
+    maximum: usize,
+    truncated: &mut bool,
+) {
+    if *truncated {
+        return;
+    }
+    let remaining = maximum.saturating_sub(value.len());
+    if text.len() <= remaining {
+        value.push_str(text);
+    } else {
+        let mut end = remaining;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        value.push_str(&text[..end]);
+        *truncated = true;
+    }
 }
 
 impl ParseState {
@@ -241,6 +274,7 @@ impl ParseState {
                     self.channel = Some(PendingChannel {
                         id: id.trim().into(),
                         display_name: None,
+                        display_name_truncated: false,
                     });
                 }
                 "programme" => {
@@ -329,50 +363,55 @@ impl ParseState {
         }
         match (self.tags[1].as_str(), self.tags[2].as_str()) {
             ("channel", "display-name") => {
-                if let Some(name) = self.channel.as_mut().and_then(|c| c.display_name.as_mut()) {
-                    name.push_str(text);
-                    if name.len() > 512 {
-                        return Err(EpgError::Capacity(LimitKind::ChannelName));
+                if let Some(channel) = self.channel.as_mut() {
+                    if let Some(name) = channel.display_name.as_mut() {
+                        if self.allow_display_truncation {
+                            append_bounded(name, text, 512, &mut channel.display_name_truncated);
+                        } else {
+                            name.push_str(text);
+                            if name.len() > 512 {
+                                return Err(EpgError::Capacity(LimitKind::ChannelName));
+                            }
+                        }
                     }
                 }
             }
             ("programme", field) => {
                 if let Some(p) = self.programme.as_mut() {
-                    if field == "desc" && self.allow_description_truncation {
-                        if let Some(value) = p.description.as_mut() {
-                            if !p.description_truncated {
-                                let remaining = 2048_usize.saturating_sub(value.len());
-                                if text.len() > remaining {
-                                    // Preserve a complete UTF-8 prefix and never
-                                    // append later CDATA/text/reference fragments.
-                                    let mut end = remaining;
-                                    while !text.is_char_boundary(end) {
-                                        end -= 1;
-                                    }
-                                    value.push_str(&text[..end]);
-                                    p.description_truncated = true;
-                                } else {
-                                    value.push_str(text);
-                                }
+                    match field {
+                        "desc" if self.allow_description_truncation => {
+                            if let Some(value) = p.description.as_mut() {
+                                append_bounded(value, text, 2048, &mut p.description_truncated);
                             }
                         }
-                    } else {
-                        let (value, max): (Option<&mut String>, usize) = match field {
-                            "title" => (p.title.as_mut(), 512),
-                            "sub-title" => (p.subtitle.as_mut(), 512),
-                            "desc" => (p.description.as_mut(), 2048),
-                            _ => (None, 0),
-                        };
-                        if let Some(value) = value {
-                            value.push_str(text);
-                            if value.len() > max {
-                                let reason = match field {
-                                    "title" => LimitKind::Title,
-                                    "sub-title" => LimitKind::Subtitle,
-                                    "desc" => LimitKind::Description,
-                                    _ => LimitKind::XmlText,
-                                };
-                                return Err(EpgError::Capacity(reason));
+                        "title" if self.allow_display_truncation => {
+                            if let Some(value) = p.title.as_mut() {
+                                append_bounded(value, text, 512, &mut p.title_truncated);
+                            }
+                        }
+                        "sub-title" if self.allow_display_truncation => {
+                            if let Some(value) = p.subtitle.as_mut() {
+                                append_bounded(value, text, 512, &mut p.subtitle_truncated);
+                            }
+                        }
+                        _ => {
+                            let (value, max): (Option<&mut String>, usize) = match field {
+                                "title" => (p.title.as_mut(), 512),
+                                "sub-title" => (p.subtitle.as_mut(), 512),
+                                "desc" => (p.description.as_mut(), 2048),
+                                _ => (None, 0),
+                            };
+                            if let Some(value) = value {
+                                value.push_str(text);
+                                if value.len() > max {
+                                    let reason = match field {
+                                        "title" => LimitKind::Title,
+                                        "sub-title" => LimitKind::Subtitle,
+                                        "desc" => LimitKind::Description,
+                                        _ => LimitKind::XmlText,
+                                    };
+                                    return Err(EpgError::Capacity(reason));
+                                }
                             }
                         }
                     }
@@ -403,24 +442,40 @@ impl ParseState {
                 channel_id: c.id,
                 display_name: name.trim().into(),
             };
-            if let Some(existing_name) = self.channel_lookup.get(&row.channel_id) {
-                if existing_name != &row.display_name {
+            if let Some((previous, was_truncated)) = self.channel_lookup.get(&row.channel_id) {
+                // Two distinct full names can shorten to the same prefix.
+                // Conservatively reject duplicate declarations involving a
+                // shortened name instead of silently conflating identities.
+                if *was_truncated || c.display_name_truncated || previous != &row.display_name {
                     return Err(EpgError::DuplicateChannel);
                 }
             } else {
-                self.channel_lookup
-                    .insert(row.channel_id.clone(), row.display_name.clone());
+                self.channel_lookup.insert(
+                    row.channel_id.clone(),
+                    (row.display_name.clone(), c.display_name_truncated),
+                );
+                if c.display_name_truncated {
+                    self.truncated_channel_names += 1;
+                }
                 self.channels.push(row);
             }
         }
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
+            self.last_programme_title_truncated = false;
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
                 if start < stop
                     && stop.saturating_sub(start) <= 86_400
                     && !p.channel.is_empty()
                     && bounded_text(&title, 512)
                 {
+                    self.last_programme_title_truncated = p.title_truncated;
+                    if p.title_truncated {
+                        self.truncated_titles += 1;
+                    }
+                    if p.subtitle_truncated {
+                        self.truncated_subtitles += 1;
+                    }
                     if p.description_truncated {
                         self.truncated_descriptions += 1;
                     }
@@ -634,6 +689,9 @@ pub struct StreamedRows {
     pub programmes: usize,
     /// Accepted programmes with a shortened synopsis.
     pub truncated_descriptions: usize,
+    pub truncated_titles: usize,
+    pub truncated_subtitles: usize,
+    pub truncated_channel_names: usize,
 }
 
 struct MeasuredRead<R> {
@@ -693,7 +751,7 @@ pub fn decode_xmltv_rows<R: BufRead>(
     limits: StreamingLimits,
     cancelled: &AtomicBool,
     on_channel: impl FnMut(GuideChannel) -> Result<(), EpgError>,
-    on_programme: impl FnMut(Programme) -> Result<(), EpgError>,
+    on_programme: impl FnMut(Programme, bool) -> Result<(), EpgError>,
 ) -> Result<StreamedRows, EpgError> {
     use std::{cell::Cell, rc::Rc};
     if !bounded_text(source_id, 64)
@@ -775,7 +833,7 @@ fn emit_stream_row<C, P>(
 ) -> Result<(), EpgError>
 where
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
-    P: FnMut(Programme) -> Result<(), EpgError>,
+    P: FnMut(Programme, bool) -> Result<(), EpgError>,
 {
     match tag {
         "channel" if state.tags == ["tv"] => {
@@ -788,7 +846,7 @@ where
             if let Some(row) = state.programmes.pop() {
                 counts.programmes += 1;
                 *future |= row.stop_utc > retrieved_utc;
-                on_programme(row)?;
+                on_programme(row, std::mem::take(&mut state.last_programme_title_truncated))?;
             }
         }
         _ => {}
@@ -815,7 +873,7 @@ fn parse_xml_stream_rows<R, C, P>(
 where
     R: BufRead,
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
-    P: FnMut(Programme) -> Result<(), EpgError>,
+    P: FnMut(Programme, bool) -> Result<(), EpgError>,
 {
     let mut reader = Reader::from_reader(input);
     reader.config_mut().check_end_names = true;
@@ -824,12 +882,16 @@ where
         max_channels,
         max_programmes,
         allow_description_truncation: true,
+        allow_display_truncation: true,
         ..ParseState::default()
     };
     let mut rows = StreamedRows {
         channels: 0,
         programmes: 0,
         truncated_descriptions: 0,
+        truncated_titles: 0,
+        truncated_subtitles: 0,
+        truncated_channel_names: 0,
     };
     let mut has_future = false;
     loop {
@@ -921,6 +983,9 @@ where
         return Err(EpgError::InvalidSchedule);
     }
     rows.truncated_descriptions = state.truncated_descriptions;
+    rows.truncated_titles = state.truncated_titles;
+    rows.truncated_subtitles = state.truncated_subtitles;
+    rows.truncated_channel_names = state.truncated_channel_names;
     Ok(rows)
 }
 
@@ -962,7 +1027,7 @@ mod formatted_xmltv_regression {
                 channels += 1;
                 Ok(())
             },
-            |_| {
+            |_, _| {
                 programmes += 1;
                 Ok(())
             },
@@ -971,6 +1036,9 @@ mod formatted_xmltv_regression {
         assert_eq!(stats.channels, 1);
         assert_eq!(stats.programmes, PROGRAMMES);
         assert_eq!(stats.truncated_descriptions, 0);
+        assert_eq!(stats.truncated_titles, 0);
+        assert_eq!(stats.truncated_subtitles, 0);
+        assert_eq!(stats.truncated_channel_names, 0);
         assert_eq!((channels, programmes), (1, PROGRAMMES));
     }
 
@@ -995,7 +1063,7 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |p| {
+            |p, _| {
                 descriptions.push(p.description);
                 Ok(())
             },
@@ -1025,7 +1093,7 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |p| {
+            |p, _| {
                 descriptions.push(p.description);
                 Ok(())
             },
@@ -1052,7 +1120,7 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |_| Ok(()),
+            |_, _| Ok(()),
         )
         .unwrap_err();
         assert_eq!(error, EpgError::Capacity(LimitKind::XmlText));
@@ -1072,7 +1140,7 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |_| Ok(()),
+            |_, _| Ok(()),
         );
         assert_eq!(outcome.unwrap_err(), EpgError::Capacity(LimitKind::XmlText));
     }

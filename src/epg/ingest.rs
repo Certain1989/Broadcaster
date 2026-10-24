@@ -10,6 +10,8 @@ use super::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    hash::{Hash, Hasher},
     io::BufRead,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -69,6 +71,10 @@ pub fn import_xmltv<R: BufRead>(
         .map_err(storage_error)?;
 
     let mut inserted = 0_usize;
+    // A shortened title can collide with a different full title after 512
+    // bytes. Track only keys of truncated rows so SQLite IGNORE never
+    // silently merges two programme identities with the same prefix.
+    let mut truncated_keys = HashSet::<u64>::new();
     let check_budget = || -> Result<(), EpgError> {
         if cancelled.load(Ordering::Acquire) {
             return Err(EpgError::Cancelled);
@@ -103,11 +109,14 @@ pub fn import_xmltv<R: BufRead>(
             .map_err(storage_error)?;
             Ok(())
         },
-        |p| {
+        |p, title_truncated| {
             inserted += 1;
             if inserted.is_multiple_of(1024) {
                 check_budget()?;
             }
+            let mut hasher = DefaultHasher::new();
+            (&p.channel_id, p.start_utc, p.stop_utc, &p.title).hash(&mut hasher);
+            let row_key = hasher.finish();
             let inserted_row = tx
                 .execute(
                     "INSERT OR IGNORE INTO epg_programmes
@@ -125,6 +134,12 @@ pub fn import_xmltv<R: BufRead>(
                 )
                 .map_err(storage_error)?;
             if inserted_row == 0 {
+                // A truncated and a longer original title may share a key
+                // despite distinct meaning. Reject this ambiguous schedule
+                // rather than treating it as an identical duplicate.
+                if title_truncated || truncated_keys.contains(&row_key) {
+                    return Err(EpgError::InvalidSchedule);
+                }
                 // Match the legacy sorted snapshot's conflict semantics:
                 // byte-identical duplicates deduplicate; different metadata
                 // for the same identity is an invalid schedule, not silent loss.
@@ -140,6 +155,8 @@ pub fn import_xmltv<R: BufRead>(
                 if prior != (p.subtitle, p.description) {
                     return Err(EpgError::InvalidSchedule);
                 }
+            } else if title_truncated {
+                truncated_keys.insert(row_key);
             }
             Ok(())
         },
@@ -218,7 +235,10 @@ mod tests {
             StreamedRows {
                 channels: 1,
                 programmes: 1,
-                truncated_descriptions: 0
+                truncated_descriptions: 0,
+                truncated_titles: 0,
+                truncated_subtitles: 0,
+                truncated_channel_names: 0,
             }
         );
         let failed = import_xmltv(
@@ -343,4 +363,95 @@ mod tests {
             .unwrap();
         assert_eq!(still, synopsis);
     }
+    #[test]
+    fn display_field_truncation_commits_preserved_ids_and_schedule() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        let name = format!("{}é", "N".repeat(511));
+        let title = format!("{}é", "T".repeat(511));
+        let subtitle = format!("{}é", "S".repeat(511));
+        let xml = format!(
+            "<tv><channel id='unchanged.id'><display-name>{name}</display-name></channel>\
+             <programme channel='unchanged.id' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{title}</title>\
+             <sub-title>{subtitle}</sub-title></programme></tv>"
+        );
+        let stats = import_xmltv(
+            &mut conn, Cursor::new(xml.as_bytes()), "source", 1, 1,
+            false, &cancelled,
+        ).unwrap();
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.truncated_titles, 1);
+        assert_eq!(stats.truncated_subtitles, 1);
+        assert_eq!(stats.truncated_channel_names, 1);
+        let (id, stored_name): (String, String) = conn.query_row(
+            "SELECT channel_id,display_name FROM epg_channels", [], |r|
+            Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!(id, "unchanged.id");
+        assert_eq!(stored_name.as_bytes().len(), 511);
+        let (id, begin, end, stored_title, sub): (String, i64, i64, String, String) =
+            conn.query_row(
+                "SELECT channel_id,start_utc,stop_utc,title,subtitle FROM epg_programmes",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            ).unwrap();
+        assert_eq!(id, "unchanged.id");
+        assert_eq!(end - begin, 3600);
+        assert_eq!(stored_title.len(), 511);
+        assert_eq!(sub.len(), 511);
+    }
+
+    #[test]
+    fn colliding_truncated_title_rolls_back_and_keeps_previous_guide() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn, Cursor::new(xml("Last-good")), "source", 1, 1,
+            false, &cancelled,
+        ).unwrap();
+        let prefix = "X".repeat(512);
+        let bad = format!(
+            "<tv><channel id='c'><display-name>C</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{prefix}a</title></programme>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{prefix}b</title></programme></tv>"
+        );
+        assert_eq!(
+            import_xmltv(
+                &mut conn, Cursor::new(bad.as_bytes()), "source", 2, 2,
+                false, &cancelled,
+            ).unwrap_err(),
+            EpgError::InvalidSchedule,
+        );
+        let stored: String = conn.query_row(
+            "SELECT title FROM epg_programmes", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(stored, "Last-good");
+    }
+
+    #[test]
+    fn strict_oversized_channel_id_still_fails_and_preserves_last_good() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn, Cursor::new(xml("Last-good")), "source", 1, 1,
+            false, &cancelled,
+        ).unwrap();
+        let id = "c".repeat(513);
+        let malformed = format!(
+            "<tv><channel id='{id}'><display-name>Long ID</display-name></channel>\
+             <programme channel='{id}' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>Show</title></programme></tv>"
+        );
+        assert!(import_xmltv(
+            &mut conn, Cursor::new(malformed.as_bytes()), "source", 2, 2,
+            false, &cancelled,
+        ).is_err());
+        let stored: String = conn.query_row(
+            "SELECT title FROM epg_programmes", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(stored, "Last-good");
+    }
+
 }
