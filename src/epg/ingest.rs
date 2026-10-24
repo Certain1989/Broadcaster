@@ -503,15 +503,24 @@ mod tests {
                 "INSERT INTO temp.d29_page_probe(payload) VALUES (zeroblob(?1))",
                 [page_size * 16],
             );
-            assert!(matches!(
-                result,
-                Err(rusqlite::Error::SqliteFailure(failure, _))
-                    if failure.code == rusqlite::ErrorCode::DiskFull
-            ), "TEMP page cap must generate SQLITE_FULL");
+            assert!(
+                matches!(
+                    result,
+                    Err(rusqlite::Error::SqliteFailure(failure, _))
+                        if failure.code == rusqlite::ErrorCode::DiskFull
+                ),
+                "TEMP page cap must generate SQLITE_FULL"
+            );
             tx.rollback().unwrap();
         }
-        let stale: i64 = scalar(&conn, "SELECT count(*) FROM sqlite_temp_master WHERE name='d29_page_probe'");
-        assert_eq!(stale, 0, "rollback must remove transaction-created TEMP tables");
+        let stale: i64 = scalar(
+            &conn,
+            "SELECT count(*) FROM sqlite_temp_master WHERE name='d29_page_probe'",
+        );
+        assert_eq!(
+            stale, 0,
+            "rollback must remove transaction-created TEMP tables"
+        );
         let restored = scalar(&conn, &format!("PRAGMA temp.max_page_count = {initial}"));
         assert_eq!(restored, initial);
         assert_eq!(scalar(&conn, "PRAGMA temp.max_page_count"), initial);
