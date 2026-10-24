@@ -428,7 +428,14 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
     for size in [10_000_usize, 10_001, 12_511, 16_796] {
         let mut c = setup();
         selected(&mut c, "g");
-        // The first and last sorted IDs must resolve by the same indexed path.
+        // Check the first and last IDs in the fully sorted channel catalogue.
+        c.execute(
+            "INSERT INTO iptv_channels
+             (id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+             VALUES ('z1','playlist-b',2,'Last','https://invalid.example/last','z-LAST',1,1)",
+            [],
+        )
+        .unwrap();
         let tx = c.transaction().unwrap();
         tx.execute(
             "INSERT INTO epg_channels (source_id,channel_id,display_name)
@@ -442,14 +449,15 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
             [],
         )
         .unwrap();
-        for index in 0..(size - 2) {
+        tx.execute(
+            "INSERT INTO epg_channels (source_id,channel_id,display_name)
+             VALUES ('g','z-LAST','Unique Non-ID')",
+            [],
+        )
+        .unwrap();
+        for index in 0..(size - 3) {
             let target = format!("c-{index:05}");
-            let name = if index == size - 3 {
-                // The duplicate is the last sorted entry (beyond 10k on large guides).
-                "Unique Non-ID"
-            } else {
-                "Other Station"
-            };
+            let name = "Other Station";
             tx.execute(
                 "INSERT INTO epg_channels (source_id,channel_id,display_name)
                  VALUES ('g',?1,?2)",
@@ -467,6 +475,11 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
                 "exact match at {size} for {row}"
             );
         }
+        assert!(matches!(resolve(&c, "z1"),
+            MatchDecision::Matched { method: MatchMethod::ExactTvgId, channel_id, .. }
+            if channel_id == "z-LAST"), "last sorted ID at {size}");
+        // Both name candidates sit at the first and final sorted positions;
+        // the second is beyond the 10k suggestion cap in larger catalogues.
         // Nonbinding uniqueness must never be inferred from a truncated subset.
         if size > 10_000 {
             assert!(
@@ -531,7 +544,7 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
         .unwrap();
         assert!(matches!(resolve(&c, "a1"),
             MatchDecision::MissingTarget { channel_id, .. } if channel_id == "TVG.EXACT"));
-        assert_eq!(count(&c, "iptv_channels"), 4);
+        assert_eq!(count(&c, "iptv_channels"), 5);
         fk_ok(&c);
     }
 }
