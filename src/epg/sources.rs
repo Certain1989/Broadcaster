@@ -580,7 +580,8 @@ mod tests {
         conn.execute(
             "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1 WHERE id=?2",
             params![now, source.id],
-        ).unwrap();
+        )
+        .unwrap();
         assert!(store
             .due_source_ids(now + DEFAULT_REFRESH_SECONDS - 1)
             .unwrap()
