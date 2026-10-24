@@ -1232,11 +1232,10 @@ impl TvStreamsView {
         ));
     }
 
-    fn utc_clock(at: i64) -> String {
-        match time::OffsetDateTime::from_unix_timestamp(at) {
-            Ok(t) => format!("{:02}:{:02} UTC", t.hour(), t.minute()),
-            Err(_) => gettext("Unknown time"),
-        }
+    fn local_clock(at: i64) -> String {
+        crate::utils::format_timestamp_time(at)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| gettext("Unknown time"))
     }
 
     fn paint_epg(ui: &RowUi, result: ProjectionOutcome) {
@@ -1301,9 +1300,12 @@ impl TvStreamsView {
                                     ui.epg_title.set_tooltip_text(Some(&text));
                                     let range = format!(
                                         "{} – {}",
-                                        Self::utc_clock(current.start_utc),
-                                        Self::utc_clock(current.stop_utc)
+                                        Self::local_clock(current.start_utc),
+                                        Self::local_clock(current.stop_utc)
                                     );
+                                    let row_label = format!("{} · {}", text, range);
+                                    ui.epg_title.set_text(&row_label);
+                                    ui.epg_title.set_tooltip_text(Some(&row_label));
                                     status = if refresh_failed {
                                         format!(
                                             "{} · {}",
@@ -1330,7 +1332,7 @@ impl TvStreamsView {
                                         "{}: {} ({})",
                                         gettext("Next"),
                                         next.title,
-                                        Self::utc_clock(next.start_utc)
+                                        Self::local_clock(next.start_utc)
                                     );
                                     ui.epg_next.set_text(&label);
                                     ui.epg_next.set_tooltip_text(Some(&label));
