@@ -82,7 +82,7 @@ impl ProjectionService {
         }
         if self
             .pending
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_PENDING).then_some(n + 1)
             })
             .is_err()
