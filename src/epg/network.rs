@@ -620,6 +620,25 @@ mod tests {
     fn addr(ip: &str) -> SocketAddr {
         SocketAddr::new(ip.parse().unwrap(), 443)
     }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn spool_write_maps_real_kernel_enospc_without_filling_disk() {
+        // /dev/full is a bounded Linux kernel fault device, not a filesystem
+        // pressure test. Exercise the same asynchronous spool-write primitive.
+        use tokio::io::AsyncWriteExt;
+        let device = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .expect("Linux provides the non-destructive /dev/full device");
+        let mut spool = tokio::fs::File::from_std(device);
+        let error = spool
+            .write_all(b"<tv/>")
+            .await
+            .expect_err("the kernel must reject a write to /dev/full");
+        assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
+        assert_eq!(spool_io_error(error), GuideFetchError::DiskFull);
+    }
+
     #[test]
     fn spool_errors_distinguish_storage_full_from_other_io() {
         assert_eq!(
