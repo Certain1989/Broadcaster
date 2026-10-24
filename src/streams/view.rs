@@ -11,10 +11,17 @@ use std::{
 
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use gettextrs::gettext;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
-use crate::epg::{bindings::SemanticProgrammeState, cache::{Coverage, Freshness}, model::Certainty};
 use super::epg_projection::{DeliveryKey, ProjectionOutcome, ProjectionService};
+use crate::epg::{
+    bindings::SemanticProgrammeState,
+    cache::{Coverage, Freshness},
+    model::Certainty,
+};
 
 use crate::{
     application::{StreamHeaders, TvApplication, VideoInfo},
@@ -243,7 +250,9 @@ impl TvStreamsView {
             &imp.search_entry.get(),
             crate::keyboard::KeyboardOptions::default(),
         );
-        imp.projection.set(ProjectionService::new()).expect("EPG projection initialized once");
+        imp.projection
+            .set(ProjectionService::new())
+            .expect("EPG projection initialized once");
         let rows = StreamRows::new();
         let selection = gtk::SingleSelection::new(Some(rows.clone()));
         selection.set_autoselect(true);
@@ -931,7 +940,12 @@ impl TvStreamsView {
             #[weak]
             item,
             move |_| {
-                if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(item.position())) {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|r| r.channel(item.position()))
+                {
                     super::editor::show_epg_mapping_editor(&view, channel.id);
                 }
             }
@@ -1098,12 +1112,12 @@ impl TvStreamsView {
         ui.mapping.set_sensitive(true);
     }
 
-
     /// All invalidations happen on GTK's main context, including results that
     /// finished their worker query but have not yet reached the paint callback.
     fn invalidate_epg(&self) {
         let imp = self.imp();
-        imp.epg_generation.set(imp.epg_generation.get().wrapping_add(1));
+        imp.epg_generation
+            .set(imp.epg_generation.get().wrapping_add(1));
         for binding in imp.bindings.borrow_mut().values_mut() {
             if let Some((_, cancelled)) = binding.request.take() {
                 cancelled.store(true, Ordering::Release);
@@ -1116,8 +1130,17 @@ impl TvStreamsView {
     /// channel reload, and never changes selection or grabs keyboard focus.
     pub(crate) fn epg_changed(&self) {
         self.invalidate_epg();
-        let slots: Vec<_> = self.imp().bindings.borrow().iter()
-            .filter_map(|(key, bound)| bound.connection.as_ref().map(|(slot, _)| (*key, slot.clone())))
+        let slots: Vec<_> = self
+            .imp()
+            .bindings
+            .borrow()
+            .iter()
+            .filter_map(|(key, bound)| {
+                bound
+                    .connection
+                    .as_ref()
+                    .map(|(slot, _)| (*key, slot.clone()))
+            })
             .collect();
         for (key, slot) in slots {
             self.request_epg_for_slot(key, &slot);
@@ -1135,8 +1158,12 @@ impl TvStreamsView {
     }
 
     fn request_epg_for_slot(&self, key: usize, slot: &StreamSlot) {
-        let Some(channel) = slot.channel() else { return; };
-        let Some(worker) = self.imp().projection.get().cloned() else { return; };
+        let Some(channel) = slot.channel() else {
+            return;
+        };
+        let Some(worker) = self.imp().projection.get().cloned() else {
+            return;
+        };
         let imp = self.imp();
         let serial = imp.projection_serial.get().wrapping_add(1);
         imp.projection_serial.set(serial);
@@ -1149,8 +1176,16 @@ impl TvStreamsView {
         let cancelled = Arc::new(AtomicBool::new(false));
         {
             let mut bindings = imp.bindings.borrow_mut();
-            let Some(bound) = bindings.get_mut(&key) else { return; };
-            if bound.connection.as_ref().is_none_or(|(bound_slot, _)| bound_slot != slot) { return; }
+            let Some(bound) = bindings.get_mut(&key) else {
+                return;
+            };
+            if bound
+                .connection
+                .as_ref()
+                .is_none_or(|(bound_slot, _)| bound_slot != slot)
+            {
+                return;
+            }
             if let Some((_, old)) = bound.request.take() {
                 old.store(true, Ordering::Release);
             }
@@ -1164,20 +1199,32 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             async move {
-                let result = worker.read(request.row_id.clone(), at, cancelled.clone()).await;
+                let result = worker
+                    .read(request.row_id.clone(), at, cancelled.clone())
+                    .await;
                 if cancelled.load(Ordering::Acquire)
                     || view.imp().generation.get() != request.view_generation
                     || view.imp().epg_generation.get() != request.epg_generation
-                { return; }
+                {
+                    return;
+                }
                 let mut bindings = view.imp().bindings.borrow_mut();
-                let Some(bound) = bindings.get_mut(&key) else { return; };
+                let Some(bound) = bindings.get_mut(&key) else {
+                    return;
+                };
                 let matches = bound.request.as_ref().is_some_and(|(current, token)| {
                     Arc::ptr_eq(token, &cancelled)
-                        && current.current(&request.row_id,
-                            view.imp().generation.get(), request.binding_generation,
-                            view.imp().epg_generation.get())
-                }) && bound.connection.as_ref().and_then(|(slot, _)| slot.channel())
-                     .is_some_and(|ch| ch.id == request.row_id);
+                        && current.current(
+                            &request.row_id,
+                            view.imp().generation.get(),
+                            request.binding_generation,
+                            view.imp().epg_generation.get(),
+                        )
+                }) && bound
+                    .connection
+                    .as_ref()
+                    .and_then(|(slot, _)| slot.channel())
+                    .is_some_and(|ch| ch.id == request.row_id);
                 if matches {
                     Self::paint_epg(&bound.ui, result);
                 }
@@ -1196,23 +1243,44 @@ impl TvStreamsView {
         Self::clear_epg(ui);
         let mut status = String::new();
         match result {
-            ProjectionOutcome::Busy => status = gettext("Programme lookup queued; scroll back to retry"),
+            ProjectionOutcome::Busy => {
+                status = gettext("Programme lookup queued; scroll back to retry")
+            }
             ProjectionOutcome::Cancelled => return,
-            ProjectionOutcome::Read(Err(_)) => status = gettext("Programme information unavailable"),
+            ProjectionOutcome::Read(Err(_)) => {
+                status = gettext("Programme information unavailable")
+            }
             ProjectionOutcome::Read(Ok(state)) => match state {
-                SemanticProgrammeState::Unconfigured => status = gettext("No programme guide selected"),
-                SemanticProgrammeState::Disabled => status = gettext("Selected programme guide disabled"),
-                SemanticProgrammeState::Unavailable => status = gettext("Guide not fetched or unavailable"),
-                SemanticProgrammeState::Unmatched => status = gettext("No matching programme guide channel"),
-                SemanticProgrammeState::AmbiguousMapping => status = gettext("Ambiguous channel mapping"),
-                SemanticProgrammeState::MissingTarget => status = gettext("Saved guide channel is missing"),
+                SemanticProgrammeState::Unconfigured => {
+                    status = gettext("No programme guide selected")
+                }
+                SemanticProgrammeState::Disabled => {
+                    status = gettext("Selected programme guide disabled")
+                }
+                SemanticProgrammeState::Unavailable => {
+                    status = gettext("Guide not fetched or unavailable")
+                }
+                SemanticProgrammeState::Unmatched => {
+                    status = gettext("No matching programme guide channel")
+                }
+                SemanticProgrammeState::AmbiguousMapping => {
+                    status = gettext("Ambiguous channel mapping")
+                }
+                SemanticProgrammeState::MissingTarget => {
+                    status = gettext("Saved guide channel is missing")
+                }
                 SemanticProgrammeState::SuggestionsUnavailable => {
                     status = gettext("Name suggestions unavailable for this guide");
                 }
                 SemanticProgrammeState::Suggested { .. } => {
                     status = gettext("Possible name match — not confirmed");
                 }
-                SemanticProgrammeState::Matched { page, now_next, refresh_failed, .. } => {
+                SemanticProgrammeState::Matched {
+                    page,
+                    now_next,
+                    refresh_failed,
+                    ..
+                } => {
                     status = if page.truncated {
                         gettext("Guide window incomplete")
                     } else {
@@ -1231,13 +1299,24 @@ impl TvStreamsView {
                                     let text = format!("{}: {}", gettext("Now"), current.title);
                                     ui.epg_title.set_text(&text);
                                     ui.epg_title.set_tooltip_text(Some(&text));
-                                    let range = format!("{} – {}",
+                                    let range = format!(
+                                        "{} – {}",
                                         Self::utc_clock(current.start_utc),
-                                        Self::utc_clock(current.stop_utc));
+                                        Self::utc_clock(current.stop_utc)
+                                    );
                                     status = if refresh_failed {
-                                        format!("{} · {}", range, gettext("Last refresh failed; cached guide"))
-                                    } else { range };
-                                    if let Some(progress) = data.progress_fraction.filter(|p| p.is_finite() && (0.0..=1.0).contains(p)) {
+                                        format!(
+                                            "{} · {}",
+                                            range,
+                                            gettext("Last refresh failed; cached guide")
+                                        )
+                                    } else {
+                                        range
+                                    };
+                                    if let Some(progress) = data
+                                        .progress_fraction
+                                        .filter(|p| p.is_finite() && (0.0..=1.0).contains(p))
+                                    {
                                         ui.epg_progress.set_fraction(progress);
                                         ui.epg_progress.set_visible(true);
                                     }
@@ -1247,8 +1326,12 @@ impl TvStreamsView {
                             }
                             if !data.next_ambiguous {
                                 if let Some(next) = data.next {
-                                    let label = format!("{}: {} ({})", gettext("Next"),
-                                        next.title, Self::utc_clock(next.start_utc));
+                                    let label = format!(
+                                        "{}: {} ({})",
+                                        gettext("Next"),
+                                        next.title,
+                                        Self::utc_clock(next.start_utc)
+                                    );
                                     ui.epg_next.set_text(&label);
                                     ui.epg_next.set_tooltip_text(Some(&label));
                                 }
@@ -1256,7 +1339,11 @@ impl TvStreamsView {
                         }
                     }
                     if refresh_failed && !status.contains(&gettext("Last refresh failed")) {
-                        status = format!("{} · {}", status, gettext("Last refresh failed; cached guide"));
+                        status = format!(
+                            "{} · {}",
+                            status,
+                            gettext("Last refresh failed; cached guide")
+                        );
                     }
                     if matches!(page.coverage, Coverage::NoData) {
                         ui.epg_title.set_text("");
@@ -1394,13 +1481,11 @@ impl TvStreamsView {
             return;
         };
         // The explicit Play button owns Return when it has focus.
-        if self
-            .imp()
-            .bindings
-            .borrow()
-            .values()
-            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus() || binding.ui.mapping.has_focus())
-        {
+        if self.imp().bindings.borrow().values().any(|binding| {
+            binding.ui.play.has_focus()
+                || binding.ui.edit.has_focus()
+                || binding.ui.mapping.has_focus()
+        }) {
             return;
         }
         if self.imp().expanded_id.borrow().as_deref() == Some(channel.id.as_str()) {
