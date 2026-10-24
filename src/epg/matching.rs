@@ -89,6 +89,11 @@ pub enum MatchDecision {
     Ambiguous {
         source_id: String,
     },
+    /// Name hints were not evaluated because the catalogue exceeds the bounded scan.
+    /// Never interpret this as an unmatched or unique suggestion.
+    SuggestionsUnavailable {
+        source_id: String,
+    },
     MissingTarget {
         source_id: String,
         channel_id: String,
@@ -211,13 +216,12 @@ pub fn match_in_source(
     if !display_name.is_empty() && !wanted.contains(&display_name) {
         wanted.push(display_name);
     }
+    // Fold each catalogue entry once, regardless of the number of name hints.
     let mut candidates = channels
         .iter()
         .filter(|c| {
             c.source_id == *id
-                && wanted
-                    .iter()
-                    .any(|name| *name == normalized_name(&c.display_name))
+                && wanted.contains(&normalized_name(&c.display_name))
         })
         .map(|c| c.channel_id.as_str())
         .collect::<Vec<_>>();
