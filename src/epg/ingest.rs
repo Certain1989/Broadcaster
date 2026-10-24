@@ -475,6 +475,63 @@ mod tests {
         .unwrap();
         conn
     }
+    #[test]
+    fn d29_actual_bundled_sqlite_temp_page_limit_probe() {
+        // Run against Cargo.lock's bundled SQLite, not host sqlite3.
+        let mut conn = db();
+        let other = db();
+        let scalar = |connection: &Connection, sql: &str| -> i64 {
+            connection.query_row(sql, [], |row| row.get(0)).unwrap()
+        };
+        let initial = scalar(&conn, "PRAGMA temp.max_page_count");
+        let other_initial = scalar(&other, "PRAGMA temp.max_page_count");
+        let page_size = scalar(&conn, "PRAGMA temp.page_size");
+        assert!(page_size > 0);
+        let pages = (128_i64 * 1024 * 1024) / page_size;
+        assert!(pages > 4);
+        assert!(pages * page_size <= 128_i64 * 1024 * 1024);
+        assert!((pages + 1) * page_size > 128_i64 * 1024 * 1024);
+
+        {
+            let tx = conn.transaction().unwrap();
+            let set = scalar(&tx, "PRAGMA temp.max_page_count = 4");
+            assert_eq!(set, 4, "bundled SQLite must support the TEMP page limit");
+            assert_eq!(scalar(&tx, "PRAGMA temp.max_page_count"), 4);
+            tx.execute_batch("CREATE TEMP TABLE d29_page_probe (payload BLOB);")
+                .unwrap();
+            let result = tx.execute(
+                "INSERT INTO temp.d29_page_probe(payload) VALUES (zeroblob(?1))",
+                [page_size * 16],
+            );
+            assert!(matches!(
+                result,
+                Err(rusqlite::Error::SqliteFailure(failure, _))
+                    if failure.code == rusqlite::ErrorCode::DiskFull
+            ), "TEMP page cap must generate SQLITE_FULL");
+            tx.rollback().unwrap();
+        }
+        let stale: i64 = scalar(&conn, "SELECT count(*) FROM sqlite_temp_master WHERE name='d29_page_probe'");
+        assert_eq!(stale, 0, "rollback must remove transaction-created TEMP tables");
+        let restored = scalar(&conn, &format!("PRAGMA temp.max_page_count = {initial}"));
+        assert_eq!(restored, initial);
+        assert_eq!(scalar(&conn, "PRAGMA temp.max_page_count"), initial);
+        assert_eq!(scalar(&other, "PRAGMA temp.max_page_count"), other_initial);
+
+        {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("CREATE TEMP TABLE d29_page_probe (payload BLOB);")
+                .unwrap();
+            tx.execute(
+                "INSERT INTO temp.d29_page_probe(payload) VALUES (zeroblob(?1))",
+                [page_size * 16],
+            )
+            .unwrap();
+            tx.execute_batch("DROP TABLE temp.d29_page_probe;").unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(scalar(&conn, "PRAGMA temp.max_page_count"), initial);
+    }
+
     fn xml(title: &str) -> Vec<u8> {
         format!(
             "<tv><channel id='c'><display-name>Example</display-name></channel>
