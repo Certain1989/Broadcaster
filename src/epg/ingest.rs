@@ -290,15 +290,24 @@ mod tests {
             "é".repeat(1400),
         );
         let rows = import_xmltv(
-            &mut conn, Cursor::new(good.as_bytes()), "source",
-            1, 1, false, &cancelled,
-        ).unwrap();
+            &mut conn,
+            Cursor::new(good.as_bytes()),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
         assert_eq!(rows.programmes, 2);
         assert_eq!(rows.truncated_descriptions, 1);
-        let synopsis: String = conn.query_row(
-            "SELECT description FROM epg_programmes WHERE title='One'",
-            [], |r| r.get(0),
-        ).unwrap();
+        let synopsis: String = conn
+            .query_row(
+                "SELECT description FROM epg_programmes WHERE title='One'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(synopsis.len(), 2048);
         assert!(synopsis.ends_with('é'));
         let broken = format!(
@@ -309,19 +318,29 @@ mod tests {
             "x".repeat(4000),
         );
         assert_eq!(
-            import_xmltv(&mut conn, Cursor::new(broken.as_bytes()), "source",
-                2, 2, false, &cancelled).unwrap_err(),
+            import_xmltv(
+                &mut conn,
+                Cursor::new(broken.as_bytes()),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled
+            )
+            .unwrap_err(),
             EpgError::InvalidInput,
         );
-        let persisted: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0),
-        ).unwrap();
+        let persisted: i64 = conn
+            .query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(persisted, 2);
-        let still: String = conn.query_row(
-            "SELECT description FROM epg_programmes WHERE title='One'",
-            [], |r| r.get(0),
-        ).unwrap();
+        let still: String = conn
+            .query_row(
+                "SELECT description FROM epg_programmes WHERE title='One'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(still, synopsis);
     }
-
 }
