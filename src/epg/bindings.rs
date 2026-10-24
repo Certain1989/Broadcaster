@@ -318,9 +318,58 @@ fn resolve_source_id(
     Ok(manual.or(exception).or(shared))
 }
 
+// A SAVEPOINT can be nested under a caller-owned transaction, unlike BEGIN.
+// Its first SELECT establishes one SQLite snapshot for the complete semantic
+// read. Always release it, even when a query is cancelled or fails. The reader
+// performs no writes; ROLLBACK TO also protects an outer caller's transaction.
+fn with_read_snapshot<T>(
+    conn: &Connection,
+    operation: impl FnOnce() -> Result<T, EpgError>,
+) -> Result<T, EpgError> {
+    conn.execute_batch("SAVEPOINT broadcaster_epg_read_snapshot")
+        .map_err(|_| EpgError::Storage)?;
+    let result = operation();
+    let cleanup = conn.execute_batch(
+        "ROLLBACK TO broadcaster_epg_read_snapshot; RELEASE broadcaster_epg_read_snapshot",
+    );
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (_, Err(_)) => Err(EpgError::Storage),
+    }
+}
+
+// The SQL-v2 composite PRIMARY KEY(source_id,channel_id) makes this an
+// indexed case-sensitive lookup. Never scan the catalogue for explicit targets.
+fn channel_present(
+    conn: &Connection,
+    source_id: &str,
+    target_id: &str,
+) -> Result<bool, EpgError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM epg_channels WHERE source_id=?1 AND channel_id=?2)",
+        params![source_id, target_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|present| present == 1)
+    .map_err(|_| EpgError::Storage)
+}
+
+/// Maximum whole-guide name suggestion scan per individual row. Above this
+/// bound, a suggestion cannot be proved unique and is not evaluated.
+const NAME_SUGGESTION_SCAN_LIMIT: usize = 10_000;
+
 /// Read resolution without reading media URLs or touching network adapters.
 /// Row input includes the current effective name (user override, if any).
 pub fn resolve_row(
+    conn: &Connection,
+    channel_id: &str,
+    cancel: &AtomicBool,
+) -> Result<MatchDecision, EpgError> {
+    with_read_snapshot(conn, || resolve_row_inner(conn, channel_id, cancel))
+}
+
+fn resolve_row_inner(
     conn: &Connection,
     channel_id: &str,
     cancel: &AtomicBool,
@@ -418,10 +467,61 @@ pub fn resolve_row(
             .map_err(|_| EpgError::Storage)?,
         None => None,
     };
+    // An explicit target must resolve independently of catalogue cardinality.
+    // Missing manual/confirmed targets never fall through to name or exact ID.
+    if let Some(target) = manual.as_ref() {
+        if target.guide_source_id != *selected_id {
+            return Ok(MatchDecision::Unavailable {
+                source_id: selected_id.clone(),
+            });
+        }
+        return Ok(if channel_present(conn, selected_id, &target.guide_channel_id)? {
+            MatchDecision::Matched {
+                source_id: selected_id.clone(),
+                channel_id: target.guide_channel_id.clone(),
+                method: MatchMethod::RowOverride,
+            }
+        } else {
+            MatchDecision::MissingTarget {
+                source_id: selected_id.clone(),
+                channel_id: target.guide_channel_id.clone(),
+            }
+        });
+    }
+    if let Some(target) = alias.as_deref() {
+        return Ok(if channel_present(conn, selected_id, target)? {
+            MatchDecision::Matched {
+                source_id: selected_id.clone(),
+                channel_id: target.to_owned(),
+                method: MatchMethod::ConfirmedGlobalAlias,
+            }
+        } else {
+            MatchDecision::MissingTarget {
+                source_id: selected_id.clone(),
+                channel_id: target.to_owned(),
+            }
+        });
+    }
+    if let Some(tvg_id) = row.tvg_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        if channel_present(conn, selected_id, tvg_id)? {
+            return Ok(MatchDecision::Matched {
+                source_id: selected_id.clone(),
+                channel_id: tvg_id.to_owned(),
+                method: MatchMethod::ExactTvgId,
+            });
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
+
+    // Name suggestions are never attached bindings. A LIMIT+sentinel cannot
+    // establish uniqueness if the guide contains more channels than the cap.
+    // Explicit targets above bypass this entire scan (and its allocations).
     let mut stmt = conn
         .prepare(
             "SELECT source_id,channel_id,display_name FROM epg_channels
-         WHERE source_id=?1 ORDER BY channel_id LIMIT 10001",
+             WHERE source_id=?1 ORDER BY channel_id LIMIT 10001",
         )
         .map_err(|_| EpgError::Storage)?;
     let rows = stmt
@@ -438,8 +538,10 @@ pub fn resolve_row(
         if cancel.load(Ordering::Relaxed) {
             return Err(EpgError::Cancelled);
         }
-        if channels.len() >= 10_000 {
-            return Err(EpgError::OverLimit);
+        if channels.len() == NAME_SUGGESTION_SCAN_LIMIT {
+            return Ok(MatchDecision::SuggestionsUnavailable {
+                source_id: selected_id.clone(),
+            });
         }
         channels.push(item.map_err(|_| EpgError::Storage)?);
     }
@@ -447,8 +549,8 @@ pub fn resolve_row(
         &row,
         chosen.as_ref(),
         availability,
-        manual.as_ref(),
-        alias.as_deref(),
+        None,
+        None,
         &channels,
     ))
 }
@@ -461,6 +563,8 @@ pub enum SemanticProgrammeState {
     Unmatched,
     AmbiguousMapping,
     MissingTarget,
+    /// Catalogue too large to prove a unique nonbinding name suggestion.
+    SuggestionsUnavailable,
     /// A proposal that is NOT a saved or attached mapping.
     Suggested {
         source_id: String,
@@ -485,13 +589,27 @@ pub fn read_semantic_now_next(
     now_utc: i64,
     cancel: &AtomicBool,
 ) -> Result<SemanticProgrammeState, EpgError> {
-    let match_state = resolve_row(conn, iptv_channel_id, cancel)?;
+    with_read_snapshot(conn, || {
+        read_semantic_now_next_inner(conn, iptv_channel_id, now_utc, cancel)
+    })
+}
+
+fn read_semantic_now_next_inner(
+    conn: &Connection,
+    iptv_channel_id: &str,
+    now_utc: i64,
+    cancel: &AtomicBool,
+) -> Result<SemanticProgrammeState, EpgError> {
+    let match_state = resolve_row_inner(conn, iptv_channel_id, cancel)?;
     let (source, channel, method) = match match_state {
         MatchDecision::Unconfigured => return Ok(SemanticProgrammeState::Unconfigured),
         MatchDecision::Disabled { .. } => return Ok(SemanticProgrammeState::Disabled),
         MatchDecision::Unavailable { .. } => return Ok(SemanticProgrammeState::Unavailable),
         MatchDecision::Unmatched { .. } => return Ok(SemanticProgrammeState::Unmatched),
         MatchDecision::Ambiguous { .. } => return Ok(SemanticProgrammeState::AmbiguousMapping),
+        MatchDecision::SuggestionsUnavailable { .. } => {
+            return Ok(SemanticProgrammeState::SuggestionsUnavailable)
+        }
         MatchDecision::MissingTarget { .. } => return Ok(SemanticProgrammeState::MissingTarget),
         MatchDecision::Suggested {
             source_id,
