@@ -892,7 +892,7 @@ mod e2_admission_tests {
         }
         assert!(matches!(
             manager.refresh(source.id.clone()).await,
-            Err(GuideServiceError::Fetch(GuideFetchError::Oversize))
+            Err(GuideServiceError::Fetch(GuideFetchError::WireLimit))
         ));
         let after = manager.list().await.unwrap().pop().unwrap();
         assert_eq!(after.last_success_at, good.last_success_at);
