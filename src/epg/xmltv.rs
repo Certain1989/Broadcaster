@@ -817,7 +817,10 @@ pub fn decode_xmltv_rows<R: BufRead>(
 }
 
 /// Only the transactional importer opts in to validated C1 omission events.
-#[expect(clippy::too_many_arguments, reason = "streaming parser with a separate validation sink")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "streaming parser with a separate validation sink"
+)]
 pub(crate) fn decode_xmltv_rows_omitting_c1<R: BufRead>(
     input: R,
     source_id: &str,
@@ -843,7 +846,10 @@ pub(crate) fn decode_xmltv_rows_omitting_c1<R: BufRead>(
     )
 }
 
-#[expect(clippy::too_many_arguments, reason = "streaming parser with separate validated sinks")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "streaming parser with separate validated sinks"
+)]
 fn decode_xmltv_rows_internal<R: BufRead>(
     input: R,
     source_id: &str,
