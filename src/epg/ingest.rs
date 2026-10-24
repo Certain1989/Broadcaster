@@ -27,7 +27,6 @@ std::thread_local! {
     static TEST_STAGED_MARKERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-
 #[cfg(test)]
 #[derive(Debug)]
 pub(super) struct O01Observation {
@@ -114,7 +113,9 @@ fn observe_o01(
         }
     };
     O01Observation {
-        sqlite_version: tx.query_row("SELECT sqlite_version()", [], |r| r.get(0)).unwrap(),
+        sqlite_version: tx
+            .query_row("SELECT sqlite_version()", [], |r| r.get(0))
+            .unwrap(),
         compile_temp_store: tx
             .query_row(
                 "SELECT compile_options FROM pragma_compile_options
@@ -1044,9 +1045,13 @@ mod tests {
         assert_eq!(leaked, 0);
     }
 
-    fn import_fixture(conn: &mut Connection, xml: &str, source: &str, stamp: i64, revision: i64)
-        -> Result<StreamedRows, EpgError>
-    {
+    fn import_fixture(
+        conn: &mut Connection,
+        xml: &str,
+        source: &str,
+        stamp: i64,
+        revision: i64,
+    ) -> Result<StreamedRows, EpgError> {
         import_xmltv(
             conn,
             Cursor::new(xml.as_bytes()),
@@ -1059,8 +1064,12 @@ mod tests {
     }
 
     fn programme(channel: &str, title: &str, subtitle: Option<&str>, desc: Option<&str>) -> String {
-        let subtitle = subtitle.map(|value| format!("<sub-title>{value}</sub-title>")).unwrap_or_default();
-        let desc = desc.map(|value| format!("<desc>{value}</desc>")).unwrap_or_default();
+        let subtitle = subtitle
+            .map(|value| format!("<sub-title>{value}</sub-title>"))
+            .unwrap_or_default();
+        let desc = desc
+            .map(|value| format!("<desc>{value}</desc>"))
+            .unwrap_or_default();
         format!(
             "<programme channel='{channel}' start='20300101000000 +0000'              stop='20300101010000 +0000'><title>{title}</title>{subtitle}{desc}</programme>"
         )
@@ -1115,7 +1124,9 @@ mod tests {
         let input = guide(c, &format!("{short}{plain}{plain}"));
         let stats = import_fixture(&mut conn, &input, "source", 1, 1).unwrap();
         assert_eq!((stats.programmes, stats.truncated_titles), (2, 1));
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 2);
         assert_no_temp_marker(&conn);
 
@@ -1127,7 +1138,9 @@ mod tests {
             EpgError::InvalidSchedule
         );
         assert_no_temp_marker(&conn);
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 2, "last-good imported rows must survive conflict");
     }
 
@@ -1147,18 +1160,34 @@ mod tests {
                 programmes.push_str(&programme(channel, title, Some(&"S".repeat(513)), None));
             }
         }
-        let stats = import_fixture(&mut conn, &guide(&channels, &programmes), "source", 1, 1).unwrap();
+        let stats =
+            import_fixture(&mut conn, &guide(&channels, &programmes), "source", 1, 1).unwrap();
         assert_eq!((stats.programmes, stats.truncated_subtitles), (4, 4));
-        let count: i64 = conn.query_row("SELECT COUNT(DISTINCT rowid) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT rowid) FROM epg_programmes",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 4);
         assert_no_temp_marker(&conn);
 
         // Exact BINARY identity distinguishes case, not just long shared prefixes.
         let input = guide(
             "<channel id='c'><display-name>C</display-name></channel>",
-            &format!("{}{}", programme("c", "Show", None, None), programme("c", "show", None, None)),
+            &format!(
+                "{}{}",
+                programme("c", "Show", None, None),
+                programme("c", "show", None, None)
+            ),
         );
-        assert_eq!(import_fixture(&mut conn, &input, "source", 2, 2).unwrap().programmes, 2);
+        assert_eq!(
+            import_fixture(&mut conn, &input, "source", 2, 2)
+                .unwrap()
+                .programmes,
+            2
+        );
     }
 
     #[test]
@@ -1172,19 +1201,39 @@ mod tests {
                 } else {
                     "T".repeat(len)
                 };
-                let title = if field == "title" { value.as_str() } else { "Normal" };
+                let title = if field == "title" {
+                    value.as_str()
+                } else {
+                    "Normal"
+                };
                 let sub = (field == "sub-title").then_some(value.as_str());
                 let desc = (field == "desc").then_some(value.as_str());
                 let stats = import_fixture(
                     &mut conn,
                     &guide(channels, &programme("c", title, sub, desc)),
-                    "source", 1, 1,
-                ).unwrap();
+                    "source",
+                    1,
+                    1,
+                )
+                .unwrap();
                 assert_eq!(stats.programmes, 1);
                 let expected_short = usize::from(len == 513);
-                assert_eq!(stats.truncated_titles, if field == "title" { expected_short } else { 0 });
-                assert_eq!(stats.truncated_subtitles, if field == "sub-title" { expected_short } else { 0 });
-                assert_eq!(stats.truncated_descriptions, if field == "desc" { expected_short } else { 0 });
+                assert_eq!(
+                    stats.truncated_titles,
+                    if field == "title" { expected_short } else { 0 }
+                );
+                assert_eq!(
+                    stats.truncated_subtitles,
+                    if field == "sub-title" {
+                        expected_short
+                    } else {
+                        0
+                    }
+                );
+                assert_eq!(
+                    stats.truncated_descriptions,
+                    if field == "desc" { expected_short } else { 0 }
+                );
                 assert_no_temp_marker(&conn);
             }
         }
@@ -1195,18 +1244,36 @@ mod tests {
         let stats = import_fixture(
             &mut conn,
             &guide(channels, &programme("c", &t, Some(&s), Some(&d))),
-            "source", 1, 1,
-        ).unwrap();
-        assert_eq!((stats.truncated_titles, stats.truncated_subtitles, stats.truncated_descriptions), (1, 1, 1));
-        let (stored_title, stored_sub, stored_desc, start, stop): (String, String, String, i64, i64) =
-            conn.query_row(
+            "source",
+            1,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                stats.truncated_titles,
+                stats.truncated_subtitles,
+                stats.truncated_descriptions
+            ),
+            (1, 1, 1)
+        );
+        let (stored_title, stored_sub, stored_desc, start, stop): (
+            String,
+            String,
+            String,
+            i64,
+            i64,
+        ) = conn
+            .query_row(
                 "SELECT title,subtitle,description,start_utc,stop_utc FROM epg_programmes",
-                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            ).unwrap();
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
         assert_eq!(stored_title, "X".repeat(511));
         assert_eq!(stored_sub, "Y".repeat(511));
         assert_eq!(stored_desc, "Z".repeat(2047));
-        assert_eq!((start,stop),(1_893_456_000,1_893_459_600));
+        assert_eq!((start, stop), (1_893_456_000, 1_893_459_600));
         assert_no_temp_marker(&conn);
     }
 
@@ -1217,19 +1284,34 @@ mod tests {
             "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)              VALUES ('second','Other','local_file','/synthetic2',1,1)", [],
         ).unwrap();
         let c = "<channel id='c'><display-name>C</display-name></channel>";
-        let combined = programme("c", &"T".repeat(513), Some(&"S".repeat(513)), Some(&"D".repeat(2049)));
+        let combined = programme(
+            "c",
+            &"T".repeat(513),
+            Some(&"S".repeat(513)),
+            Some(&"D".repeat(2049)),
+        );
         assert_eq!(
-            import_fixture(&mut conn, &guide(c,&combined), "source", 1, 1).unwrap().programmes, 1
+            import_fixture(&mut conn, &guide(c, &combined), "source", 1, 1)
+                .unwrap()
+                .programmes,
+            1
         );
         // Another source with the same channel/UTC/title identity is independent.
         let same = programme("c", &"T".repeat(512), None, None);
         assert_eq!(
-            import_fixture(&mut conn, &guide(c,&same), "second", 1, 1).unwrap().programmes, 1
+            import_fixture(&mut conn, &guide(c, &same), "second", 1, 1)
+                .unwrap()
+                .programmes,
+            1
         );
         assert_no_temp_marker(&conn);
         for reverse in [false, true] {
-            let (a,b) = if reverse { (&same, &combined) } else { (&combined, &same) };
-            let failed = import_fixture(&mut conn, &guide(c,&format!("{a}{b}")), "source", 2, 2);
+            let (a, b) = if reverse {
+                (&same, &combined)
+            } else {
+                (&combined, &same)
+            };
+            let failed = import_fixture(&mut conn, &guide(c, &format!("{a}{b}")), "source", 2, 2);
             assert_eq!(failed.unwrap_err(), EpgError::InvalidSchedule);
             assert_no_temp_marker(&conn);
         }
@@ -1237,6 +1319,6 @@ mod tests {
             "SELECT (SELECT COUNT(*) FROM epg_programmes WHERE source_id='source'),                     (SELECT COUNT(*) FROM epg_programmes WHERE source_id='second')",
             [], |r| Ok((r.get(0)?, r.get(1)?))
         ).unwrap();
-        assert_eq!(per_source, (1,1));
+        assert_eq!(per_source, (1, 1));
     }
 }
