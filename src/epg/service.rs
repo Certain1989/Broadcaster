@@ -568,14 +568,14 @@ async fn read_local_spooled_inner(
         }
         total = total
             .checked_add(part.len() as u64)
-            .ok_or(GuideServiceError::Fetch(GuideFetchError::Oversize))?;
+            .ok_or(GuideServiceError::Capacity(LimitKind::Wire))?;
         let limit = if gzip {
             256_u64 * 1024 * 1024
         } else {
             2_u64 * 1024 * 1024 * 1024
         };
         if total > limit {
-            return Err(GuideServiceError::Fetch(GuideFetchError::Oversize));
+            return Err(GuideServiceError::Capacity(LimitKind::Wire));
         }
         out.write_all(part.as_ref())
             .map_err(|_| GuideServiceError::LocalAccess)?;

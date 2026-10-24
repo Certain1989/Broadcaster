@@ -65,6 +65,7 @@ pub enum GuideFetchError {
     Network,
     Timeout,
     Oversize,
+    WireLimit,
     Encoding,
     Cancelled,
 }
@@ -78,6 +79,7 @@ impl GuideFetchError {
             Self::Network => "network",
             Self::Timeout => "timeout",
             Self::Oversize => "oversize",
+            Self::WireLimit => "oversize_wire",
             Self::Encoding => "encoding",
             Self::Cancelled => "cancelled",
         }
@@ -551,7 +553,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             CANDIDATE_PLAIN
         };
         if declared.is_some_and(|n| n > preliminary_cap) {
-            return Err(GuideFetchError::Oversize);
+            return Err(GuideFetchError::WireLimit);
         }
         // Never overwrite an existing source file or follow symlinks. The
         // caller supplies a random path in its private SQLite data directory.
@@ -587,9 +589,9 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             };
             total = total
                 .checked_add(chunk.len() as u64)
-                .ok_or(GuideFetchError::Oversize)?;
+                .ok_or(GuideFetchError::WireLimit)?;
             if total > cap {
-                return Err(GuideFetchError::Oversize);
+                return Err(GuideFetchError::WireLimit);
             }
             file.write_all(&chunk)
                 .await
