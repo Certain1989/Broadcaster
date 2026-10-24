@@ -746,7 +746,11 @@ mod tests {
             let hour = n % 24;
             let stop_day = day + usize::from(hour == 23);
             let stop_hour = (hour + 1) % 24;
-            let title = if n == 0 { "T".repeat(513) } else { format!("T{n}") };
+            let title = if n == 0 {
+                "T".repeat(513)
+            } else {
+                format!("T{n}")
+            };
             replacement.push_str(&format!(
                 "<programme channel='c' start='2030{month:02}{day:02}{hour:02}0000 +0000'
                  stop='2030{month:02}{stop_day:02}{stop_hour:02}0000 +0000'>

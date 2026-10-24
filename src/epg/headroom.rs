@@ -37,7 +37,10 @@ impl Drop for TestSpaceOverride {
 #[cfg(test)]
 pub(crate) fn override_space(path: PathBuf, readings: Vec<Option<u64>>) -> TestSpaceOverride {
     TEST_SPACE.with(|slot| {
-        assert!(slot.borrow().is_none(), "one active probe override per test");
+        assert!(
+            slot.borrow().is_none(),
+            "one active probe override per test"
+        );
         *slot.borrow_mut() = Some((path, readings.into()));
     });
     TestSpaceOverride
@@ -85,8 +88,7 @@ fn distinct_mounts(a: Option<&Space>, b: Option<&Space>) -> bool {
 }
 
 fn mount_policy_allows(db: Option<&Space>, staged: Option<&Space>, required: u64) -> bool {
-    sufficient(db, required)
-        && (!distinct_mounts(db, staged) || sufficient(staged, IMPORT_FLOOR))
+    sufficient(db, required) && (!distinct_mounts(db, staged) || sufficient(staged, IMPORT_FLOOR))
 }
 
 pub(crate) fn download_allowed(path: &Path) -> bool {
