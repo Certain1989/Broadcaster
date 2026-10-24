@@ -11,6 +11,10 @@ use std::{
 
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use gettextrs::gettext;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+
+use crate::epg::{bindings::SemanticProgrammeState, cache::{Coverage, Freshness}, model::Certainty};
+use super::epg_projection::{DeliveryKey, ProjectionOutcome, ProjectionService};
 
 use crate::{
     application::{StreamHeaders, TvApplication, VideoInfo},
@@ -33,14 +37,20 @@ struct RowUi {
     logo: gtk::Picture,
     summary: gtk::Label,
     details: gtk::Label,
+    epg_title: gtk::Label,
+    epg_next: gtk::Label,
+    epg_progress: gtk::ProgressBar,
+    epg_status: gtk::Label,
     reveal: gtk::Revealer,
     play: gtk::Button,
     edit: gtk::Button,
+    mapping: gtk::Button,
 }
 
 struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
+    request: Option<(DeliveryKey, Arc<AtomicBool>)>,
 }
 
 // Visible textures have a small pixel-budgeted LRU. Only the currently bound
@@ -151,6 +161,9 @@ mod imp {
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) projection: OnceCell<ProjectionService>,
+        pub(super) projection_serial: Cell<u64>,
+        pub(super) epg_generation: Cell<u64>,
         pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
@@ -230,6 +243,7 @@ impl TvStreamsView {
             &imp.search_entry.get(),
             crate::keyboard::KeyboardOptions::default(),
         );
+        imp.projection.set(ProjectionService::new()).expect("EPG projection initialized once");
         let rows = StreamRows::new();
         let selection = gtk::SingleSelection::new(Some(rows.clone()));
         selection.set_autoselect(true);
@@ -472,6 +486,7 @@ impl TvStreamsView {
         let Some(service) = imp.service.borrow().clone() else {
             return;
         };
+        self.invalidate_epg();
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
         imp.in_flight.borrow_mut().clear();
@@ -844,6 +859,23 @@ impl TvStreamsView {
         summary.add_css_class("dim-label");
         summary.add_css_class("tv-stream-channel-summary");
         text.append(&summary);
+        let epg_title = gtk::Label::new(None);
+        epg_title.set_xalign(0.0);
+        epg_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        epg_title.set_max_width_chars(64);
+        epg_title.add_css_class("tv-stream-channel-summary");
+        text.append(&epg_title);
+        let epg_next = gtk::Label::new(None);
+        epg_next.set_xalign(0.0);
+        epg_next.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        epg_next.set_max_width_chars(64);
+        epg_next.add_css_class("dim-label");
+        text.append(&epg_next);
+        let epg_progress = gtk::ProgressBar::new();
+        epg_progress.set_show_text(false);
+        epg_progress.set_visible(false);
+        epg_progress.set_focusable(false);
+        text.append(&epg_progress);
         header.append(&text);
         root.append(&header);
         let reveal = gtk::Revealer::new();
@@ -853,6 +885,11 @@ impl TvStreamsView {
         details.set_xalign(0.0);
         details.set_selectable(false);
         actions.append(&details);
+        let epg_status = gtk::Label::new(None);
+        epg_status.set_xalign(0.0);
+        epg_status.set_wrap(true);
+        epg_status.add_css_class("dim-label");
+        actions.append(&epg_status);
         let play = gtk::Button::with_label(&gettext("Play"));
         play.add_css_class("suggested-action");
         play.set_halign(gtk::Align::Start);
@@ -860,6 +897,9 @@ impl TvStreamsView {
         let edit = gtk::Button::with_label(&gettext("Edit Metadata"));
         edit.set_halign(gtk::Align::Start);
         actions.append(&edit);
+        let mapping = gtk::Button::with_label(&gettext("Programme mapping"));
+        mapping.set_halign(gtk::Align::Start);
+        actions.append(&mapping);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
         play.connect_clicked(glib::clone!(
@@ -885,6 +925,17 @@ impl TvStreamsView {
                 }
             }
         ));
+        mapping.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view.imp().rows.get().and_then(|r| r.channel(item.position())) {
+                    super::editor::show_epg_mapping_editor(&view, channel.id);
+                }
+            }
+        ));
         item.set_child(Some(&root));
         self.imp().bindings.borrow_mut().insert(
             item.as_ptr() as usize,
@@ -895,11 +946,17 @@ impl TvStreamsView {
                     logo,
                     summary,
                     details,
+                    epg_title,
+                    epg_next,
+                    epg_progress,
+                    epg_status,
                     reveal,
                     play,
                     edit,
+                    mapping,
                 },
                 connection: None,
+                request: None,
             },
         );
     }
@@ -927,6 +984,7 @@ impl TvStreamsView {
                     Self::paint_row(&ui, &slot, view.imp().expanded_id.borrow().as_deref());
                     view.refresh_logo(&slot);
                     view.request_logo(&slot);
+                    view.request_epg_for_slot(key, &slot);
                 }
             });
             binding.connection = Some((slot.clone(), handler));
@@ -934,6 +992,7 @@ impl TvStreamsView {
         self.refresh_logo(&slot);
         self.request_logo(&slot);
         self.request_page(slot.position());
+        self.request_epg_for_slot(key, &slot);
     }
 
     fn unbind_row(&self, item: &glib::Object) {
@@ -946,6 +1005,9 @@ impl TvStreamsView {
             .borrow_mut()
             .get_mut(&(item.as_ptr() as usize))
         {
+            if let Some((_, token)) = binding.request.take() {
+                token.store(true, Ordering::Release);
+            }
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
@@ -955,9 +1017,11 @@ impl TvStreamsView {
             binding.ui.title.set_text("");
             binding.ui.summary.set_text("");
             binding.ui.details.set_text("");
+            Self::clear_epg(&binding.ui);
             binding.ui.reveal.set_reveal_child(false);
             binding.ui.play.set_sensitive(false);
             binding.ui.edit.set_sensitive(false);
+            binding.ui.mapping.set_sensitive(false);
         }
     }
 
@@ -980,6 +1044,7 @@ impl TvStreamsView {
             ui.reveal.set_reveal_child(false);
             ui.play.set_sensitive(false);
             ui.edit.set_sensitive(false);
+            ui.mapping.set_sensitive(false);
             return;
         };
         ui.title.set_text(&channel.visible_name);
@@ -1030,6 +1095,177 @@ impl TvStreamsView {
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
         ui.edit.set_sensitive(true);
+        ui.mapping.set_sensitive(true);
+    }
+
+
+    /// All invalidations happen on GTK's main context, including results that
+    /// finished their worker query but have not yet reached the paint callback.
+    fn invalidate_epg(&self) {
+        let imp = self.imp();
+        imp.epg_generation.set(imp.epg_generation.get().wrapping_add(1));
+        for binding in imp.bindings.borrow_mut().values_mut() {
+            if let Some((_, cancelled)) = binding.request.take() {
+                cancelled.store(true, Ordering::Release);
+            }
+            Self::clear_epg(&binding.ui);
+        }
+    }
+
+    /// Used after confirmation or a source-manager dialog closes; not a
+    /// channel reload, and never changes selection or grabs keyboard focus.
+    pub(crate) fn epg_changed(&self) {
+        self.invalidate_epg();
+        let slots: Vec<_> = self.imp().bindings.borrow().iter()
+            .filter_map(|(key, bound)| bound.connection.as_ref().map(|(slot, _)| (*key, slot.clone())))
+            .collect();
+        for (key, slot) in slots {
+            self.request_epg_for_slot(key, &slot);
+        }
+    }
+
+    fn clear_epg(ui: &RowUi) {
+        ui.epg_title.set_text("");
+        ui.epg_title.set_tooltip_text(None);
+        ui.epg_next.set_text("");
+        ui.epg_next.set_tooltip_text(None);
+        ui.epg_status.set_text("");
+        ui.epg_progress.set_visible(false);
+        ui.epg_progress.set_fraction(0.0);
+    }
+
+    fn request_epg_for_slot(&self, key: usize, slot: &StreamSlot) {
+        let Some(channel) = slot.channel() else { return; };
+        let Some(worker) = self.imp().projection.get().cloned() else { return; };
+        let imp = self.imp();
+        let serial = imp.projection_serial.get().wrapping_add(1);
+        imp.projection_serial.set(serial);
+        let request = DeliveryKey {
+            row_id: channel.id.clone(),
+            view_generation: imp.generation.get(),
+            binding_generation: serial,
+            epg_generation: imp.epg_generation.get(),
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let mut bindings = imp.bindings.borrow_mut();
+            let Some(bound) = bindings.get_mut(&key) else { return; };
+            if bound.connection.as_ref().is_none_or(|(bound_slot, _)| bound_slot != slot) { return; }
+            if let Some((_, old)) = bound.request.take() {
+                old.store(true, Ordering::Release);
+            }
+            Self::clear_epg(&bound.ui);
+            bound.request = Some((request.clone(), cancelled.clone()));
+        }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64);
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let result = worker.read(request.row_id.clone(), at, cancelled.clone()).await;
+                if cancelled.load(Ordering::Acquire)
+                    || view.imp().generation.get() != request.view_generation
+                    || view.imp().epg_generation.get() != request.epg_generation
+                { return; }
+                let mut bindings = view.imp().bindings.borrow_mut();
+                let Some(bound) = bindings.get_mut(&key) else { return; };
+                let matches = bound.request.as_ref().is_some_and(|(current, token)| {
+                    Arc::ptr_eq(token, &cancelled)
+                        && current.current(&request.row_id,
+                            view.imp().generation.get(), request.binding_generation,
+                            view.imp().epg_generation.get())
+                }) && bound.connection.as_ref().and_then(|(slot, _)| slot.channel())
+                     .is_some_and(|ch| ch.id == request.row_id);
+                if matches {
+                    Self::paint_epg(&bound.ui, result);
+                }
+            }
+        ));
+    }
+
+    fn utc_clock(at: i64) -> String {
+        match time::OffsetDateTime::from_unix_timestamp(at) {
+            Ok(t) => format!("{:02}:{:02} UTC", t.hour(), t.minute()),
+            Err(_) => gettext("Unknown time"),
+        }
+    }
+
+    fn paint_epg(ui: &RowUi, result: ProjectionOutcome) {
+        Self::clear_epg(ui);
+        let mut status = String::new();
+        match result {
+            ProjectionOutcome::Busy => status = gettext("Programme lookup queued; scroll back to retry"),
+            ProjectionOutcome::Cancelled => return,
+            ProjectionOutcome::Read(Err(_)) => status = gettext("Programme information unavailable"),
+            ProjectionOutcome::Read(Ok(state)) => match state {
+                SemanticProgrammeState::Unconfigured => status = gettext("No programme guide selected"),
+                SemanticProgrammeState::Disabled => status = gettext("Selected programme guide disabled"),
+                SemanticProgrammeState::Unavailable => status = gettext("Guide not fetched or unavailable"),
+                SemanticProgrammeState::Unmatched => status = gettext("No matching programme guide channel"),
+                SemanticProgrammeState::AmbiguousMapping => status = gettext("Ambiguous channel mapping"),
+                SemanticProgrammeState::MissingTarget => status = gettext("Saved guide channel is missing"),
+                SemanticProgrammeState::SuggestionsUnavailable => {
+                    status = gettext("Name suggestions unavailable for this guide");
+                }
+                SemanticProgrammeState::Suggested { .. } => {
+                    status = gettext("Possible name match — not confirmed");
+                }
+                SemanticProgrammeState::Matched { page, now_next, refresh_failed, .. } => {
+                    status = if page.truncated {
+                        gettext("Guide window incomplete")
+                    } else {
+                        match page.freshness {
+                            Freshness::NeverFetched => gettext("Guide not fetched yet"),
+                            Freshness::Stale => gettext("Guide stale; current programme unknown"),
+                            Freshness::Unknown => gettext("Guide freshness unknown"),
+                            Freshness::Aging => gettext("Guide cache aging; coverage unverified"),
+                            Freshness::Fresh => gettext("Guide coverage is partial"),
+                        }
+                    };
+                    if !page.truncated {
+                        if let Some(data) = now_next {
+                            if data.certainty == Certainty::Exact {
+                                if let Some(current) = data.current {
+                                    let text = format!("{}: {}", gettext("Now"), current.title);
+                                    ui.epg_title.set_text(&text);
+                                    ui.epg_title.set_tooltip_text(Some(&text));
+                                    let range = format!("{} – {}",
+                                        Self::utc_clock(current.start_utc),
+                                        Self::utc_clock(current.stop_utc));
+                                    status = if refresh_failed {
+                                        format!("{} · {}", range, gettext("Last refresh failed; cached guide"))
+                                    } else { range };
+                                    if let Some(progress) = data.progress_fraction.filter(|p| p.is_finite() && (0.0..=1.0).contains(p)) {
+                                        ui.epg_progress.set_fraction(progress);
+                                        ui.epg_progress.set_visible(true);
+                                    }
+                                }
+                            } else if data.certainty == Certainty::Ambiguous {
+                                status = gettext("Overlapping programme entries; now unknown");
+                            }
+                            if !data.next_ambiguous {
+                                if let Some(next) = data.next {
+                                    let label = format!("{}: {} ({})", gettext("Next"),
+                                        next.title, Self::utc_clock(next.start_utc));
+                                    ui.epg_next.set_text(&label);
+                                    ui.epg_next.set_tooltip_text(Some(&label));
+                                }
+                            }
+                        }
+                    }
+                    if refresh_failed && !status.contains(&gettext("Last refresh failed")) {
+                        status = format!("{} · {}", status, gettext("Last refresh failed; cached guide"));
+                    }
+                    if matches!(page.coverage, Coverage::NoData) {
+                        ui.epg_title.set_text("");
+                        ui.epg_progress.set_visible(false);
+                    }
+                }
+            },
+        }
+        ui.epg_status.set_text(&status);
     }
 
     fn refresh_logo(&self, slot: &StreamSlot) {
@@ -1163,7 +1399,7 @@ impl TvStreamsView {
             .bindings
             .borrow()
             .values()
-            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus())
+            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus() || binding.ui.mapping.has_focus())
         {
             return;
         }
