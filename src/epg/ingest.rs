@@ -634,7 +634,7 @@ fn import_xmltv_scoped<R: BufRead>(
         "DROP TABLE temp.epg_import_omissions;
          DROP TABLE temp.epg_import_truncated_rowids;",
     )
-        .map_err(storage_error)?;
+    .map_err(storage_error)?;
     // Final check after all SQL writes and TEMP cleanup, before COMMIT.
     // SQLite's typed FULL/IOERR results remain the final defence.
     if headroom.is_some_and(|guard| !guard.active()) {
@@ -1819,7 +1819,13 @@ mod tests {
 
     #[test]
     fn c1_direct_description_omits_elements_but_preserves_clean_future_rows() {
-        for bad in ["\\u{0080}", "\\u{0093}", "\\u{0094}", "\\u{0096}", "\\u{009f}"] {
+        for bad in [
+            "\u{0080}",
+            "\u{0093}",
+            "\u{0094}",
+            "\u{0096}",
+            "\u{009f}",
+        ] {
             let mut conn = db();
             let xml = guide(
                 "<channel id='c'><display-name>Stable</display-name></channel>",
@@ -1838,7 +1844,8 @@ mod tests {
                 let mut query = conn
                     .prepare("SELECT title,description FROM epg_programmes ORDER BY title")
                     .unwrap();
-                query.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                query
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                     .unwrap()
                     .map(Result::unwrap)
                     .collect()
@@ -1858,14 +1865,19 @@ mod tests {
     fn c1_multiple_elements_fragments_and_second_direct_description() {
         let mut conn = db();
         let head = "<channel id='c'><display-name>C</display-name></channel>";
-        let bad1 = programme("c", "Ignored", None, Some("\\u{0093}\\u{0094}"));
+        let bad1 = programme("c", "Ignored", None, Some("\u{0093}\u{0094}"));
         let bad2 = "<programme channel='c' start='20300101000000 +0000' stop='20300101010000 +0000'>\
-                    <title>Ignored</title><desc>okay</desc><desc><![CDATA[\\u{0096}]]>&#x80;</desc></programme>";
-        let xml = guide(head, &format!("{}{}{}", bad1, bad2, programme("c", "Clean", None, None)));
+                    <title>Ignored</title><desc>okay</desc><desc><![CDATA[\u{0096}]]>&#x80;</desc></programme>";
+        let xml = guide(
+            head,
+            &format!("{}{}{}", bad1, bad2, programme("c", "Clean", None, None)),
+        );
         let rows = import_fixture(&mut conn, &xml, "source", 1, 1).unwrap();
         assert_eq!((rows.programmes, rows.omitted_c1_programmes), (1, 2));
         assert_eq!(
-            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0)).unwrap(),
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
             "Clean"
         );
         assert_no_temp_marker(&conn);
@@ -1874,8 +1886,8 @@ mod tests {
     #[test]
     fn c1_skipped_unknown_channel_and_fatal_independent_text_rollback() {
         for invalid_programme in [
-            programme("missing", "Omitted", None, Some("\\u{0093}")),
-            programme("missing", "Omitted", None, Some("\\u{0096}")),
+            programme("missing", "Omitted", None, Some("\u{0093}")),
+            programme("missing", "Omitted", None, Some("\u{0096}")),
         ] {
             for before_channels in [false, true] {
                 let mut conn = db();
@@ -1896,17 +1908,19 @@ mod tests {
                     EpgError::MissingChannel
                 );
                 assert_eq!(
-                    conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0)).unwrap(),
+                    conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                        .get::<_, String>(0))
+                        .unwrap(),
                     "LastGood"
                 );
                 assert_no_temp_marker(&conn);
             }
         }
         for bad in [
-            "<desc>\\u{0093}\\u{0001}</desc>",
-            "<desc>\\u{0093}\\u{007f}</desc>",
-            "<desc>\\u{0093}<nested>\\u{0094}</nested></desc>",
-            "<desc>\\u{0093}</desc><title>\\u{0096}</title>",
+            "<desc>\u{0093}\u{0001}</desc>",
+            "<desc>\u{0093}\u{007f}</desc>",
+            "<desc>\u{0093}<nested>\u{0094}</nested></desc>",
+            "<desc>\u{0093}</desc><title>\u{0096}</title>",
         ] {
             let mut conn = db();
             let candidate = format!(
@@ -1928,9 +1942,9 @@ mod tests {
     #[test]
     fn c1_shortened_key_and_metadata_collisions_fail_both_orders() {
         let prefix = "Q".repeat(512);
-        let omitted = programme("c", &format!("{prefix}A"), None, Some("\\u{0093}"));
+        let omitted = programme("c", &format!("{prefix}A"), None, Some("\u{0093}"));
         let retained = programme("c", &format!("{prefix}B"), None, Some("safe"));
-        let optional = programme("c", "Same", Some(&"s".repeat(513)), Some("\\u{0093}"));
+        let optional = programme("c", "Same", Some(&"s".repeat(513)), Some("\u{0093}"));
         let equal = programme("c", "Same", Some("s"), None);
         for pair in [
             (omitted.as_str(), retained.as_str()),
@@ -1946,14 +1960,21 @@ mod tests {
             import_fixture(&mut conn, &stable, "source", 1, 1).unwrap();
             let attempt = guide(
                 "<channel id='c'><display-name>C</display-name></channel>",
-                &format!("{}{}{}", pair.0, pair.1, programme("c", "Future", None, None)),
+                &format!(
+                    "{}{}{}",
+                    pair.0,
+                    pair.1,
+                    programme("c", "Future", None, None)
+                ),
             );
             assert_eq!(
                 import_fixture(&mut conn, &attempt, "source", 2, 2).unwrap_err(),
                 EpgError::InvalidSchedule
             );
             assert_eq!(
-                conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0)).unwrap(),
+                conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
                 "Previous"
             );
             assert_no_temp_marker(&conn);
@@ -1964,14 +1985,23 @@ mod tests {
     fn c1_all_omitted_does_not_satisfy_minimum_schedule_or_change_last_good() {
         let mut conn = db();
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
-        import_fixture(&mut conn, &guide(channels, &programme("c", "Good", None, None)), "source", 1, 1).unwrap();
-        let all_omitted = guide(channels, &programme("c", "Bad", None, Some("\\u{0093}")));
+        import_fixture(
+            &mut conn,
+            &guide(channels, &programme("c", "Good", None, None)),
+            "source",
+            1,
+            1,
+        )
+        .unwrap();
+        let all_omitted = guide(channels, &programme("c", "Bad", None, Some("\u{0093}")));
         assert_eq!(
             import_fixture(&mut conn, &all_omitted, "source", 2, 2).unwrap_err(),
             EpgError::InvalidSchedule
         );
         assert_eq!(
-            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0)).unwrap(),
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
             "Good"
         );
         assert_no_temp_marker(&conn);
@@ -1980,23 +2010,36 @@ mod tests {
     #[test]
     fn c1_temp_quota_full_restores_stricter_connection_limit_and_allows_retry() {
         let mut conn = db();
-        let original: i64 = conn.query_row("PRAGMA temp.max_page_count=12", [], |r| r.get(0)).unwrap();
+        let original: i64 = conn
+            .query_row("PRAGMA temp.max_page_count=12", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(original, 12);
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         let previous = guide(channels, &programme("c", "Good", None, None));
         import_fixture(&mut conn, &previous, "source", 1, 1).unwrap();
         let many = (0..500)
-            .map(|n| programme("c", &format!("{}-{n:04}", "M".repeat(500)), None, Some("\\u{0093}")))
+            .map(|n| {
+                programme(
+                    "c",
+                    &format!("{}-{n:04}", "M".repeat(500)),
+                    None,
+                    Some("\u{0093}"),
+                )
+            })
             .collect::<Vec<_>>()
             .join("");
-        let failure = import_fixture(&mut conn, &guide(channels, &many), "source", 2, 2).unwrap_err();
+        let failure =
+            import_fixture(&mut conn, &guide(channels, &many), "source", 2, 2).unwrap_err();
         assert_eq!(failure, EpgError::DiskFull);
         assert_eq!(
-            conn.query_row("PRAGMA temp.max_page_count", [], |r| r.get::<_, i64>(0)).unwrap(),
+            conn.query_row("PRAGMA temp.max_page_count", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
             12
         );
         assert_eq!(
-            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0)).unwrap(),
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
             "Good"
         );
         assert_no_temp_marker(&conn);
@@ -2004,7 +2047,8 @@ mod tests {
         assert_eq!(recovered.programmes, 1);
         assert_eq!(recovered.omitted_c1_programmes, 0);
         assert_eq!(
-            conn.query_row("PRAGMA temp.max_page_count", [], |r| r.get::<_, i64>(0)).unwrap(),
+            conn.query_row("PRAGMA temp.max_page_count", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
             12
         );
     }
