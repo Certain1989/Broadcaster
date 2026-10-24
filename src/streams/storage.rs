@@ -91,6 +91,14 @@ impl Storage {
         Self { path: path.into() }
     }
 
+    /// Ephemeral EPG download staging shares the private database directory.
+    pub(crate) fn epg_spool_path(&self) -> PathBuf {
+        self.path
+            .parent()
+            .expect("database has a parent directory")
+            .join(format!(".epg-{}.part", uuid::Uuid::new_v4()))
+    }
+
     /// Test repositories must never run orphan pruning on the real user cache.
     pub(crate) fn uses_default_database(&self) -> bool {
         self.path == Self::new().path
