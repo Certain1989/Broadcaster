@@ -206,6 +206,16 @@ impl GuideSourceRegistry {
 
     /// Call only from a blocking worker, never from GTK MainContext.
     pub fn add(&self, name: &str, origin: &SourceOrigin) -> Result<GuideSource, RegistryError> {
+        self.add_with_schedule(name, origin, false)
+    }
+
+    /// Store the owner's chosen refresh preference atomically with the source.
+    pub fn add_with_schedule(
+        &self,
+        name: &str,
+        origin: &SourceOrigin,
+        automatic: bool,
+    ) -> Result<GuideSource, RegistryError> {
         if !valid_name(name) {
             return Err(RegistryError::InvalidInput);
         }
@@ -215,9 +225,9 @@ impl GuideSourceRegistry {
         let conn = self.storage.connect().map_err(|_| RegistryError::Storage)?;
         match conn.execute(
             "INSERT INTO epg_sources
-            (id,name,origin_kind,origin_locator,trust_scope,created_at,updated_at)
-            VALUES (?1,?2,?3,?4,?5,?6,?6)",
-            params![id, name, kind, locator, trust, now],
+            (id,name,origin_kind,origin_locator,trust_scope,auto_refresh,created_at,updated_at)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
+            params![id, name, kind, locator, trust, automatic as i64, now],
         ) {
             Ok(_) => self.get(&id),
             Err(rusqlite::Error::SqliteFailure(e, _))
@@ -390,13 +400,18 @@ impl GuideSourceRegistry {
         let mut stmt = conn
             .prepare(
                 "SELECT id FROM epg_sources
-          WHERE enabled=1 AND auto_refresh=1 AND
-          (last_attempt_at IS NULL OR
-            last_attempt_at <= ?1 - refresh_interval_seconds)
+          WHERE enabled=1 AND auto_refresh=1
+            AND (last_success_at IS NULL OR
+                last_success_at <= ?1 - refresh_interval_seconds)
+            AND (last_attempt_at IS NULL OR
+                last_attempt_at <= ?1 - ?2)
           ORDER BY id",
             )
             .map_err(db)?;
-        let rows = stmt.query_map([at], |row| row.get(0)).map_err(db)?;
+        // A failed source stays outdated, but retry no more than every six hours.
+        let rows = stmt
+            .query_map(params![at, MIN_REFRESH_SECONDS], |row| row.get(0))
+            .map_err(db)?;
         let ids = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db)?;
         Ok(ids)
     }
@@ -531,6 +546,44 @@ mod tests {
             Err(RegistryError::StaleConfirmation)
         );
         assert_eq!(store.get(&first.id).unwrap().name, "Updated");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn refresh_due_uses_last_good_age_and_bounded_failure_backoff() {
+        let (dir, store) = temp_store();
+        let source = store.add_with_schedule(
+            "Auto",
+            &SourceOrigin::entered_remote_url(
+                "https://example.com/epg.xml".into(), TrustScope::Public,
+            ).unwrap(),
+            true,
+        ).unwrap();
+        let now = clock();
+        assert!(source.auto_refresh);
+        assert_eq!(store.due_source_ids(now).unwrap(), vec![source.id.clone()]);
+        let conn = store.connect_private().unwrap();
+        conn.execute(
+            "UPDATE epg_sources SET last_attempt_at=?1 WHERE id=?2",
+            params![now, source.id],
+        ).unwrap();
+        assert!(store.due_source_ids(now + 60).unwrap().is_empty());
+        assert_eq!(
+            store.due_source_ids(now + MIN_REFRESH_SECONDS).unwrap(),
+            vec![source.id.clone()],
+        );
+        conn.execute(
+            "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1 WHERE id=?2",
+            params![now, source.id],
+        ).unwrap();
+        assert!(store.due_source_ids(now + DEFAULT_REFRESH_SECONDS - 1).unwrap().is_empty());
+        assert_eq!(
+            store.due_source_ids(now + DEFAULT_REFRESH_SECONDS).unwrap(),
+            vec![source.id.clone()],
+        );
+        store.set_schedule(&source.id, false, DEFAULT_REFRESH_SECONDS).unwrap();
+        assert!(store.due_source_ids(now + DEFAULT_REFRESH_SECONDS + 60).unwrap().is_empty());
+        drop(conn);
         fs::remove_dir_all(dir).unwrap();
     }
 
