@@ -596,15 +596,19 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
 enum MappingAction {
     Row,
     ExactAlias,
+    PlaylistException,
+    ClearPlaylistException,
+    ClearRow,
 }
 
 async fn save_epg_mapping(
-    action: MappingAction, row: String, source: String, target: String,
+    action: MappingAction, row: String, playlist: String, source: String, target: String,
 ) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             use crate::epg::bindings::{
-                set_global_alias, set_row_mapping, ConfirmedGlobalMapping, ConfirmedRowMapping,
+                set_global_alias, set_row_mapping, clear_row_mapping, set_playlist_exception,
+                ConfirmedGlobalMapping, ConfirmedGuideSelection, ConfirmedRowMapping,
             };
             let mut conn = super::storage::Storage::new()
                 .connect().map_err(|_| "Cannot open programme data")?;
@@ -621,6 +625,17 @@ async fn save_epg_mapping(
                     ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
                     &row, &source, &target, at,
                 ),
+                MappingAction::PlaylistException => set_playlist_exception(
+                    &mut conn, ConfirmedGuideSelection::after_user_confirmation(),
+                    &playlist, Some(&source), at,
+                ),
+                MappingAction::ClearPlaylistException => set_playlist_exception(
+                    &mut conn, ConfirmedGuideSelection::after_user_confirmation(),
+                    &playlist, None, at,
+                ),
+                MappingAction::ClearRow => clear_row_mapping(
+                    &mut conn, ConfirmedRowMapping::after_user_confirmation_for_this_stream(), &row,
+                ),
             };
             result.map_err(|_| "Guide target missing or selection changed")
         }).await.map_err(|_| "Programme mapping worker unavailable")?
@@ -629,7 +644,7 @@ async fn save_epg_mapping(
 
 fn confirm_epg_mapping(
     view: &TvStreamsView, parent: &gtk::Window, action: MappingAction,
-    row: String, source: String, target: String,
+    row: String, playlist: String, source: String, target: String,
 ) {
     let dialog = adw::Dialog::new();
     dialog.set_title(&gettext("Confirm Programme Mapping"));
@@ -642,6 +657,9 @@ fn confirm_epg_mapping(
     label(&match action {
         MappingAction::Row => gettext("Confirm mapping for THIS stream only?"),
         MappingAction::ExactAlias => gettext("Confirm mapping for ALL streams with this exact case-sensitive tvg-id across playlists selecting this guide?"),
+        MappingAction::PlaylistException => gettext("Make this guide an explicit exception for all channels of this playlist?"),
+        MappingAction::ClearPlaylistException => gettext("Remove this playlist exception and return to the shared guide default?"),
+        MappingAction::ClearRow => gettext("Clear only this stream's saved guide mapping?"),
     }, &body);
     let error = gtk::Label::new(None);
     body.append(&error);
@@ -649,6 +667,8 @@ fn confirm_epg_mapping(
     let approve = gtk::Button::with_label(&match action {
         MappingAction::Row => gettext("Confirm This Stream Only"),
         MappingAction::ExactAlias => gettext("Confirm All Matching Streams"),
+        MappingAction::PlaylistException => gettext("Confirm Playlist Exception"),
+        MappingAction::ClearPlaylistException | MappingAction::ClearRow => gettext("Confirm Removal"),
     });
     approve.add_css_class("suggested-action");
     body.append(&cancel);
@@ -659,12 +679,13 @@ fn confirm_epg_mapping(
         move |_| {
             approve.set_sensitive(false);
             let row = row.clone();
+            let playlist = playlist.clone();
             let source = source.clone();
             let target = target.clone();
             spawn(glib::clone!(
                 #[weak] dialog, #[weak] error, #[weak] approve, #[weak] view,
                 async move {
-                    match save_epg_mapping(action, row, source, target).await {
+                    match save_epg_mapping(action, row, playlist, source, target).await {
                         Ok(()) => {
                             dialog.close();
                             view.epg_changed();
@@ -725,8 +746,12 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             shared.set_sensitive(
                 !guides.is_empty() && detail.imported.tvg_id.as_deref().is_some_and(|s| !s.is_empty())
             );
+            let playlist = gtk::Button::with_label(&gettext("Use as playlist guide exception"));
+            let clear_playlist = gtk::Button::with_label(&gettext("Remove playlist guide exception"));
+            let clear_row = gtk::Button::with_label(&gettext("Remove this stream's manual mapping"));
             let close = gtk::Button::with_label(&gettext("Close"));
-            for control in [&single, &shared, &close] {
+            playlist.set_sensitive(!guides.is_empty());
+            for control in [&single, &shared, &playlist, &clear_playlist, &clear_row, &close] {
                 control.set_halign(gtk::Align::Start);
                 body.append(control);
             }
@@ -734,6 +759,9 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             for (button, action) in [
                 (single, MappingAction::Row),
                 (shared, MappingAction::ExactAlias),
+                (playlist, MappingAction::PlaylistException),
+                (clear_playlist, MappingAction::ClearPlaylistException),
+                (clear_row, MappingAction::ClearRow),
             ] {
                 let guides = guides.clone();
                 let picker = picker.clone();
@@ -741,18 +769,25 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 let error = error.clone();
                 let window = window.clone();
                 let stable_id = detail.effective.id.clone();
+                let playlist_id = detail.effective.source_id.clone();
                 button.connect_clicked(glib::clone!(
                     #[weak] view,
                     move |_| {
-                        let Some(guide) = guides.get(picker.selected() as usize) else { return };
+                        let selected_guide = guides.get(picker.selected() as usize);
+                        if selected_guide.is_none()
+                            && !matches!(action, MappingAction::ClearPlaylistException | MappingAction::ClearRow) {
+                            return;
+                        }
                         let id = channel.text().to_string();
-                        if id.is_empty() || id.len() > 512 || id.trim() != id
-                            || id.chars().any(char::is_control) {
+                        if matches!(action, MappingAction::Row | MappingAction::ExactAlias)
+                            && (id.is_empty() || id.len() > 512 || id.trim() != id
+                                || id.chars().any(char::is_control)) {
                             error.set_text(&gettext("Enter a valid exact XMLTV channel ID"));
                             return;
                         }
                         confirm_epg_mapping(
-                            &view, &window, action, stable_id.clone(), guide.id.clone(), id,
+                            &view, &window, action, stable_id.clone(), playlist_id.clone(),
+                            selected_guide.map_or_else(String::new, |guide| guide.id.clone()), id,
                         );
                     }
                 ));
