@@ -20,6 +20,12 @@ const MAX_OPERATION: Duration = Duration::from_secs(90 * 60);
 // The active DB (old + replacement), WAL and input therefore fit <= 8 GiB.
 const MAX_DATABASE_AND_WAL: u64 = 6 * 1024 * 1024 * 1024;
 
+#[cfg(test)]
+std::thread_local! {
+    // Test-only observation made immediately after SQLite accepts a row.
+    static TEST_STAGED_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn storage_error(_: rusqlite::Error) -> EpgError {
     EpgError::Storage
 }
@@ -178,6 +184,8 @@ pub fn import_xmltv<R: BufRead>(
                 }
             } else {
                 retained += 1;
+                #[cfg(test)]
+                TEST_STAGED_INSERTS.with(|count| count.set(count.get() + 1));
                 retained_title_shortened += usize::from(shortened.title);
                 retained_subtitle_shortened += usize::from(shortened.subtitle);
                 retained_description_shortened += usize::from(shortened.description);
@@ -233,7 +241,7 @@ pub fn import_xmltv<R: BufRead>(
 mod tests {
     use super::*;
     use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
-    use std::io::Cursor;
+    use std::{cell::Cell, io::{self, BufReader, Cursor, Read}, rc::Rc};
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -698,5 +706,203 @@ mod tests {
             .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
             .unwrap();
         assert_eq!(title, "Cached");
+    }
+
+    /// The reader exposes the closing programme tag before its trailing XML.
+    /// Its next read only cancels after the importer's SQLite INSERT returned.
+    struct CancelAfterSqlInsert<'a> {
+        bytes: Vec<u8>,
+        split: usize,
+        position: usize,
+        cancelled: &'a AtomicBool,
+        fired: Rc<Cell<bool>>,
+    }
+
+    impl Read for CancelAfterSqlInsert<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            if self.position == self.split && !self.fired.get() {
+                let inserted = TEST_STAGED_INSERTS.with(|count| count.get());
+                assert_eq!(
+                    inserted, 1,
+                    "the cancellation gate must follow one completed SQLite INSERT"
+                );
+                self.cancelled.store(true, Ordering::Release);
+                self.fired.set(true);
+            }
+            let boundary = if self.position < self.split {
+                self.split
+            } else {
+                self.bytes.len()
+            };
+            let n = output.len().min(boundary - self.position);
+            output[..n].copy_from_slice(&self.bytes[self.position..self.position + n]);
+            self.position += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn cancellation_after_sql_insert_rolls_back_temp_and_allows_same_connection_retry() {
+        let mut conn = db();
+        let cancel = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancel,
+        )
+        .unwrap();
+
+        let original_channel: (String, String) = conn
+            .query_row(
+                "SELECT channel_id, display_name FROM epg_channels WHERE source_id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let original_programme: (String, i64, i64, String, Option<String>, Option<String>) =
+            conn.query_row(
+                "SELECT channel_id, start_utc, stop_utc, title, subtitle, description
+                 FROM epg_programmes WHERE source_id='source'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let original_metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+
+        // An overlong title also inserts a key into the transaction's TEMP
+        // table; rollback must discard that table along with the new rows.
+        let replacement = format!(
+            "<tv><channel id='c'><display-name>Replacement</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{}</title></programme></tv>",
+            "T".repeat(513)
+        );
+        let split = replacement.find("</programme>").unwrap() + "</programme>".len();
+        TEST_STAGED_INSERTS.with(|count| count.set(0));
+        let fired = Rc::new(Cell::new(false));
+        let gate = CancelAfterSqlInsert {
+            bytes: replacement.into_bytes(),
+            split,
+            position: 0,
+            cancelled: &cancel,
+            fired: Rc::clone(&fired),
+        };
+        let failed = import_xmltv(
+            &mut conn,
+            BufReader::new(gate),
+            "source",
+            2,
+            2,
+            false,
+            &cancel,
+        );
+        assert_eq!(failed.unwrap_err(), EpgError::Cancelled);
+        assert!(fired.get(), "cancellation must occur after an actual staged INSERT");
+        assert_eq!(TEST_STAGED_INSERTS.with(|count| count.get()), 1);
+        let retained_channel: (String, String) = conn
+            .query_row(
+                "SELECT channel_id,display_name FROM epg_channels WHERE source_id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let retained_programme: (String, i64, i64, String, Option<String>, Option<String>) =
+            conn.query_row(
+                "SELECT channel_id,start_utc,stop_utc,title,subtitle,description
+                 FROM epg_programmes WHERE source_id='source'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let retained_metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(retained_channel, original_channel);
+        assert_eq!(retained_programme, original_programme);
+        assert_eq!(retained_metadata, original_metadata);
+        assert_eq!(original_programme.3, "Cached");
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master
+                 WHERE name='epg_import_truncated_keys'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0);
+
+        // The cancelled transaction must not leave connection-local SQL state
+        // that blocks a subsequent valid import.
+        cancel.store(false, Ordering::Release);
+        let retried = import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Retried")),
+            "source",
+            3,
+            2,
+            false,
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(retried.programmes, 1);
+        assert_eq!(retried.truncated_titles, 0);
+        let title: String = conn
+            .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "Retried");
+        let success_at: Option<i64> = conn
+            .query_row(
+                "SELECT last_success_at FROM epg_sources WHERE id='source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(success_at, Some(3));
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master
+                 WHERE name='epg_import_truncated_keys'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0);
     }
 }
