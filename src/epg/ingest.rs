@@ -752,8 +752,8 @@ mod tests {
                 format!("T{n}")
             };
             replacement.push_str(&format!(
-                "<programme channel='c' start='2030{month:02}{day:02}{hour:02}0000 +0000'
-                 stop='2030{month:02}{stop_day:02}{stop_hour:02}0000 +0000'>
+                "<programme channel='c' start='2032{month:02}{day:02}{hour:02}0000 +0000'
+                 stop='2032{month:02}{stop_day:02}{stop_hour:02}0000 +0000'>
                  <title>{title}</title></programme>"
             ));
         }
