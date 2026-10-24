@@ -172,7 +172,14 @@ pub fn import_xmltv<R: BufRead>(
     cancelled: &AtomicBool,
 ) -> Result<StreamedRows, EpgError> {
     import_xmltv_inner(
-        conn, input, source_id, retrieved_utc, expected_revision, gzip, cancelled, None,
+        conn,
+        input,
+        source_id,
+        retrieved_utc,
+        expected_revision,
+        gzip,
+        cancelled,
+        None,
     )
 }
 
@@ -189,7 +196,14 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
     headroom: Option<&ImportHeadroom>,
 ) -> Result<StreamedRows, EpgError> {
     import_xmltv_inner(
-        conn, input, source_id, retrieved_utc, expected_revision, gzip, cancelled, headroom,
+        conn,
+        input,
+        source_id,
+        retrieved_utc,
+        expected_revision,
+        gzip,
+        cancelled,
+        headroom,
     )
 }
 
@@ -293,9 +307,7 @@ fn import_xmltv_inner<R: BufRead>(
             if parsed.is_multiple_of(1024) {
                 check_budget()?;
             }
-            if parsed.is_multiple_of(4096)
-                && headroom.is_some_and(|guard| !guard.active())
-            {
+            if parsed.is_multiple_of(4096) && headroom.is_some_and(|guard| !guard.active()) {
                 return Err(EpgError::DiskFull);
             }
             let inserted_rowid: Option<i64> = tx

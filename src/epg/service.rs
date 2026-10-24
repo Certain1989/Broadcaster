@@ -94,6 +94,13 @@ impl From<GuideFetchError> for GuideServiceError {
         }
     }
 }
+struct AttemptSpool(PathBuf);
+impl Drop for AttemptSpool {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn clock() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -463,13 +470,7 @@ impl GlobalGuideManager {
             .try_acquire_owned()
             .map_err(|_| GuideServiceError::AlreadyRunning)?;
         let path = self.inner.registry.spool_path();
-        struct RemoveSpool(std::path::PathBuf);
-        impl Drop for RemoveSpool {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
-            }
-        }
-        let _cleanup = RemoveSpool(path.clone());
+        let _cleanup = AttemptSpool(path.clone());
         let expected_revision = source.view.updated_at;
         let gzip = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
@@ -508,7 +509,12 @@ impl GlobalGuideManager {
                 let guard = database
                     .filter(|location| !location.is_empty())
                     .map(|location| {
-                        ImportHeadroom::new(PathBuf::from(location), path.clone(), staged_size, gzip)
+                        ImportHeadroom::new(
+                            PathBuf::from(location),
+                            path.clone(),
+                            staged_size,
+                            gzip,
+                        )
                     });
                 if guard.as_ref().is_some_and(|guard| !guard.admit()) {
                     return Err(GuideServiceError::DiskFull);
@@ -563,6 +569,10 @@ async fn local_deadline<T>(
             Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
         result = pending => result,
     }
+}
+
+fn write_local_spool<W: Write>(output: &mut W, data: &[u8]) -> Result<(), GuideServiceError> {
+    output.write_all(data).map_err(local_spool_error)
 }
 
 fn local_spool_error(error: std::io::Error) -> GuideServiceError {
@@ -651,7 +661,7 @@ async fn read_local_spooled_inner(
         if total > limit {
             return Err(GuideServiceError::Capacity(LimitKind::Wire));
         }
-        out.write_all(part.as_ref()).map_err(local_spool_error)?;
+        write_local_spool(&mut out, part.as_ref())?;
     }
     if total == 0 {
         return Err(GuideServiceError::InvalidXml);
@@ -666,6 +676,61 @@ mod e2_admission_tests {
     use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};
     use uuid::Uuid;
+
+    #[test]
+    fn controlled_partial_spool_failure_cleans_stage_and_allows_retry() {
+        // The production spool write helper writes real bytes to a real private
+        // staging file, then a deliberately injected StorageFull simulates
+        // the second write failing without filling the runner's filesystem.
+        struct FailAfterPart<'a> {
+            file: &'a mut std::fs::File,
+            first: bool,
+        }
+        impl std::io::Write for FailAfterPart<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.first {
+                    self.first = false;
+                    self.file.write(&bytes[..bytes.len().min(4)])
+                } else {
+                    Err(std::io::ErrorKind::StorageFull.into())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.file.flush()
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("epg-spool-fault-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("partial.xmltv");
+        {
+            let _cleanup = AttemptSpool(path.clone());
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            let mut writer = FailAfterPart {
+                file: &mut file,
+                first: true,
+            };
+            let result = write_local_spool(&mut writer, b"<tv><programme/></tv>");
+            assert_eq!(result, Err(GuideServiceError::DiskFull));
+            drop(writer);
+            assert_eq!(fs::metadata(&path).unwrap().len(), 4);
+        }
+        assert!(!path.exists(), "failure must remove the partial stage");
+        {
+            let _cleanup = AttemptSpool(path.clone());
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            write_local_spool(&mut file, b"<tv/>").unwrap();
+        }
+        assert!(!path.exists(), "next attempt must clean its own stage");
+        fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn local_spool_errors_distinguish_full_from_permissions() {

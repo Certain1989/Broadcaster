@@ -30,7 +30,9 @@ fn space(path: &Path) -> Option<Space> {
     }
     Some(Space {
         free: info.attribute_uint64("filesystem::free"),
-        id: info.attribute_string("filesystem::id").map(|id| id.to_string()),
+        id: info
+            .attribute_string("filesystem::id")
+            .map(|id| id.to_string()),
     })
 }
 
@@ -129,9 +131,18 @@ mod tests {
             free: 512 * MIB,
             id: id.map(str::to_owned),
         };
-        assert!(!distinct_mounts(Some(&sample(Some("a"))), Some(&sample(Some("a")))));
-        assert!(distinct_mounts(Some(&sample(Some("a"))), Some(&sample(Some("b")))));
-        assert!(!distinct_mounts(Some(&sample(None)), Some(&sample(Some("b")))));
+        assert!(!distinct_mounts(
+            Some(&sample(Some("a"))),
+            Some(&sample(Some("a")))
+        ));
+        assert!(distinct_mounts(
+            Some(&sample(Some("a"))),
+            Some(&sample(Some("b")))
+        ));
+        assert!(!distinct_mounts(
+            Some(&sample(None)),
+            Some(&sample(Some("b")))
+        ));
         assert!(!distinct_mounts(None, Some(&sample(Some("b")))));
     }
 }
