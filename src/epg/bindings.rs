@@ -341,11 +341,7 @@ fn with_read_snapshot<T>(
 
 // The SQL-v2 composite PRIMARY KEY(source_id,channel_id) makes this an
 // indexed case-sensitive lookup. Never scan the catalogue for explicit targets.
-fn channel_present(
-    conn: &Connection,
-    source_id: &str,
-    target_id: &str,
-) -> Result<bool, EpgError> {
+fn channel_present(conn: &Connection, source_id: &str, target_id: &str) -> Result<bool, EpgError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM epg_channels WHERE source_id=?1 AND channel_id=?2)",
         params![source_id, target_id],
@@ -475,18 +471,20 @@ fn resolve_row_inner(
                 source_id: selected_id.clone(),
             });
         }
-        return Ok(if channel_present(conn, selected_id, &target.guide_channel_id)? {
-            MatchDecision::Matched {
-                source_id: selected_id.clone(),
-                channel_id: target.guide_channel_id.clone(),
-                method: MatchMethod::RowOverride,
-            }
-        } else {
-            MatchDecision::MissingTarget {
-                source_id: selected_id.clone(),
-                channel_id: target.guide_channel_id.clone(),
-            }
-        });
+        return Ok(
+            if channel_present(conn, selected_id, &target.guide_channel_id)? {
+                MatchDecision::Matched {
+                    source_id: selected_id.clone(),
+                    channel_id: target.guide_channel_id.clone(),
+                    method: MatchMethod::RowOverride,
+                }
+            } else {
+                MatchDecision::MissingTarget {
+                    source_id: selected_id.clone(),
+                    channel_id: target.guide_channel_id.clone(),
+                }
+            },
+        );
     }
     if let Some(target) = alias.as_deref() {
         return Ok(if channel_present(conn, selected_id, target)? {
