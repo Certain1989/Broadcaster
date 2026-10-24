@@ -5,6 +5,7 @@
 //! Runs only on a blocking worker. A failed parse or cancelled import rolls
 //! back all changes, retaining the prior complete guide for offline readers.
 use super::{
+    headroom::ImportHeadroom,
     model::{EpgError, LimitKind},
     xmltv::{decode_xmltv_rows, StreamedRows, StreamingLimits},
 };
@@ -170,6 +171,38 @@ pub fn import_xmltv<R: BufRead>(
     gzip: bool,
     cancelled: &AtomicBool,
 ) -> Result<StreamedRows, EpgError> {
+    import_xmltv_inner(
+        conn, input, source_id, retrieved_utc, expected_revision, gzip, cancelled, None,
+    )
+}
+
+/// Import with best-effort filesystem observations. All SQLite changes still
+/// take place in one atomic transaction with the existing hard quotas.
+pub(crate) fn import_xmltv_guarded<R: BufRead>(
+    conn: &mut Connection,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    expected_revision: i64,
+    gzip: bool,
+    cancelled: &AtomicBool,
+    headroom: Option<&ImportHeadroom>,
+) -> Result<StreamedRows, EpgError> {
+    import_xmltv_inner(
+        conn, input, source_id, retrieved_utc, expected_revision, gzip, cancelled, headroom,
+    )
+}
+
+fn import_xmltv_inner<R: BufRead>(
+    conn: &mut Connection,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    expected_revision: i64,
+    gzip: bool,
+    cancelled: &AtomicBool,
+    headroom: Option<&ImportHeadroom>,
+) -> Result<StreamedRows, EpgError> {
     let started = Instant::now();
     if cancelled.load(Ordering::Acquire) {
         return Err(EpgError::Cancelled);
@@ -259,6 +292,11 @@ pub fn import_xmltv<R: BufRead>(
             parsed += 1;
             if parsed.is_multiple_of(1024) {
                 check_budget()?;
+            }
+            if parsed.is_multiple_of(4096)
+                && headroom.is_some_and(|guard| !guard.active())
+            {
+                return Err(EpgError::DiskFull);
             }
             let inserted_rowid: Option<i64> = tx
                 .query_row(
@@ -368,6 +406,11 @@ pub fn import_xmltv<R: BufRead>(
     }
     tx.execute_batch("DROP TABLE temp.epg_import_truncated_rowids;")
         .map_err(storage_error)?;
+    // Final check after all SQL writes and TEMP cleanup, before COMMIT.
+    // SQLite's typed FULL/IOERR results remain the final defence.
+    if headroom.is_some_and(|guard| !guard.active()) {
+        return Err(EpgError::DiskFull);
+    }
     tx.commit().map_err(storage_error)?;
     Ok(rows)
 }

@@ -4,7 +4,8 @@
 //! Asynchronous, application-wide XMLTV coordinator. It never consults M3U
 //! hints, stream headers, Live programmes or view repaint/focus events.
 use super::{
-    ingest::import_xmltv,
+    headroom::ImportHeadroom,
+    ingest::import_xmltv_guarded,
     model::{EpgError, LimitKind},
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
@@ -19,7 +20,7 @@ use std::{
     collections::HashMap,
     fmt,
     io::{BufReader, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -495,10 +496,24 @@ impl GlobalGuideManager {
             tokio::task::spawn_blocking(move || {
                 let file =
                     std::fs::File::open(&path).map_err(|_| GuideServiceError::LocalAccess)?;
+                let staged_size = file.metadata().map_err(local_spool_error)?.len();
                 let mut conn = store
                     .connect_private()
                     .map_err(|_| GuideServiceError::Storage)?;
-                let rows = import_xmltv(
+                // SQLite identifies its real DB/WAL location. If unavailable,
+                // existing SQLite quotas and typed errors still apply.
+                let database: Option<String> = conn
+                    .query_row("PRAGMA database_list", [], |r| r.get(2))
+                    .ok();
+                let guard = database
+                    .filter(|location| !location.is_empty())
+                    .map(|location| {
+                        ImportHeadroom::new(PathBuf::from(location), path.clone(), staged_size, gzip)
+                    });
+                if guard.as_ref().is_some_and(|guard| !guard.admit()) {
+                    return Err(GuideServiceError::DiskFull);
+                }
+                let rows = import_xmltv_guarded(
                     &mut conn,
                     BufReader::new(file),
                     &source_id,
@@ -506,6 +521,7 @@ impl GlobalGuideManager {
                     expected_revision,
                     gzip,
                     &cancelled,
+                    guard.as_ref(),
                 )
                 .map_err(|error| match error {
                     EpgError::Cancelled => GuideServiceError::Cancelled,

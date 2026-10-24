@@ -3,6 +3,7 @@
 
 //! Separate guarded transport for *user-approved* XMLTV sources.
 //! Deliberately does not accept IPTV playback headers or implicit playlist hints.
+use super::headroom;
 use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
     header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
@@ -97,6 +98,19 @@ impl fmt::Display for GuideFetchError {
     }
 }
 impl std::error::Error for GuideFetchError {}
+
+async fn download_space_allowed(path: &std::path::Path) -> bool {
+    let owned = path.to_path_buf();
+    // Querying mounted filesystem metadata must not block GTK or Tokio's
+    // async reactor. An unavailable worker/probe is not evidence of ENOSPC.
+    tokio::task::spawn_blocking(move || headroom::download_allowed(&owned))
+        .await
+        .unwrap_or(true)
+}
+
+fn completed_download_intervals(total_bytes: u64) -> u64 {
+    total_bytes / headroom::DOWNLOAD_CHECK_BYTES
+}
 
 fn spool_io_error(error: std::io::Error) -> GuideFetchError {
     match error.kind() {
@@ -505,6 +519,9 @@ pub async fn fetch_guide_spooled(
     path: &std::path::Path,
 ) -> Result<bool, GuideFetchError> {
     let url = validate_remote_url(origin)?;
+    if !download_space_allowed(path).await {
+        return Err(GuideFetchError::DiskFull);
+    }
     tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(GuideFetchError::Cancelled),
@@ -571,6 +588,9 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
         }
         // Never overwrite an existing source file or follow symlinks. The
         // caller supplies a random path in its private SQLite data directory.
+        if !download_space_allowed(path).await {
+            return Err(GuideFetchError::DiskFull);
+        }
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -578,6 +598,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             .map_err(spool_io_error)?;
         let mut file = tokio::fs::File::from_std(file);
         let mut total = 0_u64;
+        let mut space_checks = 0_u64;
         let mut header = [0_u8; 2];
         let mut header_bytes = 0_usize;
         let mut gzip = encoding == "gzip";
@@ -608,6 +629,14 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
                 return Err(GuideFetchError::WireLimit);
             }
             file.write_all(&chunk).await.map_err(spool_io_error)?;
+            while completed_download_intervals(total) > space_checks {
+                // Enforce each additional completed 16 MiB interval, without
+                // trusting server Content-Length or needing a background timer.
+                if !download_space_allowed(path).await {
+                    return Err(GuideFetchError::DiskFull);
+                }
+                space_checks += 1;
+            }
         }
         if total == 0 || (encoding == "gzip" && header != [0x1f, 0x8b]) {
             return Err(GuideFetchError::Encoding);
@@ -663,6 +692,16 @@ mod tests {
             GuideFetchError::Storage
         );
     }
+    #[test]
+    fn remote_download_cadence_counts_exact_16_mib_boundaries() {
+        let interval = headroom::DOWNLOAD_CHECK_BYTES;
+        assert_eq!(completed_download_intervals(interval - 1), 0);
+        assert_eq!(completed_download_intervals(interval), 1);
+        assert_eq!(completed_download_intervals(interval + 1), 1);
+        assert_eq!(completed_download_intervals(2 * interval - 1), 1);
+        assert_eq!(completed_download_intervals(2 * interval), 2);
+    }
+
     #[test]
     fn denies_unsafe_and_repaired_authorities() {
         for origin in [

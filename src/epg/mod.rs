@@ -7,6 +7,7 @@ pub mod cache;
 #[cfg(test)]
 mod capacity_bench;
 pub mod desktop;
+mod headroom;
 pub mod ingest;
 pub mod model;
 pub mod network;
