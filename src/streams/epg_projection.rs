@@ -51,7 +51,7 @@ pub(super) enum ProjectionOutcome {
 }
 
 /// Clones share one bounded work budget across all visible list rows.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct ProjectionService {
     permits: Arc<Semaphore>,
     pending: Arc<AtomicUsize>,
