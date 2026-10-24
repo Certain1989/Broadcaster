@@ -179,3 +179,15 @@ fn imported_tvg_name_and_effective_name_suggest_but_do_not_bind() {
     );
     assert!(d.confirmed_target().is_none());
 }
+
+#[test]
+fn full_fold_handles_greek_sigma_and_expansions_without_stripping_variants() {
+    // Final sigma folds to ordinary sigma; dotted-I has a multi-codepoint
+    // default fold; ligature expansion is full folding, not simple lowercasing.
+    assert_eq!(normalized_name("ΟΣ"), normalized_name("ος"));
+    assert_eq!(normalized_name("İ"), "i\u{307}");
+    assert_eq!(normalized_name("ﬃ"), "ffi");
+    assert_eq!(normalized_name("  STRAẞE  \u{2003} NEWS  "), "strasse news");
+    assert_ne!(normalized_name("Channel HD"), normalized_name("Channel"));
+    assert_ne!(normalized_name("Station Berlin"), normalized_name("Station"));
+}
