@@ -302,6 +302,10 @@ fn import_xmltv_inner<R: BufRead>(
     result
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "transactional importer carries a separately verified prior TEMP limit"
+)]
 fn import_xmltv_scoped<R: BufRead>(
     conn: &mut Connection,
     input: R,
