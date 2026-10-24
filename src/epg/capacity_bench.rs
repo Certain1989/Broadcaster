@@ -317,7 +317,6 @@ fn epg_capacity_near_ceiling_5m_manual() {
     streamed_capacity_case("near-5m", 100_000, 5_000_000, true);
 }
 
- 
 // O01 exercises the exact migrated importer and a test-only same-transaction
 // TEMP snapshot. These are fabricated XMLTV documents, never external guides.
 // The sample is NOT a physical TEMP peak or allocated block measurement.
@@ -333,14 +332,19 @@ fn o01_case(rows: usize, wide: bool) {
     let scenario = format!("o01-{shape}-{rows}");
     let dir = O01Directory(test_directory(&scenario));
     let path = dir.0.join("fixture.xml");
-    let channel = if wide { "C".repeat(512) } else { "channel".to_string() };
+    let channel = if wide {
+        "C".repeat(512)
+    } else {
+        "channel".to_string()
+    };
     let subtitle = "S".repeat(513);
     {
         let mut writer = BufWriter::new(File::create(&path).unwrap());
         write!(
             writer,
             "<tv><channel id='{channel}'><display-name>Fabricated</display-name></channel>"
-        ).unwrap();
+        )
+        .unwrap();
         for index in 0..rows {
             // BINARY full-key identity: titles are 512 bytes and distinct even
             // when all share 506 leading bytes. Subtitle is clipped to 512.
@@ -363,22 +367,33 @@ fn o01_case(rows: usize, wide: bool) {
     enable_o01_measurement();
     let start = Instant::now();
     let outcome = import_xmltv(
-        &mut conn, BufReader::new(File::open(&path).unwrap()),
-        "fixture", 2, 1, false, &cancelled
+        &mut conn,
+        BufReader::new(File::open(&path).unwrap()),
+        "fixture",
+        2,
+        1,
+        false,
+        &cancelled,
     );
     let observation = take_o01_observation();
     let stats = outcome.expect("O01 fabricated streamed importer success");
     let observation = observation.expect("same-transaction, pre-DROP TEMP snapshot");
     assert_eq!(stats.programmes, rows);
     assert_eq!(stats.truncated_subtitles, rows);
-    assert_eq!((stats.truncated_titles, stats.truncated_descriptions), (0, 0));
+    assert_eq!(
+        (stats.truncated_titles, stats.truncated_descriptions),
+        (0, 0)
+    );
     assert_eq!(observation.parsed, rows);
     assert_eq!(observation.retained, rows);
     assert_eq!(observation.marked, rows);
-    let persisted: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
-        [], |r| r.get(0)
-    ).unwrap();
+    let persisted: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(persisted, rows as i64);
     let marker_residue: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_temp_master          WHERE name='epg_import_truncated_rowids'",
@@ -399,7 +414,10 @@ fn o01_case(rows: usize, wide: bool) {
     // 10k x 512-byte key identity previously took tens of MiB. A bounded
     // integer rowid marker table should be well below 1 MiB at this scale.
     if rows == 10_000 {
-        assert!(temp_bytes < 1024 * 1024, "rowid TEMP footprint unexpectedly large");
+        assert!(
+            temp_bytes < 1024 * 1024,
+            "rowid TEMP footprint unexpectedly large"
+        );
     }
     drop(conn);
 }
