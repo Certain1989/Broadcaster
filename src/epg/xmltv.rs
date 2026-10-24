@@ -173,6 +173,7 @@ struct PendingProgramme {
     description_truncated: bool,
     title_truncated: bool,
     subtitle_truncated: bool,
+    description_c1: bool,
 }
 
 /// Compact provenance for display fields shortened by the streaming parser.
@@ -188,6 +189,17 @@ impl ProgrammeTruncation {
     pub fn any(self) -> bool {
         self.title || self.subtitle || self.description
     }
+}
+
+/// A validation-only signal; the invalid description and optional metadata
+/// are never forwarded to the retained-programme insertion callback.
+#[derive(Debug)]
+pub(crate) struct OmittedProgrammeIdentity {
+    pub source_id: String,
+    pub channel_id: String,
+    pub start_utc: i64,
+    pub stop_utc: i64,
+    pub title: String,
 }
 
 #[derive(Default)]
@@ -207,6 +219,8 @@ struct ParseState {
     truncated_subtitles: usize,
     truncated_channel_names: usize,
     last_programme_truncation: ProgrammeTruncation,
+    last_programme_c1: bool,
+    allow_c1_omission: bool,
     allow_description_truncation: bool,
     allow_display_truncation: bool,
     max_channels: usize,
@@ -338,11 +352,26 @@ impl ParseState {
     }
 
     fn add_text(&mut self, text: &str) -> Result<(), EpgError> {
-        if text.chars().any(|c| {
+        let direct_desc = self.allow_c1_omission
+            && self.tags.len() == 3
+            && self.tags[0] == "tv"
+            && self.tags[1] == "programme"
+            && self.tags[2] == "desc";
+        let mut contains_c1 = false;
+        for c in text.chars() {
             let u = c as u32;
-            (u < 0x20 && c != '\n' && c != '\t' && c != '\r') || (0x7f..=0x9f).contains(&u)
-        }) {
-            return Err(EpgError::InvalidInput);
+            if (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
+                || u == 0x7f
+                || ((0x80..=0x9f).contains(&u) && !direct_desc)
+            {
+                return Err(EpgError::InvalidInput);
+            }
+            contains_c1 |= (0x80..=0x9f).contains(&u);
+        }
+        if contains_c1 {
+            if let Some(programme) = self.programme.as_mut() {
+                programme.description_c1 = true;
+            }
         }
         if self.tags.is_empty() {
             if !text.trim().is_empty() {
@@ -472,6 +501,7 @@ impl ParseState {
         }
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
+            self.last_programme_c1 = p.description_c1;
             self.last_programme_truncation = ProgrammeTruncation::default();
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
                 if start < stop
@@ -709,6 +739,8 @@ pub struct StreamedRows {
     pub truncated_channel_names: usize,
     /// Conflicting repeated-row occurrences, not unique programme identities.
     pub conflicting_duplicate_rows: usize,
+    /// Otherwise-valid programme elements omitted for C1 in a direct description.
+    pub omitted_c1_programmes: usize,
 }
 
 struct MeasuredRead<R> {
@@ -769,6 +801,60 @@ pub fn decode_xmltv_rows<R: BufRead>(
     cancelled: &AtomicBool,
     on_channel: impl FnMut(GuideChannel) -> Result<(), EpgError>,
     on_programme: impl FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
+) -> Result<StreamedRows, EpgError> {
+    decode_xmltv_rows_internal(
+        input,
+        source_id,
+        retrieved_utc,
+        gzip,
+        limits,
+        cancelled,
+        on_channel,
+        on_programme,
+        |_, _| Err(EpgError::InvalidInput),
+        false,
+    )
+}
+
+/// Only the transactional importer opts in to validated C1 omission events.
+#[expect(clippy::too_many_arguments, reason = "streaming parser with a separate validation sink")]
+pub(crate) fn decode_xmltv_rows_omitting_c1<R: BufRead>(
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    gzip: bool,
+    limits: StreamingLimits,
+    cancelled: &AtomicBool,
+    on_channel: impl FnMut(GuideChannel) -> Result<(), EpgError>,
+    on_programme: impl FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
+    on_omitted: impl FnMut(OmittedProgrammeIdentity, ProgrammeTruncation) -> Result<(), EpgError>,
+) -> Result<StreamedRows, EpgError> {
+    decode_xmltv_rows_internal(
+        input,
+        source_id,
+        retrieved_utc,
+        gzip,
+        limits,
+        cancelled,
+        on_channel,
+        on_programme,
+        on_omitted,
+        true,
+    )
+}
+
+#[expect(clippy::too_many_arguments, reason = "streaming parser with separate validated sinks")]
+fn decode_xmltv_rows_internal<R: BufRead>(
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    gzip: bool,
+    limits: StreamingLimits,
+    cancelled: &AtomicBool,
+    on_channel: impl FnMut(GuideChannel) -> Result<(), EpgError>,
+    on_programme: impl FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
+    on_omitted: impl FnMut(OmittedProgrammeIdentity, ProgrammeTruncation) -> Result<(), EpgError>,
+    allow_c1_omission: bool,
 ) -> Result<StreamedRows, EpgError> {
     use std::{cell::Cell, rc::Rc};
     if !bounded_text(source_id, 64)
@@ -831,6 +917,8 @@ pub fn decode_xmltv_rows<R: BufRead>(
         cancelled,
         on_channel,
         on_programme,
+        on_omitted,
+        allow_c1_omission,
     );
     if let Some(reason) = over.get() {
         Err(EpgError::Capacity(reason))
@@ -839,7 +927,7 @@ pub fn decode_xmltv_rows<R: BufRead>(
     }
 }
 
-fn emit_stream_row<C, P>(
+fn emit_stream_row<C, P, O>(
     state: &mut ParseState,
     tag: &str,
     retrieved_utc: i64,
@@ -847,10 +935,12 @@ fn emit_stream_row<C, P>(
     future: &mut bool,
     on_channel: &mut C,
     on_programme: &mut P,
+    on_omitted: &mut O,
 ) -> Result<(), EpgError>
 where
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
     P: FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
+    O: FnMut(OmittedProgrammeIdentity, ProgrammeTruncation) -> Result<(), EpgError>,
 {
     match tag {
         "channel" if state.tags == ["tv"] => {
@@ -861,9 +951,24 @@ where
         }
         "programme" if state.tags == ["tv"] => {
             if let Some(row) = state.programmes.pop() {
-                counts.programmes += 1;
-                *future |= row.stop_utc > retrieved_utc;
-                on_programme(row, std::mem::take(&mut state.last_programme_truncation))?;
+                let truncated = std::mem::take(&mut state.last_programme_truncation);
+                if std::mem::take(&mut state.last_programme_c1) {
+                    on_omitted(
+                        OmittedProgrammeIdentity {
+                            source_id: row.source_id,
+                            channel_id: row.channel_id,
+                            start_utc: row.start_utc,
+                            stop_utc: row.stop_utc,
+                            title: row.title,
+                        },
+                        truncated,
+                    )?;
+                    counts.omitted_c1_programmes = counts.omitted_c1_programmes.saturating_add(1);
+                } else {
+                    counts.programmes += 1;
+                    *future |= row.stop_utc > retrieved_utc;
+                    on_programme(row, truncated)?;
+                }
             }
         }
         _ => {}
@@ -877,7 +982,7 @@ where
     clippy::too_many_arguments,
     reason = "streaming XMLTV event parser carries validation context and two row sinks"
 )]
-fn parse_xml_stream_rows<R, C, P>(
+fn parse_xml_stream_rows<R, C, P, O>(
     input: R,
     source_id: &str,
     retrieved_utc: i64,
@@ -886,11 +991,14 @@ fn parse_xml_stream_rows<R, C, P>(
     cancel: &AtomicBool,
     mut on_channel: C,
     mut on_programme: P,
+    mut on_omitted: O,
+    allow_c1_omission: bool,
 ) -> Result<StreamedRows, EpgError>
 where
     R: BufRead,
     C: FnMut(GuideChannel) -> Result<(), EpgError>,
     P: FnMut(Programme, ProgrammeTruncation) -> Result<(), EpgError>,
+    O: FnMut(OmittedProgrammeIdentity, ProgrammeTruncation) -> Result<(), EpgError>,
 {
     let mut reader = Reader::from_reader(input);
     reader.config_mut().check_end_names = true;
@@ -900,6 +1008,7 @@ where
         max_programmes,
         allow_description_truncation: true,
         allow_display_truncation: true,
+        allow_c1_omission,
         ..ParseState::default()
     };
     let mut rows = StreamedRows {
@@ -910,6 +1019,7 @@ where
         truncated_subtitles: 0,
         truncated_channel_names: 0,
         conflicting_duplicate_rows: 0,
+        omitted_c1_programmes: 0,
     };
     let mut has_future = false;
     loop {
@@ -935,6 +1045,7 @@ where
                     &mut has_future,
                     &mut on_channel,
                     &mut on_programme,
+                    &mut on_omitted,
                 )?;
             }
             Event::End(tag) => {
@@ -950,6 +1061,7 @@ where
                     &mut has_future,
                     &mut on_channel,
                     &mut on_programme,
+                    &mut on_omitted,
                 )?;
             }
             Event::Text(text) => {
