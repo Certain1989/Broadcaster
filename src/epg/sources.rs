@@ -80,6 +80,8 @@ fn safe_code(code: &str) -> &'static str {
         "cancelled" => "cancelled",
         "invalid_xml" => "invalid_xml",
         "storage_failed" => "storage_failed",
+        "storage_permission" => "storage_permission",
+        "disk_full" => "disk_full",
         "local_access" => "local_access",
         _ => "unknown",
     }
@@ -487,6 +489,67 @@ mod tests {
         assert!(store.list().unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn storage_failure_codes_survive_sqlite_reload_and_unknown_details_stay_redacted() {
+        use crate::epg::service::GuideServiceError;
+
+        let (dir, store) = temp_store();
+        let source = store
+            .add(
+                "Guide",
+                &SourceOrigin::selected_local_file("file:///fabricated-guide.xmltv".into()).unwrap(),
+            )
+            .unwrap();
+
+        for (failure, expected) in [
+            (GuideServiceError::DiskFull, "disk_full"),
+            (GuideServiceError::StoragePermission, "storage_permission"),
+        ] {
+            store.record_failure(&source.id, &failure.to_string()).unwrap();
+            // Recreate the registry against the same SQLite file, as happens
+            // when the guide manager is reopened or the app starts again.
+            let reopened = GuideSourceRegistry::new(Storage::at(dir.join("db.sqlite3")));
+            assert_eq!(
+                reopened.get(&source.id).unwrap().last_error_code,
+                Some(expected)
+            );
+            let listed = reopened.list().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].last_error_code, Some(expected));
+            let stored: String = reopened
+                .connect_private()
+                .unwrap()
+                .query_row(
+                    "SELECT last_error_code FROM epg_sources WHERE id=?1",
+                    [&source.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, expected);
+        }
+
+        // Never widen the whitelist to arbitrary path, URL or error details.
+        store
+            .record_failure(&source.id, "disk_full: /private/path?token=secret")
+            .unwrap();
+        let reopened = GuideSourceRegistry::new(Storage::at(dir.join("db.sqlite3")));
+        assert_eq!(
+            reopened.get(&source.id).unwrap().last_error_code,
+            Some("unknown")
+        );
+        let stored: String = reopened
+            .connect_private()
+            .unwrap()
+            .query_row(
+                "SELECT last_error_code FROM epg_sources WHERE id=?1",
+                [&source.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "unknown");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn settings_cas_is_atomic_and_old_dialogs_cannot_overwrite() {
         let (dir, store) = temp_store();
