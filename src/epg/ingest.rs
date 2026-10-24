@@ -1819,13 +1819,7 @@ mod tests {
 
     #[test]
     fn c1_direct_description_omits_elements_but_preserves_clean_future_rows() {
-        for bad in [
-            "\u{0080}",
-            "\u{0093}",
-            "\u{0094}",
-            "\u{0096}",
-            "\u{009f}",
-        ] {
+        for bad in ["\u{0080}", "\u{0093}", "\u{0094}", "\u{0096}", "\u{009f}"] {
             let mut conn = db();
             let xml = guide(
                 "<channel id='c'><display-name>Stable</display-name></channel>",
