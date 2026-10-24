@@ -444,8 +444,8 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
         .unwrap();
         for index in 0..(size - 2) {
             let target = format!("c-{index:05}");
-            let name = if index == 9_999 {
-                // A duplicate beyond the 10,000-row scan boundary.
+            let name = if index == size - 3 {
+                // The duplicate is the last sorted entry (beyond 10k on large guides).
                 "Unique Non-ID"
             } else {
                 "Other Station"
