@@ -469,7 +469,7 @@ pub enum SemanticProgrammeState {
     /// All scheduling information is from ONE selected cached guide.
     Matched {
         method: MatchMethod,
-        page: BoundedGuidePage,
+        page: Box<BoundedGuidePage>,
         /// None for stale/unknown freshness or truncated results.
         now_next: Option<NowNext>,
         refresh_failed: bool,
@@ -542,7 +542,7 @@ pub fn read_semantic_now_next(
     };
     Ok(SemanticProgrammeState::Matched {
         method,
-        page,
+        page: Box::new(page),
         now_next,
         refresh_failed,
     })
