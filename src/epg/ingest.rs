@@ -971,7 +971,8 @@ mod tests {
         let reopened = Connection::open(&path).unwrap();
         assert_eq!(
             reopened
-                .query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+                .query_row("SELECT title FROM epg_programmes", [], |r| r
+                    .get::<_, String>(0))
                 .unwrap(),
             "Cached",
         );
