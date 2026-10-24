@@ -30,11 +30,11 @@ fn test_directory(scenario: &str) -> PathBuf {
 }
 
 fn fixture<W: Write>(out: &mut W, channels: usize, programmes: usize) {
-    out.write_all(b"<tv>").unwrap();
+    out.write_all(b"<tv>\n").unwrap();
     for channel in 0..channels {
         write!(
             out,
-            "<channel id='c{channel:05}'><display-name>Channel {channel}</display-name></channel>"
+            "                <channel id='c{channel:05}'><display-name>Channel {channel}</display-name></channel>"
         )
         .unwrap();
     }
@@ -59,7 +59,7 @@ fn fixture<W: Write>(out: &mut W, channels: usize, programmes: usize) {
         }
         write!(
             out,
-            "<programme channel='c{channel:05}' start='202610{day:02}{hour:02}0000 +0000' stop='202610{end_day:02}{end_hour:02}0000 +0000'><title>Show {index:07} {token}</title><desc>Sample {token} {token}</desc></programme>"
+            "                <programme channel='c{channel:05}' start='202610{day:02}{hour:02}0000 +0000' stop='202610{end_day:02}{end_hour:02}0000 +0000'><title>Show {index:07} {token}</title><desc>Sample {token} {token}</desc></programme>"
         )
         .unwrap();
     }

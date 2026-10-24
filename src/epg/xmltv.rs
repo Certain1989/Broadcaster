@@ -300,6 +300,14 @@ impl ParseState {
             }
             return Ok(());
         }
+        // XMLTV permits formatting whitespace between its many records.
+        // The root and the channel/programme containers can each contain
+        // millions of individually small separators. Their *aggregate*
+        // whitespace is not the text of one XML element. The expanded-byte
+        // quota still bounds the total input, while leaf text stays limited.
+        if self.tags.len() <= 2 && text.trim().is_empty() {
+            return Ok(());
+        }
         let used = self.text_bytes.last_mut().ok_or(EpgError::InvalidInput)?;
         *used = used.checked_add(text.len()).ok_or(EpgError::OverLimit)?;
         if *used > MAX_ELEMENT_TEXT {
@@ -865,4 +873,73 @@ where
         return Err(EpgError::InvalidSchedule);
     }
     Ok(rows)
+}
+
+
+#[cfg(test)]
+mod formatted_xmltv_regression {
+    use super::{decode_xmltv_rows, StreamingLimits};
+    use std::{fmt::Write as _, io::Cursor, sync::atomic::AtomicBool};
+
+    /// Mirrors ordinary indented XMLTV with roughly 75,000 programmes.
+    /// Previously the spaces between <programme> rows exhausted the 1 MiB
+    /// text cap on the enclosing <tv> despite all fields being small.
+    #[test]
+    fn indented_germany_sized_guide_uses_per_field_not_root_text_budget() {
+        const PROGRAMMES: usize = 75_000;
+        let mut xml = String::with_capacity(18_000_000);
+        xml.push_str("<tv>\n                <channel id='de'><display-name>DE</display-name></channel>\n");
+        for i in 0..PROGRAMMES {
+            writeln!(
+                &mut xml,
+                "                <programme channel='de' start='20300101000000 +0000' \
+                 stop='20300101010000 +0000'><title>Show {i}</title></programme>"
+            )
+            .unwrap();
+        }
+        xml.push_str("</tv>");
+        let cancelled = AtomicBool::new(false);
+        let mut channels = 0_usize;
+        let mut programmes = 0_usize;
+        let stats = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &cancelled,
+            |_| {
+                channels += 1;
+                Ok(())
+            },
+            |_| {
+                programmes += 1;
+                Ok(())
+            },
+        )
+        .expect("normal XMLTV formatting whitespace must not trip element quota");
+        assert_eq!(stats.channels, 1);
+        assert_eq!(stats.programmes, PROGRAMMES);
+        assert_eq!((channels, programmes), (1, PROGRAMMES));
+    }
+
+    #[test]
+    fn oversized_actual_leaf_text_is_still_rejected() {
+        use super::super::model::EpgError;
+        let mut xml = String::from("<tv><channel id='de'><display-name>");
+        xml.push_str(&"X".repeat(1_048_577));
+        xml.push_str("</display-name></channel></tv>");
+        let cancelled = AtomicBool::new(false);
+        let outcome = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &cancelled,
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+        assert_eq!(outcome.unwrap_err(), EpgError::OverLimit);
+    }
 }
