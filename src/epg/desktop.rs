@@ -249,7 +249,7 @@ fn confirm_shared_guide(
             dialog.close();
         }
     ));
-    let parent = parent.clone();
+    let callback_parent = parent.clone();
     confirm.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -263,7 +263,7 @@ fn confirm_shared_guide(
             let manager = manager.clone();
             let list = list.clone();
             let status = status.clone();
-            let parent = parent.clone();
+            let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
