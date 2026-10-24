@@ -24,6 +24,7 @@ const MAX_DATABASE_AND_WAL: u64 = 6 * 1024 * 1024 * 1024;
 std::thread_local! {
     // Test-only observation made immediately after SQLite accepts a row.
     static TEST_STAGED_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_STAGED_MARKERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 
@@ -276,6 +277,8 @@ pub fn import_xmltv<R: BufRead>(
                     )
                     .map_err(storage_error)?;
                     marked += 1;
+                    #[cfg(test)]
+                    TEST_STAGED_MARKERS.with(|count| count.set(count.get() + 1));
                 }
             } else {
                 // Only a genuinely ignored insertion follows this path; never
@@ -845,6 +848,11 @@ mod tests {
                     inserted, 1,
                     "the cancellation gate must follow one completed SQLite INSERT"
                 );
+                assert_eq!(
+                    TEST_STAGED_MARKERS.with(|count| count.get()),
+                    1,
+                    "the cancellation gate must follow the shortened-row TEMP marker"
+                );
                 self.cancelled.store(true, Ordering::Release);
                 self.fired.set(true);
             }
@@ -918,6 +926,7 @@ mod tests {
         );
         let split = replacement.find("</programme>").unwrap() + "</programme>".len();
         TEST_STAGED_INSERTS.with(|count| count.set(0));
+        TEST_STAGED_MARKERS.with(|count| count.set(0));
         let fired = Rc::new(Cell::new(false));
         let gate = CancelAfterSqlInsert {
             bytes: replacement.into_bytes(),
@@ -941,6 +950,7 @@ mod tests {
             "cancellation must occur after an actual staged INSERT"
         );
         assert_eq!(TEST_STAGED_INSERTS.with(|count| count.get()), 1);
+        assert_eq!(TEST_STAGED_MARKERS.with(|count| count.get()), 1);
         let retained_channel: (String, String) = conn
             .query_row(
                 "SELECT channel_id,display_name FROM epg_channels WHERE source_id='source'",
@@ -1032,5 +1042,201 @@ mod tests {
             )
             .unwrap();
         assert_eq!(leaked, 0);
+    }
+
+    fn import_fixture(conn: &mut Connection, xml: &str, source: &str, stamp: i64, revision: i64)
+        -> Result<StreamedRows, EpgError>
+    {
+        import_xmltv(
+            conn,
+            Cursor::new(xml.as_bytes()),
+            source,
+            stamp,
+            revision,
+            false,
+            &AtomicBool::new(false),
+        )
+    }
+
+    fn programme(channel: &str, title: &str, subtitle: Option<&str>, desc: Option<&str>) -> String {
+        let subtitle = subtitle.map(|value| format!("<sub-title>{value}</sub-title>")).unwrap_or_default();
+        let desc = desc.map(|value| format!("<desc>{value}</desc>")).unwrap_or_default();
+        format!(
+            "<programme channel='{channel}' start='20300101000000 +0000'              stop='20300101010000 +0000'><title>{title}</title>{subtitle}{desc}</programme>"
+        )
+    }
+
+    fn guide(channels: &str, programmes: &str) -> String {
+        format!("<tv>{channels}{programmes}</tv>")
+    }
+
+    fn assert_no_temp_marker(conn: &Connection) {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master                  WHERE name='epg_import_truncated_rowids'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "TEMP state must be absent after import");
+    }
+
+    #[test]
+    fn migrated_programme_table_is_a_rowid_table_and_temp_markers_do_not_leak() {
+        let mut conn = db();
+        // WITHOUT ROWID schema migration would invalidate INSERT ... RETURNING rowid.
+        let without_rowid: i64 = conn
+            .query_row(
+                "SELECT wr FROM pragma_table_list                  WHERE schema='main' AND name='epg_programmes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(without_rowid, 0);
+        let g = guide(
+            "<channel id='c'><display-name>C</display-name></channel>",
+            &programme("c", &"T".repeat(513), None, None),
+        );
+        let stats = import_fixture(&mut conn, &g, "source", 1, 1).unwrap();
+        assert_eq!((stats.programmes, stats.truncated_titles), (1, 1));
+        let rowid: i64 = conn
+            .query_row("SELECT rowid FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
+        assert!(rowid > 0);
+        assert_no_temp_marker(&conn);
+    }
+
+    #[test]
+    fn ignored_identical_rows_must_not_inherit_other_rowid_markers() {
+        let mut conn = db();
+        let c = "<channel id='c'><display-name>C</display-name></channel>";
+        let short = programme("c", &"T".repeat(513), None, None);
+        let plain = programme("c", "Plain", Some("Same"), Some("Same"));
+        let input = guide(c, &format!("{short}{plain}{plain}"));
+        let stats = import_fixture(&mut conn, &input, "source", 1, 1).unwrap();
+        assert_eq!((stats.programmes, stats.truncated_titles), (2, 1));
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        assert_no_temp_marker(&conn);
+
+        // Two equal BINARY identities with different complete metadata conflict.
+        let plain_changed = programme("c", "Plain", Some("Different"), Some("Same"));
+        let rejected = guide(c, &format!("{plain}{plain_changed}"));
+        assert_eq!(
+            import_fixture(&mut conn, &rejected, "source", 2, 2).unwrap_err(),
+            EpgError::InvalidSchedule
+        );
+        assert_no_temp_marker(&conn);
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2, "last-good imported rows must survive conflict");
+    }
+
+    #[test]
+    fn wide_binary_identities_with_common_prefixes_are_not_conflated() {
+        let mut conn = db();
+        let channel_a = format!("{}a", "C".repeat(511));
+        let channel_b = format!("{}b", "C".repeat(511));
+        let title_a = format!("{}a", "T".repeat(511));
+        let title_b = format!("{}b", "T".repeat(511));
+        let channels = format!(
+            "<channel id='{channel_a}'><display-name>One</display-name></channel>             <channel id='{channel_b}'><display-name>Two</display-name></channel>"
+        );
+        let mut programmes = String::new();
+        for channel in [&channel_a, &channel_b] {
+            for title in [&title_a, &title_b] {
+                programmes.push_str(&programme(channel, title, Some(&"S".repeat(513)), None));
+            }
+        }
+        let stats = import_fixture(&mut conn, &guide(&channels, &programmes), "source", 1, 1).unwrap();
+        assert_eq!((stats.programmes, stats.truncated_subtitles), (4, 4));
+        let count: i64 = conn.query_row("SELECT COUNT(DISTINCT rowid) FROM epg_programmes", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 4);
+        assert_no_temp_marker(&conn);
+
+        // Exact BINARY identity distinguishes case, not just long shared prefixes.
+        let input = guide(
+            "<channel id='c'><display-name>C</display-name></channel>",
+            &format!("{}{}", programme("c", "Show", None, None), programme("c", "show", None, None)),
+        );
+        assert_eq!(import_fixture(&mut conn, &input, "source", 2, 2).unwrap().programmes, 2);
+    }
+
+    #[test]
+    fn all_shortening_combinations_and_utf8_byte_boundaries_roundtrip() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        for len in [511, 512, 513] {
+            for field in ["title", "sub-title", "desc"] {
+                let mut conn = db();
+                let value = if field == "desc" {
+                    "D".repeat(2048 - 512 + len)
+                } else {
+                    "T".repeat(len)
+                };
+                let title = if field == "title" { value.as_str() } else { "Normal" };
+                let sub = (field == "sub-title").then_some(value.as_str());
+                let desc = (field == "desc").then_some(value.as_str());
+                let stats = import_fixture(
+                    &mut conn,
+                    &guide(channels, &programme("c", title, sub, desc)),
+                    "source", 1, 1,
+                ).unwrap();
+                assert_eq!(stats.programmes, 1);
+                let expected_short = usize::from(len == 513);
+                assert_eq!(stats.truncated_titles, if field == "title" { expected_short } else { 0 });
+                assert_eq!(stats.truncated_subtitles, if field == "sub-title" { expected_short } else { 0 });
+                assert_eq!(stats.truncated_descriptions, if field == "desc" { expected_short } else { 0 });
+                assert_no_temp_marker(&conn);
+            }
+        }
+        let mut conn = db();
+        let t = format!("{}é", "X".repeat(511));
+        let s = format!("{}é", "Y".repeat(511));
+        let d = format!("{}é", "Z".repeat(2047));
+        let stats = import_fixture(
+            &mut conn,
+            &guide(channels, &programme("c", &t, Some(&s), Some(&d))),
+            "source", 1, 1,
+        ).unwrap();
+        assert_eq!((stats.truncated_titles, stats.truncated_subtitles, stats.truncated_descriptions), (1, 1, 1));
+        let (stored_title, stored_sub, stored_desc, start, stop): (String, String, String, i64, i64) =
+            conn.query_row(
+                "SELECT title,subtitle,description,start_utc,stop_utc FROM epg_programmes",
+                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            ).unwrap();
+        assert_eq!(stored_title, "X".repeat(511));
+        assert_eq!(stored_sub, "Y".repeat(511));
+        assert_eq!(stored_desc, "Z".repeat(2047));
+        assert_eq!((start,stop),(1_893_456_000,1_893_459_600));
+        assert_no_temp_marker(&conn);
+    }
+
+    #[test]
+    fn source_isolation_and_complete_combined_collision_rollback() {
+        let mut conn = db();
+        conn.execute(
+            "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)              VALUES ('second','Other','local_file','/synthetic2',1,1)", [],
+        ).unwrap();
+        let c = "<channel id='c'><display-name>C</display-name></channel>";
+        let combined = programme("c", &"T".repeat(513), Some(&"S".repeat(513)), Some(&"D".repeat(2049)));
+        assert_eq!(
+            import_fixture(&mut conn, &guide(c,&combined), "source", 1, 1).unwrap().programmes, 1
+        );
+        // Another source with the same channel/UTC/title identity is independent.
+        let same = programme("c", &"T".repeat(512), None, None);
+        assert_eq!(
+            import_fixture(&mut conn, &guide(c,&same), "second", 1, 1).unwrap().programmes, 1
+        );
+        assert_no_temp_marker(&conn);
+        for reverse in [false, true] {
+            let (a,b) = if reverse { (&same, &combined) } else { (&combined, &same) };
+            let failed = import_fixture(&mut conn, &guide(c,&format!("{a}{b}")), "source", 2, 2);
+            assert_eq!(failed.unwrap_err(), EpgError::InvalidSchedule);
+            assert_no_temp_marker(&conn);
+        }
+        let per_source: (i64,i64) = conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM epg_programmes WHERE source_id='source'),                     (SELECT COUNT(*) FROM epg_programmes WHERE source_id='second')",
+            [], |r| Ok((r.get(0)?, r.get(1)?))
+        ).unwrap();
+        assert_eq!(per_source, (1,1));
     }
 }
