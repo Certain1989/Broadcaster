@@ -1266,6 +1266,80 @@ mod tests {
     }
 
     #[test]
+    fn decoded_attribute_control_after_c1_omission_rolls_back_last_good() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        let metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        let prior_cap = temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap();
+        let invalid = "<tv><channel id='c'><display-name>Changed</display-name></channel>
+            <programme channel='c' start='20300101000000 +0000'
+             stop='20300101010000 +0000'><title>Omitted</title>
+             <desc>bad&#x85;text</desc></programme>
+            <programme channel='c' start='20300101010000 +0000'
+             stop='20300101020000 +0000'><title data-ignored='&#x85;'>Invalid</title>
+             </programme></tv>";
+        assert_eq!(
+            import_xmltv(
+                &mut conn,
+                Cursor::new(invalid),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled,
+            ),
+            Err(EpgError::InvalidInput),
+        );
+        let persisted: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(persisted, metadata);
+        assert_eq!(
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Cached",
+        );
+        assert_eq!(
+            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Example",
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_temp_master
+                 WHERE name IN ('epg_import_omissions','epg_import_truncated_rowids')",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+        );
+        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), prior_cap);
+    }
+
+    #[test]
     fn streamed_plain_import_commits_complete_guide_and_rolls_back_invalid_refresh() {
         let mut conn = db();
         let cancel = AtomicBool::new(false);
