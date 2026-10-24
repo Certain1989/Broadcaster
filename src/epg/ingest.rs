@@ -26,6 +26,118 @@ std::thread_local! {
     static TEST_STAGED_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct O01Observation {
+    pub sqlite_version: String,
+    pub compile_temp_store: Option<String>,
+    pub temp_store: i64,
+    pub temp_pages: i64,
+    pub temp_page_size: i64,
+    pub parsed: usize,
+    pub retained: usize,
+    pub marked: usize,
+    pub elapsed_ms: u128,
+    pub db_bytes: u64,
+    pub wal_bytes: u64,
+    pub rss_kib: Option<u64>,
+    pub hwm_kib: Option<u64>,
+    pub temp_fd_bytes: Option<u64>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    // Opt-in only. No SQLite PRAGMAs, /proc reads, or per-row probes in normal tests.
+    static TEST_O01_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_O01_OBSERVATION: std::cell::RefCell<Option<O01Observation>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn enable_o01_measurement() {
+    TEST_O01_ENABLED.with(|enabled| enabled.set(true));
+    TEST_O01_OBSERVATION.with(|slot| *slot.borrow_mut() = None);
+}
+
+#[cfg(test)]
+pub(super) fn take_o01_observation() -> Option<O01Observation> {
+    TEST_O01_ENABLED.with(|enabled| enabled.set(false));
+    TEST_O01_OBSERVATION.with(|slot| slot.borrow_mut().take())
+}
+
+#[cfg(test)]
+fn observe_o01(
+    tx: &rusqlite::Transaction<'_>,
+    database: &str,
+    parsed: usize,
+    retained: usize,
+    marked: usize,
+    started: Instant,
+) -> O01Observation {
+    let scalar = |sql| tx.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let status_kib = |key: &str| {
+        status.lines().find_map(|line| {
+            line.strip_prefix(key)?
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+    };
+    // SQLite's deleted-open FILE-mode TEMP descriptor: st_size is a sampled
+    // logical file length, not allocated disk blocks or an observed peak.
+    #[cfg(target_os = "linux")]
+    let temp_fd_bytes = std::fs::read_dir("/proc/self/fd").ok().map(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let link = std::fs::read_link(entry.path()).ok()?;
+                let name = link.to_string_lossy();
+                (name.contains("etilqs_") || name.contains("sqlite-temp"))
+                    .then(|| std::fs::metadata(entry.path()).ok().map(|m| m.len()))
+                    .flatten()
+            })
+            .sum()
+    });
+    #[cfg(not(target_os = "linux"))]
+    let temp_fd_bytes = None;
+    let disk_bytes = |suffix: &str| -> u64 {
+        if database.is_empty() {
+            0
+        } else {
+            std::fs::metadata(format!("{database}{suffix}"))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        }
+    };
+    O01Observation {
+        sqlite_version: tx.query_row("SELECT sqlite_version()", [], |r| r.get(0)).unwrap(),
+        compile_temp_store: tx
+            .query_row(
+                "SELECT compile_options FROM pragma_compile_options
+                 WHERE compile_options LIKE 'TEMP_STORE=%' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap(),
+        temp_store: scalar("PRAGMA temp_store"),
+        temp_pages: scalar("PRAGMA temp.page_count"),
+        temp_page_size: scalar("PRAGMA temp.page_size"),
+        parsed,
+        retained,
+        marked,
+        elapsed_ms: started.elapsed().as_millis(),
+        db_bytes: disk_bytes(""),
+        wal_bytes: disk_bytes("-wal"),
+        rss_kib: status_kib("VmRSS:"),
+        hwm_kib: status_kib("VmHWM:"),
+        temp_fd_bytes,
+    }
+}
+
 fn storage_error(_: rusqlite::Error) -> EpgError {
     EpgError::Storage
 }
@@ -74,20 +186,18 @@ pub fn import_xmltv<R: BufRead>(
     tx.execute("DELETE FROM epg_channels WHERE source_id=?1", [source_id])
         .map_err(storage_error)?;
 
-    // Track only keys involving any shortened display metadata. A TEMP table
-    // gives exact SQLite-key identity without retaining unbounded original
-    // descriptions in Rust memory or changing the persistent v2 schema.
-    // It is dropped before a successful commit and rolled back on failure.
+    // The migrated epg_programmes table MUST remain an ordinary rowid table.
+    // Its complete BINARY composite primary key stays in main SQLite, while
+    // TEMP stores only rowids of freshly inserted rows with shortened metadata.
+    // RETURNING rowid makes successful insertion unambiguous even after IGNORE.
+    // TEMP is created in this transaction, dropped before commit or rolled back.
     tx.execute_batch(
-        "CREATE TEMP TABLE epg_import_truncated_keys (
-            channel_id TEXT NOT NULL,
-            start_utc INTEGER NOT NULL,
-            stop_utc INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            PRIMARY KEY(channel_id,start_utc,stop_utc,title)
-         ) WITHOUT ROWID;",
+        "CREATE TEMP TABLE epg_import_truncated_rowids (
+            programme_rowid INTEGER PRIMARY KEY
+         );",
     )
     .map_err(storage_error)?;
+    let mut marked = 0_usize;
     let mut parsed = 0_usize;
     let mut retained = 0_usize;
     let mut retained_title_shortened = 0_usize;
@@ -132,11 +242,12 @@ pub fn import_xmltv<R: BufRead>(
             if parsed.is_multiple_of(1024) {
                 check_budget()?;
             }
-            let inserted_row = tx
-                .execute(
+            let inserted_rowid: Option<i64> = tx
+                .query_row(
                     "INSERT OR IGNORE INTO epg_programmes
-                 (source_id,channel_id,start_utc,stop_utc,title,subtitle,description)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                     (source_id,channel_id,start_utc,stop_utc,title,subtitle,description)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7)
+                     RETURNING rowid",
                     params![
                         p.source_id,
                         p.channel_id,
@@ -146,43 +257,11 @@ pub fn import_xmltv<R: BufRead>(
                         p.subtitle,
                         p.description
                     ],
+                    |r| r.get(0),
                 )
+                .optional()
                 .map_err(storage_error)?;
-            if inserted_row == 0 {
-                // Once *any* field was shortened, the original values cannot
-                // be reconstructed from the stored row. Reject both arrival
-                // orders, including a shortened row followed by a plain row.
-                if shortened.any() {
-                    return Err(EpgError::InvalidSchedule);
-                }
-                let prior_shortened: i64 = tx
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM temp.epg_import_truncated_keys
-                         WHERE channel_id=?1 AND start_utc=?2 AND stop_utc=?3
-                           AND title=?4)",
-                        params![p.channel_id, p.start_utc, p.stop_utc, p.title],
-                        |r| r.get(0),
-                    )
-                    .map_err(storage_error)?;
-                if prior_shortened != 0 {
-                    return Err(EpgError::InvalidSchedule);
-                }
-                // Match the legacy sorted snapshot's conflict semantics:
-                // byte-identical duplicates deduplicate; different metadata
-                // for the same identity is an invalid schedule, not silent loss.
-                let prior: (Option<String>, Option<String>) = tx
-                    .query_row(
-                        "SELECT subtitle,description FROM epg_programmes
-                     WHERE source_id=?1 AND channel_id=?2 AND start_utc=?3
-                       AND stop_utc=?4 AND title=?5",
-                        params![p.source_id, p.channel_id, p.start_utc, p.stop_utc, p.title],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .map_err(storage_error)?;
-                if prior != (p.subtitle, p.description) {
-                    return Err(EpgError::InvalidSchedule);
-                }
-            } else {
+            if let Some(programme_rowid) = inserted_rowid {
                 retained += 1;
                 #[cfg(test)]
                 TEST_STAGED_INSERTS.with(|count| count.set(count.get() + 1));
@@ -191,12 +270,40 @@ pub fn import_xmltv<R: BufRead>(
                 retained_description_shortened += usize::from(shortened.description);
                 if shortened.any() {
                     tx.execute(
-                        "INSERT INTO temp.epg_import_truncated_keys
-                         (channel_id,start_utc,stop_utc,title)
-                         VALUES (?1,?2,?3,?4)",
-                        params![p.channel_id, p.start_utc, p.stop_utc, p.title],
+                        "INSERT INTO temp.epg_import_truncated_rowids (programme_rowid)
+                         VALUES (?1)",
+                        [programme_rowid],
                     )
                     .map_err(storage_error)?;
+                    marked += 1;
+                }
+            } else {
+                // Only a genuinely ignored insertion follows this path; never
+                // use last_insert_rowid(), which could belong to another row.
+                // Resolve the full composite PK with SQLite's BINARY identity,
+                // including source_id, before checking the TEMP marker.
+                if shortened.any() {
+                    return Err(EpgError::InvalidSchedule);
+                }
+                let prior: (i64, Option<String>, Option<String>) = tx
+                    .query_row(
+                        "SELECT rowid,subtitle,description FROM epg_programmes
+                         WHERE source_id=?1 AND channel_id=?2 AND start_utc=?3
+                           AND stop_utc=?4 AND title=?5",
+                        params![p.source_id, p.channel_id, p.start_utc, p.stop_utc, p.title],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    )
+                    .map_err(storage_error)?;
+                let prior_shortened: i64 = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM temp.epg_import_truncated_rowids
+                         WHERE programme_rowid=?1)",
+                        [prior.0],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage_error)?;
+                if prior_shortened != 0 || (prior.1, prior.2) != (p.subtitle, p.description) {
+                    return Err(EpgError::InvalidSchedule);
                 }
             }
             Ok(())
@@ -231,7 +338,12 @@ pub fn import_xmltv<R: BufRead>(
     )
     .map_err(storage_error)?;
     check_budget()?;
-    tx.execute_batch("DROP TABLE temp.epg_import_truncated_keys;")
+    #[cfg(test)]
+    if TEST_O01_ENABLED.with(|enabled| enabled.get()) {
+        let observation = observe_o01(&tx, &database, parsed, retained, marked, started);
+        TEST_O01_OBSERVATION.with(|slot| *slot.borrow_mut() = Some(observation));
+    }
+    tx.execute_batch("DROP TABLE temp.epg_import_truncated_rowids;")
         .map_err(storage_error)?;
     tx.commit().map_err(storage_error)?;
     Ok(rows)
@@ -877,7 +989,7 @@ mod tests {
         let leaked: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_temp_master
-                 WHERE name='epg_import_truncated_keys'",
+                 WHERE name='epg_import_truncated_rowids'",
                 [],
                 |r| r.get(0),
             )
@@ -914,7 +1026,7 @@ mod tests {
         let leaked: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_temp_master
-                 WHERE name='epg_import_truncated_keys'",
+                 WHERE name='epg_import_truncated_rowids'",
                 [],
                 |r| r.get(0),
             )
