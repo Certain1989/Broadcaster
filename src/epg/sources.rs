@@ -497,7 +497,8 @@ mod tests {
         let source = store
             .add(
                 "Guide",
-                &SourceOrigin::selected_local_file("file:///fabricated-guide.xmltv".into()).unwrap(),
+                &SourceOrigin::selected_local_file("file:///fabricated-guide.xmltv".into())
+                    .unwrap(),
             )
             .unwrap();
 
@@ -505,7 +506,9 @@ mod tests {
             (GuideServiceError::DiskFull, "disk_full"),
             (GuideServiceError::StoragePermission, "storage_permission"),
         ] {
-            store.record_failure(&source.id, &failure.to_string()).unwrap();
+            store
+                .record_failure(&source.id, &failure.to_string())
+                .unwrap();
             // Recreate the registry against the same SQLite file, as happens
             // when the guide manager is reopened or the app starts again.
             let reopened = GuideSourceRegistry::new(Storage::at(dir.join("db.sqlite3")));
