@@ -6,7 +6,7 @@
 //! Run only in the dedicated, bounded capacity CI workflow.
 use super::{
     cache::replace_guide_snapshot,
-    ingest::import_xmltv,
+    ingest::{enable_o01_measurement, import_xmltv, take_o01_observation},
     model::{EpgError, GuideChannel, GuideSnapshot, Programme},
     xmltv::{decode_xmltv, ParseLimits},
 };
@@ -315,4 +315,100 @@ fn epg_capacity_growth_3m_manual() {
 #[ignore = "manual near-ceiling scenario only; never run on an undersized shared runner"]
 fn epg_capacity_near_ceiling_5m_manual() {
     streamed_capacity_case("near-5m", 100_000, 5_000_000, true);
+}
+
+ 
+// O01 exercises the exact migrated importer and a test-only same-transaction
+// TEMP snapshot. These are fabricated XMLTV documents, never external guides.
+// The sample is NOT a physical TEMP peak or allocated block measurement.
+struct O01Directory(PathBuf);
+impl Drop for O01Directory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn o01_case(rows: usize, wide: bool) {
+    let shape = if wide { "wide512" } else { "short" };
+    let scenario = format!("o01-{shape}-{rows}");
+    let dir = O01Directory(test_directory(&scenario));
+    let path = dir.0.join("fixture.xml");
+    let channel = if wide { "C".repeat(512) } else { "channel".to_string() };
+    let subtitle = "S".repeat(513);
+    {
+        let mut writer = BufWriter::new(File::create(&path).unwrap());
+        write!(
+            writer,
+            "<tv><channel id='{channel}'><display-name>Fabricated</display-name></channel>"
+        ).unwrap();
+        for index in 0..rows {
+            // BINARY full-key identity: titles are 512 bytes and distinct even
+            // when all share 506 leading bytes. Subtitle is clipped to 512.
+            let title = if wide {
+                format!("{}{:06}", "T".repeat(506), index)
+            } else {
+                format!("Show {index:06}")
+            };
+            write!(
+                writer,
+                "<programme channel='{channel}' start='20300101000000 +0000'                  stop='20300101010000 +0000'><title>{title}</title>                  <sub-title>{subtitle}</sub-title></programme>"
+            ).unwrap();
+        }
+        writer.write_all(b"</tv>").unwrap();
+        writer.flush().unwrap();
+    }
+    let input_bytes = file_bytes(&path);
+    let mut conn = disk_db(&dir.0);
+    let cancelled = AtomicBool::new(false);
+    enable_o01_measurement();
+    let start = Instant::now();
+    let outcome = import_xmltv(
+        &mut conn, BufReader::new(File::open(&path).unwrap()),
+        "fixture", 2, 1, false, &cancelled
+    );
+    let observation = take_o01_observation();
+    let stats = outcome.expect("O01 fabricated streamed importer success");
+    let observation = observation.expect("same-transaction, pre-DROP TEMP snapshot");
+    assert_eq!(stats.programmes, rows);
+    assert_eq!(stats.truncated_subtitles, rows);
+    assert_eq!((stats.truncated_titles, stats.truncated_descriptions), (0, 0));
+    assert_eq!(observation.parsed, rows);
+    assert_eq!(observation.retained, rows);
+    assert_eq!(observation.marked, rows);
+    let persisted: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(persisted, rows as i64);
+    let marker_residue: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_temp_master          WHERE name='epg_import_truncated_rowids'",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(marker_residue, 0);
+    let temp_bytes = observation.temp_pages * observation.temp_page_size;
+    println!(
+        "EPG_O01 shape={shape} rows={rows} input_bytes={input_bytes}          parsed={} unique={} persisted={persisted} marked={}          sqlite_version={} compile_temp_store={:?} temp_store={}          temp_pages={} temp_page_size={} temp_logical_bytes={temp_bytes}          importer_pre_drop_ms={} importer_full_ms={} rss_kib={:?} hwm_kib={:?}          temp_fd_logical_bytes={:?} db_snapshot_bytes={} wal_snapshot_bytes={}          marker_residue={marker_residue}",
+        observation.parsed, observation.retained, observation.marked,
+        observation.sqlite_version, observation.compile_temp_store, observation.temp_store,
+        observation.temp_pages, observation.temp_page_size,
+        observation.elapsed_ms, start.elapsed().as_millis(), observation.rss_kib,
+        observation.hwm_kib, observation.temp_fd_bytes,
+        observation.db_bytes, observation.wal_bytes
+    );
+    assert!(temp_bytes > 0);
+    // 10k x 512-byte key identity previously took tens of MiB. A bounded
+    // integer rowid marker table should be well below 1 MiB at this scale.
+    if rows == 10_000 {
+        assert!(temp_bytes < 1024 * 1024, "rowid TEMP footprint unexpectedly large");
+    }
+    drop(conn);
+}
+
+#[test]
+#[ignore = "opt-in O01 actual importer / bundled SQLite; six bounded synthetic cases only"]
+fn epg_capacity_o01_rowid_markers() {
+    for count in [100, 1_000, 10_000] {
+        o01_case(count, false);
+        o01_case(count, true);
+    }
 }
