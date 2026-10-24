@@ -17,6 +17,36 @@ use crate::utils::spawn;
 
 static SHARED_MANAGER: OnceLock<tokio::sync::OnceCell<GlobalGuideManager>> = OnceLock::new();
 
+/// Friendly explanations for fixed, sanitized EPG result codes.
+fn guide_problem(code: &str) -> String {
+    match code {
+        "invalid_epg_source" => gettext("Enter a valid guide name and XMLTV location."),
+        "epg_source_already_exists" => gettext("This programme guide has already been added."),
+        "epg_source_not_found" => gettext("The programme guide no longer exists."),
+        "epg_source_changed" => gettext("Guide settings changed. Close this dialog and reopen it."),
+        "epg_source_disabled" | "source_disabled" => gettext("Enable this guide before refreshing it."),
+        "invalid_origin" => gettext("Enter a valid HTTP(S) URL or select a local XMLTV file."),
+        "network_scope_denied" | "redirect_denied" => gettext("This guide's network location is not allowed."),
+        "http_status" => gettext("The guide server returned an HTTP error."),
+        "network" => gettext("Cannot reach the guide server. Check your connection."),
+        "timeout" => gettext("The guide download timed out."),
+        "oversize_description" => gettext("A programme description is longer than the permitted limit."),
+        "oversize" | "oversize_wire" | "oversize_expanded" | "oversize_ratio" => gettext("The guide exceeds a download or decompression safety limit."),
+        "oversize_database" => gettext("The guide exceeds the database storage limit."),
+        "oversize_duration" => gettext("The guide import took too long."),
+        "oversize_title" | "oversize_subtitle" | "oversize_channel_name" => gettext("A programme title or channel name exceeds the safety limit."),
+        "oversize_depth" | "oversize_attributes" | "oversize_xml_text" |
+        "oversize_channels" | "oversize_programmes" => gettext("The guide exceeds the XMLTV safety limits."),
+        "invalid_xml" | "encoding" => gettext("The file is not valid UTF-8 XMLTV data."),
+        "storage_failed" | "epg_storage_failed" => gettext("The guide could not be saved. Check available disk space."),
+        "local_access" => gettext("The selected local XMLTV file cannot be opened."),
+        "cancelled" => gettext("Guide refresh cancelled."),
+        "refresh_in_progress" => gettext("This guide is already being refreshed."),
+        _ => gettext("The guide operation failed. Please try again."),
+    }
+}
+
+
 fn box_column() -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 10);
     box_.set_margin_start(16);
@@ -99,8 +129,9 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     row.append(&caption);
                     if let Some(code) = source.last_error_code {
                         row.append(&gtk::Label::new(Some(&format!(
-                            "{}: {code}",
-                            gettext("Last error")
+                            "{}: {}",
+                            gettext("Last refresh failed"),
+                            guide_problem(code)
                         ))));
                     }
                     if source.last_success_at.is_some() {
@@ -154,7 +185,11 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                         )
                                     }
                                 }
-                                Err(error) => format!("{}: {error}", gettext("Refresh failed")),
+                                Err(error) => format!(
+                                    "{}: {}",
+                                    gettext("Refresh failed"),
+                                    guide_problem(&error.to_string()),
+                                ),
                             };
                             state.set_text(&message);
                             repaint(manager, listing, state, window);
@@ -211,13 +246,13 @@ fn show_source_settings(
     let enabled = gtk::CheckButton::with_label(&gettext("Enabled"));
     enabled.set_active(source.enabled);
     body.append(&enabled);
-    let automatic = gtk::CheckButton::with_label(&gettext("Automatic refresh (opt-in)"));
+    let automatic = gtk::CheckButton::with_label(&gettext("Automatically refresh this guide"));
     automatic.set_active(source.auto_refresh);
     body.append(&automatic);
     let hours = gtk::SpinButton::with_range(6.0, 168.0, 1.0);
     hours.set_value(source.refresh_interval_seconds as f64 / 3600.0);
     body.append(&gtk::Label::new(Some(&gettext(
-        "Refresh interval in hours (6–168)",
+        "Refresh when the guide is this old (hours, 6–168)",
     ))));
     body.append(&hours);
     let message = status_label();
@@ -262,7 +297,7 @@ fn show_source_settings(
                             dialog.close();
                             repaint(manager, list, status, parent);
                         }
-                        Err(error) => message.set_text(&error.to_string()),
+                        Err(error) => message.set_text(&guide_problem(&error.to_string())),
                     }
                 }
             ));
@@ -327,7 +362,7 @@ fn show_delete_confirmation(
                             dialog.close();
                             repaint(manager, list, status, parent);
                         }
-                        Err(reason) => error.set_text(&reason.to_string()),
+                        Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
                 }
             ));
@@ -359,8 +394,13 @@ fn show_add(
     if local.is_none() {
         body.append(&lan);
     }
+    let automatic = gtk::CheckButton::with_label(&gettext(
+        "Keep this guide updated automatically"
+    ));
+    automatic.set_active(true);
+    body.append(&automatic);
     let note = gtk::Label::new(Some(&gettext(
-        "Adding a source saves the selected locator privately. No download occurs until you choose Refresh or explicitly enable a schedule."
+        "When enabled, Broadcaster checks this saved guide when it is older than 24 hours while the app is running. You can disable updates in Edit."
     )));
     note.set_wrap(true);
     body.append(&note);
@@ -398,7 +438,7 @@ fn show_add(
                 )
             };
             let Ok(origin) = origin else {
-                error.set_text(&gettext("Invalid guide location"));
+                error.set_text(&gettext("Enter a valid HTTP(S) URL or select a local XMLTV file."));
                 return;
             };
             let manager = service.clone();
@@ -406,18 +446,19 @@ fn show_add(
             let status = status.clone();
             let parent = callback_parent.clone();
             let name = name.text().to_string();
+            let update_automatically = automatic.is_active();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
                 #[weak]
                 error,
                 async move {
-                    match manager.add(name, origin).await {
+                    match manager.add_with_schedule(name, origin, update_automatically).await {
                         Ok(_) => {
                             dialog.close();
                             repaint(manager, list, status, parent);
                         }
-                        Err(reason) => error.set_text(&reason.to_string()),
+                        Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
                 }
             ));
