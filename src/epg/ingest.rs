@@ -511,7 +511,11 @@ mod tests {
                 ),
                 "TEMP page cap must generate SQLITE_FULL"
             );
-            tx.rollback().unwrap();
+            // SQLITE_FULL is permitted to roll back the entire transaction
+            // implicitly. Only perform an explicit rollback if one remains open.
+            if !tx.is_autocommit() {
+                tx.rollback().unwrap();
+            }
         }
         let stale: i64 = scalar(
             &conn,
