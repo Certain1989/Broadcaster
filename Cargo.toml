@@ -28,6 +28,8 @@ rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"
 quick-xml = "=0.38.4"
 flate2 = "=1.1.8"
 uuid = { version = "1.28.0", features = ["v4"] }
+# Full default Unicode case folding for XMLTV name suggestions (including ß -> ss).
+unicode-casefold = "=0.2.0"
 smart-default = "0.7.1"
 time = { version = "0.3.37", features = ["parsing", "serde"] }
 tokio = { version = "1.43.0", features = ["fs", "time", "rt-multi-thread", "macros", "sync", "net", "io-util"] }
