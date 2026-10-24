@@ -205,19 +205,27 @@ async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             let mut conn = crate::streams::storage::Storage::new()
-                .connect().map_err(|_| "Cannot open programme data")?;
+                .connect()
+                .map_err(|_| "Cannot open programme data")?;
             super::bindings::set_shared_guide(
                 &mut conn,
                 super::bindings::ConfirmedGuideSelection::after_user_confirmation(),
                 Some(&source_id),
-            ).map_err(|_| "Programme guide changed or is unavailable")
-        }).await.map_err(|_| "Programme guide worker unavailable")?
-    }).await
+            )
+            .map_err(|_| "Programme guide changed or is unavailable")
+        })
+        .await
+        .map_err(|_| "Programme guide worker unavailable")?
+    })
+    .await
 }
 
 fn confirm_shared_guide(
-    parent: &gtk::Window, source: GuideSource,
-    manager: GlobalGuideManager, list: gtk::Box, status: gtk::Label,
+    parent: &gtk::Window,
+    source: GuideSource,
+    manager: GlobalGuideManager,
+    list: gtk::Box,
+    status: gtk::Label,
 ) {
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Confirm Shared Programme Guide"));
@@ -234,10 +242,19 @@ fn confirm_shared_guide(
     let cancel = command(&gettext("Cancel"), &body);
     let confirm = command(&gettext("Confirm Shared Default"), &body);
     confirm.add_css_class("suggested-action");
-    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
     let parent = parent.clone();
     confirm.connect_clicked(glib::clone!(
-        #[weak] dialog, #[weak] failure, #[weak] confirm,
+        #[weak]
+        dialog,
+        #[weak]
+        failure,
+        #[weak]
+        confirm,
         move |_| {
             confirm.set_sensitive(false);
             let id = source.id.clone();
@@ -246,7 +263,12 @@ fn confirm_shared_guide(
             let status = status.clone();
             let parent = parent.clone();
             spawn(glib::clone!(
-                #[weak] dialog, #[weak] failure, #[weak] confirm,
+                #[weak]
+                dialog,
+                #[weak]
+                failure,
+                #[weak]
+                confirm,
                 async move {
                     match save_default_guide(id).await {
                         Ok(()) => {
