@@ -471,7 +471,7 @@ pub enum SemanticProgrammeState {
         method: MatchMethod,
         page: Box<BoundedGuidePage>,
         /// None for stale/unknown freshness or truncated results.
-        now_next: Option<NowNext>,
+        now_next: Option<Box<NowNext>>,
         refresh_failed: bool,
     },
 }
@@ -538,7 +538,7 @@ pub fn read_semantic_now_next(
     {
         None
     } else {
-        Some(select_programmes(&page.programmes, &channel, now_utc))
+        Some(Box::new(select_programmes(&page.programmes, &channel, now_utc)))
     };
     Ok(SemanticProgrammeState::Matched {
         method,
