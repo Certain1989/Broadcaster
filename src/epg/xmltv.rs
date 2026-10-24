@@ -222,12 +222,7 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
 /// Append only a complete UTF-8 prefix. Even after reaching the bound,
 /// subsequent text, CDATA and numeric references are still fully parsed and
 /// checked against the independent decoded XML-element text budget.
-fn append_bounded(
-    value: &mut String,
-    text: &str,
-    maximum: usize,
-    truncated: &mut bool,
-) {
+fn append_bounded(value: &mut String, text: &str, maximum: usize, truncated: &mut bool) {
     if *truncated {
         return;
     }
@@ -846,7 +841,10 @@ where
             if let Some(row) = state.programmes.pop() {
                 counts.programmes += 1;
                 *future |= row.stop_utc > retrieved_utc;
-                on_programme(row, std::mem::take(&mut state.last_programme_title_truncated))?;
+                on_programme(
+                    row,
+                    std::mem::take(&mut state.last_programme_title_truncated),
+                )?;
             }
         }
         _ => {}

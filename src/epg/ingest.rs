@@ -377,24 +377,35 @@ mod tests {
              <sub-title>{subtitle}</sub-title></programme></tv>"
         );
         let stats = import_xmltv(
-            &mut conn, Cursor::new(xml.as_bytes()), "source", 1, 1,
-            false, &cancelled,
-        ).unwrap();
+            &mut conn,
+            Cursor::new(xml.as_bytes()),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
         assert_eq!(stats.programmes, 1);
         assert_eq!(stats.truncated_titles, 1);
         assert_eq!(stats.truncated_subtitles, 1);
         assert_eq!(stats.truncated_channel_names, 1);
-        let (id, stored_name): (String, String) = conn.query_row(
-            "SELECT channel_id,display_name FROM epg_channels", [], |r|
-            Ok((r.get(0)?, r.get(1)?)),
-        ).unwrap();
+        let (id, stored_name): (String, String) = conn
+            .query_row(
+                "SELECT channel_id,display_name FROM epg_channels",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(id, "unchanged.id");
         assert_eq!(stored_name.as_bytes().len(), 511);
-        let (id, begin, end, stored_title, sub): (String, i64, i64, String, String) =
-            conn.query_row(
+        let (id, begin, end, stored_title, sub): (String, i64, i64, String, String) = conn
+            .query_row(
                 "SELECT channel_id,start_utc,stop_utc,title,subtitle FROM epg_programmes",
-                [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            ).unwrap();
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
         assert_eq!(id, "unchanged.id");
         assert_eq!(end - begin, 3600);
         assert_eq!(stored_title.len(), 511);
@@ -406,9 +417,15 @@ mod tests {
         let mut conn = db();
         let cancelled = AtomicBool::new(false);
         import_xmltv(
-            &mut conn, Cursor::new(xml("Last-good")), "source", 1, 1,
-            false, &cancelled,
-        ).unwrap();
+            &mut conn,
+            Cursor::new(xml("Last-good")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
         let prefix = "X".repeat(512);
         let bad = format!(
             "<tv><channel id='c'><display-name>C</display-name></channel>\
@@ -419,14 +436,20 @@ mod tests {
         );
         assert_eq!(
             import_xmltv(
-                &mut conn, Cursor::new(bad.as_bytes()), "source", 2, 2,
-                false, &cancelled,
-            ).unwrap_err(),
+                &mut conn,
+                Cursor::new(bad.as_bytes()),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled,
+            )
+            .unwrap_err(),
             EpgError::InvalidSchedule,
         );
-        let stored: String = conn.query_row(
-            "SELECT title FROM epg_programmes", [], |r| r.get(0),
-        ).unwrap();
+        let stored: String = conn
+            .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(stored, "Last-good");
     }
 
@@ -435,9 +458,15 @@ mod tests {
         let mut conn = db();
         let cancelled = AtomicBool::new(false);
         import_xmltv(
-            &mut conn, Cursor::new(xml("Last-good")), "source", 1, 1,
-            false, &cancelled,
-        ).unwrap();
+            &mut conn,
+            Cursor::new(xml("Last-good")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
         let id = "c".repeat(513);
         let malformed = format!(
             "<tv><channel id='{id}'><display-name>Long ID</display-name></channel>\
@@ -445,13 +474,18 @@ mod tests {
              stop='20300101010000 +0000'><title>Show</title></programme></tv>"
         );
         assert!(import_xmltv(
-            &mut conn, Cursor::new(malformed.as_bytes()), "source", 2, 2,
-            false, &cancelled,
-        ).is_err());
-        let stored: String = conn.query_row(
-            "SELECT title FROM epg_programmes", [], |r| r.get(0),
-        ).unwrap();
+            &mut conn,
+            Cursor::new(malformed.as_bytes()),
+            "source",
+            2,
+            2,
+            false,
+            &cancelled,
+        )
+        .is_err());
+        let stored: String = conn
+            .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(stored, "Last-good");
     }
-
 }

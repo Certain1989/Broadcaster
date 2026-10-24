@@ -6,12 +6,12 @@
 use super::{
     ingest::import_xmltv,
     model::{EpgError, LimitKind},
-    xmltv::StreamedRows,
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
         ConfirmedGuideDeletion, GuideSource, GuideSourceRegistry, PrivateGuideSource,
         RegistryError, SourceOrigin,
     },
+    xmltv::StreamedRows,
 };
 use crate::streams::storage::Storage;
 use adw::{gio, glib, prelude::*};
@@ -185,7 +185,12 @@ impl GlobalGuideManager {
     /// Truncation counts from the last successful import in this session.
     /// A failed import never publishes an incomplete warning count.
     pub async fn truncation_counts(&self, id: &str) -> Option<StreamedRows> {
-        self.inner.truncated_descriptions.lock().await.get(id).copied()
+        self.inner
+            .truncated_descriptions
+            .lock()
+            .await
+            .get(id)
+            .copied()
     }
 
     pub async fn list(&self) -> Result<Vec<GuideSource>, GuideServiceError> {

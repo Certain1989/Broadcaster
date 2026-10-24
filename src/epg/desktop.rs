@@ -70,7 +70,9 @@ fn guide_problem(code: &str) -> String {
 fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
     let mut messages = Vec::new();
     if counts.truncated_titles == 1 {
-        messages.push(gettext("One programme title was shortened to fit the 512-byte limit."));
+        messages.push(gettext(
+            "One programme title was shortened to fit the 512-byte limit.",
+        ));
     } else if counts.truncated_titles > 1 {
         messages.push(format!(
             "{} {}",
@@ -79,7 +81,9 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
         ));
     }
     if counts.truncated_subtitles == 1 {
-        messages.push(gettext("One programme subtitle was shortened to fit the 512-byte limit."));
+        messages.push(gettext(
+            "One programme subtitle was shortened to fit the 512-byte limit.",
+        ));
     } else if counts.truncated_subtitles > 1 {
         messages.push(format!(
             "{} {}",
@@ -88,7 +92,9 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
         ));
     }
     if counts.truncated_channel_names == 1 {
-        messages.push(gettext("One channel display name was shortened to fit the 512-byte limit."));
+        messages.push(gettext(
+            "One channel display name was shortened to fit the 512-byte limit.",
+        ));
     } else if counts.truncated_channel_names > 1 {
         messages.push(format!(
             "{} {}",
@@ -97,7 +103,9 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
         ));
     }
     if counts.truncated_descriptions == 1 {
-        messages.push(gettext("One programme description was shortened to fit the 2,048-byte limit."));
+        messages.push(gettext(
+            "One programme description was shortened to fit the 2,048-byte limit.",
+        ));
     } else if counts.truncated_descriptions > 1 {
         messages.push(format!(
             "{} {}",
@@ -244,7 +252,11 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                     if details.is_empty() {
                                         gettext("Guide refreshed")
                                     } else {
-                                        format!("{} {}", gettext("Guide refreshed."), details.join(" "))
+                                        format!(
+                                            "{} {}",
+                                            gettext("Guide refreshed."),
+                                            details.join(" ")
+                                        )
                                     }
                                 }
                                 Err(error) => format!(
