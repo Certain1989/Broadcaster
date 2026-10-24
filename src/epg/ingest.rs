@@ -215,8 +215,8 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
 
 // Page-count quota applies to the entire TEMP schema on this connection,
 // including the existing rowid marker and the validation-only omission ledger.
-// SQLite may roll back implicitly on SQLITE_FULL, but TEMP PRAGMA state must
-// still be restored and read back after the transaction has ended.
+// SQLite may roll back implicitly on SQLITE_FULL. Restore/read back the previous
+// cap BEFORE COMMIT on success; errors require explicit outer cleanup.
 const MAX_TEMP_PAGE_BYTES: i64 = 128 * 1024 * 1024;
 
 fn temp_pragma(conn: &Connection, sql: &str) -> Result<i64, EpgError> {
@@ -231,6 +231,21 @@ fn restore_temp_page_limit(conn: &Connection, previous: i64) -> Result<(), EpgEr
         return Err(EpgError::Storage);
     }
     Ok(())
+}
+
+#[cfg(test)]
+std::thread_local! {
+    // One-shot failure after all staged SQL and TEMP drops, while COMMIT is
+    // still abortable. Each test thread owns its fault; no shared DB hooks.
+    static TEST_PRECOMMIT_RESTORE_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn restore_before_commit(tx: &rusqlite::Transaction<'_>, previous: i64) -> Result<(), EpgError> {
+    #[cfg(test)]
+    if TEST_PRECOMMIT_RESTORE_FAILURE.with(|fault| fault.replace(false)) {
+        return Err(EpgError::Storage);
+    }
+    restore_temp_page_limit(tx, previous)
 }
 
 fn import_xmltv_inner<R: BufRead>(
@@ -273,11 +288,17 @@ fn import_xmltv_inner<R: BufRead>(
         expected_revision,
         gzip,
         checks,
+        previous,
     );
-    // An unsuccessful SQLite statement can implicitly undo the transaction;
-    // restoration must therefore take place on the outer connection.
-    // A failed restoration forbids claiming this connection is reusable.
-    restore_temp_page_limit(conn, previous)?;
+    // An unsuccessful statement (including SQLITE_FULL) can implicitly undo
+    // the transaction. The scoped transaction has been dropped on every error,
+    // so recover the connection's limit explicitly before returning failure.
+    // A failed readback is a storage error, never a claim of clean reuse.
+    // The successful path already restored the limit before COMMIT: do not
+    // turn durable success into a failed refresh via another fallible PRAGMA.
+    if result.is_err() {
+        restore_temp_page_limit(conn, previous)?;
+    }
     result
 }
 
@@ -289,6 +310,7 @@ fn import_xmltv_scoped<R: BufRead>(
     expected_revision: i64,
     gzip: bool,
     checks: ImportChecks<'_>,
+    previous_temp_pages: i64,
 ) -> Result<StreamedRows, EpgError> {
     let cancelled = checks.cancelled;
     let headroom = checks.headroom;
@@ -653,6 +675,9 @@ fn import_xmltv_scoped<R: BufRead>(
     if headroom.is_some_and(|guard| !guard.active()) {
         return Err(EpgError::DiskFull);
     }
+    // No TEMP ledger writes remain. A failed restoration still rolls back
+    // guide and source-success metadata. Verify while COMMIT is abortable.
+    restore_before_commit(&tx, previous_temp_pages)?;
     tx.commit().map_err(storage_error)?;
     Ok(rows)
 }
@@ -745,6 +770,15 @@ mod tests {
             )
             .unwrap();
             tx.execute_batch("DROP TABLE temp.d29_page_probe;").unwrap();
+            // Locked bundled SQLite must accept restoration and readback while
+            // the transaction is still active, not only after COMMIT.
+            assert!(!tx.is_autocommit());
+            assert_eq!(
+                scalar(&tx, &format!("PRAGMA temp.max_page_count = {initial}")),
+                initial
+            );
+            assert_eq!(scalar(&tx, "PRAGMA temp.max_page_count"), initial);
+            assert!(!tx.is_autocommit());
             tx.commit().unwrap();
         }
         assert_eq!(scalar(&conn, "PRAGMA temp.max_page_count"), initial);
@@ -757,6 +791,102 @@ mod tests {
              stop='20300101010000 +0000'><title>{title}</title></programme></tv>"
         )
         .into_bytes()
+    }
+
+    #[test]
+    fn precommit_temp_restore_failure_preserves_last_good_and_retry() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        let initial_limit = temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap();
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        let before: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        let old_channel: String = conn
+            .query_row("SELECT display_name FROM epg_channels", [], |r| r.get(0))
+            .unwrap();
+        TEST_STAGED_INSERTS.with(|counter| counter.set(0));
+        TEST_STAGED_MARKERS.with(|counter| counter.set(0));
+        TEST_PRECOMMIT_RESTORE_FAILURE.with(|fault| fault.set(true));
+        assert_eq!(
+            import_xmltv(
+                &mut conn,
+                Cursor::new(xml(&"Replaced".repeat(74))),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled,
+            ),
+            Err(EpgError::Storage),
+        );
+        assert!(!TEST_PRECOMMIT_RESTORE_FAILURE.with(|fault| fault.get()));
+        assert_eq!(TEST_STAGED_INSERTS.with(|counter| counter.get()), 1);
+        assert_eq!(TEST_STAGED_MARKERS.with(|counter| counter.get()), 1);
+        assert_eq!(
+            conn.query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?,
+                        r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?)),
+            )
+            .unwrap(),
+            before,
+        );
+        assert_eq!(
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Cached",
+        );
+        assert_eq!(
+            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            old_channel,
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_temp_master
+                 WHERE name IN ('epg_import_omissions','epg_import_truncated_rowids')",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+        );
+        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), initial_limit);
+        assert!(conn.is_autocommit());
+        // A failed pre-COMMIT restoration does not publish success-only
+        // warning counters; a subsequent import on this connection can commit.
+        assert_eq!(
+            import_xmltv(
+                &mut conn,
+                Cursor::new(xml("Retried")),
+                "source",
+                3,
+                2,
+                false,
+                &cancelled,
+            )
+            .unwrap()
+            .programmes,
+            1,
+        );
+        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), initial_limit);
     }
 
     #[test]
