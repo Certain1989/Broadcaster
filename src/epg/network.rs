@@ -631,12 +631,17 @@ mod tests {
             .open("/dev/full")
             .expect("Linux provides the non-destructive /dev/full device");
         let mut spool = tokio::fs::File::from_std(device);
-        let error = spool
-            .write_all(b"<tv/>")
-            .await
-            .expect_err("the kernel must reject a write to /dev/full");
-        assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
-        assert_eq!(spool_io_error(error), GuideFetchError::DiskFull);
+        // Tokio may buffer a small successful write until flush; production
+        // maps errors at both write_all and flush.
+        let failure = match spool.write_all(b"<tv/>").await {
+            Err(error) => error,
+            Ok(()) => spool
+                .flush()
+                .await
+                .expect_err("the kernel must reject a flush to /dev/full"),
+        };
+        assert_eq!(failure.kind(), std::io::ErrorKind::StorageFull);
+        assert_eq!(spool_io_error(failure), GuideFetchError::DiskFull);
     }
 
     #[test]
