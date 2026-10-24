@@ -398,7 +398,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(id, "unchanged.id");
-        assert_eq!(stored_name.as_bytes().len(), 511);
+        assert_eq!(stored_name.len(), 511);
         let (id, begin, end, stored_title, sub): (String, i64, i64, String, String) = conn
             .query_row(
                 "SELECT channel_id,start_utc,stop_utc,title,subtitle FROM epg_programmes",
