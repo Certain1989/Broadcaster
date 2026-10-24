@@ -42,9 +42,7 @@ fn guide_problem(code: &str) -> String {
         }
         "oversize_database" => gettext("The guide exceeds the database storage limit."),
         "oversize_duration" => gettext("The guide import took too long."),
-        "oversize_title" => {
-            gettext("A programme title in this guide exceeds the 512-byte limit.")
-        }
+        "oversize_title" => gettext("A programme title in this guide exceeds the 512-byte limit."),
         "oversize_subtitle" => {
             gettext("A programme subtitle in this guide exceeds the 512-byte limit.")
         }
