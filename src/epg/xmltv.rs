@@ -1511,7 +1511,7 @@ mod formatted_xmltv_regression {
         );
         assert_eq!(outcome.unwrap_err(), EpgError::Capacity(LimitKind::XmlText));
     }
- 
+
     // Only the direct programme <desc> element's text is eligible for D27
     // omission. Parsed/ignored attributes must all obey the strict text rule.
     fn parse_with_c1_omission(input: &str) -> Result<StreamedRows, EpgError> {
@@ -1543,10 +1543,16 @@ mod formatted_xmltv_regression {
         let base = attribute_fixture();
         let good = parse_with_c1_omission(&base).unwrap();
         assert_eq!((good.programmes, good.omitted_c1_programmes), (1, 1));
-        for bad in ["&#x85;", "&#133;", "\u{0085}", "&#x1;", "&#x7F;", "\u{007f}"] {
+        for bad in [
+            "&#x85;", "&#133;", "\u{0085}", "&#x1;", "&#x7F;", "\u{007f}",
+        ] {
             for xml in [
                 base.replacen("<tv>", &format!("<tv data-ignored='{bad}'>"), 1),
-                base.replacen("<channel id='c'>", &format!("<channel id='c' data-ignored='{bad}'>"), 1),
+                base.replacen(
+                    "<channel id='c'>",
+                    &format!("<channel id='c' data-ignored='{bad}'>"),
+                    1,
+                ),
                 base.replacen(
                     "<programme channel='c'",
                     &format!("<programme data-ignored='{bad}' channel='c'"),
@@ -1573,11 +1579,7 @@ mod formatted_xmltv_regression {
     fn allowed_attribute_whitespace_and_unicode_preserve_direct_desc_omission() {
         let base = attribute_fixture();
         for value in ["\t\n\r", "&#x9;&#xA;&#xD;", "café漢字🛰️", "&#xE9;"] {
-            let xml = base.replacen(
-                "<tv>",
-                &format!("<tv data-ignored='{value}'>"),
-                1,
-            );
+            let xml = base.replacen("<tv>", &format!("<tv data-ignored='{value}'>"), 1);
             let stats = parse_with_c1_omission(&xml).unwrap();
             assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 1));
         }
