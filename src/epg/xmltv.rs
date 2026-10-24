@@ -169,6 +169,7 @@ struct PendingProgramme {
     title: Option<String>,
     subtitle: Option<String>,
     description: Option<String>,
+    description_truncated: bool,
 }
 
 #[derive(Default)]
@@ -183,6 +184,8 @@ struct ParseState {
     channel: Option<PendingChannel>,
     programme: Option<PendingProgramme>,
     programme_count: usize,
+    truncated_descriptions: usize,
+    allow_description_truncation: bool,
     max_channels: usize,
     max_programmes: usize,
     capturing: Option<String>,
@@ -335,22 +338,42 @@ impl ParseState {
             }
             ("programme", field) => {
                 if let Some(p) = self.programme.as_mut() {
-                    let (value, max): (Option<&mut String>, usize) = match field {
-                        "title" => (p.title.as_mut(), 512),
-                        "sub-title" => (p.subtitle.as_mut(), 512),
-                        "desc" => (p.description.as_mut(), 2048),
-                        _ => (None, 0),
-                    };
-                    if let Some(value) = value {
-                        value.push_str(text);
-                        if value.len() > max {
-                            let reason = match field {
-                                "title" => LimitKind::Title,
-                                "sub-title" => LimitKind::Subtitle,
-                                "desc" => LimitKind::Description,
-                                _ => LimitKind::XmlText,
-                            };
-                            return Err(EpgError::Capacity(reason));
+                    if field == "desc" && self.allow_description_truncation {
+                        if let Some(value) = p.description.as_mut() {
+                            if !p.description_truncated {
+                                let remaining = 2048_usize.saturating_sub(value.len());
+                                if text.len() > remaining {
+                                    // Preserve a complete UTF-8 prefix and never
+                                    // append later CDATA/text/reference fragments.
+                                    let mut end = remaining;
+                                    while !text.is_char_boundary(end) {
+                                        end -= 1;
+                                    }
+                                    value.push_str(&text[..end]);
+                                    p.description_truncated = true;
+                                } else {
+                                    value.push_str(text);
+                                }
+                            }
+                        }
+                    } else {
+                        let (value, max): (Option<&mut String>, usize) = match field {
+                            "title" => (p.title.as_mut(), 512),
+                            "sub-title" => (p.subtitle.as_mut(), 512),
+                            "desc" => (p.description.as_mut(), 2048),
+                            _ => (None, 0),
+                        };
+                        if let Some(value) = value {
+                            value.push_str(text);
+                            if value.len() > max {
+                                let reason = match field {
+                                    "title" => LimitKind::Title,
+                                    "sub-title" => LimitKind::Subtitle,
+                                    "desc" => LimitKind::Description,
+                                    _ => LimitKind::XmlText,
+                                };
+                                return Err(EpgError::Capacity(reason));
+                            }
                         }
                     }
                 }
@@ -398,6 +421,9 @@ impl ParseState {
                     && !p.channel.is_empty()
                     && bounded_text(&title, 512)
                 {
+                    if p.description_truncated {
+                        self.truncated_descriptions += 1;
+                    }
                     self.programmes.push(Programme {
                         source_id: source_id.to_owned(),
                         channel_id: p.channel,
@@ -606,6 +632,8 @@ impl StreamingLimits {
 pub struct StreamedRows {
     pub channels: usize,
     pub programmes: usize,
+    /// Accepted programmes with a shortened synopsis.
+    pub truncated_descriptions: usize,
 }
 
 struct MeasuredRead<R> {
@@ -795,11 +823,13 @@ where
     let mut state = ParseState {
         max_channels,
         max_programmes,
+        allow_description_truncation: true,
         ..ParseState::default()
     };
     let mut rows = StreamedRows {
         channels: 0,
         programmes: 0,
+        truncated_descriptions: 0,
     };
     let mut has_future = false;
     loop {
@@ -890,6 +920,7 @@ where
     {
         return Err(EpgError::InvalidSchedule);
     }
+    rows.truncated_descriptions = state.truncated_descriptions;
     Ok(rows)
 }
 
@@ -939,19 +970,23 @@ mod formatted_xmltv_regression {
         .expect("normal XMLTV formatting whitespace must not trip element quota");
         assert_eq!(stats.channels, 1);
         assert_eq!(stats.programmes, PROGRAMMES);
+        assert_eq!(stats.truncated_descriptions, 0);
         assert_eq!((channels, programmes), (1, PROGRAMMES));
     }
 
     #[test]
-    fn overlong_xmltv_description_has_a_precise_safe_capacity_reason() {
+    fn oversized_description_retains_complete_schedule_and_tracks_warning() {
+        let desc = format!("{}é", "x".repeat(2047));
         let xml = format!(
             "<tv><channel id='c'><display-name>Channel</display-name></channel>\
-             <programme channel='c' start='20300101000000 +0000'\
-             stop='20300101010000 +0000'><title>Programme</title>\
-             <desc>{}</desc></programme></tv>",
-            "d".repeat(2049),
+            <programme channel='c' start='20300101000000 +0000'\
+            stop='20300101010000 +0000'><title>First</title>\
+            <desc>{desc}<![CDATA[EXTRA]]>&amp;more</desc></programme>\
+            <programme channel='c' start='20300101010000 +0000'\
+            stop='20300101020000 +0000'><title>Second</title></programme></tv>"
         );
         let cancelled = AtomicBool::new(false);
+        let mut descriptions = Vec::new();
         let result = decode_xmltv_rows(
             Cursor::new(xml.as_bytes()),
             "synthetic",
@@ -960,13 +995,47 @@ mod formatted_xmltv_regression {
             StreamingLimits::candidate(),
             &cancelled,
             |_| Ok(()),
-            |_| Ok(()),
+            |p| { descriptions.push(p.description); Ok(()) },
+        ).unwrap();
+        assert_eq!(result.programmes, 2);
+        assert_eq!(result.truncated_descriptions, 1);
+        assert_eq!(descriptions[0].as_deref(), Some("x".repeat(2047).as_str()));
+        assert_eq!(descriptions[1], None);
+    }
+
+    #[test]
+    fn exact_utf8_description_limit_keeps_all_bytes() {
+        let xml = format!(
+            "<tv><channel id='c'><display-name>Channel</display-name></channel>\
+            <programme channel='c' start='20300101000000 +0000'\
+            stop='20300101010000 +0000'><title>Show</title><desc>{}</desc></programme></tv>",
+            "é".repeat(1024),
         );
-        assert_eq!(
-            result.unwrap_err(),
-            EpgError::Capacity(LimitKind::Description)
+        let cancelled = AtomicBool::new(false);
+        let mut descriptions = Vec::new();
+        let rows = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
+            StreamingLimits::candidate(), &cancelled, |_| Ok(()),
+            |p| { descriptions.push(p.description); Ok(()) },
+        ).unwrap();
+        assert_eq!(rows.truncated_descriptions, 0);
+        assert_eq!(descriptions[0].as_ref().unwrap().len(), 2048);
+    }
+
+    #[test]
+    fn huge_description_remains_rejected_by_aggregate_text_limit() {
+        let xml = format!(
+            "<tv><channel id='c'><display-name>Channel</display-name></channel>\
+            <programme channel='c' start='20300101000000 +0000'\
+            stop='20300101010000 +0000'><title>Show</title><desc>{}</desc></programme></tv>",
+            "x".repeat(1_048_577),
         );
-        assert_eq!(LimitKind::Description.code(), "oversize_description");
+        let cancelled = AtomicBool::new(false);
+        let error = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()), "synthetic", 0, false,
+            StreamingLimits::candidate(), &cancelled, |_| Ok(()), |_| Ok(()),
+        ).unwrap_err();
+        assert_eq!(error, EpgError::Capacity(LimitKind::XmlText));
     }
 
     #[test]

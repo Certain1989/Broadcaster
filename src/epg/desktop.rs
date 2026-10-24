@@ -103,6 +103,20 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                             gettext("Last error")
                         ))));
                     }
+                    if source.last_success_at.is_some() {
+                        let count = service.truncated_descriptions(&source.id).await;
+                        if count > 0 {
+                            let warning = gtk::Label::new(Some(&format!(
+                                "{}: {count} ({} {})",
+                                gettext("Programme descriptions shortened"),
+                                gettext("maximum"),
+                                2048,
+                            )));
+                            warning.set_wrap(true);
+                            warning.set_xalign(0.0);
+                            row.append(&warning);
+                        }
+                    }
                     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                     let refresh = command(&gettext("Refresh"), &buttons);
                     refresh.set_sensitive(source.enabled);
@@ -124,11 +138,25 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         let state = fetch_status.clone();
                         let window = fetch_parent.clone();
                         spawn(async move {
-                            let result = manager.refresh(id).await;
-                            state.set_text(&match result {
-                                Ok(_) => gettext("Guide refreshed"),
+                            let result = manager.refresh(id.clone()).await;
+                            let message = match result {
+                                Ok(()) => {
+                                    let count = manager.truncated_descriptions(&id).await;
+                                    if count == 0 {
+                                        gettext("Guide refreshed")
+                                    } else {
+                                        format!(
+                                            "{} — {}: {count} ({} {})",
+                                            gettext("Guide refreshed"),
+                                            gettext("Programme descriptions shortened"),
+                                            gettext("maximum"),
+                                            2048,
+                                        )
+                                    }
+                                }
                                 Err(error) => format!("{}: {error}", gettext("Refresh failed")),
-                            });
+                            };
+                            state.set_text(&message);
                             repaint(manager, listing, state, window);
                         });
                     });

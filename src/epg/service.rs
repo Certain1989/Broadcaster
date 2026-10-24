@@ -103,6 +103,8 @@ struct Running {
 struct Inner {
     registry: GuideSourceRegistry,
     running: Mutex<HashMap<String, Running>>,
+    /// Session-only successful-import warnings; no schema/contract migration.
+    truncated_descriptions: Mutex<HashMap<String, usize>>,
     /// Serializes source authorization/revocation with request admission.
     admission: Mutex<()>,
     heavy_imports: Arc<Semaphore>,
@@ -134,6 +136,7 @@ impl GlobalGuideManager {
             inner: Arc::new(Inner {
                 registry: GuideSourceRegistry::new(storage),
                 running: Mutex::new(HashMap::new()),
+                truncated_descriptions: Mutex::new(HashMap::new()),
                 admission: Mutex::new(()),
                 heavy_imports: Arc::new(Semaphore::new(1)),
             }),
@@ -175,6 +178,11 @@ impl GlobalGuideManager {
         })
         .await
     }
+    /// Most recent successful refresh this app session; zero after restart.
+    pub async fn truncated_descriptions(&self, id: &str) -> usize {
+        self.inner.truncated_descriptions.lock().await.get(id).copied().unwrap_or(0)
+    }
+
     pub async fn list(&self) -> Result<Vec<GuideSource>, GuideServiceError> {
         self.db(|registry| registry.list()).await
     }
@@ -242,6 +250,7 @@ impl GlobalGuideManager {
         self.db(move |registry| registry.delete_confirmed(&approval))
             .await?;
         self.cancel(&source_id).await;
+        self.inner.truncated_descriptions.lock().await.remove(&source_id);
         Ok(())
     }
     pub async fn due_ids(&self) -> Result<Vec<String>, GuideServiceError> {
@@ -451,14 +460,14 @@ impl GlobalGuideManager {
         let store = self.inner.registry.clone();
         let source_id = id.to_owned();
         let cancelled = parser_cancel.clone();
-        crate::utils::tokio(async move {
+        let rows = crate::utils::tokio(async move {
             tokio::task::spawn_blocking(move || {
                 let file =
                     std::fs::File::open(&path).map_err(|_| GuideServiceError::LocalAccess)?;
                 let mut conn = store
                     .connect_private()
                     .map_err(|_| GuideServiceError::Storage)?;
-                import_xmltv(
+                let rows = import_xmltv(
                     &mut conn,
                     BufReader::new(file),
                     &source_id,
@@ -474,12 +483,20 @@ impl GlobalGuideManager {
                     EpgError::Storage => GuideServiceError::Storage,
                     _ => GuideServiceError::InvalidXml,
                 })?;
-                Ok(())
+                Ok(rows)
             })
             .await
             .map_err(|_| GuideServiceError::WorkerFailed)?
         })
-        .await
+        .await?;
+        // Publish the count only after the entire validated guide committed.
+        // An unsuccessful refresh leaves the last successful warning intact.
+        self.inner
+            .truncated_descriptions
+            .lock()
+            .await
+            .insert(id.to_owned(), rows.truncated_descriptions);
+        Ok(())
     }
 }
 
@@ -608,6 +625,7 @@ mod e2_admission_tests {
             inner: Arc::new(Inner {
                 registry: GuideSourceRegistry::new(store),
                 running: Mutex::new(HashMap::new()),
+                truncated_descriptions: Mutex::new(HashMap::new()),
                 admission: Mutex::new(()),
                 heavy_imports: Arc::new(Semaphore::new(1)),
             }),

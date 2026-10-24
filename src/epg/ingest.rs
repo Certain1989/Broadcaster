@@ -217,7 +217,8 @@ mod tests {
             stats,
             StreamedRows {
                 channels: 1,
-                programmes: 1
+                programmes: 1,
+                truncated_descriptions: 0
             }
         );
         let failed = import_xmltv(
@@ -276,4 +277,51 @@ mod tests {
             .unwrap();
         assert_eq!(original, (1, None));
     }
+    #[test]
+    fn truncation_commits_all_rows_and_rolls_back_on_later_invalid_xml() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        let good = format!(
+            "<tv><channel id='c'><display-name>Example</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>One</title><desc>{}</desc></programme>\
+             <programme channel='c' start='20300101010000 +0000'\
+             stop='20300101020000 +0000'><title>Two</title></programme></tv>",
+            "é".repeat(1400),
+        );
+        let rows = import_xmltv(
+            &mut conn, Cursor::new(good.as_bytes()), "source",
+            1, 1, false, &cancelled,
+        ).unwrap();
+        assert_eq!(rows.programmes, 2);
+        assert_eq!(rows.truncated_descriptions, 1);
+        let synopsis: String = conn.query_row(
+            "SELECT description FROM epg_programmes WHERE title='One'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(synopsis.len(), 2048);
+        assert!(synopsis.ends_with('é'));
+        let broken = format!(
+            "<tv><channel id='c'><display-name>Example</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>One</title><desc>{}</desc></programme>\
+             <!DOCTYPE foo>",
+            "x".repeat(4000),
+        );
+        assert_eq!(
+            import_xmltv(&mut conn, Cursor::new(broken.as_bytes()), "source",
+                2, 2, false, &cancelled).unwrap_err(),
+            EpgError::InvalidInput,
+        );
+        let persisted: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(persisted, 2);
+        let still: String = conn.query_row(
+            "SELECT description FROM epg_programmes WHERE title='One'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(still, synopsis);
+    }
+
 }
