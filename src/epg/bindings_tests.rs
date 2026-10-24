@@ -421,3 +421,233 @@ fn now_next_half_open_gap_overlap_stale_and_cancellation() {
         Err(EpgError::Cancelled)
     ));
 }
+
+#[test]
+fn large_guide_indexed_targets_and_bounded_suggestions() {
+    // These sizes cover the original boundary and both E2 capacity scenarios.
+    for size in [10_000_usize, 10_001, 12_511, 16_796] {
+        let mut c = setup();
+        selected(&mut c, "g");
+        // The first and last sorted IDs must resolve by the same indexed path.
+        let tx = c.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO epg_channels (source_id,channel_id,display_name)
+             VALUES ('g','A-FIRST','Unique Non-ID')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO epg_channels (source_id,channel_id,display_name)
+             VALUES ('g','TVG.EXACT','Station')",
+            [],
+        )
+        .unwrap();
+        for index in 0..(size - 2) {
+            let target = format!("c-{index:05}");
+            let name = if index == 9_999 {
+                // A duplicate beyond the 10,000-row scan boundary.
+                "Unique Non-ID"
+            } else {
+                "Other Station"
+            };
+            tx.execute(
+                "INSERT INTO epg_channels (source_id,channel_id,display_name)
+                 VALUES ('g',?1,?2)",
+                params![target, name],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        assert_eq!(count(&c, "epg_channels"), size as i64);
+        for row in ["a1", "b1"] {
+            assert!(matches!(resolve(&c, row),
+                MatchDecision::Matched { method: MatchMethod::ExactTvgId, channel_id, .. }
+                if channel_id == "TVG.EXACT"), "exact match at {size} for {row}");
+        }
+        // Nonbinding uniqueness must never be inferred from a truncated subset.
+        if size > 10_000 {
+            assert!(matches!(resolve(&c, "b2"),
+                MatchDecision::SuggestionsUnavailable { .. }), "size {size}");
+        } else {
+            assert!(matches!(resolve(&c, "b2"), MatchDecision::Ambiguous { .. }));
+        }
+        // Both playable streams share an owner-confirmed alias, but remain
+        // separately identified IPTV rows with their original stream URLs.
+        set_global_alias(
+            &mut c,
+            ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
+            "a1", "g", "A-FIRST", 3,
+        )
+        .unwrap();
+        for row in ["a1", "b1"] {
+            assert!(matches!(resolve(&c, row),
+                MatchDecision::Matched { method: MatchMethod::ConfirmedGlobalAlias, channel_id, .. }
+                if channel_id == "A-FIRST"), "alias at {size}");
+        }
+        set_row_mapping(
+            &mut c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            "a1", "g", "TVG.EXACT", 4,
+        )
+        .unwrap();
+        assert!(matches!(resolve(&c, "a1"),
+            MatchDecision::Matched { method: MatchMethod::RowOverride, channel_id, .. }
+            if channel_id == "TVG.EXACT"));
+        c.execute(
+            "DELETE FROM epg_channels WHERE source_id='g' AND channel_id='A-FIRST'",
+            [],
+        ).unwrap();
+        assert!(matches!(resolve(&c, "b1"),
+            MatchDecision::MissingTarget { channel_id, .. } if channel_id == "A-FIRST"));
+        assert!(matches!(resolve(&c, "a1"),
+            MatchDecision::Matched { method: MatchMethod::RowOverride, .. }));
+        c.execute(
+            "DELETE FROM epg_channels WHERE source_id='g' AND channel_id='TVG.EXACT'",
+            [],
+        ).unwrap();
+        assert!(matches!(resolve(&c, "a1"),
+            MatchDecision::MissingTarget { channel_id, .. } if channel_id == "TVG.EXACT"));
+        assert_eq!(count(&c, "iptv_channels"), 4);
+        fk_ok(&c);
+    }
+}
+
+#[test]
+fn large_guide_now_next_uses_cached_programmes_without_a_catalogue_scan() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    let tx = c.transaction().unwrap();
+    for index in 0..10_001 {
+        tx.execute(
+            "INSERT INTO epg_channels (source_id,channel_id,display_name)
+             VALUES ('g',?1,'Other')",
+            [format!("c-{index:05}")],
+        ).unwrap();
+    }
+    tx.execute(
+        "INSERT INTO epg_channels (source_id,channel_id,display_name)
+         VALUES ('g','TVG.EXACT','Station')",
+        [],
+    ).unwrap();
+    for (start, stop, title) in [(900, 1100, "Current"), (1100, 1200, "Following")] {
+        tx.execute(
+            "INSERT INTO epg_programmes (source_id,channel_id,start_utc,stop_utc,title)
+             VALUES ('g','TVG.EXACT',?1,?2,?3)",
+            params![start, stop, title],
+        ).unwrap();
+    }
+    tx.commit().unwrap();
+    let cancelled = AtomicBool::new(false);
+    if let SemanticProgrammeState::Matched { now_next, page, .. } =
+        read_semantic_now_next(&c, "a1", 1000, &cancelled).unwrap()
+    {
+        assert_eq!(now_next.unwrap().current.unwrap().title, "Current");
+        assert_eq!(page.freshness, Freshness::Fresh);
+    } else {
+        panic!("large catalogue blocked cached programme");
+    }
+    c.execute("UPDATE epg_sources SET last_success_at=1 WHERE id='g'", [])
+        .unwrap();
+    if let SemanticProgrammeState::Matched { now_next, page, .. } =
+        read_semantic_now_next(&c, "a1", 1_000_000, &cancelled).unwrap()
+    {
+        assert!(now_next.is_none());
+        assert_eq!(page.freshness, Freshness::Stale);
+    } else {
+        panic!("stale source lost resolved target");
+    }
+    c.execute("UPDATE epg_sources SET enabled=0 WHERE id='g'", [])
+        .unwrap();
+    assert!(matches!(
+        read_semantic_now_next(&c, "a1", 1000, &cancelled).unwrap(),
+        SemanticProgrammeState::Disabled
+    ));
+    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(
+        read_semantic_now_next(&c, "a1", 1000, &cancelled),
+        Err(EpgError::Cancelled)
+    ));
+    // Composite primary key must support a source-scoped indexed seek.
+    let mut query = c.prepare(
+        "EXPLAIN QUERY PLAN SELECT 1 FROM epg_channels
+         WHERE source_id=?1 AND channel_id=?2",
+    ).unwrap();
+    let plan = query.query_map(params!["g", "TVG.EXACT"], |r| r.get::<_, String>(3))
+        .unwrap().map(Result::unwrap).collect::<Vec<_>>().join(" ");
+    assert!(plan.contains("SEARCH epg_channels") && plan.contains("INDEX"), "{plan}");
+}
+
+#[test]
+fn snapshot_generation_and_locked_mapping_write_do_not_mix_or_partially_commit() {
+    let path = std::env::temp_dir().join(format!("broadcaster-epg-{}.sqlite", uuid::Uuid::new_v4()));
+    let mut reader = Connection::open(&path).unwrap();
+    reader.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
+    reader.execute_batch(MIGRATION_001).unwrap();
+    reader.execute_batch(MIGRATION_002).unwrap();
+    reader.execute(
+        "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES ('p','Playlist','local_file','/fabricated/source',1,1)", []
+    ).unwrap();
+    reader.execute(
+        "INSERT INTO iptv_channels
+         (id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+         VALUES ('stream','p',0,'Station','https://invalid.example/one','target',1,1)", []
+    ).unwrap();
+    add_guide(&reader, "g", true);
+    add_channel(&reader, "g", "target", "Station");
+    reader.execute(
+        "INSERT INTO epg_programmes(source_id,channel_id,start_utc,stop_utc,title)
+         VALUES ('g','target',900,1100,'Old programme')", []
+    ).unwrap();
+    selected(&mut reader, "g");
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    let cancel = AtomicBool::new(false);
+
+    // Hold the older read snapshot while a separate WAL writer commits a
+    // different mapping, source state, and atomic programme replacement.
+    reader.execute_batch("SAVEPOINT outer_read_generation").unwrap();
+    assert!(matches!(
+        read_semantic_now_next(&reader, "stream", 1000, &cancel).unwrap(),
+        SemanticProgrammeState::Matched { .. }
+    ));
+    writer.execute_batch(
+        "BEGIN IMMEDIATE;
+         UPDATE epg_settings SET shared_guide_source_id=NULL WHERE singleton=1;
+         UPDATE epg_sources SET enabled=0 WHERE id='g';
+         DELETE FROM epg_programmes WHERE source_id='g';
+         INSERT INTO epg_programmes(source_id,channel_id,start_utc,stop_utc,title)
+         VALUES ('g','target',900,1100,'New programme');
+         COMMIT;"
+    ).unwrap();
+    match read_semantic_now_next(&reader, "stream", 1000, &cancel).unwrap() {
+        SemanticProgrammeState::Matched { now_next, .. } => {
+            assert_eq!(now_next.unwrap().current.unwrap().title, "Old programme");
+        }
+        _ => panic!("read snapshot mixed source or mapping generations"),
+    }
+    reader.execute_batch("ROLLBACK TO outer_read_generation; RELEASE outer_read_generation").unwrap();
+    assert!(matches!(
+        read_semantic_now_next(&reader, "stream", 1000, &cancel).unwrap(),
+        SemanticProgrammeState::Unconfigured
+    ));
+
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    reader.busy_timeout(std::time::Duration::from_millis(0)).unwrap();
+    let result = set_shared_guide(
+        &mut reader, ConfirmedGuideSelection::after_user_confirmation(), Some("g")
+    );
+    assert_eq!(result, Err(BindingError::Storage));
+    let shared: Option<String> = reader.query_row(
+        "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+        [], |r| r.get(0)
+    ).unwrap();
+    assert_eq!(shared, None, "locked write partially modified settings");
+    writer.execute_batch("ROLLBACK").unwrap();
+    set_shared_guide(
+        &mut reader, ConfirmedGuideSelection::after_user_confirmation(), Some("g")
+    ).unwrap();
+    drop(writer);
+    drop(reader);
+    std::fs::remove_file(&path).unwrap();
+}
