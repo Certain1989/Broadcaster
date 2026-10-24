@@ -24,28 +24,42 @@ fn guide_problem(code: &str) -> String {
         "epg_source_already_exists" => gettext("This programme guide has already been added."),
         "epg_source_not_found" => gettext("The programme guide no longer exists."),
         "epg_source_changed" => gettext("Guide settings changed. Close this dialog and reopen it."),
-        "epg_source_disabled" | "source_disabled" => gettext("Enable this guide before refreshing it."),
+        "epg_source_disabled" | "source_disabled" => {
+            gettext("Enable this guide before refreshing it.")
+        }
         "invalid_origin" => gettext("Enter a valid HTTP(S) URL or select a local XMLTV file."),
-        "network_scope_denied" | "redirect_denied" => gettext("This guide's network location is not allowed."),
+        "network_scope_denied" | "redirect_denied" => {
+            gettext("This guide's network location is not allowed.")
+        }
         "http_status" => gettext("The guide server returned an HTTP error."),
         "network" => gettext("Cannot reach the guide server. Check your connection."),
         "timeout" => gettext("The guide download timed out."),
-        "oversize_description" => gettext("A programme description is longer than the permitted limit."),
-        "oversize" | "oversize_wire" | "oversize_expanded" | "oversize_ratio" => gettext("The guide exceeds a download or decompression safety limit."),
+        "oversize_description" => {
+            gettext("A programme description is longer than the permitted limit.")
+        }
+        "oversize" | "oversize_wire" | "oversize_expanded" | "oversize_ratio" => {
+            gettext("The guide exceeds a download or decompression safety limit.")
+        }
         "oversize_database" => gettext("The guide exceeds the database storage limit."),
         "oversize_duration" => gettext("The guide import took too long."),
-        "oversize_title" | "oversize_subtitle" | "oversize_channel_name" => gettext("A programme title or channel name exceeds the safety limit."),
-        "oversize_depth" | "oversize_attributes" | "oversize_xml_text" |
-        "oversize_channels" | "oversize_programmes" => gettext("The guide exceeds the XMLTV safety limits."),
+        "oversize_title" | "oversize_subtitle" | "oversize_channel_name" => {
+            gettext("A programme title or channel name exceeds the safety limit.")
+        }
+        "oversize_depth"
+        | "oversize_attributes"
+        | "oversize_xml_text"
+        | "oversize_channels"
+        | "oversize_programmes" => gettext("The guide exceeds the XMLTV safety limits."),
         "invalid_xml" | "encoding" => gettext("The file is not valid UTF-8 XMLTV data."),
-        "storage_failed" | "epg_storage_failed" => gettext("The guide could not be saved. Check available disk space."),
+        "storage_failed" | "epg_storage_failed" => {
+            gettext("The guide could not be saved. Check available disk space.")
+        }
         "local_access" => gettext("The selected local XMLTV file cannot be opened."),
         "cancelled" => gettext("Guide refresh cancelled."),
         "refresh_in_progress" => gettext("This guide is already being refreshed."),
         _ => gettext("The guide operation failed. Please try again."),
     }
 }
-
 
 fn box_column() -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -394,9 +408,7 @@ fn show_add(
     if local.is_none() {
         body.append(&lan);
     }
-    let automatic = gtk::CheckButton::with_label(&gettext(
-        "Keep this guide updated automatically"
-    ));
+    let automatic = gtk::CheckButton::with_label(&gettext("Keep this guide updated automatically"));
     automatic.set_active(true);
     body.append(&automatic);
     let note = gtk::Label::new(Some(&gettext(
@@ -438,7 +450,9 @@ fn show_add(
                 )
             };
             let Ok(origin) = origin else {
-                error.set_text(&gettext("Enter a valid HTTP(S) URL or select a local XMLTV file."));
+                error.set_text(&gettext(
+                    "Enter a valid HTTP(S) URL or select a local XMLTV file.",
+                ));
                 return;
             };
             let manager = service.clone();
@@ -453,7 +467,10 @@ fn show_add(
                 #[weak]
                 error,
                 async move {
-                    match manager.add_with_schedule(name, origin, update_automatically).await {
+                    match manager
+                        .add_with_schedule(name, origin, update_automatically)
+                        .await
+                    {
                         Ok(_) => {
                             dialog.close();
                             repaint(manager, list, status, parent);
