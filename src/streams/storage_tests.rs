@@ -376,3 +376,87 @@ fn actual_v1_check_with_internal_comment_still_upgrades_and_reopens() {
         .count();
     assert_eq!(backups, 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn epg_manual_override_survives_ninety_day_missing_purge_until_real_guide_deletion() {
+    let dir = Sandbox::new();
+    seed_real_v1(&dir.path());
+    let storage = Storage::at(dir.path());
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    conn.execute(
+        "INSERT INTO epg_sources
+         (id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES ('fixture-guide','Synthetic guide','local_file','/fabricated/guide',1,1)",
+        [],
+    )
+    .unwrap();
+    for id in ["epg-mapped", "unmapped"] {
+        conn.execute(
+            "INSERT INTO iptv_channels
+             (id,source_id,playlist_order,imported_name,stream_url,
+              is_present,missing_since,created_at,updated_at)
+             VALUES (?1,'playlist-one',2,'Archived',
+                     'https://invalid.example/archived.m3u8',0,1,1,1)",
+            [id],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO epg_channel_overrides
+         (iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+         VALUES ('epg-mapped','fixture-guide','region',1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    assert_eq!(storage.purge_expired_missing(10_000_000).unwrap(), 1);
+    let conn = storage.connect().unwrap();
+    let mapped: String = conn
+        .query_row(
+            "SELECT stream_url FROM iptv_channels WHERE id='epg-mapped'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(mapped, "https://invalid.example/archived.m3u8");
+    let missing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='unmapped'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert!(missing.is_none());
+    conn.execute("DELETE FROM epg_sources WHERE id='fixture-guide'", [])
+        .unwrap();
+    let epg_overrides: i64 = conn
+        .query_row("SELECT COUNT(*) FROM epg_channel_overrides", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(epg_overrides, 0);
+    drop(conn);
+    assert_eq!(storage.purge_expired_missing(10_000_000).unwrap(), 1);
+    let conn = storage.connect().unwrap();
+    let remaining: Option<String> = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='epg-mapped'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert!(remaining.is_none());
+    // Existing editor customization remains independently retained.
+    let user_row: String = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='stream-one'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(user_row, "stream-one");
+}

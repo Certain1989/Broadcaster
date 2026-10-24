@@ -408,7 +408,8 @@ impl Storage {
         conn.execute(
             "DELETE FROM iptv_channels WHERE is_present=0 AND missing_since <= ?1
                 AND NOT EXISTS (SELECT 1 FROM iptv_channel_overrides o WHERE o.channel_id=iptv_channels.id)
-                AND NOT EXISTS (SELECT 1 FROM iptv_channel_override_facets f WHERE f.channel_id=iptv_channels.id)",
+                AND NOT EXISTS (SELECT 1 FROM iptv_channel_override_facets f WHERE f.channel_id=iptv_channels.id)
+                AND NOT EXISTS (SELECT 1 FROM epg_channel_overrides e WHERE e.iptv_channel_id=iptv_channels.id)",
             [now.saturating_sub(90 * 24 * 3600)],
         ).map_err(map_sql)
     }
