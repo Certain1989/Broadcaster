@@ -62,6 +62,9 @@ fn guide_problem(code: &str) -> String {
         "storage_failed" | "epg_storage_failed" => {
             gettext("The guide could not be saved because of a storage error.")
         }
+        "storage_permission" => gettext(
+            "Broadcaster cannot write to its guide storage. Check the application's storage permissions."
+        ),
         "local_access" => gettext("The selected local XMLTV file cannot be opened."),
         "cancelled" => gettext("Guide refresh cancelled."),
         "refresh_in_progress" => gettext("This guide is already being refreshed."),

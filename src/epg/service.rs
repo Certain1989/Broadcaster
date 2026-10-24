@@ -52,6 +52,7 @@ pub enum GuideServiceError {
     InvalidXml,
     Capacity(LimitKind),
     Storage,
+    StoragePermission,
     DiskFull,
     Disabled,
     AlreadyRunning,
@@ -67,6 +68,7 @@ impl fmt::Display for GuideServiceError {
             Self::InvalidXml => "invalid_xml",
             Self::Capacity(kind) => return f.write_str(kind.code()),
             Self::Storage => "storage_failed",
+            Self::StoragePermission => "storage_permission",
             Self::DiskFull => "disk_full",
             Self::Disabled => "source_disabled",
             Self::AlreadyRunning => "refresh_in_progress",
@@ -424,6 +426,7 @@ impl GlobalGuideManager {
                 GuideServiceError::InvalidXml => "invalid_xml",
                 GuideServiceError::Capacity(kind) => kind.code(),
                 GuideServiceError::Storage => "storage_failed",
+                GuideServiceError::StoragePermission => "storage_permission",
                 GuideServiceError::DiskFull => "disk_full",
                 GuideServiceError::LocalAccess => "local_access",
                 GuideServiceError::Cancelled => "cancelled",
@@ -509,6 +512,7 @@ impl GlobalGuideManager {
                     EpgError::OverLimit => GuideServiceError::Fetch(GuideFetchError::Oversize),
                     EpgError::Capacity(kind) => GuideServiceError::Capacity(kind),
                     EpgError::Storage => GuideServiceError::Storage,
+                    EpgError::StoragePermission => GuideServiceError::StoragePermission,
                     EpgError::DiskFull => GuideServiceError::DiskFull,
                     _ => GuideServiceError::InvalidXml,
                 })?;
@@ -546,10 +550,10 @@ async fn local_deadline<T>(
 }
 
 fn local_spool_error(error: std::io::Error) -> GuideServiceError {
-    if error.kind() == std::io::ErrorKind::StorageFull {
-        GuideServiceError::DiskFull
-    } else {
-        GuideServiceError::LocalAccess
+    match error.kind() {
+        std::io::ErrorKind::StorageFull => GuideServiceError::DiskFull,
+        std::io::ErrorKind::PermissionDenied => GuideServiceError::StoragePermission,
+        _ => GuideServiceError::Storage,
     }
 }
 
@@ -655,7 +659,11 @@ mod e2_admission_tests {
         );
         assert_eq!(
             local_spool_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
-            GuideServiceError::LocalAccess
+            GuideServiceError::StoragePermission
+        );
+        assert_eq!(
+            local_spool_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            GuideServiceError::Storage
         );
     }
 

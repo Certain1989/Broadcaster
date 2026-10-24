@@ -63,6 +63,8 @@ pub enum GuideFetchError {
     RedirectDenied,
     HttpStatus,
     Network,
+    Storage,
+    StoragePermission,
     DiskFull,
     Timeout,
     Oversize,
@@ -78,6 +80,8 @@ impl GuideFetchError {
             Self::RedirectDenied => "redirect_denied",
             Self::HttpStatus => "http_status",
             Self::Network => "network",
+            Self::Storage => "storage_failed",
+            Self::StoragePermission => "storage_permission",
             Self::DiskFull => "disk_full",
             Self::Timeout => "timeout",
             Self::Oversize => "oversize",
@@ -95,10 +99,10 @@ impl fmt::Display for GuideFetchError {
 impl std::error::Error for GuideFetchError {}
 
 fn spool_io_error(error: std::io::Error) -> GuideFetchError {
-    if error.kind() == std::io::ErrorKind::StorageFull {
-        GuideFetchError::DiskFull
-    } else {
-        GuideFetchError::Network
+    match error.kind() {
+        std::io::ErrorKind::StorageFull => GuideFetchError::DiskFull,
+        std::io::ErrorKind::PermissionDenied => GuideFetchError::StoragePermission,
+        _ => GuideFetchError::Storage,
     }
 }
 
@@ -652,7 +656,11 @@ mod tests {
         );
         assert_eq!(
             spool_io_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
-            GuideFetchError::Network
+            GuideFetchError::StoragePermission
+        );
+        assert_eq!(
+            spool_io_error(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            GuideFetchError::Storage
         );
     }
     #[test]

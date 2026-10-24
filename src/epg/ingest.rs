@@ -147,6 +147,14 @@ fn storage_error(error: rusqlite::Error) -> EpgError {
         {
             EpgError::DiskFull
         }
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::PermissionDenied | rusqlite::ErrorCode::ReadOnly
+            ) =>
+        {
+            EpgError::StoragePermission
+        }
         _ => EpgError::Storage,
     }
 }
