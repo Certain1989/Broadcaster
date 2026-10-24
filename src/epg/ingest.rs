@@ -842,19 +842,25 @@ mod tests {
                 "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
                  FROM epg_sources WHERE id='source'",
                 [],
-                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?,
-                        r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?)),
+                |r| Ok((
+                    r.get::<_, Option<i64>>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?
+                )),
             )
             .unwrap(),
             before,
         );
         assert_eq!(
-            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
                 .unwrap(),
             "Cached",
         );
         assert_eq!(
-            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r.get::<_, String>(0))
+            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r
+                .get::<_, String>(0))
                 .unwrap(),
             old_channel,
         );
@@ -868,7 +874,10 @@ mod tests {
             .unwrap(),
             0,
         );
-        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), initial_limit);
+        assert_eq!(
+            temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(),
+            initial_limit
+        );
         assert!(conn.is_autocommit());
         // A failed pre-COMMIT restoration does not publish success-only
         // warning counters; a subsequent import on this connection can commit.
@@ -886,7 +895,10 @@ mod tests {
             .programmes,
             1,
         );
-        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), initial_limit);
+        assert_eq!(
+            temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(),
+            initial_limit
+        );
     }
 
     #[test]
@@ -1317,12 +1329,14 @@ mod tests {
             .unwrap();
         assert_eq!(persisted, metadata);
         assert_eq!(
-            conn.query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
                 .unwrap(),
             "Cached",
         );
         assert_eq!(
-            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r.get::<_, String>(0))
+            conn.query_row("SELECT display_name FROM epg_channels", [], |r| r
+                .get::<_, String>(0))
                 .unwrap(),
             "Example",
         );
@@ -1336,7 +1350,10 @@ mod tests {
             .unwrap(),
             0,
         );
-        assert_eq!(temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(), prior_cap);
+        assert_eq!(
+            temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(),
+            prior_cap
+        );
     }
 
     #[test]
