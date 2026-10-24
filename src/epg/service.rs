@@ -153,7 +153,8 @@ impl GlobalGuideManager {
         // GLib main context. Network, decoding and SQLite still use workers.
         crate::utils::spawn(async move {
             loop {
-                glib::timeout_future_seconds(60).await;
+                // Check at startup as well as periodically while running.
+                // Only previously consented, enabled sources are eligible.
                 let Some(inner) = weak.upgrade() else { break };
                 let manager = GlobalGuideManager { inner };
                 if let Ok(ids) = manager.due_ids().await {
@@ -161,6 +162,7 @@ impl GlobalGuideManager {
                         let _ = manager.refresh_scheduled(id).await;
                     }
                 }
+                glib::timeout_future_seconds(60).await;
             }
         });
     }
@@ -180,7 +182,13 @@ impl GlobalGuideManager {
     }
     /// Most recent successful refresh this app session; zero after restart.
     pub async fn truncated_descriptions(&self, id: &str) -> usize {
-        self.inner.truncated_descriptions.lock().await.get(id).copied().unwrap_or(0)
+        self.inner
+            .truncated_descriptions
+            .lock()
+            .await
+            .get(id)
+            .copied()
+            .unwrap_or(0)
     }
 
     pub async fn list(&self) -> Result<Vec<GuideSource>, GuideServiceError> {
@@ -192,6 +200,17 @@ impl GlobalGuideManager {
         origin: SourceOrigin,
     ) -> Result<GuideSource, GuideServiceError> {
         self.db(move |registry| registry.add(&name, &origin)).await
+    }
+
+    /// Called only after the user sees and chooses automatic guide updates.
+    pub async fn add_with_schedule(
+        &self,
+        name: String,
+        origin: SourceOrigin,
+        automatic: bool,
+    ) -> Result<GuideSource, GuideServiceError> {
+        self.db(move |registry| registry.add_with_schedule(&name, &origin, automatic))
+            .await
     }
     pub async fn rename(&self, id: String, name: String) -> Result<(), GuideServiceError> {
         self.db(move |registry| registry.rename(&id, &name)).await
@@ -250,7 +269,11 @@ impl GlobalGuideManager {
         self.db(move |registry| registry.delete_confirmed(&approval))
             .await?;
         self.cancel(&source_id).await;
-        self.inner.truncated_descriptions.lock().await.remove(&source_id);
+        self.inner
+            .truncated_descriptions
+            .lock()
+            .await
+            .remove(&source_id);
         Ok(())
     }
     pub async fn due_ids(&self) -> Result<Vec<String>, GuideServiceError> {
@@ -483,7 +506,7 @@ impl GlobalGuideManager {
                     EpgError::Storage => GuideServiceError::Storage,
                     _ => GuideServiceError::InvalidXml,
                 })?;
-                Ok(rows)
+                Ok::<_, GuideServiceError>(rows)
             })
             .await
             .map_err(|_| GuideServiceError::WorkerFailed)?
