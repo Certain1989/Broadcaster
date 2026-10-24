@@ -20,7 +20,46 @@ struct Space {
 
 /// Query the parent directory because a freshly generated spool need not exist.
 /// GIO may not report filesystem attributes inside a portal or sandbox.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_SPACE: std::cell::RefCell<Option<(PathBuf, std::collections::VecDeque<Option<u64>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct TestSpaceOverride;
+#[cfg(test)]
+impl Drop for TestSpaceOverride {
+    fn drop(&mut self) {
+        TEST_SPACE.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+#[cfg(test)]
+pub(crate) fn override_space(path: PathBuf, readings: Vec<Option<u64>>) -> TestSpaceOverride {
+    TEST_SPACE.with(|slot| {
+        assert!(slot.borrow().is_none(), "one active probe override per test");
+        *slot.borrow_mut() = Some((path, readings.into()));
+    });
+    TestSpaceOverride
+}
+
 fn space(path: &Path) -> Option<Space> {
+    #[cfg(test)]
+    if let Some(reading) = TEST_SPACE.with(|slot| {
+        let mut borrowed = slot.borrow_mut();
+        borrowed.as_mut().and_then(|(target, queue)| {
+            (target == path).then(|| {
+                queue
+                    .pop_front()
+                    .expect("all expected mocked filesystem checks must be enumerated")
+            })
+        })
+    }) {
+        return reading.map(|free| Space {
+            free,
+            id: Some("mock-db-mount".to_owned()),
+        });
+    }
     let directory = path.parent().unwrap_or(path);
     let info = gio::File::for_path(directory)
         .query_filesystem_info("filesystem::free,filesystem::id", gio::Cancellable::NONE)
@@ -43,6 +82,11 @@ fn sufficient(observed: Option<&Space>, needed: u64) -> bool {
 fn distinct_mounts(a: Option<&Space>, b: Option<&Space>) -> bool {
     matches!((a.and_then(|s| s.id.as_ref()), b.and_then(|s| s.id.as_ref())),
         (Some(left), Some(right)) if left != right)
+}
+
+fn mount_policy_allows(db: Option<&Space>, staged: Option<&Space>, required: u64) -> bool {
+    sufficient(db, required)
+        && (!distinct_mounts(db, staged) || sufficient(staged, IMPORT_FLOOR))
 }
 
 pub(crate) fn download_allowed(path: &Path) -> bool {
@@ -79,9 +123,7 @@ impl ImportHeadroom {
     pub(crate) fn admit(&self) -> bool {
         let db = space(&self.database);
         let staged = space(&self.staged);
-        sufficient(db.as_ref(), self.reserve)
-            && (!distinct_mounts(db.as_ref(), staged.as_ref())
-                || sufficient(staged.as_ref(), IMPORT_FLOOR))
+        mount_policy_allows(db.as_ref(), staged.as_ref(), self.reserve)
     }
 
     /// The DB/WAL floor is checked every 4096 parsed programmes and once
@@ -90,9 +132,7 @@ impl ImportHeadroom {
     pub(crate) fn active(&self) -> bool {
         let db = space(&self.database);
         let staged = space(&self.staged);
-        sufficient(db.as_ref(), IMPORT_FLOOR)
-            && (!distinct_mounts(db.as_ref(), staged.as_ref())
-                || sufficient(staged.as_ref(), IMPORT_FLOOR))
+        mount_policy_allows(db.as_ref(), staged.as_ref(), IMPORT_FLOOR)
     }
 }
 
@@ -123,6 +163,32 @@ mod tests {
         assert!(sufficient(Some(&sample(required + 1)), required));
         assert!(!sufficient(Some(&sample(IMPORT_FLOOR - 1)), IMPORT_FLOOR));
         assert!(sufficient(Some(&sample(IMPORT_FLOOR)), IMPORT_FLOOR));
+    }
+
+    #[test]
+    fn separated_mount_admission_uses_only_approved_floors() {
+        let db = Space {
+            free: 1024 * MIB,
+            id: Some("db".to_owned()),
+        };
+        let staged = Space {
+            free: IMPORT_FLOOR - 1,
+            id: Some("stage".to_owned()),
+        };
+        let required = 1024 * MIB;
+        assert!(!mount_policy_allows(Some(&db), Some(&staged), required));
+        let stage_ok = Space {
+            free: IMPORT_FLOOR,
+            ..staged
+        };
+        assert!(mount_policy_allows(Some(&db), Some(&stage_ok), required));
+        let shared = Space {
+            id: Some("db".to_owned()),
+            free: 0,
+        };
+        assert!(mount_policy_allows(Some(&db), Some(&shared), required));
+        assert!(mount_policy_allows(None, None, required));
+        assert!(mount_policy_allows(None, Some(&stage_ok), required));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! hints, stream headers, Live programmes or view repaint/focus events.
 use super::{
     headroom::ImportHeadroom,
-    ingest::import_xmltv_guarded,
+    ingest::{import_xmltv_guarded, ImportChecks},
     model::{EpgError, LimitKind},
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
@@ -526,8 +526,10 @@ impl GlobalGuideManager {
                     timestamp,
                     expected_revision,
                     gzip,
-                    &cancelled,
-                    guard.as_ref(),
+                    ImportChecks {
+                        cancelled: &cancelled,
+                        headroom: guard.as_ref(),
+                    },
                 )
                 .map_err(|error| match error {
                     EpgError::Cancelled => GuideServiceError::Cancelled,
@@ -709,13 +711,14 @@ mod e2_admission_tests {
                 .write(true)
                 .open(&path)
                 .unwrap();
-            let mut writer = FailAfterPart {
-                file: &mut file,
-                first: true,
-            };
-            let result = write_local_spool(&mut writer, b"<tv><programme/></tv>");
-            assert_eq!(result, Err(GuideServiceError::DiskFull));
-            drop(writer);
+            {
+                let mut writer = FailAfterPart {
+                    file: &mut file,
+                    first: true,
+                };
+                let result = write_local_spool(&mut writer, b"<tv><programme/></tv>");
+                assert_eq!(result, Err(GuideServiceError::DiskFull));
+            }
             assert_eq!(fs::metadata(&path).unwrap().len(), 4);
         }
         assert!(!path.exists(), "failure must remove the partial stage");

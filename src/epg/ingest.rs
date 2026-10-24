@@ -160,6 +160,11 @@ fn storage_error(error: rusqlite::Error) -> EpgError {
     }
 }
 
+pub(crate) struct ImportChecks<'a> {
+    pub cancelled: &'a AtomicBool,
+    pub headroom: Option<&'a ImportHeadroom>,
+}
+
 /// Import a fully source-authorized stream. The source adapter must separately
 /// enforce the network/portal consent, transfer and staging-file quotas.
 pub fn import_xmltv<R: BufRead>(
@@ -178,8 +183,10 @@ pub fn import_xmltv<R: BufRead>(
         retrieved_utc,
         expected_revision,
         gzip,
-        cancelled,
-        None,
+        ImportChecks {
+            cancelled,
+            headroom: None,
+        },
     )
 }
 
@@ -192,8 +199,7 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
     retrieved_utc: i64,
     expected_revision: i64,
     gzip: bool,
-    cancelled: &AtomicBool,
-    headroom: Option<&ImportHeadroom>,
+    checks: ImportChecks<'_>,
 ) -> Result<StreamedRows, EpgError> {
     import_xmltv_inner(
         conn,
@@ -202,8 +208,7 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
         retrieved_utc,
         expected_revision,
         gzip,
-        cancelled,
-        headroom,
+        checks,
     )
 }
 
@@ -214,9 +219,10 @@ fn import_xmltv_inner<R: BufRead>(
     retrieved_utc: i64,
     expected_revision: i64,
     gzip: bool,
-    cancelled: &AtomicBool,
-    headroom: Option<&ImportHeadroom>,
+    checks: ImportChecks<'_>,
 ) -> Result<StreamedRows, EpgError> {
+    let cancelled = checks.cancelled;
+    let headroom = checks.headroom;
     let started = Instant::now();
     if cancelled.load(Ordering::Acquire) {
         return Err(EpgError::Cancelled);
@@ -628,6 +634,207 @@ mod tests {
         assert_eq!((count, title.as_str()), (1, "Retried"));
         drop(conn);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn headroom_final_check_rolls_back_and_same_connection_retry_succeeds() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        let original: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        let db_path = std::path::PathBuf::from("synthetic-headroom-db");
+        let guard = ImportHeadroom::new(
+            db_path.clone(),
+            "absent-epg-staging-directory/stage.xml".into(),
+            4096,
+            false,
+        );
+        TEST_STAGED_INSERTS.with(|cell| cell.set(0));
+        TEST_STAGED_MARKERS.with(|cell| cell.set(0));
+        let observation = crate::epg::headroom::override_space(
+            db_path,
+            vec![Some(crate::epg::headroom::IMPORT_FLOOR - 1)],
+        );
+        assert_eq!(
+            import_xmltv_guarded(
+                &mut conn,
+                Cursor::new(xml(&"T".repeat(513))),
+                "source",
+                2,
+                2,
+                false,
+                ImportChecks {
+                    cancelled: &cancelled,
+                    headroom: Some(&guard),
+                },
+            ),
+            Err(EpgError::DiskFull),
+        );
+        drop(observation);
+        assert_eq!(TEST_STAGED_INSERTS.with(|c| c.get()), 1);
+        assert_eq!(TEST_STAGED_MARKERS.with(|c| c.get()), 1);
+        let previous_title: String = conn
+            .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(previous_title, "Cached");
+        let current: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(current, original);
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master
+                 WHERE name='epg_import_truncated_rowids'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0);
+        let retried = import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Retried")),
+            "source",
+            3,
+            2,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        assert_eq!(retried.programmes, 1);
+    }
+
+    #[test]
+    fn headroom_4096_programme_check_rejects_without_partial_publication() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        let mut replacement =
+            String::from("<tv><channel id='c'><display-name>Updated</display-name></channel>");
+        for n in 0..4096 {
+            let month = 1 + n / (28 * 24);
+            let day = 1 + (n / 24) % 28;
+            let hour = n % 24;
+            let stop_day = day + usize::from(hour == 23);
+            let stop_hour = (hour + 1) % 24;
+            let title = if n == 0 { "T".repeat(513) } else { format!("T{n}") };
+            replacement.push_str(&format!(
+                "<programme channel='c' start='2030{month:02}{day:02}{hour:02}0000 +0000'
+                 stop='2030{month:02}{stop_day:02}{stop_hour:02}0000 +0000'>
+                 <title>{title}</title></programme>"
+            ));
+        }
+        replacement.push_str("</tv>");
+        let db_path = std::path::PathBuf::from("synthetic-headroom-db");
+        let guard = ImportHeadroom::new(
+            db_path.clone(),
+            "absent-epg-staging-directory/stage.xml".into(),
+            4096,
+            false,
+        );
+        TEST_STAGED_INSERTS.with(|cell| cell.set(0));
+        TEST_STAGED_MARKERS.with(|cell| cell.set(0));
+        let observation = crate::epg::headroom::override_space(
+            db_path,
+            vec![Some(crate::epg::headroom::IMPORT_FLOOR - 1)],
+        );
+        let result = import_xmltv_guarded(
+            &mut conn,
+            Cursor::new(replacement),
+            "source",
+            2,
+            2,
+            false,
+            ImportChecks {
+                cancelled: &cancelled,
+                headroom: Some(&guard),
+            },
+        );
+        drop(observation);
+        assert_eq!(result, Err(EpgError::DiskFull));
+        assert_eq!(TEST_STAGED_INSERTS.with(|c| c.get()), 4095);
+        assert_eq!(TEST_STAGED_MARKERS.with(|c| c.get()), 1);
+        let retained: (i64, String) = conn
+            .query_row("SELECT COUNT(*),MIN(title) FROM epg_programmes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(retained, (1, "Cached".to_owned()));
+        let last_success: Option<i64> = conn
+            .query_row(
+                "SELECT last_success_at FROM epg_sources WHERE id='source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(last_success, Some(1));
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_temp_master
+                 WHERE name='epg_import_truncated_rowids'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0);
+    }
+
+    #[test]
+    fn headroom_unavailable_probe_does_not_reject_import() {
+        let mut conn = db();
+        let cancelled = AtomicBool::new(false);
+        let db_path = std::path::PathBuf::from("synthetic-headroom-db");
+        let guard = ImportHeadroom::new(
+            db_path.clone(),
+            "absent-epg-staging-directory/stage.xml".into(),
+            4096,
+            true,
+        );
+        let observation = crate::epg::headroom::override_space(db_path, vec![None]);
+        let result = import_xmltv_guarded(
+            &mut conn,
+            Cursor::new(xml("Valid")),
+            "source",
+            1,
+            1,
+            false,
+            ImportChecks {
+                cancelled: &cancelled,
+                headroom: Some(&guard),
+            },
+        )
+        .unwrap();
+        drop(observation);
+        assert_eq!(result.programmes, 1);
     }
 
     #[test]
