@@ -618,6 +618,19 @@ fn import_xmltv_scoped<R: BufRead>(
     if omitted_dangling != 0 {
         return Err(EpgError::MissingChannel);
     }
+    // Retained future rows alone may satisfy minimum schedule admission.
+    // Check only after omitted identities and channels have been validated.
+    let future_retained: i64 = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_programmes
+             WHERE source_id=?1 AND stop_utc>?2 LIMIT 1)",
+            params![source_id, retrieved_utc],
+            |r| r.get(0),
+        )
+        .map_err(storage_error)?;
+    if retained == 0 || future_retained == 0 {
+        return Err(EpgError::InvalidSchedule);
+    }
     tx.execute(
         "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1,
          last_error_code=NULL,updated_at=MAX(updated_at+1,?1) WHERE id=?2",
@@ -1998,6 +2011,25 @@ mod tests {
                 .unwrap(),
             "Good"
         );
+        assert_no_temp_marker(&conn);
+    }
+
+    #[test]
+    fn c1_all_omitted_unknown_channel_still_fails_as_missing_channel() {
+        let mut conn = db();
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let good = guide(channels, &programme("c", "Good", None, None));
+        import_fixture(&mut conn, &good, "source", 1, 1).unwrap();
+        let missing = programme("undeclared", "Invalid", None, Some("\u{0093}"));
+        let attempted = guide(channels, &missing);
+        assert_eq!(
+            import_fixture(&mut conn, &attempted, "source", 2, 2).unwrap_err(),
+            EpgError::MissingChannel
+        );
+        let previous: String = conn
+            .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(previous, "Good");
         assert_no_temp_marker(&conn);
     }
 
