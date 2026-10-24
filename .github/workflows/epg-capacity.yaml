@@ -48,6 +48,13 @@ jobs:
         run: meson setup _build -Dprofile=development
       - name: Compile opt-in Rust/SQLite diagnostics
         run: cargo test --locked --release --no-run
+      - name: Measure O01 rowid TEMP footprint through the actual importer
+        timeout-minutes: 8
+        run: |
+          # Six 100/1k/10k synthetic cases, <=420s combined, no 25k+ stress.
+          /usr/bin/time -v timeout --signal=TERM 420s cargo test --locked --release epg_capacity_o01_rowid_markers -- --ignored --nocapture --test-threads=1
+          df -h .
+
       - name: Benchmark fabricated DE-size gzip import into SQLite
         timeout-minutes: 12
         run: |
