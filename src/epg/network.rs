@@ -63,6 +63,7 @@ pub enum GuideFetchError {
     RedirectDenied,
     HttpStatus,
     Network,
+    DiskFull,
     Timeout,
     Oversize,
     WireLimit,
@@ -77,6 +78,7 @@ impl GuideFetchError {
             Self::RedirectDenied => "redirect_denied",
             Self::HttpStatus => "http_status",
             Self::Network => "network",
+            Self::DiskFull => "disk_full",
             Self::Timeout => "timeout",
             Self::Oversize => "oversize",
             Self::WireLimit => "oversize_wire",
@@ -91,6 +93,14 @@ impl fmt::Display for GuideFetchError {
     }
 }
 impl std::error::Error for GuideFetchError {}
+
+fn spool_io_error(error: std::io::Error) -> GuideFetchError {
+    if error.kind() == std::io::ErrorKind::StorageFull {
+        GuideFetchError::DiskFull
+    } else {
+        GuideFetchError::Network
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrustScope {
@@ -561,7 +571,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             .write(true)
             .create_new(true)
             .open(path)
-            .map_err(|_| GuideFetchError::Network)?;
+            .map_err(spool_io_error)?;
         let mut file = tokio::fs::File::from_std(file);
         let mut total = 0_u64;
         let mut header = [0_u8; 2];
@@ -595,12 +605,12 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             }
             file.write_all(&chunk)
                 .await
-                .map_err(|_| GuideFetchError::Network)?;
+                .map_err(spool_io_error)?;
         }
         if total == 0 || (encoding == "gzip" && header != [0x1f, 0x8b]) {
             return Err(GuideFetchError::Encoding);
         }
-        file.flush().await.map_err(|_| GuideFetchError::Network)?;
+        file.flush().await.map_err(spool_io_error)?;
         return Ok(gzip);
     }
     Err(GuideFetchError::RedirectDenied)
@@ -611,6 +621,17 @@ mod tests {
     use super::*;
     fn addr(ip: &str) -> SocketAddr {
         SocketAddr::new(ip.parse().unwrap(), 443)
+    }
+    #[test]
+    fn spool_errors_distinguish_storage_full_from_other_io() {
+        assert_eq!(
+            spool_io_error(std::io::Error::from(std::io::ErrorKind::StorageFull)),
+            GuideFetchError::DiskFull
+        );
+        assert_eq!(
+            spool_io_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            GuideFetchError::Network
+        );
     }
     #[test]
     fn denies_unsafe_and_repaired_authorities() {

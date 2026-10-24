@@ -140,8 +140,12 @@ fn observe_o01(
     }
 }
 
-fn storage_error(_: rusqlite::Error) -> EpgError {
-    EpgError::Storage
+fn storage_error(error: rusqlite::Error) -> EpgError {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ErrorCode::DiskFull => EpgError::DiskFull,
+        _ => EpgError::Storage,
+    }
 }
 
 /// Import a fully source-authorized stream. The source adapter must separately
@@ -387,6 +391,147 @@ mod tests {
              stop='20300101010000 +0000'><title>{title}</title></programme></tv>"
         )
         .into_bytes()
+    }
+
+
+    #[test]
+    fn sqlite_full_after_staged_insert_preserves_last_good_and_same_connection_retry() {
+        // A bounded, isolated real SQLite SQLITE_FULL probe. Never exhaust the
+        // runner's filesystem: SQLite's logical max_page_count is the limiter.
+        let dir = std::env::temp_dir().join(format!(
+            "broadcaster-epg-full-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let mut conn = Connection::open(dir.join("fixture.sqlite3")).unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_002).unwrap();
+        conn.execute(
+            "INSERT INTO epg_sources
+             (id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES ('source','Fabricated','local_file','/synthetic',1,1)",
+            [],
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(&mut conn, Cursor::new(xml("Cached")), "source", 1, 1, false, &cancelled)
+            .unwrap();
+        let original_metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                 FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        let original_channel: String = conn
+            .query_row("SELECT display_name FROM epg_channels", [], |r| r.get(0))
+            .unwrap();
+        let original_programme: (String, Option<String>, Option<String>) = conn
+            .query_row("SELECT title,subtitle,description FROM epg_programmes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+
+        // 384 unique programmes with genuinely shortened title metadata and
+        // substantial descriptions. This needs more database pages than the
+        // bounded per-attempt limits below, without using large host files.
+        let mut replacement =
+            String::from("<tv><channel id='c'><display-name>Replacement</display-name></channel>");
+        for index in 0..384 {
+            let start_day = 1 + index / 24;
+            let start_hour = index % 24;
+            let stop_day = 1 + (index + 1) / 24;
+            let stop_hour = (index + 1) % 24;
+            let title = format!("{index:04}{}", "T".repeat(513));
+            replacement.push_str(&format!(
+                "<programme channel='c' start='203001{start_day:02}{start_hour:02}0000 +0000' \
+                 stop='203001{stop_day:02}{stop_hour:02}0000 +0000'>\
+                 <title>{title}</title><desc>{}</desc></programme>",
+                "D".repeat(2300),
+            ));
+        }
+        replacement.push_str("</tv>");
+        let base_pages: i64 = conn
+            .query_row("PRAGMA page_count", [], |r| r.get(0))
+            .unwrap();
+        let mut exercised = false;
+        // Search for a cap that permits an actual SQL INSERT and TEMP marker
+        // before SQLite runs out of logical pages. Bounded at 96 small probes.
+        for spare_pages in 1..=96 {
+            let limit = base_pages + spare_pages;
+            let set_limit: i64 = conn
+                .query_row(&format!("PRAGMA max_page_count={limit}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(set_limit, limit);
+            TEST_STAGED_INSERTS.with(|counter| counter.set(0));
+            TEST_STAGED_MARKERS.with(|counter| counter.set(0));
+            let failed = import_xmltv(
+                &mut conn, Cursor::new(replacement.as_bytes()),
+                "source", 2, 2, false, &cancelled,
+            );
+            let staged = TEST_STAGED_INSERTS.with(|counter| counter.get());
+            let marked = TEST_STAGED_MARKERS.with(|counter| counter.get());
+            assert_eq!(
+                failed,
+                Err(EpgError::DiskFull),
+                "a bounded synthetic guide must hit the real SQLite page limit"
+            );
+            let persisted: (i64, String, Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT COUNT(*),MIN(title),MIN(subtitle),MIN(description)
+                     FROM epg_programmes WHERE source_id='source'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(persisted, (
+                1, original_programme.0.clone(),
+                original_programme.1.clone(), original_programme.2.clone()
+            ));
+            let channel: String = conn
+                .query_row("SELECT display_name FROM epg_channels", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(channel, original_channel);
+            let metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+                .query_row(
+                    "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
+                     FROM epg_sources WHERE id='source'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(metadata, original_metadata);
+            let leaked: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_temp_master
+                     WHERE name='epg_import_truncated_rowids'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(leaked, 0, "failed import must drop transaction-local TEMP marker");
+            if staged > 0 && marked > 0 {
+                exercised = true;
+                break;
+            }
+        }
+        assert!(exercised, "SQLITE_FULL must occur after a staged INSERT and TEMP marker");
+        // Lift the imposed page limit, then retry on this very same connection.
+        conn.execute_batch("PRAGMA max_page_count=1073741823;").unwrap();
+        let retried = import_xmltv(
+            &mut conn, Cursor::new(xml("Retried")), "source", 3, 2, false, &cancelled,
+        )
+        .unwrap();
+        assert_eq!(retried.programmes, 1);
+        let (count, title): (i64, String) = conn
+            .query_row("SELECT COUNT(*),MIN(title) FROM epg_programmes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!((count, title.as_str()), (1, "Retried"));
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

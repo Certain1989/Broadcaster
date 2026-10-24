@@ -52,6 +52,7 @@ pub enum GuideServiceError {
     InvalidXml,
     Capacity(LimitKind),
     Storage,
+    DiskFull,
     Disabled,
     AlreadyRunning,
     Cancelled,
@@ -66,6 +67,7 @@ impl fmt::Display for GuideServiceError {
             Self::InvalidXml => "invalid_xml",
             Self::Capacity(kind) => return f.write_str(kind.code()),
             Self::Storage => "storage_failed",
+            Self::DiskFull => "disk_full",
             Self::Disabled => "source_disabled",
             Self::AlreadyRunning => "refresh_in_progress",
             Self::Cancelled => "cancelled",
@@ -422,6 +424,7 @@ impl GlobalGuideManager {
                 GuideServiceError::InvalidXml => "invalid_xml",
                 GuideServiceError::Capacity(kind) => kind.code(),
                 GuideServiceError::Storage => "storage_failed",
+                GuideServiceError::DiskFull => "disk_full",
                 GuideServiceError::LocalAccess => "local_access",
                 GuideServiceError::Cancelled => "cancelled",
                 GuideServiceError::Disabled => "source_disabled",
@@ -506,6 +509,7 @@ impl GlobalGuideManager {
                     EpgError::OverLimit => GuideServiceError::Fetch(GuideFetchError::Oversize),
                     EpgError::Capacity(kind) => GuideServiceError::Capacity(kind),
                     EpgError::Storage => GuideServiceError::Storage,
+                    EpgError::DiskFull => GuideServiceError::DiskFull,
                     _ => GuideServiceError::InvalidXml,
                 })?;
                 Ok::<_, GuideServiceError>(rows)
@@ -538,6 +542,14 @@ async fn local_deadline<T>(
         _ = glib::timeout_future_seconds(seconds) =>
             Err(GuideServiceError::Fetch(GuideFetchError::Timeout)),
         result = pending => result,
+    }
+}
+
+fn local_spool_error(error: std::io::Error) -> GuideServiceError {
+    if error.kind() == std::io::ErrorKind::StorageFull {
+        GuideServiceError::DiskFull
+    } else {
+        GuideServiceError::LocalAccess
     }
 }
 
@@ -578,7 +590,7 @@ async fn read_local_spooled_inner(
         .write(true)
         .create_new(true)
         .open(target)
-        .map_err(|_| GuideServiceError::LocalAccess)?;
+        .map_err(local_spool_error)?;
     let mut total = 0_u64;
     let mut magic = [0_u8; 2];
     let mut prefix = 0_usize;
@@ -620,12 +632,12 @@ async fn read_local_spooled_inner(
             return Err(GuideServiceError::Capacity(LimitKind::Wire));
         }
         out.write_all(part.as_ref())
-            .map_err(|_| GuideServiceError::LocalAccess)?;
+            .map_err(local_spool_error)?;
     }
     if total == 0 {
         return Err(GuideServiceError::InvalidXml);
     }
-    out.flush().map_err(|_| GuideServiceError::LocalAccess)?;
+    out.flush().map_err(local_spool_error)?;
     Ok(gzip)
 }
 
@@ -635,6 +647,18 @@ mod e2_admission_tests {
     use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};
     use uuid::Uuid;
+
+    #[test]
+    fn local_spool_errors_distinguish_full_from_permissions() {
+        assert_eq!(
+            local_spool_error(std::io::Error::from(std::io::ErrorKind::StorageFull)),
+            GuideServiceError::DiskFull
+        );
+        assert_eq!(
+            local_spool_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            GuideServiceError::LocalAccess
+        );
+    }
 
     fn manager() -> (PathBuf, GlobalGuideManager) {
         let dir = std::env::temp_dir().join(format!("epg-admission-{}", Uuid::new_v4()));

@@ -56,8 +56,11 @@ fn guide_problem(code: &str) -> String {
         | "oversize_channels"
         | "oversize_programmes" => gettext("The guide exceeds the XMLTV safety limits."),
         "invalid_xml" | "encoding" => gettext("The file is not valid UTF-8 XMLTV data."),
+        "disk_full" => gettext(
+            "The guide could not be saved because the disk is full. Any previously saved guide is still available."
+        ),
         "storage_failed" | "epg_storage_failed" => {
-            gettext("The guide could not be saved. Check available disk space.")
+            gettext("The guide could not be saved because of a storage error.")
         }
         "local_access" => gettext("The selected local XMLTV file cannot be opened."),
         "cancelled" => gettext("Guide refresh cancelled."),

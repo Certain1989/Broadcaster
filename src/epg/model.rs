@@ -101,6 +101,7 @@ pub enum EpgError {
     Cancelled,
     Unavailable,
     Storage,
+    DiskFull,
 }
 
 impl std::fmt::Display for EpgError {
@@ -115,6 +116,7 @@ impl std::fmt::Display for EpgError {
             Self::Cancelled => "EPG operation cancelled",
             Self::Unavailable => "EPG source is unavailable",
             Self::Storage => "EPG storage operation failed",
+            Self::DiskFull => "Not enough disk space to store the guide",
         })
     }
 }
