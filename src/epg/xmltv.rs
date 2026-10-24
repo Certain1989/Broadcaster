@@ -3,9 +3,7 @@
 
 //! Portable, bounded XMLTV parsing. Input streams and trust decisions are
 //! supplied by separate platform/network/file adapters. XML never performs I/O.
-use super::model::{
-    bounded_text, EpgError, GuideChannel, GuideSnapshot, LimitKind, Programme,
-};
+use super::model::{bounded_text, EpgError, GuideChannel, GuideSnapshot, LimitKind, Programme};
 use flate2::read::MultiGzDecoder;
 use quick_xml::{
     events::{BytesStart, Event},
