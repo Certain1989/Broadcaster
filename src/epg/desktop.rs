@@ -200,6 +200,73 @@ fn edit_field(label: &str, initial: &str, body: &gtk::Box) -> gtk::Entry {
     body.append(&line);
     entry
 }
+
+async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            let mut conn = crate::streams::storage::Storage::new()
+                .connect().map_err(|_| "Cannot open programme data")?;
+            super::bindings::set_shared_guide(
+                &mut conn,
+                super::bindings::ConfirmedGuideSelection::after_user_confirmation(),
+                Some(&source_id),
+            ).map_err(|_| "Programme guide changed or is unavailable")
+        }).await.map_err(|_| "Programme guide worker unavailable")?
+    }).await
+}
+
+fn confirm_shared_guide(
+    parent: &gtk::Window, source: GuideSource,
+    manager: GlobalGuideManager, list: gtk::Box, status: gtk::Label,
+) {
+    let dialog = adw::Dialog::new();
+    title(&dialog, &gettext("Confirm Shared Programme Guide"));
+    let body = box_column();
+    let caption = gtk::Label::new(Some(&format!(
+        "{}\n{}",
+        source.name,
+        gettext("Use this one guide as the application-wide default for all IPTV playlists without an explicit exception? Per-stream overrides still take priority.")
+    )));
+    caption.set_wrap(true);
+    body.append(&caption);
+    let failure = status_label();
+    body.append(&failure);
+    let cancel = command(&gettext("Cancel"), &body);
+    let confirm = command(&gettext("Confirm Shared Default"), &body);
+    confirm.add_css_class("suggested-action");
+    cancel.connect_clicked(glib::clone!(#[weak] dialog, move |_| dialog.close()));
+    let parent = parent.clone();
+    confirm.connect_clicked(glib::clone!(
+        #[weak] dialog, #[weak] failure, #[weak] confirm,
+        move |_| {
+            confirm.set_sensitive(false);
+            let id = source.id.clone();
+            let manager = manager.clone();
+            let list = list.clone();
+            let status = status.clone();
+            let parent = parent.clone();
+            spawn(glib::clone!(
+                #[weak] dialog, #[weak] failure, #[weak] confirm,
+                async move {
+                    match save_default_guide(id).await {
+                        Ok(()) => {
+                            dialog.close();
+                            status.set_text(&gettext("Shared guide selected"));
+                            repaint(manager, list, status, parent);
+                        }
+                        Err(reason) => {
+                            failure.set_text(&gettext(reason));
+                            confirm.set_sensitive(true);
+                        }
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.set_child(Some(&body));
+    dialog.present(Some(parent));
+}
+
 fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window) {
     spawn(async move {
         match service.list().await {
@@ -252,12 +319,27 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         }
                     }
                     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let set_default = command(&gettext("Use as Shared Default"), &buttons);
                     let refresh = command(&gettext("Refresh"), &buttons);
                     refresh.set_sensitive(source.enabled);
                     let configure = command(&gettext("Edit"), &buttons);
                     let remove = command(&gettext("Remove"), &buttons);
                     row.append(&buttons);
                     list.append(&row);
+                    let default_service = service.clone();
+                    let default_list = list.clone();
+                    let default_status = status.clone();
+                    let default_parent = parent.clone();
+                    let default_source = source.clone();
+                    set_default.connect_clicked(move |_| {
+                        confirm_shared_guide(
+                            &default_parent,
+                            default_source.clone(),
+                            default_service.clone(),
+                            default_list.clone(),
+                            default_status.clone(),
+                        );
+                    });
                     let id = source.id.clone();
                     let fetch_service = service.clone();
                     let fetch_list = list.clone();
@@ -583,6 +665,10 @@ pub async fn ensure_started() -> Result<GlobalGuideManager, super::service::Guid
         .cloned()
 }
 pub fn show_guide_manager(parent: &gtk::Window) {
+    show_guide_manager_with_close(parent, || ());
+}
+
+pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() + 'static) {
     let parent = parent.clone();
     spawn(async move {
         let service = match ensure_started().await {
@@ -640,6 +726,7 @@ pub fn show_guide_manager(parent: &gtk::Window) {
             });
         });
         dialog.set_child(Some(&body));
+        dialog.connect_closed(move |_| on_close());
         dialog.present(Some(&parent));
         repaint(service, list, status, parent);
     });
