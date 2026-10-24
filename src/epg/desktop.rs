@@ -196,7 +196,11 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                     if count == 0 {
                                         gettext("Guide refreshed")
                                     } else {
-                                        format!("{} {}", gettext("Guide refreshed."), truncation_message(count))
+                                        format!(
+                                            "{} {}",
+                                            gettext("Guide refreshed."),
+                                            truncation_message(count)
+                                        )
                                     }
                                 }
                                 Err(error) => format!(
