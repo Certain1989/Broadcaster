@@ -61,6 +61,17 @@ fn guide_problem(code: &str) -> String {
     }
 }
 
+fn truncation_message(count: usize) -> String {
+    if count == 1 {
+        gettext("One programme description was shortened to fit the 2,048-byte limit.")
+    } else {
+        format!(
+            "{count} {}",
+            gettext("programme descriptions were shortened to fit the 2,048-byte limit.")
+        )
+    }
+}
+
 fn box_column() -> gtk::Box {
     let box_ = gtk::Box::new(gtk::Orientation::Vertical, 10);
     box_.set_margin_start(16);
@@ -151,12 +162,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     if source.last_success_at.is_some() {
                         let count = service.truncated_descriptions(&source.id).await;
                         if count > 0 {
-                            let warning = gtk::Label::new(Some(&format!(
-                                "{}: {count} ({} {})",
-                                gettext("Programme descriptions shortened"),
-                                gettext("maximum"),
-                                2048,
-                            )));
+                            let warning = gtk::Label::new(Some(&truncation_message(count)));
                             warning.set_wrap(true);
                             warning.set_xalign(0.0);
                             row.append(&warning);
@@ -190,13 +196,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                     if count == 0 {
                                         gettext("Guide refreshed")
                                     } else {
-                                        format!(
-                                            "{} — {}: {count} ({} {})",
-                                            gettext("Guide refreshed"),
-                                            gettext("Programme descriptions shortened"),
-                                            gettext("maximum"),
-                                            2048,
-                                        )
+                                        format!("{} {}", gettext("Guide refreshed."), truncation_message(count))
                                     }
                                 }
                                 Err(error) => format!(
