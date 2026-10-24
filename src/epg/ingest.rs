@@ -905,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_forward_references_and_conflicting_programme_duplicates() {
+    fn validates_forward_references_and_reconciles_programme_duplicates() {
         let mut conn = db();
         let cancel = AtomicBool::new(false);
         let before = b"<tv><programme channel='c' start='20300101000000 +0000' stop='20300101010000 +0000'><title>A</title></programme><channel id='c'><display-name>Example</display-name></channel></tv>";
@@ -920,19 +920,18 @@ mod tests {
         );
         assert!(outcome.is_ok(), "{outcome:?}");
         let conflicting = b"<tv><channel id='c'><display-name>Example</display-name></channel><programme channel='c' start='20300101000000 +0000' stop='20300101010000 +0000'><title>A</title><desc>One</desc></programme><programme channel='c' start='20300101000000 +0000' stop='20300101010000 +0000'><title>A</title><desc>Two</desc></programme></tv>";
-        assert_eq!(
-            import_xmltv(
-                &mut conn,
-                Cursor::new(conflicting),
-                "source",
-                2,
-                2,
-                false,
-                &cancel
-            )
-            .unwrap_err(),
-            EpgError::InvalidSchedule
-        );
+        let stats = import_xmltv(
+            &mut conn,
+            Cursor::new(conflicting),
+            "source",
+            2,
+            2,
+            false,
+            &cancel,
+        )
+        .unwrap();
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.conflicting_duplicate_rows, 1);
         let original: (i64, Option<String>) = conn
             .query_row(
                 "SELECT COUNT(*), MIN(description) FROM epg_programmes",
@@ -1566,6 +1565,158 @@ mod tests {
         assert_eq!(count, 0, "TEMP state must be absent after import");
     }
 
+
+    // Small fabricated guides. This count represents later duplicate entries
+    // that disagree with retained metadata, not distinct programme identities.
+    fn assert_optional_duplicate_case(
+        values: &[(Option<&str>, Option<&str>)],
+        expected_subtitle: Option<&str>,
+        expected_description: Option<&str>,
+        conflicts: usize,
+    ) {
+        let mut conn = db();
+        let records = values
+            .iter()
+            .map(|(subtitle, desc)| programme("c", "Show", *subtitle, *desc))
+            .collect::<Vec<_>>()
+            .join("");
+        let input = guide(
+            "<channel id='c'><display-name>C</display-name></channel>",
+            &records,
+        );
+        let stats = import_fixture(&mut conn, &input, "source", 1, 1).unwrap();
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.conflicting_duplicate_rows, conflicts);
+        assert_eq!(stats.truncated_subtitles, 0);
+        assert_eq!(stats.truncated_descriptions, 0);
+        let saved: (Option<String>, Option<String>) = conn
+            .query_row("SELECT subtitle,description FROM epg_programmes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            saved,
+            (
+                expected_subtitle.map(str::to_owned),
+                expected_description.map(str::to_owned)
+            )
+        );
+        assert_no_temp_marker(&conn);
+
+        // Reimporting the same feed is idempotent and publishes one final count.
+        let repeated = import_fixture(&mut conn, &input, "source", 2, 2).unwrap();
+        assert_eq!(repeated.programmes, 1);
+        assert_eq!(repeated.conflicting_duplicate_rows, conflicts);
+        let again: (Option<String>, Option<String>) = conn
+            .query_row("SELECT subtitle,description FROM epg_programmes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(again, saved);
+        assert_no_temp_marker(&conn);
+    }
+
+    #[test]
+    fn optional_metadata_conflicts_are_fieldwise_and_order_invariant() {
+        assert_optional_duplicate_case(
+            &[(Some("Equal"), Some("Equal")), (Some("Equal"), Some("Equal"))],
+            Some("Equal"),
+            Some("Equal"),
+            0,
+        );
+        for reverse in [false, true] {
+            let a = (Some("A"), Some("Equal"));
+            let b = (Some("B"), Some("Equal"));
+            let values = if reverse { [b, a] } else { [a, b] };
+            assert_optional_duplicate_case(&values, None, Some("Equal"), 1);
+
+            let a = (Some("Equal"), Some("A"));
+            let b = (Some("Equal"), Some("B"));
+            let values = if reverse { [b, a] } else { [a, b] };
+            assert_optional_duplicate_case(&values, Some("Equal"), None, 1);
+
+            let a = (Some("A"), Some("C"));
+            let b = (Some("B"), Some("D"));
+            let values = if reverse { [b, a] } else { [a, b] };
+            assert_optional_duplicate_case(&values, None, None, 1);
+
+            let a = (None, Some("Equal"));
+            let b = (Some("B"), Some("Equal"));
+            let values = if reverse { [b, a] } else { [a, b] };
+            assert_optional_duplicate_case(&values, None, Some("Equal"), 1);
+
+            let a = (Some("Equal"), None);
+            let b = (Some("Equal"), Some("B"));
+            let values = if reverse { [b, a] } else { [a, b] };
+            assert_optional_duplicate_case(&values, Some("Equal"), None, 1);
+        }
+    }
+
+    #[test]
+    fn conflicting_optional_fields_remain_cleared_after_three_and_four_entries() {
+        assert_optional_duplicate_case(
+            &[(Some("A"), Some("Equal")), (Some("B"), Some("Equal")), (Some("A"), Some("Equal"))],
+            None,
+            Some("Equal"),
+            2,
+        );
+        assert_optional_duplicate_case(
+            &[(Some("C"), Some("Equal")), (Some("B"), Some("Equal")), (Some("A"), Some("Equal"))],
+            None,
+            Some("Equal"),
+            2,
+        );
+        assert_optional_duplicate_case(
+            &[
+                (Some("A"), Some("Equal")),
+                (Some("B"), Some("Equal")),
+                (Some("C"), Some("Equal")),
+                (Some("B"), Some("Equal")),
+            ],
+            None,
+            Some("Equal"),
+            3,
+        );
+        assert_optional_duplicate_case(
+            &[(None, Some("Equal")), (Some("A"), Some("Equal")), (None, Some("Equal"))],
+            None,
+            Some("Equal"),
+            1,
+        );
+        assert_optional_duplicate_case(
+            &[(Some("A"), Some("Equal")), (None, Some("Equal")), (Some("A"), Some("Equal"))],
+            None,
+            Some("Equal"),
+            2,
+        );
+        assert_optional_duplicate_case(
+            &[(None, None), (Some("A"), Some("B")), (None, None), (Some("A"), Some("B"))],
+            None,
+            None,
+            2,
+        );
+    }
+
+    #[test]
+    fn duplicate_optional_metadata_does_not_collapse_other_programmes() {
+        let mut conn = db();
+        let original = programme("c", "Show", Some("A"), Some("One"));
+        let duplicate = programme("c", "Show", Some("A"), Some("Two"));
+        let case_distinct = programme("c", "show", Some("A"), Some("Unrelated"));
+        let another_channel = programme("other", "Show", None, None);
+        let time_distinct = "<programme channel='c' start='20300101003000 +0000'
+            stop='20300101013000 +0000'><title>Show</title></programme>";
+        let input = guide(
+            "<channel id='c'><display-name>C</display-name></channel>
+             <channel id='other'><display-name>Other</display-name></channel>",
+            &format!("{original}{duplicate}{case_distinct}{another_channel}{time_distinct}"),
+        );
+        let stats = import_fixture(&mut conn, &input, "source", 1, 1).unwrap();
+        assert_eq!(stats.programmes, 4);
+        assert_eq!(stats.conflicting_duplicate_rows, 1);
+        assert_no_temp_marker(&conn);
+    }
+
     #[test]
     fn migrated_programme_table_is_a_rowid_table_and_temp_markers_do_not_leak() {
         let mut conn = db();
@@ -1606,18 +1757,23 @@ mod tests {
         assert_eq!(count, 2);
         assert_no_temp_marker(&conn);
 
-        // Two equal BINARY identities with different complete metadata conflict.
+        // Identical full key: retain the agreed description, suppress only
+        // the conflicting subtitle, and report one reconciled occurrence.
         let plain_changed = programme("c", "Plain", Some("Different"), Some("Same"));
-        let rejected = guide(c, &format!("{plain}{plain_changed}"));
-        assert_eq!(
-            import_fixture(&mut conn, &rejected, "source", 2, 2).unwrap_err(),
-            EpgError::InvalidSchedule
-        );
+        let reconciled = guide(c, &format!("{plain}{plain_changed}"));
+        let stats = import_fixture(&mut conn, &reconciled, "source", 2, 2).unwrap();
+        assert_eq!(stats.programmes, 1);
+        assert_eq!(stats.conflicting_duplicate_rows, 1);
         assert_no_temp_marker(&conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM epg_programmes", [], |r| r.get(0))
+        let saved: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT subtitle,description FROM epg_programmes WHERE title='Plain'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(count, 2, "last-good imported rows must survive conflict");
+        assert_eq!(saved, (None, Some("Same".to_owned())));
+
     }
 
     #[test]
