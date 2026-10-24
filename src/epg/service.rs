@@ -631,8 +631,7 @@ async fn read_local_spooled_inner(
         if total > limit {
             return Err(GuideServiceError::Capacity(LimitKind::Wire));
         }
-        out.write_all(part.as_ref())
-            .map_err(local_spool_error)?;
+        out.write_all(part.as_ref()).map_err(local_spool_error)?;
     }
     if total == 0 {
         return Err(GuideServiceError::InvalidXml);

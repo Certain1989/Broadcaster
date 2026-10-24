@@ -16,8 +16,8 @@ use std::{
 };
 
 const MAX_OPERATION: Duration = Duration::from_secs(90 * 60);
-// Reserve a full 2 GiB for the largest permitted plain-XML staging file.
-// The active DB (old + replacement), WAL and input therefore fit <= 8 GiB.
+// Cap only the main database plus WAL. Staging and SQLite TEMP may use
+// separate filesystems; this does not impose a total disk-footprint bound.
 const MAX_DATABASE_AND_WAL: u64 = 6 * 1024 * 1024 * 1024;
 
 #[cfg(test)]
@@ -143,7 +143,10 @@ fn observe_o01(
 fn storage_error(error: rusqlite::Error) -> EpgError {
     match error {
         rusqlite::Error::SqliteFailure(failure, _)
-            if failure.code == rusqlite::ErrorCode::DiskFull => EpgError::DiskFull,
+            if failure.code == rusqlite::ErrorCode::DiskFull =>
+        {
+            EpgError::DiskFull
+        }
         _ => EpgError::Storage,
     }
 }
@@ -393,15 +396,12 @@ mod tests {
         .into_bytes()
     }
 
-
     #[test]
     fn sqlite_full_after_staged_insert_preserves_last_good_and_same_connection_retry() {
         // A bounded, isolated real SQLite SQLITE_FULL probe. Never exhaust the
         // runner's filesystem: SQLite's logical max_page_count is the limiter.
-        let dir = std::env::temp_dir().join(format!(
-            "broadcaster-epg-full-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("broadcaster-epg-full-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         let mut conn = Connection::open(dir.join("fixture.sqlite3")).unwrap();
         conn.execute_batch(MIGRATION_001).unwrap();
@@ -414,8 +414,16 @@ mod tests {
         )
         .unwrap();
         let cancelled = AtomicBool::new(false);
-        import_xmltv(&mut conn, Cursor::new(xml("Cached")), "source", 1, 1, false, &cancelled)
-            .unwrap();
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
         let original_metadata: (Option<i64>, Option<i64>, i64, Option<String>) = conn
             .query_row(
                 "SELECT last_success_at,last_attempt_at,updated_at,last_error_code
@@ -428,9 +436,11 @@ mod tests {
             .query_row("SELECT display_name FROM epg_channels", [], |r| r.get(0))
             .unwrap();
         let original_programme: (String, Option<String>, Option<String>) = conn
-            .query_row("SELECT title,subtitle,description FROM epg_programmes", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT title,subtitle,description FROM epg_programmes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
 
         // 384 unique programmes with genuinely shortened title metadata and
@@ -467,8 +477,13 @@ mod tests {
             TEST_STAGED_INSERTS.with(|counter| counter.set(0));
             TEST_STAGED_MARKERS.with(|counter| counter.set(0));
             let failed = import_xmltv(
-                &mut conn, Cursor::new(replacement.as_bytes()),
-                "source", 2, 2, false, &cancelled,
+                &mut conn,
+                Cursor::new(replacement.as_bytes()),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled,
             );
             let staged = TEST_STAGED_INSERTS.with(|counter| counter.get());
             let marked = TEST_STAGED_MARKERS.with(|counter| counter.get());
@@ -485,10 +500,15 @@ mod tests {
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .unwrap();
-            assert_eq!(persisted, (
-                1, original_programme.0.clone(),
-                original_programme.1.clone(), original_programme.2.clone()
-            ));
+            assert_eq!(
+                persisted,
+                (
+                    1,
+                    original_programme.0.clone(),
+                    original_programme.1.clone(),
+                    original_programme.2.clone()
+                )
+            );
             let channel: String = conn
                 .query_row("SELECT display_name FROM epg_channels", [], |r| r.get(0))
                 .unwrap();
@@ -510,17 +530,30 @@ mod tests {
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(leaked, 0, "failed import must drop transaction-local TEMP marker");
+            assert_eq!(
+                leaked, 0,
+                "failed import must drop transaction-local TEMP marker"
+            );
             if staged > 0 && marked > 0 {
                 exercised = true;
                 break;
             }
         }
-        assert!(exercised, "SQLITE_FULL must occur after a staged INSERT and TEMP marker");
+        assert!(
+            exercised,
+            "SQLITE_FULL must occur after a staged INSERT and TEMP marker"
+        );
         // Lift the imposed page limit, then retry on this very same connection.
-        conn.execute_batch("PRAGMA max_page_count=1073741823;").unwrap();
+        conn.execute_batch("PRAGMA max_page_count=1073741823;")
+            .unwrap();
         let retried = import_xmltv(
-            &mut conn, Cursor::new(xml("Retried")), "source", 3, 2, false, &cancelled,
+            &mut conn,
+            Cursor::new(xml("Retried")),
+            "source",
+            3,
+            2,
+            false,
+            &cancelled,
         )
         .unwrap();
         assert_eq!(retried.programmes, 1);

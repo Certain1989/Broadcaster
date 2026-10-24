@@ -603,9 +603,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             if total > cap {
                 return Err(GuideFetchError::WireLimit);
             }
-            file.write_all(&chunk)
-                .await
-                .map_err(spool_io_error)?;
+            file.write_all(&chunk).await.map_err(spool_io_error)?;
         }
         if total == 0 || (encoding == "gzip" && header != [0x1f, 0x8b]) {
             return Err(GuideFetchError::Encoding);
