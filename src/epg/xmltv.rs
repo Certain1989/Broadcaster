@@ -888,7 +888,9 @@ mod formatted_xmltv_regression {
     fn indented_germany_sized_guide_uses_per_field_not_root_text_budget() {
         const PROGRAMMES: usize = 75_000;
         let mut xml = String::with_capacity(18_000_000);
-        xml.push_str("<tv>\n                <channel id='de'><display-name>DE</display-name></channel>\n");
+        xml.push_str(
+            "<tv>\n                <channel id='de'><display-name>DE</display-name></channel>\n",
+        );
         for i in 0..PROGRAMMES {
             writeln!(
                 &mut xml,
