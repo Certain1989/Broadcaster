@@ -706,7 +706,7 @@ fn confirm_epg_mapping(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| { dialog.close(); }
     ));
     approve.connect_clicked(glib::clone!(
         #[weak]
@@ -832,7 +832,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             close.connect_clicked(glib::clone!(
                 #[weak]
                 dialog,
-                move |_| dialog.close()
+                move |_| { dialog.close(); }
             ));
             for (button, action) in [
                 (single, MappingAction::Row),
