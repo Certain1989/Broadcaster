@@ -552,13 +552,17 @@ mod tests {
     #[test]
     fn refresh_due_uses_last_good_age_and_bounded_failure_backoff() {
         let (dir, store) = temp_store();
-        let source = store.add_with_schedule(
-            "Auto",
-            &SourceOrigin::entered_remote_url(
-                "https://example.com/epg.xml".into(), TrustScope::Public,
-            ).unwrap(),
-            true,
-        ).unwrap();
+        let source = store
+            .add_with_schedule(
+                "Auto",
+                &SourceOrigin::entered_remote_url(
+                    "https://example.com/epg.xml".into(),
+                    TrustScope::Public,
+                )
+                .unwrap(),
+                true,
+            )
+            .unwrap();
         let now = clock();
         assert!(source.auto_refresh);
         assert_eq!(store.due_source_ids(now).unwrap(), vec![source.id.clone()]);
@@ -566,7 +570,8 @@ mod tests {
         conn.execute(
             "UPDATE epg_sources SET last_attempt_at=?1 WHERE id=?2",
             params![now, source.id],
-        ).unwrap();
+        )
+        .unwrap();
         assert!(store.due_source_ids(now + 60).unwrap().is_empty());
         assert_eq!(
             store.due_source_ids(now + MIN_REFRESH_SECONDS).unwrap(),
@@ -576,13 +581,21 @@ mod tests {
             "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1 WHERE id=?2",
             params![now, source.id],
         ).unwrap();
-        assert!(store.due_source_ids(now + DEFAULT_REFRESH_SECONDS - 1).unwrap().is_empty());
+        assert!(store
+            .due_source_ids(now + DEFAULT_REFRESH_SECONDS - 1)
+            .unwrap()
+            .is_empty());
         assert_eq!(
             store.due_source_ids(now + DEFAULT_REFRESH_SECONDS).unwrap(),
             vec![source.id.clone()],
         );
-        store.set_schedule(&source.id, false, DEFAULT_REFRESH_SECONDS).unwrap();
-        assert!(store.due_source_ids(now + DEFAULT_REFRESH_SECONDS + 60).unwrap().is_empty());
+        store
+            .set_schedule(&source.id, false, DEFAULT_REFRESH_SECONDS)
+            .unwrap();
+        assert!(store
+            .due_source_ids(now + DEFAULT_REFRESH_SECONDS + 60)
+            .unwrap()
+            .is_empty());
         drop(conn);
         fs::remove_dir_all(dir).unwrap();
     }
