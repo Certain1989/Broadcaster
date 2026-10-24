@@ -7,10 +7,11 @@
 use super::{
     headroom::ImportHeadroom,
     model::{EpgError, LimitKind},
-    xmltv::{decode_xmltv_rows, StreamedRows, StreamingLimits},
+    xmltv::{decode_xmltv_rows_omitting_c1, StreamedRows, StreamingLimits},
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
+    cell::Cell,
     io::BufRead,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -212,7 +213,75 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
     )
 }
 
+// Page-count quota applies to the entire TEMP schema on this connection,
+// including the existing rowid marker and the validation-only omission ledger.
+// SQLite may roll back implicitly on SQLITE_FULL, but TEMP PRAGMA state must
+// still be restored and read back after the transaction has ended.
+const MAX_TEMP_PAGE_BYTES: i64 = 128 * 1024 * 1024;
+
+fn temp_pragma(conn: &Connection, sql: &str) -> Result<i64, EpgError> {
+    conn.query_row(sql, [], |row| row.get(0))
+        .map_err(storage_error)
+}
+
+fn restore_temp_page_limit(conn: &Connection, previous: i64) -> Result<(), EpgError> {
+    let written = temp_pragma(conn, &format!("PRAGMA temp.max_page_count={previous}"))?;
+    let read = temp_pragma(conn, "PRAGMA temp.max_page_count")?;
+    if written != previous || read != previous {
+        return Err(EpgError::Storage);
+    }
+    Ok(())
+}
+
 fn import_xmltv_inner<R: BufRead>(
+    conn: &mut Connection,
+    input: R,
+    source_id: &str,
+    retrieved_utc: i64,
+    expected_revision: i64,
+    gzip: bool,
+    checks: ImportChecks<'_>,
+) -> Result<StreamedRows, EpgError> {
+    let previous = temp_pragma(conn, "PRAGMA temp.max_page_count")?;
+    let page_size = temp_pragma(conn, "PRAGMA temp.page_size")?;
+    let allocated = temp_pragma(conn, "PRAGMA temp.page_count")?;
+    if previous <= 0 || page_size <= 0 || allocated < 0 {
+        return Err(EpgError::Storage);
+    }
+    let ceiling = MAX_TEMP_PAGE_BYTES / page_size;
+    if ceiling <= 0 {
+        return Err(EpgError::Storage);
+    }
+    if allocated > ceiling {
+        return Err(EpgError::DiskFull);
+    }
+    // Never raise a pre-existing, stricter per-connection TEMP cap.
+    let target = previous.min(ceiling);
+    let applied = temp_pragma(conn, &format!("PRAGMA temp.max_page_count={target}"));
+    if !matches!(applied, Ok(value) if value == target)
+        || temp_pragma(conn, "PRAGMA temp.max_page_count") != Ok(target)
+    {
+        restore_temp_page_limit(conn, previous)?;
+        return Err(EpgError::Storage);
+    }
+
+    let result = import_xmltv_scoped(
+        conn,
+        input,
+        source_id,
+        retrieved_utc,
+        expected_revision,
+        gzip,
+        checks,
+    );
+    // An unsuccessful SQLite statement can implicitly undo the transaction;
+    // restoration must therefore take place on the outer connection.
+    // A failed restoration forbids claiming this connection is reusable.
+    restore_temp_page_limit(conn, previous)?;
+    result
+}
+
+fn import_xmltv_scoped<R: BufRead>(
     conn: &mut Connection,
     input: R,
     source_id: &str,
@@ -264,12 +333,21 @@ fn import_xmltv_inner<R: BufRead>(
     tx.execute_batch(
         "CREATE TEMP TABLE epg_import_truncated_rowids (
             programme_rowid INTEGER PRIMARY KEY
-         );",
+         );
+         CREATE TEMP TABLE epg_import_omissions (
+            source_id TEXT COLLATE BINARY NOT NULL,
+            channel_id TEXT COLLATE BINARY NOT NULL,
+            start_utc INTEGER NOT NULL,
+            stop_utc INTEGER NOT NULL,
+            title TEXT COLLATE BINARY NOT NULL,
+            shortened INTEGER NOT NULL CHECK(shortened IN (0,1)),
+            PRIMARY KEY(source_id,channel_id,start_utc,stop_utc,title)
+         ) WITHOUT ROWID;",
     )
     .map_err(storage_error)?;
     #[cfg(test)]
     let mut marked = 0_usize;
-    let mut parsed = 0_usize;
+    let parsed = Cell::new(0_usize);
     let mut retained = 0_usize;
     let mut retained_title_shortened = 0_usize;
     let mut retained_subtitle_shortened = 0_usize;
@@ -293,7 +371,18 @@ fn import_xmltv_inner<R: BufRead>(
         }
         Ok(())
     };
-    let mut rows = decode_xmltv_rows(
+    let note_candidate = || -> Result<(), EpgError> {
+        let n = parsed.get().saturating_add(1);
+        parsed.set(n);
+        if n.is_multiple_of(1024) {
+            check_budget()?;
+        }
+        if n.is_multiple_of(4096) && headroom.is_some_and(|guard| !guard.active()) {
+            return Err(EpgError::DiskFull);
+        }
+        Ok(())
+    };
+    let mut rows = decode_xmltv_rows_omitting_c1(
         input,
         source_id,
         retrieved_utc,
@@ -310,12 +399,21 @@ fn import_xmltv_inner<R: BufRead>(
             Ok(())
         },
         |p, shortened| {
-            parsed += 1;
-            if parsed.is_multiple_of(1024) {
-                check_budget()?;
-            }
-            if parsed.is_multiple_of(4096) && headroom.is_some_and(|guard| !guard.active()) {
-                return Err(EpgError::DiskFull);
+            note_candidate()?;
+            // An earlier omitted candidate may still have a key that would
+            // fatally collide with this now-retained programme.
+            let omitted_shortened: Option<i64> = tx
+                .query_row(
+                    "SELECT shortened FROM temp.epg_import_omissions
+                     WHERE source_id=?1 AND channel_id=?2 AND start_utc=?3
+                       AND stop_utc=?4 AND title=?5",
+                    params![p.source_id, p.channel_id, p.start_utc, p.stop_utc, p.title],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            if omitted_shortened.is_some_and(|prior| shortened.any() || prior != 0) {
+                return Err(EpgError::InvalidSchedule);
             }
             let inserted_rowid: Option<i64> = tx
                 .query_row(
@@ -405,6 +503,82 @@ fn import_xmltv_inner<R: BufRead>(
             }
             Ok(())
         },
+        |omitted, shortened| {
+            note_candidate()?;
+            let prior_omitted: Option<i64> = tx
+                .query_row(
+                    "SELECT shortened FROM temp.epg_import_omissions
+                     WHERE source_id=?1 AND channel_id=?2 AND start_utc=?3
+                       AND stop_utc=?4 AND title=?5",
+                    params![
+                        omitted.source_id,
+                        omitted.channel_id,
+                        omitted.start_utc,
+                        omitted.stop_utc,
+                        omitted.title
+                    ],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            if prior_omitted.is_some_and(|prior| shortened.any() || prior != 0) {
+                return Err(EpgError::InvalidSchedule);
+            }
+            // Retained rows can also have arrived before the omitted candidate.
+            // Never allow either side's shortened key/optional provenance to
+            // make an otherwise fatal duplicate appear harmless.
+            let retained_rowid: Option<i64> = tx
+                .query_row(
+                    "SELECT rowid FROM epg_programmes
+                     WHERE source_id=?1 AND channel_id=?2 AND start_utc=?3
+                       AND stop_utc=?4 AND title=?5",
+                    params![
+                        omitted.source_id,
+                        omitted.channel_id,
+                        omitted.start_utc,
+                        omitted.stop_utc,
+                        omitted.title
+                    ],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(storage_error)?;
+            if let Some(rowid) = retained_rowid {
+                if shortened.any() {
+                    return Err(EpgError::InvalidSchedule);
+                }
+                let prior_shortened: i64 = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM temp.epg_import_truncated_rowids
+                         WHERE programme_rowid=?1)",
+                        [rowid],
+                        |r| r.get(0),
+                    )
+                    .map_err(storage_error)?;
+                if prior_shortened != 0 {
+                    return Err(EpgError::InvalidSchedule);
+                }
+            }
+            // Only one indexed identity per distinct key; harmless fully
+            // unshortened repeated omissions still count as separate elements.
+            if prior_omitted.is_none() {
+                tx.execute(
+                    "INSERT INTO temp.epg_import_omissions
+                     (source_id,channel_id,start_utc,stop_utc,title,shortened)
+                     VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![
+                        omitted.source_id,
+                        omitted.channel_id,
+                        omitted.start_utc,
+                        omitted.stop_utc,
+                        omitted.title,
+                        i64::from(shortened.any())
+                    ],
+                )
+                .map_err(storage_error)?;
+            }
+            Ok(())
+        },
     )?;
     // The parser saw candidates, but only committed, unique programme rows
     // contribute to the displayed retained-row counts.
@@ -429,6 +603,21 @@ fn import_xmltv_inner<R: BufRead>(
     if dangling != 0 {
         return Err(EpgError::MissingChannel);
     }
+    let omitted_dangling: i64 = tx
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM temp.epg_import_omissions o
+                LEFT JOIN epg_channels c
+                    ON c.source_id=o.source_id AND c.channel_id=o.channel_id
+                WHERE c.channel_id IS NULL LIMIT 1
+            )",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(storage_error)?;
+    if omitted_dangling != 0 {
+        return Err(EpgError::MissingChannel);
+    }
     tx.execute(
         "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1,
          last_error_code=NULL,updated_at=MAX(updated_at+1,?1) WHERE id=?2",
@@ -438,10 +627,13 @@ fn import_xmltv_inner<R: BufRead>(
     check_budget()?;
     #[cfg(test)]
     if TEST_O01_ENABLED.with(|enabled| enabled.get()) {
-        let observation = observe_o01(&tx, &database, parsed, retained, marked, started);
+        let observation = observe_o01(&tx, &database, parsed.get(), retained, marked, started);
         TEST_O01_OBSERVATION.with(|slot| *slot.borrow_mut() = Some(observation));
     }
-    tx.execute_batch("DROP TABLE temp.epg_import_truncated_rowids;")
+    tx.execute_batch(
+        "DROP TABLE temp.epg_import_omissions;
+         DROP TABLE temp.epg_import_truncated_rowids;",
+    )
         .map_err(storage_error)?;
     // Final check after all SQL writes and TEMP cleanup, before COMMIT.
     // SQLite's typed FULL/IOERR results remain the final defence.
@@ -954,6 +1146,7 @@ mod tests {
                 truncated_subtitles: 0,
                 truncated_channel_names: 0,
                 conflicting_duplicate_rows: 0,
+                omitted_c1_programmes: 0,
             }
         );
         let failed = import_xmltv(
