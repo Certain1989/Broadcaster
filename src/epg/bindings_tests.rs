@@ -475,9 +475,12 @@ fn large_guide_indexed_targets_and_bounded_suggestions() {
                 "exact match at {size} for {row}"
             );
         }
-        assert!(matches!(resolve(&c, "z1"),
+        assert!(
+            matches!(resolve(&c, "z1"),
             MatchDecision::Matched { method: MatchMethod::ExactTvgId, channel_id, .. }
-            if channel_id == "z-LAST"), "last sorted ID at {size}");
+            if channel_id == "z-LAST"),
+            "last sorted ID at {size}"
+        );
         // Both name candidates sit at the first and final sorted positions;
         // the second is beyond the 10k suggestion cap in larger catalogues.
         // Nonbinding uniqueness must never be inferred from a truncated subset.
