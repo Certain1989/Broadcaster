@@ -875,7 +875,6 @@ where
     Ok(rows)
 }
 
-
 #[cfg(test)]
 mod formatted_xmltv_regression {
     use super::{decode_xmltv_rows, StreamingLimits};
