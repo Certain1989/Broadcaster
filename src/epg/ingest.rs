@@ -199,6 +199,7 @@ pub fn import_xmltv<R: BufRead>(
          );",
     )
     .map_err(storage_error)?;
+    #[cfg(test)]
     let mut marked = 0_usize;
     let mut parsed = 0_usize;
     let mut retained = 0_usize;
@@ -277,7 +278,10 @@ pub fn import_xmltv<R: BufRead>(
                         [programme_rowid],
                     )
                     .map_err(storage_error)?;
-                    marked += 1;
+                    #[cfg(test)]
+                    {
+                        marked += 1;
+                    }
                     #[cfg(test)]
                     TEST_STAGED_MARKERS.with(|count| count.set(count.get() + 1));
                 }
