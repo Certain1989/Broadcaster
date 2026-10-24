@@ -235,9 +235,19 @@ fn restore_temp_page_limit(conn: &Connection, previous: i64) -> Result<(), EpgEr
 
 #[cfg(test)]
 std::thread_local! {
-    // One-shot failure after all staged SQL and TEMP drops, while COMMIT is
-    // still abortable. Each test thread owns its fault; no shared DB hooks.
+    // One-shot faults are confined to their current test thread.
     static TEST_PRECOMMIT_RESTORE_FAILURE: Cell<bool> = const { Cell::new(false) };
+    // Simulates an unrecoverable outer restoration so the caller must
+    // discard the connection rather than claiming it is clean.
+    static TEST_OUTER_RESTORE_FAILURE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn restore_after_error(conn: &Connection, previous: i64) -> Result<(), EpgError> {
+    #[cfg(test)]
+    if TEST_OUTER_RESTORE_FAILURE.with(|fault| fault.replace(false)) {
+        return Err(EpgError::Storage);
+    }
+    restore_temp_page_limit(conn, previous)
 }
 
 fn restore_before_commit(tx: &rusqlite::Transaction<'_>, previous: i64) -> Result<(), EpgError> {
@@ -276,7 +286,7 @@ fn import_xmltv_inner<R: BufRead>(
     if !matches!(applied, Ok(value) if value == target)
         || temp_pragma(conn, "PRAGMA temp.max_page_count") != Ok(target)
     {
-        restore_temp_page_limit(conn, previous)?;
+        restore_after_error(conn, previous)?;
         return Err(EpgError::Storage);
     }
 
@@ -297,7 +307,7 @@ fn import_xmltv_inner<R: BufRead>(
     // The successful path already restored the limit before COMMIT: do not
     // turn durable success into a failed refresh via another fallible PRAGMA.
     if result.is_err() {
-        restore_temp_page_limit(conn, previous)?;
+        restore_after_error(conn, previous)?;
     }
     result
 }
@@ -903,6 +913,78 @@ mod tests {
             temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(),
             initial_limit
         );
+    }
+
+    #[test]
+    fn unrecoverable_temp_restore_reports_error_and_discarded_file_connection() {
+        let dir =
+            std::env::temp_dir().join(format!("broadcaster-epg-restore-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("fixture.sqlite3");
+        let mut conn = Connection::open(&path).unwrap();
+        conn.execute_batch(MIGRATION_001).unwrap();
+        conn.execute_batch(MIGRATION_002).unwrap();
+        conn.execute(
+            "INSERT INTO epg_sources
+             (id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES ('source','Fabricated','local_file','/synthetic',1,1)",
+            [],
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        import_xmltv(
+            &mut conn,
+            Cursor::new(xml("Cached")),
+            "source",
+            1,
+            1,
+            false,
+            &cancelled,
+        )
+        .unwrap();
+        let prior_cap = temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap();
+        TEST_PRECOMMIT_RESTORE_FAILURE.with(|fault| fault.set(true));
+        TEST_OUTER_RESTORE_FAILURE.with(|fault| fault.set(true));
+        assert_eq!(
+            import_xmltv(
+                &mut conn,
+                Cursor::new(xml(&"Changed".repeat(74))),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled,
+            ),
+            Err(EpgError::Storage),
+        );
+        assert!(!TEST_PRECOMMIT_RESTORE_FAILURE.with(|fault| fault.get()));
+        assert!(!TEST_OUTER_RESTORE_FAILURE.with(|fault| fault.get()));
+        // The simulated un-restorable connection is NOT proven reusable.
+        assert_ne!(
+            temp_pragma(&conn, "PRAGMA temp.max_page_count").unwrap(),
+            prior_cap,
+        );
+        assert!(conn.is_autocommit());
+        // Production service creates and discards a dedicated importer
+        // connection per refresh. Do likewise after this terminal error.
+        drop(conn);
+        let reopened = Connection::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .query_row("SELECT title FROM epg_programmes", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "Cached",
+        );
+        let success: (Option<i64>, i64) = reopened
+            .query_row(
+                "SELECT last_success_at,updated_at FROM epg_sources WHERE id='source'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(success, (Some(1), 2));
+        drop(reopened);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
