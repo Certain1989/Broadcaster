@@ -228,6 +228,15 @@ struct ParseState {
     capturing: Option<String>,
 }
 
+// Uniform decoded-scalar rule for element text and *every* attribute value.
+// Only direct programme-description text can opt into D27's C1 omission.
+fn forbidden_xml_control(c: char, direct_desc: bool) -> bool {
+    let u = c as u32;
+    (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
+        || u == 0x7f
+        || ((0x80..=0x9f).contains(&u) && !direct_desc)
+}
+
 fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError> {
     let mut attributes = BTreeMap::new();
     for item in tag.attributes().with_checks(true) {
@@ -237,6 +246,11 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
         }
         let key = std::str::from_utf8(item.key.as_ref()).map_err(|_| EpgError::InvalidInput)?;
         let value = item.unescape_value().map_err(|_| EpgError::InvalidInput)?;
+        // Validate decoded values even when the attribute is not interpreted.
+        // An XML attribute is never eligible for direct-desc C1 omission.
+        if value.chars().any(|c| forbidden_xml_control(c, false)) {
+            return Err(EpgError::InvalidInput);
+        }
         if key.starts_with("xmlns") && value.contains("www.w3.org/2001/XInclude") {
             return Err(EpgError::InvalidInput);
         }
@@ -359,14 +373,10 @@ impl ParseState {
             && self.tags[2] == "desc";
         let mut contains_c1 = false;
         for c in text.chars() {
-            let u = c as u32;
-            if (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
-                || u == 0x7f
-                || ((0x80..=0x9f).contains(&u) && !direct_desc)
-            {
+            if forbidden_xml_control(c, direct_desc) {
                 return Err(EpgError::InvalidInput);
             }
-            contains_c1 |= (0x80..=0x9f).contains(&u);
+            contains_c1 |= (0x80..=0x9f).contains(&(c as u32));
         }
         if contains_c1 {
             if let Some(programme) = self.programme.as_mut() {
@@ -1129,7 +1139,10 @@ where
 
 #[cfg(test)]
 mod formatted_xmltv_regression {
-    use super::{decode_xmltv_rows, EpgError, LimitKind, StreamingLimits};
+    use super::{
+        decode_xmltv_rows, decode_xmltv_rows_omitting_c1, EpgError, LimitKind, StreamedRows,
+        StreamingLimits,
+    };
     use std::{fmt::Write as _, io::Cursor, sync::atomic::AtomicBool};
 
     /// Mirrors ordinary indented XMLTV with roughly 75,000 programmes.
@@ -1497,5 +1510,76 @@ mod formatted_xmltv_regression {
             |_, _| Ok(()),
         );
         assert_eq!(outcome.unwrap_err(), EpgError::Capacity(LimitKind::XmlText));
+    }
+ 
+    // Only the direct programme <desc> element's text is eligible for D27
+    // omission. Parsed/ignored attributes must all obey the strict text rule.
+    fn parse_with_c1_omission(input: &str) -> Result<StreamedRows, EpgError> {
+        decode_xmltv_rows_omitting_c1(
+            Cursor::new(input.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |_| Ok(()),
+            |_, _| Ok(()),
+            |_, _| Ok(()),
+        )
+    }
+
+    fn attribute_fixture() -> String {
+        "<tv><channel id='c'><display-name>Channel</display-name></channel>\
+         <programme channel='c' start='20300101000000 +0000'\
+         stop='20300101010000 +0000'><title>Omitted</title>\
+         <desc>bad&#x85;text</desc></programme>\
+         <programme channel='c' start='20300101010000 +0000'\
+         stop='20300101020000 +0000'><title>Retained</title></programme></tv>"
+            .to_owned()
+    }
+
+    #[test]
+    fn decoded_controls_in_recognized_and_ignored_attributes_are_fatal() {
+        let base = attribute_fixture();
+        let good = parse_with_c1_omission(&base).unwrap();
+        assert_eq!((good.programmes, good.omitted_c1_programmes), (1, 1));
+        for bad in ["&#x85;", "&#133;", "\u{0085}", "&#x1;", "&#x7F;", "\u{007f}"] {
+            for xml in [
+                base.replacen("<tv>", &format!("<tv data-ignored='{bad}'>"), 1),
+                base.replacen("<channel id='c'>", &format!("<channel id='c' data-ignored='{bad}'>"), 1),
+                base.replacen(
+                    "<programme channel='c'",
+                    &format!("<programme data-ignored='{bad}' channel='c'"),
+                    1,
+                ),
+                base.replacen("<desc>", &format!("<desc data-ignored='{bad}'>"), 1),
+                base.replacen(
+                    "<title>Retained</title>",
+                    &format!("<title data-ignored='{bad}'>Retained</title>"),
+                    1,
+                ),
+                base.replacen("<channel id='c'>", &format!("<channel id='{bad}'>"), 1),
+            ] {
+                assert_eq!(
+                    parse_with_c1_omission(&xml),
+                    Err(EpgError::InvalidInput),
+                    "unexpected acceptance of forbidden decoded attribute scalar",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn allowed_attribute_whitespace_and_unicode_preserve_direct_desc_omission() {
+        let base = attribute_fixture();
+        for value in ["\t\n\r", "&#x9;&#xA;&#xD;", "café漢字🛰️", "&#xE9;"] {
+            let xml = base.replacen(
+                "<tv>",
+                &format!("<tv data-ignored='{value}'>"),
+                1,
+            );
+            let stats = parse_with_c1_omission(&xml).unwrap();
+            assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 1));
+        }
     }
 }
