@@ -1168,7 +1168,10 @@ mod formatted_xmltv_regression {
             assert_eq!(p.stop_utc - p.start_utc, 3600);
             assert_eq!(p.title, "Ordinary");
             assert_eq!(c.display_name, "N".repeat(bytes.min(512)));
-            assert_eq!(p.subtitle.as_deref(), Some("S".repeat(bytes.min(512)).as_str()));
+            assert_eq!(
+                p.subtitle.as_deref(),
+                Some("S".repeat(bytes.min(512)).as_str())
+            );
             assert_eq!(stats.truncated_channel_names, usize::from(bytes > 512));
             assert_eq!(stats.truncated_subtitles, usize::from(bytes > 512));
             assert_eq!(stats.truncated_titles, 0);
