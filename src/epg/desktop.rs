@@ -133,6 +133,17 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
             gettext("repeated programme entries had conflicting optional metadata; inconsistent fields were omitted."),
         ));
     }
+    if counts.omitted_c1_programmes == 1 {
+        messages.push(gettext(
+            "One programme was omitted because its description contains unsupported control characters.",
+        ));
+    } else if counts.omitted_c1_programmes > 1 {
+        messages.push(format!(
+            "{} {}",
+            counts.omitted_c1_programmes,
+            gettext("programmes were omitted because their descriptions contain unsupported control characters."),
+        ));
+    }
     messages
 }
 
