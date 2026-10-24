@@ -18,8 +18,8 @@ struct Space {
     id: Option<String>,
 }
 
-/// Query the parent directory because a freshly generated spool need not exist.
-/// GIO may not report filesystem attributes inside a portal or sandbox.
+// A freshly generated spool need not exist, so probe its parent directory.
+// GIO may not report filesystem attributes inside a portal or sandbox.
 #[cfg(test)]
 std::thread_local! {
     static TEST_SPACE: std::cell::RefCell<Option<(PathBuf, std::collections::VecDeque<Option<u64>>)>> =
