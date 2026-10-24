@@ -189,5 +189,8 @@ fn full_fold_handles_greek_sigma_and_expansions_without_stripping_variants() {
     assert_eq!(normalized_name("ﬃ"), "ffi");
     assert_eq!(normalized_name("  STRAẞE  \u{2003} NEWS  "), "strasse news");
     assert_ne!(normalized_name("Channel HD"), normalized_name("Channel"));
-    assert_ne!(normalized_name("Station Berlin"), normalized_name("Station"));
+    assert_ne!(
+        normalized_name("Station Berlin"),
+        normalized_name("Station")
+    );
 }
