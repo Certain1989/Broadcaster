@@ -1192,8 +1192,11 @@ mod playback_navigation_tests {
             !window.focus_boundary_key(gtk::gdk::Key::Right),
             "collapsed row must retain native arrow behavior"
         );
+        eprintln!("E4 before activation: {}", streams.remote_action_test_state());
         streams.remote_action_test_activate();
+        eprintln!("E4 after activation: {}", streams.remote_action_test_state());
         spin();
+        eprintln!("E4 after animation: {}", streams.remote_action_test_state());
         let buttons = streams
             .remote_action_test_buttons()
             .expect("expanded selected row must be bound");
