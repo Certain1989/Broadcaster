@@ -1163,7 +1163,7 @@ impl TvStreamsView {
         for (key, slot) in due {
             self.request_epg_for_slot(key, &slot);
         }
-        if ticks % 5 != 0 || imp.epg_poll_busy.replace(true) {
+        if !ticks.is_multiple_of(5) || imp.epg_poll_busy.replace(true) {
             return;
         }
         let Some(worker) = imp.projection.get().cloned() else {
