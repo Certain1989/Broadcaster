@@ -120,3 +120,25 @@ fn sqlite_data_version_detects_external_writes_not_own_connection() {
     drop(writer);
     let _ = std::fs::remove_file(path);
 }
+
+#[tokio::test]
+async fn cancelling_waiting_row_releases_ticket_without_a_worker_permit() {
+    let service = ProjectionService::new();
+    let held = service.hold_all_permits_for_test().await;
+    let token = Arc::new(AtomicBool::new(false));
+    let worker = service.clone();
+    let cancel = token.clone();
+    let pending = tokio::spawn(async move {
+        worker.read("synthetic-row".into(), 1_800_000_000, cancel).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert_eq!(service.pending(), 1);
+    token.store(true, std::sync::atomic::Ordering::Release);
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), pending)
+        .await
+        .expect("canceled wait must return without any permit release")
+        .expect("worker join");
+    assert!(matches!(outcome, ProjectionOutcome::Cancelled));
+    assert_eq!(service.pending(), 0);
+    drop(held);
+}
