@@ -240,6 +240,11 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
     )
     .unwrap();
     conn.execute(
+        "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES ('selected','Unique.xml@HD','Distinct Station')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
         "UPDATE epg_settings SET shared_guide_source_id='selected' WHERE singleton=1",
         [],
     )
@@ -250,6 +255,7 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
         ("three", "zdf@HD"),
         ("four", "ZDF"),
         ("five", ""),
+        ("hint", "Case-Sensitive.Original"),
     ] {
         conn.execute(
             "INSERT INTO iptv_channels(id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
@@ -258,6 +264,11 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
         )
         .unwrap();
     }
+    conn.execute(
+        "UPDATE iptv_channels SET imported_name='Distinct Station' WHERE id='hint'",
+        [],
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO epg_channel_overrides(iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
          VALUES ('two','selected','ZDF',1)",
@@ -268,7 +279,19 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
     let review = load_guide_review(&mut conn, "selected", &cancel).unwrap();
     assert_eq!(review.guide_source_id, "selected");
     assert_eq!(review.last_success_at, 99);
-    assert_eq!(review.counts.playlist_rows, 5);
+    assert_eq!(review.counts.playlist_rows, 6);
+    // The pre-existing case-distinct zdf@HD row is also a name-only hint.
+    assert_eq!(review.counts.name_only, 2);
+    assert_eq!(review.name_only_hints.len(), 2);
+    assert!(!review.name_only_truncated);
+    let hint = review
+        .name_only_hints
+        .iter()
+        .find(|candidate| candidate.original_tvg_id == "Case-Sensitive.Original")
+        .expect("unlinked name hint must be separately inspectable");
+    assert_eq!(hint.imported_name, "Distinct Station");
+    assert_eq!(hint.full_xmltv_id, "Unique.xml@HD");
+    assert_eq!(hint.guide_display_name, "Distinct Station");
     assert_eq!(review.counts.manual_or_alias, 1);
     assert_eq!(review.counts.exact_ids, 1);
     assert_eq!(review.counts.no_imported_id, 1);
@@ -291,4 +314,17 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
         load_guide_review(&mut conn, "selected", &cancel),
         Err(ReviewLoadError::Unavailable)
     ));
+    conn.execute("UPDATE epg_sources SET enabled=1 WHERE id='selected'", [])
+        .unwrap();
+    conn.execute(
+        "DELETE FROM epg_channels WHERE source_id='selected' AND channel_id='Unique.xml@HD'",
+        [],
+    )
+    .unwrap();
+    let after_deletion = load_guide_review(&mut conn, "selected", &cancel).unwrap();
+    assert_eq!(after_deletion.counts.name_only, 1);
+    assert!(after_deletion
+        .name_only_hints
+        .iter()
+        .all(|candidate| candidate.original_tvg_id != "Case-Sensitive.Original"));
 }

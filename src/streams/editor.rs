@@ -1177,6 +1177,54 @@ fn populate_guide_review_page(
     }
 }
 
+/// Never creates check buttons or alias choices: a name resemblance is only
+/// an explanation to inspect, not evidence of an identical broadcast schedule.
+fn populate_read_only_name_hints_page(
+    review: &crate::epg::candidates::GuideReview,
+    page: usize,
+    rows: &gtk::Box,
+    navigation: &gtk::Label,
+) {
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    let count = review.name_only_hints.len();
+    let start = page.saturating_mul(GUIDE_REVIEW_PAGE_SIZE).min(count);
+    let end = (start + GUIDE_REVIEW_PAGE_SIZE).min(count);
+    navigation.set_text(&format!(
+        "{} {}–{} / {}{} · {}",
+        gettext("Read-only name hints"),
+        start.saturating_add(usize::from(count != 0)),
+        end,
+        count,
+        if review.name_only_truncated {
+            gettext(" (additional hints not loaded; narrow the playlist)")
+        } else {
+            String::new()
+        },
+        gettext("Cannot be selected or applied as aliases")
+    ));
+    for hint in &review.name_only_hints[start..end] {
+        label(
+            &format!(
+                "{}: {} · {}: {}\n{}: {} · {}: {}\n{}: {} · {}",
+                gettext("Original M3U tvg-id"),
+                hint.original_tvg_id,
+                gettext("Playlist channel name"),
+                hint.imported_name,
+                gettext("Complete XMLTV ID"),
+                hint.full_xmltv_id,
+                gettext("XMLTV channel name"),
+                hint.guide_display_name,
+                gettext("Selected guide"),
+                review.guide_source_id,
+                gettext("Name similarity only — no alias action")
+            ),
+            rows,
+        );
+    }
+}
+
 async fn compute_guide_review(
     guide: String,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1496,6 +1544,9 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
     let previous = gtk::Button::with_label(&gettext("Previous page"));
     let next = gtk::Button::with_label(&gettext("Next page"));
     let preview = gtk::Button::with_label(&gettext("Preview selected aliases"));
+    let inspect_hints = gtk::ToggleButton::with_label(&gettext("Inspect name-only hints"));
+    inspect_hints.set_sensitive(false);
+    controls.append(&inspect_hints);
     let close = gtk::Button::with_label(&gettext("Close"));
     for control in [&previous, &next, &preview, &close] {
         control.set_sensitive(control == &close);
@@ -1527,6 +1578,8 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
         #[weak]
         preview,
         #[weak]
+        inspect_hints,
+        #[weak]
         list,
         #[weak]
         position,
@@ -1538,10 +1591,31 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
             match compute_guide_review(guide.clone(), cancelled.clone()).await {
                 Ok(review) if !cancelled.load(std::sync::atomic::Ordering::Acquire) => {
                     let c = &review.counts;
+                    let timestamp = crate::utils::format_timestamp_full(review.last_success_at)
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| gettext("Unknown local time"));
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |duration| duration.as_secs() as i64);
+                    let freshness = if review.last_success_at > now {
+                        gettext("Guide import time is in the future; freshness unknown")
+                    } else {
+                        let age = now - review.last_success_at;
+                        if age > 259_200 {
+                            gettext("Guide is stale (over 3 days); check refresh status before trusting schedules")
+                        } else if age > 129_600 {
+                            gettext("Guide is aging (over 36 hours); schedules may be incomplete")
+                        } else {
+                            gettext(
+                                "Guide recently imported; schedule completeness is not guaranteed",
+                            )
+                        }
+                    };
                     overview.set_text(&format!(
-                        "{}: {} • {}: {}\n{}: {} • {}: {} • {}: {}\n{}: {} • {}: {} • {}: {} • {}: {}\n{}: {}",
+                        "{}: {} • {}: {}\n{}\n{}: {} • {}: {} • {}: {}\n{}: {} • {}: {} • {}: {} • {}: {}\n{}: {}",
                         gettext("Selected guide"), review.guide_source_id,
-                        gettext("Last successful import (UTC timestamp)"), review.last_success_at,
+                        gettext("Last successful import (local)"), timestamp,
+                        freshness,
                         gettext("Selected playlist rows"), c.playlist_rows,
                         gettext("Manual/confirmed"), c.manual_or_alias,
                         gettext("Exact IDs"), c.exact_ids,
@@ -1563,11 +1637,41 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                         }
                     }
                     let current = std::rc::Rc::new(std::cell::Cell::new(0usize));
+                    let read_only_hints = std::rc::Rc::new(std::cell::Cell::new(false));
                     populate_guide_review_page(&review, 0, &list, &position, &selected);
-                    let pages = review.proposals.len().div_ceil(GUIDE_REVIEW_PAGE_SIZE);
                     previous.set_sensitive(false);
-                    next.set_sensitive(pages > 1);
+                    next.set_sensitive(review.proposals.len() > GUIDE_REVIEW_PAGE_SIZE);
                     preview.set_sensitive(!review.proposals.is_empty());
+                    inspect_hints.set_sensitive(!review.name_only_hints.is_empty());
+                    inspect_hints.connect_toggled({
+                        let review = review.clone();
+                        let selected = selected.clone();
+                        let current = current.clone();
+                        let read_only_hints = read_only_hints.clone();
+                        let list = list.clone();
+                        let position = position.clone();
+                        let previous = previous.clone();
+                        let next = next.clone();
+                        let preview = preview.clone();
+                        move |button| {
+                            let hints = button.is_active();
+                            read_only_hints.set(hints);
+                            current.set(0);
+                            if hints {
+                                populate_read_only_name_hints_page(&review, 0, &list, &position);
+                            } else {
+                                populate_guide_review_page(&review, 0, &list, &position, &selected);
+                            }
+                            let count = if hints {
+                                review.name_only_hints.len()
+                            } else {
+                                review.proposals.len()
+                            };
+                            previous.set_sensitive(false);
+                            next.set_sensitive(count > GUIDE_REVIEW_PAGE_SIZE);
+                            preview.set_sensitive(!hints && !review.proposals.is_empty());
+                        }
+                    });
                     for (button, increment) in [(&previous, false), (&next, true)] {
                         let review = review.clone();
                         let selected = selected.clone();
@@ -1576,7 +1680,15 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                         let position = position.clone();
                         let previous = previous.clone();
                         let next = next.clone();
+                        let read_only_hints = read_only_hints.clone();
                         button.connect_clicked(move |_| {
+                            let hints = read_only_hints.get();
+                            let pages = (if hints {
+                                review.name_only_hints.len()
+                            } else {
+                                review.proposals.len()
+                            })
+                            .div_ceil(GUIDE_REVIEW_PAGE_SIZE);
                             let new_page = if increment {
                                 current.get().saturating_add(1)
                             } else {
@@ -1586,9 +1698,15 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                                 return;
                             }
                             current.set(new_page);
-                            populate_guide_review_page(
-                                &review, new_page, &list, &position, &selected,
-                            );
+                            if hints {
+                                populate_read_only_name_hints_page(
+                                    &review, new_page, &list, &position,
+                                );
+                            } else {
+                                populate_guide_review_page(
+                                    &review, new_page, &list, &position, &selected,
+                                );
+                            }
                             previous.set_sensitive(new_page > 0);
                             next.set_sensitive(new_page + 1 < pages);
                         });

@@ -253,6 +253,9 @@ impl<'a> CandidateIndex<'a> {
 const MAX_REVIEW_GUIDE_ROWS: usize = 100_000;
 const MAX_REVIEW_IPTV_ROWS: usize = 50_000;
 const MAX_REVIEW_SNAPSHOT_BYTES: usize = 48 * 1024 * 1024;
+// Inspection is deliberately read-only and bounded separately from selectable
+// feed proposals. The total count remains truthful if the display cap is hit.
+const MAX_REVIEW_NAME_HINTS: usize = 8_192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewLoadError {
@@ -274,12 +277,23 @@ pub struct ReviewCounts {
     pub feed_review: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameOnlyHint {
+    pub original_tvg_id: String,
+    pub imported_name: String,
+    pub full_xmltv_id: String,
+    pub guide_display_name: String,
+}
+
 #[derive(Debug)]
 pub struct GuideReview {
     pub guide_source_id: String,
     pub last_success_at: i64,
     pub counts: ReviewCounts,
     pub proposals: Vec<BatchCandidate>,
+    /// Informational only. Never passed to preview_batch or alias confirmation.
+    pub name_only_hints: Vec<NameOnlyHint>,
+    pub name_only_truncated: bool,
 }
 
 /// Read exclusively safe matching metadata. Never fetch stream URLs, request
@@ -337,6 +351,12 @@ pub(crate) fn review_in_transaction(
         }
     }
     let index = CandidateIndex::build(guide, &channels);
+    let guide_names: HashMap<&str, &str> = channels
+        .iter()
+        .map(|channel| (channel.channel_id.as_str(), channel.display_name.as_str()))
+        .collect();
+    let mut name_only_hints = Vec::new();
+    let mut name_only_truncated = false;
     let mut rows = Vec::new();
     let mut already_bound_ids = HashSet::new();
     let mut counts = ReviewCounts::default();
@@ -395,7 +415,23 @@ pub(crate) fn review_in_transaction(
                 Discovery::Ambiguous { .. } => counts.ambiguous += 1,
                 Discovery::None => counts.unmatched += 1,
                 Discovery::Unique(candidate) => match candidate.reason {
-                    CandidateReason::NameOnly => counts.name_only += 1,
+                    CandidateReason::NameOnly => {
+                        counts.name_only += 1;
+                        if name_only_hints.len() < MAX_REVIEW_NAME_HINTS {
+                            name_only_hints.push(NameOnlyHint {
+                                original_tvg_id: candidate.original_tvg_id,
+                                imported_name: row.effective_name.clone(),
+                                guide_display_name: guide_names
+                                    .get(candidate.full_xmltv_id.as_str())
+                                    .copied()
+                                    .unwrap_or("")
+                                    .to_owned(),
+                                full_xmltv_id: candidate.full_xmltv_id,
+                            });
+                        } else {
+                            name_only_truncated = true;
+                        }
+                    }
                     CandidateReason::Feed(_) => counts.feed_review += 1,
                 },
             }
@@ -410,6 +446,8 @@ pub(crate) fn review_in_transaction(
         last_success_at,
         counts,
         proposals,
+        name_only_hints,
+        name_only_truncated,
     })
 }
 
