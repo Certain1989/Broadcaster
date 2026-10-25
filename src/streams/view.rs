@@ -16,7 +16,7 @@ use std::sync::{
     Arc,
 };
 
-use super::epg_projection::{DeliveryKey, ProjectionOutcome, ProjectionService};
+use super::epg_projection::{next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService};
 use crate::epg::{
     bindings::SemanticProgrammeState,
     cache::{Coverage, Freshness},
@@ -58,6 +58,7 @@ struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
     request: Option<(DeliveryKey, Arc<AtomicBool>)>,
+    next_update_at: Option<i64>,
 }
 
 // Visible textures have a small pixel-budgeted LRU. Only the currently bound
@@ -171,6 +172,8 @@ mod imp {
         pub(super) projection: OnceCell<ProjectionService>,
         pub(super) projection_serial: Cell<u64>,
         pub(super) epg_generation: Cell<u64>,
+        pub(super) epg_ticks: Cell<u64>,
+        pub(super) epg_poll_busy: Cell<bool>,
         pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
@@ -476,6 +479,7 @@ impl TvStreamsView {
                         // shared SQLite catalogue has opened successfully.
                         // Unconfigured guides cause no network access.
                         let _ = crate::epg::desktop::ensure_started().await;
+                        view.start_epg_clock();
                     }
                     Err(_) => view.imp().results_stack.set_visible_child_name("error"),
                 }
@@ -971,6 +975,7 @@ impl TvStreamsView {
                 },
                 connection: None,
                 request: None,
+                next_update_at: None,
             },
         );
     }
@@ -1022,6 +1027,7 @@ impl TvStreamsView {
             if let Some((_, token)) = binding.request.take() {
                 token.store(true, Ordering::Release);
             }
+            binding.next_update_at = None;
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
@@ -1112,6 +1118,81 @@ impl TvStreamsView {
         ui.mapping.set_sensitive(true);
     }
 
+    /// A single view-owned clock; no per-row timers, network polling or work on
+    /// GTK's main thread. One independent persistent SQLite data_version reader
+    /// catches successful commits by scheduled guide refresh and other views.
+    fn start_epg_clock(&self) {
+        let weak = self.downgrade();
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let Some(view) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            view.tick_epg_clock();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn utc_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64)
+    }
+
+    fn tick_epg_clock(&self) {
+        let imp = self.imp();
+        let ticks = imp.epg_ticks.get().wrapping_add(1);
+        imp.epg_ticks.set(ticks);
+        let now = Self::utc_now();
+        let due: Vec<_> = imp
+            .bindings
+            .borrow()
+            .iter()
+            .filter_map(|(key, bound)| {
+                (bound.next_update_at.is_some_and(|deadline| deadline <= now))
+                    .then(|| bound.connection.as_ref().map(|(slot, _)| (*key, slot.clone())))
+                    .flatten()
+            })
+            .collect();
+        for (key, slot) in due {
+            self.request_epg_for_slot(key, &slot);
+        }
+        if ticks % 5 != 0 || imp.epg_poll_busy.replace(true) {
+            return;
+        }
+        let Some(worker) = imp.projection.get().cloned() else {
+            imp.epg_poll_busy.set(false);
+            return;
+        };
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let changed = worker.check_revision().await;
+                view.imp().epg_poll_busy.set(false);
+                // On observer errors, fail closed: clear any previously painted
+                // information and let ordinary readers show Unavailable.
+                if !matches!(changed, Ok(false)) {
+                    view.epg_changed();
+                }
+            }
+        ));
+    }
+
+    fn epg_deadline(result: &ProjectionOutcome, at: i64) -> i64 {
+        if let ProjectionOutcome::Read(Ok(SemanticProgrammeState::Matched {
+            page, now_next, ..
+        })) = result
+        {
+            return next_projection_deadline(
+                at,
+                now_next.as_ref().is_some_and(|value| value.current.is_some()),
+                page.last_success_at,
+                page.programmes.iter().map(|item| (item.start_utc, item.stop_utc)),
+            );
+        }
+        at.saturating_add(120)
+    }
+
     /// All invalidations happen on GTK's main context, including results that
     /// finished their worker query but have not yet reached the paint callback.
     fn invalidate_epg(&self) {
@@ -1122,6 +1203,7 @@ impl TvStreamsView {
             if let Some((_, cancelled)) = binding.request.take() {
                 cancelled.store(true, Ordering::Release);
             }
+            binding.next_update_at = None;
             Self::clear_epg(&binding.ui);
         }
     }
@@ -1190,24 +1272,53 @@ impl TvStreamsView {
                 old.store(true, Ordering::Release);
             }
             Self::clear_epg(&bound.ui);
+            bound.next_update_at = None;
             bound.request = Some((request.clone(), cancelled.clone()));
         }
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64);
         spawn(glib::clone!(
             #[weak(rename_to = view)]
             self,
             async move {
-                let result = worker
-                    .read(request.row_id.clone(), at, cancelled.clone())
-                    .await;
-                if cancelled.load(Ordering::Acquire)
-                    || view.imp().generation.get() != request.view_generation
-                    || view.imp().epg_generation.get() != request.epg_generation
-                {
+                // Busy is an unadmitted result, not a queue ticket. Keep only
+                // one retry coroutine per still-bound row, with bounded delay
+                // and the original cancellation/binding generation.
+                let mut at;
+                let result = loop {
+                    at = Self::utc_now();
+                    let outcome = worker
+                        .read(request.row_id.clone(), at, cancelled.clone())
+                        .await;
+                    if cancelled.load(Ordering::Acquire)
+                        || view.imp().generation.get() != request.view_generation
+                        || view.imp().epg_generation.get() != request.epg_generation
+                    {
+                        return;
+                    }
+                    if !matches!(outcome, ProjectionOutcome::Busy) {
+                        break outcome;
+                    }
+                    {
+                        let mut bindings = view.imp().bindings.borrow_mut();
+                        let Some(bound) = bindings.get_mut(&key) else {
+                            return;
+                        };
+                        if !bound.request.as_ref().is_some_and(|(current, token)| {
+                            Arc::ptr_eq(token, &cancelled) && current == &request
+                        }) {
+                            return;
+                        }
+                        bound.ui.epg_status.set_text(&gettext("Programme lookup busy; retrying"));
+                    }
+                    glib::timeout_future(Duration::from_millis(250)).await;
+                };
+                if matches!(result, ProjectionOutcome::SourceChanged) {
+                    // A different SQLite connection committed during the read.
+                    // Invalidate all old callbacks before any stale paint.
+                    view.epg_changed();
                     return;
                 }
+                let deadline = Self::epg_deadline(&result, at);
+                let repaint_at = Self::utc_now();
                 let mut bindings = view.imp().bindings.borrow_mut();
                 let Some(bound) = bindings.get_mut(&key) else {
                     return;
@@ -1226,7 +1337,15 @@ impl TvStreamsView {
                     .and_then(|(slot, _)| slot.channel())
                     .is_some_and(|ch| ch.id == request.row_id);
                 if matches {
-                    Self::paint_epg(&bound.ui, result);
+                    // Do not paint a pre-boundary Now snapshot after its stop.
+                    // The one-second view clock will requery this still-bound
+                    // slot, using a fresh UTC timestamp.
+                    bound.next_update_at = Some(deadline);
+                    if deadline > repaint_at {
+                        Self::paint_epg(&bound.ui, result);
+                    } else {
+                        bound.ui.epg_status.set_text(&gettext("Programme information updating"));
+                    }
                 }
             }
         ));
@@ -1243,9 +1362,9 @@ impl TvStreamsView {
         let mut status: String;
         match result {
             ProjectionOutcome::Busy => {
-                status = gettext("Programme lookup queued; scroll back to retry")
+                status = gettext("Programme lookup busy; retrying")
             }
-            ProjectionOutcome::Cancelled => return,
+            ProjectionOutcome::Cancelled | ProjectionOutcome::SourceChanged => return,
             ProjectionOutcome::Read(Err(_)) => {
                 status = gettext("Programme information unavailable")
             }
