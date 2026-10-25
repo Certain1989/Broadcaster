@@ -1342,7 +1342,10 @@ impl TvStreamsView {
                         if deadline > repaint_at {
                             Self::paint_epg(&bound.ui, result);
                         } else {
-                            bound.ui.epg_status.set_text(&gettext("Programme information updating"));
+                            bound
+                                .ui
+                                .epg_status
+                                .set_text(&gettext("Programme information updating"));
                         }
                     }
                 }
