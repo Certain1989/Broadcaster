@@ -1279,38 +1279,19 @@ impl TvStreamsView {
             #[weak(rename_to = view)]
             self,
             async move {
-                // Busy is an unadmitted result, not a queue ticket. Keep only
-                // one retry coroutine per still-bound row, with bounded delay
-                // and the original cancellation/binding generation.
-                let mut at;
-                let result = loop {
-                    at = Self::utc_now();
-                    let outcome = worker
-                        .read(request.row_id.clone(), at, cancelled.clone())
-                        .await;
-                    if cancelled.load(Ordering::Acquire)
-                        || view.imp().generation.get() != request.view_generation
-                        || view.imp().epg_generation.get() != request.epg_generation
-                    {
-                        return;
-                    }
-                    if !matches!(outcome, ProjectionOutcome::Busy) {
-                        break outcome;
-                    }
-                    {
-                        let mut bindings = view.imp().bindings.borrow_mut();
-                        let Some(bound) = bindings.get_mut(&key) else {
-                            return;
-                        };
-                        if !bound.request.as_ref().is_some_and(|(current, token)| {
-                            Arc::ptr_eq(token, &cancelled) && current == &request
-                        }) {
-                            return;
-                        }
-                        bound.ui.epg_status.set_text(&gettext("Programme lookup busy; retrying"));
-                    }
-                    glib::timeout_future(Duration::from_millis(250)).await;
-                };
+                // Busy is not admitted and not queued. End this attempt and
+                // let the ONE view timer resubmit only while the slot remains
+                // bound; this creates no unbounded per-row retry coroutine.
+                let at = Self::utc_now();
+                let result = worker
+                    .read(request.row_id.clone(), at, cancelled.clone())
+                    .await;
+                if cancelled.load(Ordering::Acquire)
+                    || view.imp().generation.get() != request.view_generation
+                    || view.imp().epg_generation.get() != request.epg_generation
+                {
+                    return;
+                }
                 if matches!(result, ProjectionOutcome::SourceChanged) {
                     // A different SQLite connection committed during the read.
                     // Invalidate all old callbacks before any stale paint.
@@ -1337,14 +1318,21 @@ impl TvStreamsView {
                     .and_then(|(slot, _)| slot.channel())
                     .is_some_and(|ch| ch.id == request.row_id);
                 if matches {
-                    // Do not paint a pre-boundary Now snapshot after its stop.
-                    // The one-second view clock will requery this still-bound
-                    // slot, using a fresh UTC timestamp.
-                    bound.next_update_at = Some(deadline);
-                    if deadline > repaint_at {
+                    if matches!(result, ProjectionOutcome::Busy) {
+                        // No worker slot was taken. One view-owned tick will
+                        // retry, not one indefinitely waiting future per row.
+                        bound.next_update_at = Some(repaint_at.saturating_add(1));
                         Self::paint_epg(&bound.ui, result);
                     } else {
-                        bound.ui.epg_status.set_text(&gettext("Programme information updating"));
+                        // Do not paint a pre-boundary Now snapshot after its stop.
+                        // The one-second view clock will requery this still-bound
+                        // slot, using a fresh UTC timestamp.
+                        bound.next_update_at = Some(deadline);
+                        if deadline > repaint_at {
+                            Self::paint_epg(&bound.ui, result);
+                        } else {
+                            bound.ui.epg_status.set_text(&gettext("Programme information updating"));
+                        }
                     }
                 }
             }
