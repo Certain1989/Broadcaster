@@ -6,6 +6,9 @@
 pub mod bindings;
 #[cfg(test)]
 mod bindings_tests;
+pub mod bulk;
+#[cfg(test)]
+mod bulk_tests;
 pub mod cache;
 pub mod candidates;
 #[cfg(test)]
