@@ -620,6 +620,15 @@ impl TvWindow {
                 return handled;
             }
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                // Expanded row actions own their D-pad interior and Left exit.
+                // Route before the historical list -> page switcher boundary.
+                if self
+                    .imp()
+                    .streams_view
+                    .focus_expanded_action_key(&focused, key)
+                {
+                    return true;
+                }
                 // Escape from any virtualized row using one remote key, no
                 // matter where the selection is in a large playlist.
                 // GTK keeps Left/Right ownership in filters and editors.
@@ -1171,6 +1180,154 @@ mod playback_navigation_tests {
             !filters[6].is_mapped(),
             "hidden region must not steal focus"
         );
+
+        // E4 owner regression: the real mapped GtkListView contains two
+        // fabricated My Channels entries. Exercise the same window capture
+        // router as a remote; GTK event synthesis is not claimed here.
+        let ids = streams.install_remote_action_test_rows();
+        window.queue_allocate();
+        spin();
+        assert!(streams.show_and_focus_test_results());
+        assert!(
+            !window.focus_boundary_key(gtk::gdk::Key::Right),
+            "collapsed row must retain native arrow behavior"
+        );
+        eprintln!(
+            "E4 before activation: {}",
+            streams.remote_action_test_state()
+        );
+        streams.remote_action_test_activate();
+        eprintln!(
+            "E4 after activation: {}",
+            streams.remote_action_test_state()
+        );
+        spin();
+        eprintln!("E4 after animation: {}", streams.remote_action_test_state());
+        let buttons = streams
+            .remote_action_test_buttons()
+            .expect("expanded selected row must be bound");
+        let button_states: Vec<_> = buttons
+            .iter()
+            .map(|button| {
+                let reveal = button
+                    .ancestor(gtk::Revealer::static_type())
+                    .and_downcast::<gtk::Revealer>();
+                (
+                    button.is_mapped(),
+                    button.is_visible(),
+                    button.is_sensitive(),
+                    reveal.as_ref().map(|reveal| reveal.reveals_child()),
+                    reveal.as_ref().map(|reveal| reveal.is_mapped()),
+                )
+            })
+            .collect();
+        assert!(
+            buttons
+                .iter()
+                .all(|button| button.is_mapped() && button.is_sensitive()),
+            "all three actions must be mapped and enabled without a guide; states: {button_states:?}; selected={:?}",
+            streams.remote_action_test_selected_id()
+        );
+        let assert_action = |index: usize| {
+            let focused = window.focused_widget().expect("focused action");
+            assert!(
+                TvWindow::is_within(&focused, buttons[index].upcast_ref()),
+                "the expected expanded-row action must own focus: {index}"
+            );
+            assert!(
+                buttons[index].has_focus(),
+                "GTK focus styling requires focus"
+            );
+        };
+        // Repeated Right must not make any of the expanded actions lose GTK focus.
+        // This verifies the routed widget state, not compositor-rendered pixels.
+        for (index, button) in buttons.iter().enumerate() {
+            assert!(button.grab_focus(), "action {index} must accept focus");
+            assert_action(index);
+            for _ in 0..10 {
+                assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+                assert_action(index);
+            }
+        }
+        assert!(buttons[0].grab_focus());
+
+        // A disabled or unmatched programme guide must never gate Play/focus.
+        streams.remote_action_test_status("Selected programme guide disabled");
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert_action(1);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert_action(2);
+        streams.remote_action_test_status("No matching programme guide channel");
+        assert_action(2); // informational EPG paint must not steal focus
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_action(1);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_action(0);
+        streams.remote_action_test_status("Now: fabricated programme");
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert!(
+            streams.contains_results_focus(&window.focused_widget().expect("row focus")),
+            "Up from Play must return to the owning row"
+        );
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_action(0);
+        // The focused Play button's callback, not GtkListView activate,
+        // performs the single action; even spurious list activation must not
+        // deliver the historic second-OK playback.
+        buttons[0].emit_clicked();
+        streams.remote_action_test_activate();
+        assert_eq!(streams.remote_action_test_counts(), (1, 0, 0));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        buttons[1].emit_clicked();
+        assert_eq!(streams.remote_action_test_counts(), (1, 1, 0));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        buttons[2].emit_clicked();
+        assert_eq!(streams.remote_action_test_counts(), (1, 1, 1));
+        // Boundary policy: Down from final action exits back to the list.
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("row")));
+        // Recycling an action-focused list item must not keep a detached
+        // button as the window's focus target.
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        streams.remote_action_test_rebind();
+        spin();
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("after rebind")));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
+
+        // Collapse and Back/Escape semantics remain unchanged; Home exits
+        // My Channels, but no action button can hijack a modal's keys.
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Back, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        streams.remote_action_test_activate();
+        spin();
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("Escape row")));
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::HomePage, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
     }
 
     /// Checks GTK widget ancestry and list-boundary detection against real

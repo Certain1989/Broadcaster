@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 mod editor;
+mod epg_projection;
 mod facet_picker;
 mod fetch;
 mod logo;
@@ -19,6 +20,8 @@ pub(crate) mod service;
 pub(crate) mod storage;
 pub(crate) mod view;
 
+#[cfg(test)]
+mod epg_projection_tests;
 #[cfg(test)]
 mod network_tests;
 #[cfg(test)]

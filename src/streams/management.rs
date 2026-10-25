@@ -579,7 +579,14 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         view,
         move |_| {
             if let Some(window) = parent(&view) {
-                crate::epg::desktop::show_guide_manager(&window);
+                crate::epg::desktop::show_guide_manager_with_close(
+                    &window,
+                    glib::clone!(
+                        #[weak]
+                        view,
+                        move || view.epg_changed()
+                    ),
+                );
             }
         }
     ));

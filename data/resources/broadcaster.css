@@ -137,6 +137,17 @@ label.channel-fallback {
   font-size: 14px;
 }
 
+/* Keep focus visible on the expanded My Channels action buttons even when
+ * GTK does not apply :focus-visible during repeated remote arrow input.
+ * Only the actually focused action (or its focused child) gets an outline. */
+.tv-stream-channel-row button:focus,
+.tv-stream-channel-row button:focus-within,
+.tv-stream-channel-row button:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: 1px;
+  border-radius: 10px;
+}
+
 /* Remote focus must remain visible across the large OSK key grid. */
 .osk-production button:focus,
 .osk-production button:focus-visible {

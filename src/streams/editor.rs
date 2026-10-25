@@ -592,6 +592,362 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
     ));
 }
 
+#[derive(Clone, Copy)]
+enum MappingAction {
+    Row,
+    ExactAlias,
+    PlaylistException,
+    ClearPlaylistException,
+    ClearRow,
+}
+
+async fn save_epg_mapping(
+    action: MappingAction,
+    row: String,
+    playlist: String,
+    source: String,
+    target: String,
+    expected_tvg_id: Option<String>,
+) -> Result<(), &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::bindings::{
+                clear_row_mapping, set_global_alias_if_imported_id_matches,
+                set_playlist_exception, set_row_mapping, ConfirmedGlobalMapping,
+                ConfirmedGuideSelection, ConfirmedRowMapping, BindingError,
+            };
+            let mut conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Cannot open programme data")?;
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |t| t.as_secs() as i64);
+            let result = match action {
+                MappingAction::Row => set_row_mapping(
+                    &mut conn,
+                    ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                    &row,
+                    &source,
+                    &target,
+                    at,
+                ),
+                MappingAction::ExactAlias => expected_tvg_id
+                    .as_deref()
+                    .ok_or(BindingError::InvalidInput)
+                    .and_then(|expected| {
+                        set_global_alias_if_imported_id_matches(
+                            &mut conn,
+                            ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
+                            &row,
+                            expected,
+                            &source,
+                            &target,
+                            at,
+                        )
+                    }),
+                MappingAction::PlaylistException => set_playlist_exception(
+                    &mut conn,
+                    ConfirmedGuideSelection::after_user_confirmation(),
+                    &playlist,
+                    Some(&source),
+                    at,
+                ),
+                MappingAction::ClearPlaylistException => set_playlist_exception(
+                    &mut conn,
+                    ConfirmedGuideSelection::after_user_confirmation(),
+                    &playlist,
+                    None,
+                    at,
+                ),
+                MappingAction::ClearRow => clear_row_mapping(
+                    &mut conn,
+                    ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                    &row,
+                ),
+            };
+            result.map_err(|_| {
+                if matches!(action, MappingAction::ExactAlias) {
+                    "Imported tvg-id or guide changed. Reopen mapping and reconfirm."
+                } else {
+                    "Guide target missing or selection changed"
+                }
+            })
+        })
+        .await
+        .map_err(|_| "Programme mapping worker unavailable")?
+    })
+    .await
+}
+
+struct MappingChoice {
+    row: String,
+    playlist: String,
+    source: String,
+    target: String,
+    imported_tvg: Option<String>,
+    source_name: String,
+}
+
+fn confirm_epg_mapping(
+    view: &TvStreamsView,
+    parent: &gtk::Window,
+    action: MappingAction,
+    choice: MappingChoice,
+) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&gettext("Confirm Programme Mapping"));
+    dialog.set_content_width(460);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(16);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+    label(&match action {
+        MappingAction::Row => gettext("Confirm mapping for THIS stream only?"),
+        MappingAction::ExactAlias => gettext("Confirm mapping for ALL streams with this exact case-sensitive tvg-id across playlists selecting this guide?"),
+        MappingAction::PlaylistException => gettext("Make this guide an explicit exception for all channels of this playlist?"),
+        MappingAction::ClearPlaylistException => gettext("Remove this playlist exception and return to the shared guide default?"),
+        MappingAction::ClearRow => gettext("Clear only this stream's saved guide mapping?"),
+    }, &body);
+    if matches!(action, MappingAction::ExactAlias) {
+        // Literal strings, never markup. This is the exact scope a future
+        // atomic E3 API must compare under the same write transaction.
+        label(
+            &format!(
+                "{}: {}\n{}: {}\n{}: {}",
+                gettext("Imported exact tvg-id (case-sensitive)"),
+                choice.imported_tvg.as_deref().unwrap_or(""),
+                gettext("Selected programme guide"),
+                choice.source_name,
+                gettext("XMLTV channel ID"),
+                choice.target
+            ),
+            &body,
+        );
+    }
+    let error = gtk::Label::new(None);
+    body.append(&error);
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let approve = gtk::Button::with_label(&match action {
+        MappingAction::Row => gettext("Confirm This Stream Only"),
+        MappingAction::ExactAlias => gettext("Confirm All Matching Streams"),
+        MappingAction::PlaylistException => gettext("Confirm Playlist Exception"),
+        MappingAction::ClearPlaylistException | MappingAction::ClearRow => {
+            gettext("Confirm Removal")
+        }
+    });
+    approve.add_css_class("suggested-action");
+    // The confirmed literal imported ID is rechecked within the SQLite
+    // write transaction. Changed IDs fail closed and require new consent.
+    approve.set_sensitive(
+        !matches!(action, MappingAction::ExactAlias)
+            || choice
+                .imported_tvg
+                .as_deref()
+                .is_some_and(|id| !id.is_empty()),
+    );
+    body.append(&cancel);
+    body.append(&approve);
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    approve.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        error,
+        #[weak]
+        approve,
+        #[weak]
+        view,
+        move |_| {
+            approve.set_sensitive(false);
+            let row = choice.row.clone();
+            let playlist = choice.playlist.clone();
+            let source = choice.source.clone();
+            let target = choice.target.clone();
+            let expected_tvg = choice.imported_tvg.clone();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                error,
+                #[weak]
+                approve,
+                #[weak]
+                view,
+                async move {
+                    match save_epg_mapping(action, row, playlist, source, target, expected_tvg)
+                        .await
+                    {
+                        Ok(()) => {
+                            dialog.close();
+                            view.epg_changed();
+                        }
+                        Err(reason) => {
+                            error.set_text(&gettext(reason));
+                            approve.set_sensitive(true);
+                        }
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.set_child(Some(&body));
+    dialog.present(Some(parent));
+}
+
+pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
+    let (Some(window), Some(streams)) = (view.root().and_downcast::<gtk::Window>(), view.service())
+    else {
+        return;
+    };
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let Ok(detail) = streams.channel_detail(&id).await else {
+                return;
+            };
+            let Ok(manager) = crate::epg::desktop::ensure_started().await else {
+                return;
+            };
+            let Ok(guides) = manager.list().await else {
+                return;
+            };
+            let dialog = adw::Dialog::new();
+            dialog.set_title(&gettext("Programme Mapping"));
+            dialog.set_content_width(530);
+            let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+            body.set_margin_top(16);
+            body.set_margin_bottom(16);
+            body.set_margin_start(16);
+            body.set_margin_end(16);
+            label(&gettext("Select an existing guide and enter the exact XMLTV channel ID. Name suggestions never create a mapping."), &body);
+            let names: Vec<String> = guides
+                .iter()
+                .map(|g| {
+                    if g.enabled {
+                        g.name.clone()
+                    } else {
+                        format!("{} ({})", g.name, gettext("disabled"))
+                    }
+                })
+                .collect();
+            let choices: Vec<&str> = names.iter().map(String::as_str).collect();
+            let picker = gtk::DropDown::from_strings(&choices);
+            picker.set_sensitive(!guides.is_empty());
+            body.append(&picker);
+            label(&gettext("Exact XMLTV channel ID (case-sensitive)"), &body);
+            let channel = text("");
+            editable_control(&channel, &body);
+            let error = gtk::Label::new(None);
+            error.set_xalign(0.0);
+            error.set_wrap(true);
+            body.append(&error);
+            let single = gtk::Button::with_label(&gettext("Use for this stream"));
+            let shared =
+                gtk::Button::with_label(&gettext("Use for all streams with this exact tvg-id"));
+            single.set_sensitive(!guides.is_empty());
+            shared.set_sensitive(
+                !guides.is_empty()
+                    && detail
+                        .imported
+                        .tvg_id
+                        .as_deref()
+                        .is_some_and(|s| !s.is_empty()),
+            );
+            let playlist = gtk::Button::with_label(&gettext("Use as playlist guide exception"));
+            let clear_playlist =
+                gtk::Button::with_label(&gettext("Remove playlist guide exception"));
+            let clear_row =
+                gtk::Button::with_label(&gettext("Remove this stream's manual mapping"));
+            let close = gtk::Button::with_label(&gettext("Close"));
+            playlist.set_sensitive(!guides.is_empty());
+            for control in [
+                &single,
+                &shared,
+                &playlist,
+                &clear_playlist,
+                &clear_row,
+                &close,
+            ] {
+                control.set_halign(gtk::Align::Start);
+                body.append(control);
+            }
+            close.connect_clicked(glib::clone!(
+                #[weak]
+                dialog,
+                move |_| {
+                    dialog.close();
+                }
+            ));
+            for (button, action) in [
+                (single, MappingAction::Row),
+                (shared, MappingAction::ExactAlias),
+                (playlist, MappingAction::PlaylistException),
+                (clear_playlist, MappingAction::ClearPlaylistException),
+                (clear_row, MappingAction::ClearRow),
+            ] {
+                let guides = guides.clone();
+                let picker = picker.clone();
+                let channel = channel.clone();
+                let error = error.clone();
+                let window = window.clone();
+                let stable_id = detail.effective.id.clone();
+                let playlist_id = detail.effective.source_id.clone();
+                let imported_tvg = detail.imported.tvg_id.clone();
+                button.connect_clicked(glib::clone!(
+                    #[weak]
+                    view,
+                    move |_| {
+                        let selected_guide = guides.get(picker.selected() as usize);
+                        if selected_guide.is_none()
+                            && !matches!(
+                                action,
+                                MappingAction::ClearPlaylistException | MappingAction::ClearRow
+                            )
+                        {
+                            return;
+                        }
+                        let id = channel.text().to_string();
+                        if matches!(action, MappingAction::Row | MappingAction::ExactAlias)
+                            && (id.is_empty()
+                                || id.len() > 512
+                                || id.trim() != id
+                                || id.chars().any(char::is_control))
+                        {
+                            error.set_text(&gettext("Enter a valid exact XMLTV channel ID"));
+                            return;
+                        }
+                        confirm_epg_mapping(
+                            &view,
+                            &window,
+                            action,
+                            MappingChoice {
+                                row: stable_id.clone(),
+                                playlist: playlist_id.clone(),
+                                source: selected_guide
+                                    .map_or_else(String::new, |guide| guide.id.clone()),
+                                target: id,
+                                imported_tvg: imported_tvg.clone(),
+                                source_name: selected_guide
+                                    .map_or_else(String::new, |guide| guide.name.clone()),
+                            },
+                        );
+                    }
+                ));
+            }
+            dialog.set_child(Some(&body));
+            dialog.present(Some(&window));
+        }
+    ));
+}
+
 #[cfg(test)]
 pub(crate) fn assert_synthetic_editor_form() {
     use self::model_for_test::*;
