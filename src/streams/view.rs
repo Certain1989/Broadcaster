@@ -301,6 +301,7 @@ mod imp {
         pub(super) region_values: RefCell<Vec<FacetSelection>>,
         pub(super) selected_id: RefCell<Option<ChannelId>>,
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
+        pub(super) restore_results_focus: Cell<bool>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
         pub(super) projection: OnceCell<ProjectionService>,
@@ -316,6 +317,10 @@ mod imp {
         pub(super) fake_player_enabled: Cell<bool>,
         #[cfg(test)]
         pub(super) fake_player_calls: Cell<usize>,
+        #[cfg(test)]
+        pub(super) fake_edit_calls: Cell<usize>,
+        #[cfg(test)]
+        pub(super) fake_mapping_calls: Cell<usize>,
     }
 
     #[glib::object_subclass]
@@ -634,6 +639,15 @@ impl TvStreamsView {
             return;
         };
         self.invalidate_epg();
+        // A filter/source refresh may recycle the currently focused action.
+        // Restore focus to the new list item, never to a detached button.
+        imp.restore_results_focus.set(
+            imp.bindings.borrow().values().any(|binding| {
+                binding.ui.play.has_focus()
+                    || binding.ui.edit.has_focus()
+                    || binding.ui.mapping.has_focus()
+            }),
+        );
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
         imp.in_flight.borrow_mut().clear();
@@ -752,6 +766,13 @@ impl TvStreamsView {
                 .set_selected(fallback);
         }
         imp.suppress_controls.set(false);
+        if imp.restore_results_focus.replace(false) {
+            if total == 0 {
+                self.focus_search();
+            } else {
+                imp.results_list.grab_focus();
+            }
+        }
         if total != 0 {
             if let Some(id) = previously_selected {
                 self.select_channel_id(generation, query, id, previous_index);
@@ -1068,6 +1089,8 @@ impl TvStreamsView {
                     .get()
                     .and_then(|r| r.channel(item.position()))
                 {
+                    #[cfg(test)]
+                    view.imp().fake_edit_calls.set(view.imp().fake_edit_calls.get() + 1);
                     view.edit_selected(channel.id);
                 }
             }
@@ -1084,6 +1107,8 @@ impl TvStreamsView {
                     .get()
                     .and_then(|r| r.channel(item.position()))
                 {
+                    #[cfg(test)]
+                    view.imp().fake_mapping_calls.set(view.imp().fake_mapping_calls.get() + 1);
                     super::editor::show_epg_mapping_editor(&view, channel.id);
                 }
             }
@@ -1152,12 +1177,16 @@ impl TvStreamsView {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        let mut action_had_focus = false;
         if let Some(binding) = self
             .imp()
             .bindings
             .borrow_mut()
             .get_mut(&(item.as_ptr() as usize))
         {
+            action_had_focus = binding.ui.play.has_focus()
+                || binding.ui.edit.has_focus()
+                || binding.ui.mapping.has_focus();
             if let Some((_, token)) = binding.request.take() {
                 token.store(true, Ordering::Release);
             }
@@ -1176,6 +1205,9 @@ impl TvStreamsView {
             binding.ui.play.set_sensitive(false);
             binding.ui.edit.set_sensitive(false);
             binding.ui.mapping.set_sensitive(false);
+        }
+        if action_had_focus {
+            self.imp().results_list.grab_focus();
         }
     }
 
@@ -1973,6 +2005,95 @@ impl TvStreamsView {
         assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
     }
 
+    /// Two fabricated rows in the real virtualized ListView, with no provider
+    /// fetch or media process. Window tests must present/map the parent first.
+    #[cfg(test)]
+    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 2] {
+        use super::model::ChannelEffective;
+        use std::collections::BTreeSet;
+
+        let channels: Vec<_> = ["First fabricated channel", "Second fabricated channel"]
+            .into_iter()
+            .map(|name| ChannelEffective {
+                id: uuid::Uuid::new_v4().to_string(),
+                source_id: uuid::Uuid::new_v4().to_string(),
+                source_name: "Fabricated Source".into(),
+                visible_name: name.into(),
+                stream_url: "https://example.invalid/fake.m3u8".into(),
+                group: None,
+                languages: BTreeSet::new(),
+                countries: BTreeSet::new(),
+                region: None,
+                logo_url: None,
+                channel_number: None,
+                has_user_overrides: false,
+            })
+            .collect();
+        let ids = [channels[0].id.clone(), channels[1].id.clone()];
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("rows");
+        rows.reset(2);
+        rows.insert_page(0, channels);
+        imp.results_stack.set_visible_child_name("results");
+        imp.selection.get().expect("selection").set_selected(0);
+        imp.selected_id.replace(Some(ids[0].clone()));
+        imp.expanded_id.replace(None);
+        imp.fake_player_enabled.set(true);
+        imp.fake_player_calls.set(0);
+        imp.fake_edit_calls.set(0);
+        imp.fake_mapping_calls.set(0);
+        self.repaint_bound_rows();
+        ids
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_buttons(&self) -> Option<[gtk::Button; 3]> {
+        let position = self.imp().selection.get()?.selected();
+        self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.position() == position)
+                .then(|| [
+                    binding.ui.play.clone(),
+                    binding.ui.edit.clone(),
+                    binding.ui.mapping.clone(),
+                ])
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_counts(&self) -> (usize, usize, usize) {
+        let imp = self.imp();
+        (
+            imp.fake_player_calls.get(),
+            imp.fake_edit_calls.get(),
+            imp.fake_mapping_calls.get(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_status(&self, status: &str) {
+        let position = self.imp().selection.get().expect("selection").selected();
+        for binding in self.imp().bindings.borrow().values() {
+            if binding
+                .connection
+                .as_ref()
+                .is_some_and(|(slot, _)| slot.position() == position)
+            {
+                binding.ui.epg_status.set_text(status);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_rebind(&self) {
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("rows");
+        let channels: Vec<_> = (0..2).filter_map(|n| rows.channel(n)).collect();
+        assert_eq!(channels.len(), 2);
+        rows.reset(2);
+        rows.insert_page(0, channels);
+    }
+
     /// Match the virtualized list and its focused descendants, including
     /// expanded Play/Edit buttons. Never depend on a recycled row's identity.
     pub fn contains_results_focus(&self, focused: &gtk::Widget) -> bool {
@@ -2051,6 +2172,70 @@ impl TvStreamsView {
         } else {
             false
         }
+    }
+
+    /// D-pad path for *only* the selected, bound, expanded My Channels row.
+    /// No action can be focused through a stale/recycled slot or a closed reveal.
+    /// Window capture routes here before its historical Left -> page switcher.
+    pub fn focus_expanded_action_key(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
+        ) || !self.contains_results_focus(focused)
+        {
+            return false;
+        }
+        let imp = self.imp();
+        let Some(position) = imp.selection.get().map(|selection| selection.selected()) else {
+            return false;
+        };
+        let Some(channel) = imp.rows.get().and_then(|rows| rows.channel(position)) else {
+            return false;
+        };
+        if imp.expanded_id.borrow().as_deref() != Some(channel.id.as_str()) {
+            return false;
+        }
+        // Only the current selection's actually bound widgets may be targeted.
+        // Clone GTK handles before grabbing focus (focus can reenter GTK).
+        let buttons = imp.bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            if slot.position() != position
+                || slot.channel().as_ref().map(|c| c.id.as_str()) != Some(channel.id.as_str())
+                || !binding.ui.reveal.reveals_child()
+            {
+                return None;
+            }
+            let ui = &binding.ui;
+            let buttons = [ui.play.clone(), ui.edit.clone(), ui.mapping.clone()];
+            buttons
+                .iter()
+                .all(|button| button.is_mapped() && button.is_visible() && button.is_sensitive())
+                .then_some(buttons)
+        });
+        let Some(buttons) = buttons else {
+            return false;
+        };
+        let action = buttons.iter().position(|button| {
+            focused == button.upcast_ref::<gtk::Widget>()
+                || focused.is_ancestor(button.upcast_ref::<gtk::Widget>())
+        });
+        if let Some(index) = action {
+            return match key {
+                gtk::gdk::Key::Left => imp.results_list.grab_focus(),
+                gtk::gdk::Key::Up if index == 0 => imp.results_list.grab_focus(),
+                gtk::gdk::Key::Up => buttons[index - 1].grab_focus(),
+                gtk::gdk::Key::Down if index == buttons.len() - 1 => {
+                    imp.results_list.grab_focus()
+                }
+                gtk::gdk::Key::Down => buttons[index + 1].grab_focus(),
+                // Right remains in the action group; Left is its explicit exit.
+                gtk::gdk::Key::Right => true,
+                _ => false,
+            };
+        }
+        // Preserve the existing row Up/Down/OK behavior. A single Right on
+        // the selected expanded row enters Play without Tab or a pointer.
+        key == gtk::gdk::Key::Right && buttons[0].grab_focus()
     }
 
     pub fn focus_vertical_navigation(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
