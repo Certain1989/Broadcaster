@@ -1378,6 +1378,7 @@ impl TvStreamsView {
         ui.epg_next.set_text("");
         ui.epg_next.set_tooltip_text(None);
         ui.epg_status.set_text("");
+        ui.epg_status.set_tooltip_text(None);
         ui.epg_progress.set_visible(false);
         ui.epg_progress.set_fraction(0.0);
     }
