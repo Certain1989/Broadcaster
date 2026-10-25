@@ -741,7 +741,10 @@ fn confirm_epg_mapping(
     // write transaction. Changed IDs fail closed and require new consent.
     approve.set_sensitive(
         !matches!(action, MappingAction::ExactAlias)
-            || choice.imported_tvg.as_deref().is_some_and(|id| !id.is_empty()),
+            || choice
+                .imported_tvg
+                .as_deref()
+                .is_some_and(|id| !id.is_empty()),
     );
     body.append(&cancel);
     body.append(&approve);
@@ -778,7 +781,9 @@ fn confirm_epg_mapping(
                 #[weak]
                 view,
                 async move {
-                    match save_epg_mapping(action, row, playlist, source, target, expected_tvg).await {
+                    match save_epg_mapping(action, row, playlist, source, target, expected_tvg)
+                        .await
+                    {
                         Ok(()) => {
                             dialog.close();
                             view.epg_changed();
