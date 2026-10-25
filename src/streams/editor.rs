@@ -611,8 +611,8 @@ async fn save_epg_mapping(
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             use crate::epg::bindings::{
-                clear_row_mapping, set_global_alias, set_playlist_exception, set_row_mapping,
-                ConfirmedGlobalMapping, ConfirmedGuideSelection, ConfirmedRowMapping,
+                clear_row_mapping, set_playlist_exception, set_row_mapping,
+                ConfirmedGuideSelection, ConfirmedRowMapping,
             };
             let mut conn = super::storage::Storage::new()
                 .connect()
@@ -629,14 +629,12 @@ async fn save_epg_mapping(
                     &target,
                     at,
                 ),
-                MappingAction::ExactAlias => set_global_alias(
-                    &mut conn,
-                    ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
-                    &row,
-                    &source,
-                    &target,
-                    at,
-                ),
+                MappingAction::ExactAlias => {
+                    // The accepted E3 API rereads the imported ID within its
+                    // transaction but cannot compare it to the confirmed ID.
+                    // Do not allow a playlist refresh to expand consent to B.
+                    return Err("All-stream mapping needs an atomic imported-ID check");
+                },
                 MappingAction::PlaylistException => set_playlist_exception(
                     &mut conn,
                     ConfirmedGuideSelection::after_user_confirmation(),
@@ -673,6 +671,8 @@ fn confirm_epg_mapping(
     playlist: String,
     source: String,
     target: String,
+    imported_tvg: Option<String>,
+    source_name: String,
 ) {
     let dialog = adw::Dialog::new();
     dialog.set_title(&gettext("Confirm Programme Mapping"));
@@ -689,7 +689,28 @@ fn confirm_epg_mapping(
         MappingAction::ClearPlaylistException => gettext("Remove this playlist exception and return to the shared guide default?"),
         MappingAction::ClearRow => gettext("Clear only this stream's saved guide mapping?"),
     }, &body);
+    if matches!(action, MappingAction::ExactAlias) {
+        // Literal strings, never markup. This is the exact scope a future
+        // atomic E3 API must compare under the same write transaction.
+        label(
+            &format!(
+                "{}: {}\n{}: {}\n{}: {}",
+                gettext("Imported exact tvg-id (case-sensitive)"),
+                imported_tvg.as_deref().unwrap_or(""),
+                gettext("Selected programme guide"),
+                source_name,
+                gettext("XMLTV channel ID"),
+                target
+            ),
+            &body,
+        );
+    }
     let error = gtk::Label::new(None);
+    if matches!(action, MappingAction::ExactAlias) {
+        error.set_text(&gettext(
+            "All-stream confirmation is temporarily unavailable until the imported ID can be checked atomically at save time."
+        ));
+    }
     body.append(&error);
     let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let approve = gtk::Button::with_label(&match action {
@@ -701,6 +722,8 @@ fn confirm_epg_mapping(
         }
     });
     approve.add_css_class("suggested-action");
+    // E4 cannot safely authorize accepted E3's non-comparing alias API.
+    approve.set_sensitive(!matches!(action, MappingAction::ExactAlias));
     body.append(&cancel);
     body.append(&approve);
     cancel.connect_clicked(glib::clone!(
@@ -803,7 +826,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             body.append(&error);
             let single = gtk::Button::with_label(&gettext("Use for this stream"));
             let shared =
-                gtk::Button::with_label(&gettext("Use for all streams with this exact tvg-id"));
+                gtk::Button::with_label(&gettext("Review all-stream exact-ID mapping (unavailable)"));
             single.set_sensitive(!guides.is_empty());
             shared.set_sensitive(
                 !guides.is_empty()
@@ -813,6 +836,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                         .as_deref()
                         .is_some_and(|s| !s.is_empty()),
             );
+            label(&gettext("All-stream mapping remains disabled pending an atomic imported-ID safety check."), &body);
             let playlist = gtk::Button::with_label(&gettext("Use as playlist guide exception"));
             let clear_playlist =
                 gtk::Button::with_label(&gettext("Remove playlist guide exception"));
@@ -852,6 +876,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 let window = window.clone();
                 let stable_id = detail.effective.id.clone();
                 let playlist_id = detail.effective.source_id.clone();
+                let imported_tvg = detail.imported.tvg_id.clone();
                 button.connect_clicked(glib::clone!(
                     #[weak]
                     view,
@@ -883,6 +908,8 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                             playlist_id.clone(),
                             selected_guide.map_or_else(String::new, |guide| guide.id.clone()),
                             id,
+                            imported_tvg.clone(),
+                            selected_guide.map_or_else(String::new, |guide| guide.name.clone()),
                         );
                     }
                 ));
