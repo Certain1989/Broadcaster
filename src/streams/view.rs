@@ -39,6 +39,139 @@ use super::{
     service::StreamsService,
 };
 
+// Only E4 presentation uses these time labels. UTC matching remains in E3.
+// Injecting the zone makes fall-back/repeated-hour cases testable without
+// mutating the process-wide TZ or relying on a CI runner's local timezone.
+#[derive(Clone)]
+struct ProgrammeLocalClock {
+    clock: String,
+    date: String,
+    offset: String,
+}
+
+fn programme_clock_at(at: i64, zone: &glib::TimeZone) -> Option<ProgrammeLocalClock> {
+    let local = glib::DateTime::from_unix_utc(at)
+        .ok()?
+        .to_timezone(zone)
+        .ok()?;
+    Some(ProgrammeLocalClock {
+        clock: local.format(&gettext("%H:%M")).ok()?.to_string(),
+        date: local.format("%Y-%m-%d").ok()?.to_string(),
+        offset: local.format("%z").ok()?.to_string(),
+    })
+}
+
+/// Add both offsets when an interval traverses an offset change; add dates
+/// when local calendar days differ. Stable same-day ranges stay compact.
+pub(super) fn programme_range_in_timezone(
+    start_utc: i64,
+    stop_utc: i64,
+    zone: &glib::TimeZone,
+) -> String {
+    let (Some(start), Some(stop)) = (
+        programme_clock_at(start_utc, zone),
+        programme_clock_at(stop_utc, zone),
+    ) else {
+        return gettext("Unknown time");
+    };
+    let dates_differ = start.date != stop.date;
+    let offsets_differ = start.offset != stop.offset;
+    let label = |point: &ProgrammeLocalClock| {
+        let mut parts = Vec::new();
+        if dates_differ {
+            parts.push(point.date.as_str());
+        }
+        parts.push(point.clock.as_str());
+        if offsets_differ {
+            parts.push(point.offset.as_str());
+        }
+        parts.join(" ")
+    };
+    format!("{} – {}", label(&start), label(&stop))
+}
+
+/// A repeated local clock time must not be mistaken for its other UTC instant.
+/// The neighbouring UTC hour check covers both sides of Berlin's repeated
+/// autumn hour; it does not reinterpret, round, or infer programme duration.
+fn repeated_local_hour(at: i64, point: &ProgrammeLocalClock, zone: &glib::TimeZone) -> bool {
+    [-3600_i64, 3600].into_iter().any(|difference| {
+        at.checked_add(difference)
+            .and_then(|other| programme_clock_at(other, zone))
+            .is_some_and(|other| {
+                other.date == point.date
+                    && other.clock == point.clock
+                    && other.offset != point.offset
+            })
+    })
+}
+
+pub(super) fn programme_next_in_timezone(
+    next_utc: i64,
+    reference_utc: i64,
+    zone: &glib::TimeZone,
+) -> String {
+    let Some(point) = programme_clock_at(next_utc, zone) else {
+        return gettext("Unknown time");
+    };
+    let mut parts = Vec::new();
+    if programme_clock_at(reference_utc, zone)
+        .is_some_and(|reference| reference.date != point.date)
+    {
+        parts.push(point.date.clone());
+    }
+    parts.push(point.clock.clone());
+    if repeated_local_hour(next_utc, &point, zone) {
+        parts.push(point.offset);
+    }
+    parts.join(" ")
+}
+
+/// Construct the *final* visible status. In particular, a valid Now time
+/// range must never discard Aging, partial coverage or refresh-failure state.
+pub(super) fn compose_epg_status(
+    freshness: Freshness,
+    coverage: &Coverage,
+    truncated: bool,
+    current_range: Option<&str>,
+    current_ambiguous: bool,
+    refresh_failed: bool,
+) -> String {
+    let qualifier = if truncated {
+        gettext("Guide window incomplete")
+    } else if matches!(coverage, Coverage::Disabled) {
+        gettext("Selected programme guide disabled")
+    } else {
+        match freshness {
+            Freshness::NeverFetched => gettext("Guide not fetched yet"),
+            Freshness::Stale => gettext("Guide stale; current programme unknown"),
+            Freshness::Unknown => gettext("Guide freshness unknown"),
+            Freshness::Aging => gettext("Guide cache aging; coverage unverified"),
+            Freshness::Fresh => match coverage {
+                Coverage::Partial { .. } => gettext("Guide coverage is partial"),
+                Coverage::NoData => gettext("Guide has no programme data"),
+                Coverage::Disabled => unreachable!("disabled coverage handled above"),
+            },
+        }
+    };
+
+    let mut parts = Vec::new();
+    let may_show_current = !truncated
+        && matches!(freshness, Freshness::Fresh | Freshness::Aging)
+        && matches!(coverage, Coverage::Partial { .. });
+    if may_show_current {
+        if current_ambiguous {
+            parts.push(gettext("Overlapping programme entries; now unknown"));
+        } else if let Some(range) = current_range {
+            parts.push(range.to_owned());
+        }
+    }
+    parts.push(qualifier);
+    if refresh_failed {
+        parts.push(gettext("Last refresh failed; cached guide"));
+    }
+    parts.join(" · ")
+}
+
 #[derive(Clone)]
 struct RowUi {
     title: gtk::Label,
@@ -1353,12 +1486,6 @@ impl TvStreamsView {
         ));
     }
 
-    fn local_clock(at: i64) -> String {
-        crate::utils::format_timestamp_time(at)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| gettext("Unknown time"))
-    }
-
     fn paint_epg(ui: &RowUi, result: ProjectionOutcome) {
         Self::clear_epg(ui);
         let mut status: String;
@@ -1399,41 +1526,28 @@ impl TvStreamsView {
                     refresh_failed,
                     ..
                 } => {
-                    status = if page.truncated {
-                        gettext("Guide window incomplete")
-                    } else {
-                        match page.freshness {
-                            Freshness::NeverFetched => gettext("Guide not fetched yet"),
-                            Freshness::Stale => gettext("Guide stale; current programme unknown"),
-                            Freshness::Unknown => gettext("Guide freshness unknown"),
-                            Freshness::Aging => gettext("Guide cache aging; coverage unverified"),
-                            Freshness::Fresh => gettext("Guide coverage is partial"),
-                        }
-                    };
-                    if !page.truncated {
+                    let zone = glib::TimeZone::local();
+                    let mut current_range = None;
+                    let mut current_ambiguous = false;
+                    // Never fabricate Now/Next from an incomplete, stale,
+                    // unknown or unproven guide, regardless of a bad projection.
+                    let can_show = !page.truncated
+                        && matches!(page.freshness, Freshness::Fresh | Freshness::Aging)
+                        && matches!(page.coverage, Coverage::Partial { .. });
+                    if can_show {
                         if let Some(data) = now_next {
                             if data.certainty == Certainty::Exact {
                                 if let Some(current) = data.current {
                                     let text = format!("{}: {}", gettext("Now"), current.title);
-                                    ui.epg_title.set_text(&text);
-                                    ui.epg_title.set_tooltip_text(Some(&text));
-                                    let range = format!(
-                                        "{} – {}",
-                                        Self::local_clock(current.start_utc),
-                                        Self::local_clock(current.stop_utc)
+                                    let range = programme_range_in_timezone(
+                                        current.start_utc,
+                                        current.stop_utc,
+                                        &zone,
                                     );
                                     let row_label = format!("{} · {}", text, range);
                                     ui.epg_title.set_text(&row_label);
                                     ui.epg_title.set_tooltip_text(Some(&row_label));
-                                    status = if refresh_failed {
-                                        format!(
-                                            "{} · {}",
-                                            range,
-                                            gettext("Last refresh failed; cached guide")
-                                        )
-                                    } else {
-                                        range
-                                    };
+                                    current_range = Some(range);
                                     if let Some(progress) = data
                                         .progress_fraction
                                         .filter(|p| p.is_finite() && (0.0..=1.0).contains(p))
@@ -1443,7 +1557,7 @@ impl TvStreamsView {
                                     }
                                 }
                             } else if data.certainty == Certainty::Ambiguous {
-                                status = gettext("Overlapping programme entries; now unknown");
+                                current_ambiguous = true;
                             }
                             if !data.next_ambiguous {
                                 if let Some(next) = data.next {
@@ -1451,7 +1565,11 @@ impl TvStreamsView {
                                         "{}: {} ({})",
                                         gettext("Next"),
                                         next.title,
-                                        Self::local_clock(next.start_utc)
+                                        programme_next_in_timezone(
+                                            next.start_utc,
+                                            page.start_utc.saturating_add(86_400),
+                                            &zone,
+                                        )
                                     );
                                     ui.epg_next.set_text(&label);
                                     ui.epg_next.set_tooltip_text(Some(&label));
@@ -1459,21 +1577,19 @@ impl TvStreamsView {
                             }
                         }
                     }
-                    if refresh_failed && !status.contains(&gettext("Last refresh failed")) {
-                        status = format!(
-                            "{} · {}",
-                            status,
-                            gettext("Last refresh failed; cached guide")
-                        );
-                    }
-                    if matches!(page.coverage, Coverage::NoData) {
-                        ui.epg_title.set_text("");
-                        ui.epg_progress.set_visible(false);
-                    }
+                    status = compose_epg_status(
+                        page.freshness,
+                        &page.coverage,
+                        page.truncated,
+                        current_range.as_deref(),
+                        current_ambiguous,
+                        refresh_failed,
+                    );
                 }
             },
         }
         ui.epg_status.set_text(&status);
+        ui.epg_status.set_tooltip_text(Some(&status));
     }
 
     fn refresh_logo(&self, slot: &StreamSlot) {
