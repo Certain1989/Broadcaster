@@ -2073,6 +2073,31 @@ impl TvStreamsView {
     }
 
     #[cfg(test)]
+    pub(crate) fn remote_action_test_state(&self) -> String {
+        let imp = self.imp();
+        let bound: Vec<_> = imp
+            .bindings
+            .borrow()
+            .values()
+            .filter_map(|binding| {
+                let (slot, _) = binding.connection.as_ref()?;
+                Some((
+                    slot.position(),
+                    slot.channel().map(|channel| channel.id),
+                    binding.ui.reveal.reveals_child(),
+                    binding.ui.reveal.is_mapped(),
+                ))
+            })
+            .collect();
+        format!(
+            "selected={:?} expanded={:?} rows0={:?} bound={bound:?}",
+            imp.selection.get().map(|selection| selection.selected()),
+            imp.expanded_id.borrow().as_deref(),
+            imp.rows.get().and_then(|rows| rows.channel(0)).map(|channel| channel.id),
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn remote_action_test_selected_id(&self) -> Option<ChannelId> {
         self.imp().selected_id.borrow().clone()
     }
