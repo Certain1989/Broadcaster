@@ -950,3 +950,112 @@ fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
     );
     assert_eq!(count(&c, "epg_channel_overrides"), 1);
 }
+
+#[test]
+fn d35_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feeds_now_next() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='ABC.us@KEROTV' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    {
+        let tx = c.transaction().unwrap();
+        let mut insert = tx
+            .prepare(
+                "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES('g',?1,?2)",
+            )
+            .unwrap();
+        for n in 0..10_010 {
+            insert
+                .execute(params![format!("unrelated.station.{n:05}"), "Unrelated"])
+                .unwrap();
+        }
+        drop(insert);
+        tx.commit().unwrap();
+    }
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::SuggestionsUnavailable { .. }
+    ));
+    add_channel(&c, "g", "ABCKERO.us", "US - ABC KERO Bakersfield CA");
+    assert!(matches!(resolve(&c,"a1"),MatchDecision::Matched {
+        method: MatchMethod::AutomaticIdentity, channel_id, ..
+    } if channel_id=="ABCKERO.us"));
+    c.execute(
+        "INSERT INTO epg_programmes(source_id,channel_id,start_utc,stop_utc,title)
+         VALUES('g','ABCKERO.us',1100,2200,'Synthetic local show')",
+        [],
+    )
+    .unwrap();
+    let programme_state = read_semantic_now_next(&c, "a1", 1400, &AtomicBool::new(false)).unwrap();
+    assert!(matches!(
+        programme_state,
+        SemanticProgrammeState::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        }
+    ));
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    // Even if another guide contains a different broadcaster under the same
+    // stream name, the selected effective guide is the only scope.
+    add_guide(&c, "other", true);
+    add_channel(&c, "other", "ABCKERO.us", "US - ABC KERO different guide");
+    assert!(matches!(resolve(&c,"a1"),MatchDecision::Matched {
+        source_id, method: MatchMethod::AutomaticIdentity, ..
+    } if source_id=="g"));
+}
+
+#[test]
+fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    add_channel(&c, "g", "first", "Synthetic ABC Station");
+    add_channel(&c, "g", "second", "Synthetic ABC Station Alternate");
+    let revision: i64 = c
+        .query_row(
+            "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut snapshot = PickerMappingSnapshot {
+        row_id: "a1".into(),
+        playlist_id: "playlist-a".into(),
+        tvg_id: Some("TVG.EXACT".into()),
+        effective_name: "Station".into(),
+        playlist_revision: revision,
+        guide_source_id: "g".into(),
+        guide_last_success_at: 1000,
+        prior_row_target: None,
+        prior_alias_target: None,
+    };
+    let confirmed = || ConfirmedRowMapping::after_user_confirmation_for_this_stream();
+    set_row_mapping_from_picker_if_unchanged(&mut c, confirmed(), &snapshot, "first", 110).unwrap();
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(&mut c, confirmed(), &snapshot, "second", 111),
+        Err(BindingError::InvalidInput)
+    );
+    assert!(matches!(resolve(&c,"a1"),MatchDecision::Matched {
+        method: MatchMethod::RowOverride, channel_id,..
+    } if channel_id=="first"));
+    snapshot.prior_row_target = Some("first".into());
+    set_row_mapping_from_picker_if_unchanged(&mut c, confirmed(), &snapshot, "second", 112)
+        .unwrap();
+    assert!(matches!(resolve(&c,"a1"),MatchDecision::Matched {
+        method: MatchMethod::RowOverride, channel_id,..
+    } if channel_id=="second"));
+    snapshot.prior_row_target = Some("second".into());
+    c.execute(
+        "UPDATE epg_sources SET last_success_at=1200 WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(&mut c, confirmed(), &snapshot, "first", 113),
+        Err(BindingError::InvalidInput)
+    );
+    fk_ok(&c);
+}

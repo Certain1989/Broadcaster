@@ -322,6 +322,101 @@ pub fn set_row_mapping_from_hint_if_unchanged(
     tx.commit().map_err(db)
 }
 
+/// A picker captures a revision-stable, read-only row/guide state. A deliberate
+/// click writes only this row, and only if all referenced state is unchanged.
+/// Existing explicit overrides may be replaced when the user deliberately
+/// selects a different target, unlike the older new-hint-only path.
+#[derive(Clone, Debug)]
+pub struct PickerMappingSnapshot {
+    pub row_id: String,
+    pub playlist_id: String,
+    pub tvg_id: Option<String>,
+    pub effective_name: String,
+    pub playlist_revision: i64,
+    pub guide_source_id: String,
+    pub guide_last_success_at: i64,
+    pub prior_row_target: Option<String>,
+    pub prior_alias_target: Option<String>,
+}
+
+pub fn set_row_mapping_from_picker_if_unchanged(
+    conn: &mut Connection,
+    _: ConfirmedRowMapping,
+    expected: &PickerMappingSnapshot,
+    exact_target: &str,
+    at: i64,
+) -> Result<(), BindingError> {
+    id(&expected.row_id, 64)?;
+    id(&expected.playlist_id, 64)?;
+    id(&expected.guide_source_id, 64)?;
+    id(exact_target, 512)?;
+    fk(conn)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    let actual: Option<(String, Option<String>, String, i64)> = tx.query_row(
+        "SELECT c.source_id,c.tvg_id,COALESCE(o.display_name_override,c.imported_name),s.revision
+         FROM iptv_channels c JOIN iptv_sources s ON s.id=c.source_id
+         LEFT JOIN iptv_channel_overrides o ON o.channel_id=c.id
+         WHERE c.id=?1 AND c.is_present=1 AND s.enabled=1",
+        [&expected.row_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    ).optional().map_err(db)?;
+    let Some((playlist, tvg_id, name, revision)) = actual else {
+        return Err(BindingError::NotFound);
+    };
+    if playlist != expected.playlist_id
+        || tvg_id != expected.tvg_id
+        || name != expected.effective_name
+        || revision != expected.playlist_revision
+        || resolve_source_id(&tx, &expected.row_id, &playlist)?.as_deref()
+            != Some(expected.guide_source_id.as_str())
+    {
+        return Err(BindingError::InvalidInput);
+    }
+    let row_target: Option<String> = tx
+        .query_row(
+            "SELECT guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+            [&expected.row_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    let alias_target: Option<String> = tx
+        .query_row(
+            "SELECT guide_channel_id FROM epg_global_id_aliases
+         WHERE guide_source_id=?1 AND iptv_tvg_id=?2",
+            params![expected.guide_source_id, expected.tvg_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    if row_target != expected.prior_row_target || alias_target != expected.prior_alias_target {
+        return Err(BindingError::InvalidInput);
+    }
+    let imported: Option<i64> = tx
+        .query_row(
+            "SELECT last_success_at FROM epg_sources WHERE id=?1 AND enabled=1",
+            [&expected.guide_source_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?
+        .flatten();
+    if imported != Some(expected.guide_last_success_at) {
+        return Err(BindingError::InvalidInput);
+    }
+    guide_channel_exists(&tx, &expected.guide_source_id, exact_target)?;
+    tx.execute(
+        "INSERT INTO epg_channel_overrides(iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+         VALUES(?1,?2,?3,?4) ON CONFLICT(iptv_channel_id) DO UPDATE SET
+         guide_source_id=excluded.guide_source_id,
+         guide_channel_id=excluded.guide_channel_id,updated_at=excluded.updated_at",
+        params![expected.row_id, expected.guide_source_id, exact_target, at],
+    ).map_err(db)?;
+    tx.commit().map_err(db)
+}
+
 /// Read-only selected-guide diagnosis; does not consult stream URLs or EPG
 /// schedule bodies. Return None if no effective shared/playlist/row choice.
 pub fn selected_guide_for_row(
@@ -655,6 +750,58 @@ fn resolve_row_inner(
                 source_id: selected_id.clone(),
                 channel_id: tvg_id.to_owned(),
                 method: MatchMethod::ExactTvgId,
+            });
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EpgError::Cancelled);
+    }
+
+    // Full identity candidate keys are generated without touching programme
+    // contents or another guide. SQLite's selected-guide composite PK proves
+    // presence; same read snapshot guarantees source/guide coherence. Unlike
+    // review-only folded names, this result feeds the ACTUAL now/next query.
+    if let Some(original) = row.tvg_id.as_deref() {
+        let mut proven = Vec::new();
+        for (candidate_id, kind) in super::matching::automatic_identity_candidates(original) {
+            let record: Option<String> = conn
+                .query_row(
+                    "SELECT display_name FROM epg_channels WHERE source_id=?1 AND channel_id=?2",
+                    params![selected_id, candidate_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|_| EpgError::Storage)?;
+            if let Some(display_name) = record {
+                let channel = GuideChannel {
+                    source_id: selected_id.clone(),
+                    channel_id: candidate_id.clone(),
+                    display_name,
+                };
+                if super::matching::corroborated_auto_identity(original, kind, &channel) {
+                    // Multiple feed-specific guide IDs for the same base veto
+                    // a quality-only collapse even if the bare stem exists.
+                    let ambiguous_feed = if kind == super::matching::AutoIdentityKind::Quality {
+                        let pattern = format!("{}@*", candidate_id);
+                        let count: i64 = conn.query_row(
+                            "SELECT count(*) FROM epg_channels WHERE source_id=?1 AND channel_id GLOB ?2",
+                            params![selected_id, pattern], |r| r.get(0),
+                        ).map_err(|_| EpgError::Storage)?;
+                        count > 0
+                    } else {
+                        false
+                    };
+                    if !ambiguous_feed {
+                        proven.push(candidate_id);
+                    }
+                }
+            }
+        }
+        if proven.len() == 1 {
+            return Ok(MatchDecision::Matched {
+                source_id: selected_id.clone(),
+                channel_id: proven.remove(0),
+                method: MatchMethod::AutomaticIdentity,
             });
         }
     }

@@ -186,6 +186,7 @@ struct RowUi {
     play: gtk::Button,
     edit: gtk::Button,
     mapping: gtk::Button,
+    star: gtk::Button,
 }
 
 struct BoundRow {
@@ -270,6 +271,10 @@ mod imp {
         #[template_child]
         pub(super) clear_button: TemplateChild<gtk::Button>,
         #[template_child]
+        pub(super) favourites_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub(super) show_all_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) manage_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub(super) sort_filter: TemplateChild<gtk::DropDown>,
@@ -289,6 +294,7 @@ mod imp {
         pub(super) rows: OnceCell<StreamRows>,
         pub(super) selection: OnceCell<gtk::SingleSelection>,
         pub(super) query: RefCell<ChannelQuery>,
+        pub(super) starred_busy: RefCell<HashSet<ChannelId>>,
         pub(super) generation: Cell<u64>,
         pub(super) play_serial: Cell<u64>,
         pub(super) search_serial: Cell<u64>,
@@ -527,6 +533,16 @@ impl TvStreamsView {
                 view.reload();
             }
         ));
+        imp.favourites_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| view.switch_favourites_mode()
+        ));
+        imp.show_all_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| view.switch_favourites_mode()
+        ));
         imp.clear_button.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -535,7 +551,11 @@ impl TvStreamsView {
                 view.imp()
                     .search_serial
                     .set(view.imp().search_serial.get().wrapping_add(1));
-                *view.imp().query.borrow_mut() = ChannelQuery::default();
+                let favourites_only = view.imp().query.borrow().favourites_only;
+                *view.imp().query.borrow_mut() = ChannelQuery {
+                    favourites_only,
+                    ..ChannelQuery::default()
+                };
                 view.imp().search_entry.set_text("");
                 view.imp().suppress_controls.set(false);
                 view.reload();
@@ -612,7 +632,12 @@ impl TvStreamsView {
             async move {
                 match StreamsService::open().await {
                     Ok(service) => {
+                        let remembered = service.favourites_only().await;
                         view.imp().service.replace(Some(service));
+                        if let Ok(enabled) = remembered {
+                            view.imp().query.borrow_mut().favourites_only = enabled;
+                        }
+                        view.update_favourites_mode_button();
                         view.reload();
                         // Initialize the optional EPG scheduler only after the
                         // shared SQLite catalogue has opened successfully.
@@ -621,6 +646,62 @@ impl TvStreamsView {
                         view.start_epg_clock();
                     }
                     Err(_) => view.imp().results_stack.set_visible_child_name("error"),
+                }
+            }
+        ));
+    }
+
+    fn update_favourites_mode_button(&self) {
+        let active = self.imp().query.borrow().favourites_only;
+        self.imp()
+            .favourites_button
+            .set_label(if active { "★" } else { "☆" });
+        let tooltip = if active {
+            gettext("Show all channels")
+        } else {
+            gettext("Show favourites only")
+        };
+        self.imp()
+            .favourites_button
+            .set_tooltip_text(Some(&tooltip));
+    }
+
+    fn switch_favourites_mode(&self) {
+        let Some(service) = self.imp().service.borrow().clone() else {
+            return;
+        };
+        let enabled = !self.imp().query.borrow().favourites_only;
+        self.imp().favourites_button.set_sensitive(false);
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let outcome = service.set_favourites_only(enabled).await;
+                view.imp().favourites_button.set_sensitive(true);
+                if outcome.is_ok() {
+                    view.imp().query.borrow_mut().favourites_only = enabled;
+                    view.update_favourites_mode_button();
+                    view.reload();
+                }
+            }
+        ));
+    }
+
+    fn toggle_row_star(&self, id: ChannelId) {
+        let Some(service) = self.imp().service.borrow().clone() else {
+            return;
+        };
+        if !self.imp().starred_busy.borrow_mut().insert(id.clone()) {
+            return;
+        }
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let result = service.toggle_favourite(&id).await;
+                view.imp().starred_busy.borrow_mut().remove(&id);
+                if result.is_ok() {
+                    view.reload();
                 }
             }
         ));
@@ -646,6 +727,7 @@ impl TvStreamsView {
                 binding.ui.play.has_focus()
                     || binding.ui.edit.has_focus()
                     || binding.ui.mapping.has_focus()
+                    || binding.ui.star.has_focus()
             }));
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
@@ -737,6 +819,7 @@ impl TvStreamsView {
             .set_label(&format!("{total} {}", gettext("channels")));
         if total == 0 {
             imp.expanded_id.replace(None);
+            imp.show_all_button.set_visible(query.favourites_only);
             let active_filters = query.search.is_some()
                 || query.source_id.is_some()
                 || query.group != FacetSelection::Any
@@ -757,6 +840,7 @@ impl TvStreamsView {
             }));
             imp.results_stack.set_visible_child_name("empty");
         } else {
+            imp.show_all_button.set_visible(false);
             imp.results_stack.set_visible_child_name("results");
             let fallback = previous_index.min(total - 1);
             imp.selection
@@ -1044,6 +1128,13 @@ impl TvStreamsView {
         epg_progress.set_focusable(false);
         text.append(&epg_progress);
         header.append(&text);
+        let star = gtk::Button::with_label("☆");
+        star.set_tooltip_text(Some(&gettext("Add to favourites")));
+        star.add_css_class("flat");
+        star.add_css_class("circular");
+        star.set_size_request(36, 36);
+        star.set_valign(gtk::Align::Center);
+        header.append(&star);
         root.append(&header);
         let reveal = gtk::Revealer::new();
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 5);
@@ -1096,6 +1187,22 @@ impl TvStreamsView {
                 }
             }
         ));
+        star.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|rows| rows.channel(item.position()))
+                {
+                    view.toggle_row_star(channel.id);
+                }
+            }
+        ));
         mapping.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -1112,7 +1219,7 @@ impl TvStreamsView {
                     view.imp()
                         .fake_mapping_calls
                         .set(view.imp().fake_mapping_calls.get() + 1);
-                    super::editor::show_epg_mapping_editor(&view, channel.id);
+                    super::editor::show_card_mapping_picker(&view, channel.id);
                 }
             }
         ));
@@ -1134,6 +1241,7 @@ impl TvStreamsView {
                     play,
                     edit,
                     mapping,
+                    star,
                 },
                 connection: None,
                 request: None,
@@ -1189,7 +1297,8 @@ impl TvStreamsView {
         {
             action_had_focus = binding.ui.play.has_focus()
                 || binding.ui.edit.has_focus()
-                || binding.ui.mapping.has_focus();
+                || binding.ui.mapping.has_focus()
+                || binding.ui.star.has_focus();
             if let Some((_, token)) = binding.request.take() {
                 token.store(true, Ordering::Release);
             }
@@ -1208,6 +1317,7 @@ impl TvStreamsView {
             binding.ui.play.set_sensitive(false);
             binding.ui.edit.set_sensitive(false);
             binding.ui.mapping.set_sensitive(false);
+            binding.ui.star.set_sensitive(false);
         }
         if action_had_focus {
             self.imp().results_list.grab_focus();
@@ -1234,6 +1344,7 @@ impl TvStreamsView {
             ui.play.set_sensitive(false);
             ui.edit.set_sensitive(false);
             ui.mapping.set_sensitive(false);
+            ui.star.set_sensitive(false);
             return;
         };
         ui.title.set_text(&channel.visible_name);
@@ -1285,6 +1396,14 @@ impl TvStreamsView {
         ui.play.set_sensitive(true);
         ui.edit.set_sensitive(true);
         ui.mapping.set_sensitive(true);
+        ui.star.set_sensitive(true);
+        ui.star
+            .set_label(if channel.is_favourite { "★" } else { "☆" });
+        ui.star.set_tooltip_text(Some(&if channel.is_favourite {
+            gettext("Remove from favourites")
+        } else {
+            gettext("Add to favourites")
+        }));
     }
 
     /// A single view-owned clock; no per-row timers, network polling or work on
@@ -1733,6 +1852,23 @@ impl TvStreamsView {
         ));
     }
 
+    /// Return focus to the origin card action after OK/Back/Home/cancel, if
+    /// virtualization has not removed it; otherwise return to the list.
+    pub(crate) fn restore_card_mapping_focus(&self, id: &str) {
+        for bound in self.imp().bindings.borrow().values() {
+            if bound
+                .connection
+                .as_ref()
+                .and_then(|(slot, _)| slot.channel())
+                .is_some_and(|channel| channel.id == id)
+                && bound.ui.mapping.grab_focus()
+            {
+                return;
+            }
+        }
+        self.imp().results_list.grab_focus();
+    }
+
     fn repaint_bound_rows(&self) {
         let expanded = self.imp().expanded_id.borrow().clone();
         for binding in self.imp().bindings.borrow().values() {
@@ -1757,6 +1893,7 @@ impl TvStreamsView {
             binding.ui.play.has_focus()
                 || binding.ui.edit.has_focus()
                 || binding.ui.mapping.has_focus()
+                || binding.ui.star.has_focus()
         }) {
             return;
         }
@@ -1965,6 +2102,7 @@ impl TvStreamsView {
             logo_url: None,
             channel_number: None,
             has_user_overrides: false,
+            is_favourite: false,
         };
         rows.reset(1);
         rows.insert_page(0, vec![channel]);
@@ -2030,6 +2168,7 @@ impl TvStreamsView {
                 logo_url: None,
                 channel_number: None,
                 has_user_overrides: false,
+                is_favourite: false,
             })
             .collect();
         let ids = [channels[0].id.clone(), channels[1].id.clone()];
@@ -2203,6 +2342,7 @@ impl TvStreamsView {
             imp.country_filter.get().upcast(),
             imp.region_filter.get().upcast(),
             imp.clear_button.get().upcast(),
+            imp.favourites_button.get().upcast(),
             imp.manage_button.get().upcast(),
             imp.add_button.get().upcast(),
             // Spatial navigation uses mapped geometry, not vector ordering.

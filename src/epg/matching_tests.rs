@@ -194,3 +194,121 @@ fn full_fold_handles_greek_sigma_and_expansions_without_stripping_variants() {
         normalized_name("Station")
     );
 }
+
+#[test]
+fn d35_quality_region_and_us_station_auto_are_restricted_to_proven_identity() {
+    let cases = [
+        ("3sat.de@SD", "3sat.de", "DE - 3sat"),
+        (
+            "NDRFernsehen.de@Niedersachsen",
+            "NDRFernsehenNiedersachsen.de",
+            "DE - NDR Fernsehen Niedersachsen",
+        ),
+        (
+            "ABC.us@KEROTV",
+            "ABCKERO.us",
+            "US - ABC KERO Bakersfield CA",
+        ),
+    ];
+    for (original, expected, guide_name) in cases {
+        let r = row(
+            "r",
+            "playlist",
+            Some(original),
+            "An irrelevant changed card name",
+        );
+        let channels = [
+            ch("guide", expected, guide_name),
+            ch("other", expected, guide_name),
+        ];
+        assert!(
+            matches!(decision(&r, None, None, &channels),
+            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, channel_id, .. }
+            if channel_id == expected),
+            "failed {original}"
+        );
+        assert!(automatic_identity_target(original, "other-guide", &channels).is_none());
+    }
+    // Literal same-ID target and explicit overrides always outrank derived IDs.
+    let r = row("r", "p", Some("3sat.de@SD"), "3sat");
+    assert!(matches!(
+        decision(
+            &r,
+            None,
+            None,
+            &[
+                ch("guide", "3sat.de@SD", "3sat feed"),
+                ch("guide", "3sat.de", "3sat")
+            ]
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::ExactTvgId,
+            ..
+        }
+    ));
+    let manual = ManualTarget {
+        guide_source_id: "guide".into(),
+        guide_channel_id: "owner-region".into(),
+    };
+    assert!(matches!(
+        decision(
+            &r,
+            Some(&manual),
+            None,
+            &[
+                ch("guide", "3sat.de", "3sat"),
+                ch("guide", "owner-region", "owner")
+            ]
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn d35_no_false_automatic_links_in_critical_negative_matrix() {
+    let negatives = [
+        ("ARTE.de@SD", "ZDF.de", "DE - ZDF"),
+        ("CBN.us@HD", "CNN.us", "US - CNN"),
+        ("BBC.us@HD", "MBCAmerica.us", "MBC America"),
+        ("ABC.us@KEROTV", "ABCKERO.pluto", "PLUTO - ABC KERO"),
+        ("ABCNewsLive.us@1", "ABCNewsLive.us", "ABC News Live"),
+        ("AMC.us@East", "AMC.us", "AMC West"),
+        (
+            "NDRFernsehen.de@Niedersachsen",
+            "NDRHamburg.de",
+            "DE - NDR Hamburg",
+        ),
+        ("ABC.us@KAAL", "ABCKAAL.us", "US - ABC KAAL"),
+        ("BabyTVLatinAmerica.us@HD", "BabyTV.us", "BabyTV"),
+    ];
+    for (imported, guide_id, guide_name) in negatives {
+        let catalog = [ch("guide", guide_id, guide_name)];
+        let d = decision(
+            &row("r", "p", Some(imported), "UNKNOWN"),
+            None,
+            None,
+            &catalog,
+        );
+        // A suffix alone cannot make a provider/network ID change valid;
+        // US station labels do need exact corroboration of their broadcaster.
+        assert!(
+            !matches!(
+                d,
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "incorrect auto: {imported} to {guide_id}"
+        );
+    }
+    assert!(automatic_identity_target(
+        "ABC.us@KEROTV",
+        "guide",
+        &[ch("guide", "ABCKERO.us", "US - CBS KERO Bakersfield CA")]
+    )
+    .is_none());
+}

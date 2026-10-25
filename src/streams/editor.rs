@@ -910,6 +910,560 @@ fn confirm_epg_mapping(
     dialog.present(Some(parent));
 }
 
+// D35 compact on-card mapper. The fuller manager is retained for the other
+// explicit guide management workflows; the card action uses only this picker.
+#[derive(Clone)]
+struct CardMappingData {
+    snapshot: crate::epg::bindings::PickerMappingSnapshot,
+    guide_name: String,
+    existing: String,
+    suggestions: Vec<(String, String)>,
+}
+
+async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::{bindings::selected_guide_for_row, matching};
+            use rusqlite::{params, OptionalExtension};
+            let conn = super::storage::Storage::new().connect().map_err(|_| "Cannot open programme data")?;
+            let row: Option<(String, Option<String>, String, i64)> = conn.query_row(
+                "SELECT c.source_id,c.tvg_id,COALESCE(o.display_name_override,c.imported_name),s.revision
+                 FROM iptv_channels c JOIN iptv_sources s ON s.id=c.source_id
+                 LEFT JOIN iptv_channel_overrides o ON o.channel_id=c.id
+                 WHERE c.id=?1 AND c.is_present=1 AND s.enabled=1",
+                [&row_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+            ).optional().map_err(|_| "Channel no longer exists")?;
+            let Some((playlist_id, tvg_id, effective_name, playlist_revision)) = row else {
+                return Err("Channel no longer exists");
+            };
+            let guide_id = selected_guide_for_row(&conn, &row_id)
+                .map_err(|_| "Cannot read selected guide")?
+                .ok_or("No programme guide selected; configure a guide in Programme Guides")?;
+            let source: Option<(String, i64, Option<i64>)> = conn.query_row(
+                "SELECT name,enabled,last_success_at FROM epg_sources WHERE id=?1",
+                [&guide_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+            ).optional().map_err(|_| "Cannot read selected guide")?;
+            let Some((guide_name, enabled, imported)) = source else {
+                return Err("Selected guide is missing");
+            };
+            if enabled != 1 || imported.is_none() {
+                return Err("Selected guide is disabled or not yet imported");
+            }
+            let imported = imported.expect("checked imported");
+            let prior_row_target: Option<String> = conn.query_row(
+                "SELECT guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&row_id], |r| r.get(0),
+            ).optional().map_err(|_| "Cannot read existing mapping")?;
+            let prior_alias_target: Option<String> = conn.query_row(
+                "SELECT guide_channel_id FROM epg_global_id_aliases
+                 WHERE guide_source_id=?1 AND iptv_tvg_id=?2",
+                params![guide_id, tvg_id], |r| r.get(0),
+            ).optional().map_err(|_| "Cannot read existing mapping")?;
+
+            // Entire selected-guide channel METADATA only; never programme
+            // bodies, provider endpoints, streaming URLs or credentials.
+            const MAX_ROWS: usize = 100_000;
+            const MAX_META_BYTES: usize = 48 * 1024 * 1024;
+            let mut stmt = conn.prepare(
+                "SELECT channel_id,display_name FROM epg_channels
+                 WHERE source_id=?1 ORDER BY channel_id LIMIT 100001",
+            ).map_err(|_| "Programme catalogue unavailable")?;
+            let mut rows = stmt.query([&guide_id]).map_err(|_| "Programme catalogue unavailable")?;
+            let mut channels = Vec::new();
+            let mut bytes = 0usize;
+            while let Some(row) = rows.next().map_err(|_| "Programme catalogue unavailable")? {
+                if channels.len() >= MAX_ROWS { return Err("Programme catalogue exceeds mapping limit"); }
+                let id: String = row.get(0).map_err(|_| "Programme catalogue unavailable")?;
+                let name: String = row.get(1).map_err(|_| "Programme catalogue unavailable")?;
+                bytes = bytes.saturating_add(id.len()).saturating_add(name.len());
+                if bytes > MAX_META_BYTES { return Err("Programme catalogue metadata exceeds mapping limit"); }
+                channels.push(crate::epg::model::GuideChannel {
+                    source_id: guide_id.clone(), channel_id: id, display_name: name,
+                });
+            }
+            let existing = if let Some(target) = prior_row_target.as_ref() {
+                format!("Manual target for this stream: {target}")
+            } else if let Some(target) = prior_alias_target.as_ref() {
+                format!("Confirmed shared ID alias: {target}")
+            } else if let Some(target) = tvg_id.as_ref().filter(|id| channels.iter().any(|ch| &ch.channel_id == *id)) {
+                format!("Literal guide ID: {target}")
+            } else if let Some(target) = tvg_id.as_deref()
+                .and_then(|id| matching::automatic_identity_target(id, &guide_id, &channels)) {
+                format!("Automatically proven identity: {target}")
+            } else { "No confirmed match".to_owned() };
+
+            // Same-broadcaster gate BEFORE relevance. Names alone are not
+            // station identity and are never allowed to suggest another brand.
+            let original = tvg_id.as_deref().unwrap_or("");
+            let plausible = matching::automatic_identity_candidates(original);
+            let mut suggestions: Vec<(String, String)> = Vec::new();
+            for (candidate, kind) in plausible {
+                if let Some(ch) = channels.iter().find(|c| c.channel_id == candidate
+                    && matching::corroborated_auto_identity(original, kind, c)) {
+                    suggestions.push((candidate, format!("{} — exact identity ({kind:?})", ch.display_name)));
+                }
+            }
+            // Additional human-only exact-name suggestions MUST have a literal
+            // broadcaster-brand gate in the ID and exact canonical name; no
+            // Levenshtein or cross-region generic closeness is accepted.
+            if let Some(brand) = original.split_once('.').map(|(brand, _)| brand)
+                .filter(|brand| (3..=24).contains(&brand.len())
+                    && brand.bytes().all(|b| b.is_ascii_alphanumeric())) {
+                let name_key = matching::normalized_name(&effective_name);
+                for ch in &channels {
+                    if suggestions.len() >= 5 { break; }
+                    let guidelabel = ch.display_name
+                        .split_once(" - ").map_or(ch.display_name.as_str(), |(_, label)| label);
+                    let guide_key = matching::normalized_name(guidelabel);
+                    if ch.channel_id.split_once('.').is_some_and(|(targetbrand, _)|
+                        targetbrand.eq_ignore_ascii_case(brand))
+                        && guide_key == name_key
+                        && !suggestions.iter().any(|s| s.0 == ch.channel_id) {
+                        suggestions.push((ch.channel_id.clone(),
+                            format!("{} — same broadcaster and exact displayed name (review variant)",ch.display_name)));
+                    }
+                }
+            }
+            suggestions.truncate(5);
+            Ok(CardMappingData {
+                snapshot: crate::epg::bindings::PickerMappingSnapshot {
+                    row_id, playlist_id, tvg_id, effective_name, playlist_revision,
+                    guide_source_id: guide_id, guide_last_success_at: imported,
+                    prior_row_target, prior_alias_target,
+                },
+                guide_name, existing, suggestions,
+            })
+        }).await.map_err(|_| "Programme picker worker unavailable")?
+    }).await
+}
+
+async fn search_card_guide(
+    guide: String,
+    typed: String,
+    page: u32,
+) -> Result<Vec<(String, String)>, &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use rusqlite::params;
+            if typed.len() > 128 || typed.chars().any(char::is_control) || page > 5000 {
+                return Err("Search input too long");
+            }
+            let conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Cannot open programme data")?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT channel_id,display_name FROM epg_channels
+                 WHERE source_id=?1 AND (instr(lower(channel_id),lower(?2))>0
+                     OR instr(lower(display_name),lower(?2))>0)
+                 ORDER BY channel_id LIMIT 31 OFFSET ?3",
+                )
+                .map_err(|_| "Cannot search guide channels")?;
+            let results = stmt
+                .query_map(params![guide, typed, page.saturating_mul(30)], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|_| "Cannot search guide channels")?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| "Cannot search guide channels")?;
+            Ok(results)
+        })
+        .await
+        .map_err(|_| "Programme search worker unavailable")?
+    })
+    .await
+}
+
+fn card_picker_apply(
+    view: &TvStreamsView,
+    dialog: &adw::Dialog,
+    status: &gtk::Label,
+    snap: &crate::epg::bindings::PickerMappingSnapshot,
+    exact_target: String,
+) {
+    let expected = snap.clone();
+    status.set_text(&gettext("Saving exact stream mapping…"));
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        #[weak]
+        dialog,
+        #[weak]
+        status,
+        async move {
+            let result: Result<(), &'static str> = crate::utils::tokio(async move {
+                tokio::task::spawn_blocking(move || {
+                    let mut conn = super::storage::Storage::new().connect()
+                        .map_err(|_| "Cannot open programme data")?;
+                    let at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs() as i64);
+                    crate::epg::bindings::set_row_mapping_from_picker_if_unchanged(
+                        &mut conn,
+                        crate::epg::bindings::ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                        &expected, &exact_target, at,
+                    ).map_err(|_| "Channel, guide or binding changed; reopen mapping")
+                }).await.map_err(|_| "Programme save worker unavailable")?
+            }).await;
+            match result {
+                Ok(()) => {
+                    dialog.close();
+                    view.epg_changed();
+                }
+                Err(err) => status.set_text(&gettext(err)),
+            }
+        }
+    ));
+}
+
+struct CardSearchUi {
+    results: gtk::Box,
+    previous: gtk::Button,
+    next: gtk::Button,
+    page: std::rc::Rc<std::cell::Cell<u32>>,
+    serial: std::rc::Rc<std::cell::Cell<u64>>,
+}
+impl CardSearchUi {
+    fn new(
+        results: &gtk::Box,
+        previous: &gtk::Button,
+        next: &gtk::Button,
+        page: &std::rc::Rc<std::cell::Cell<u32>>,
+        serial: &std::rc::Rc<std::cell::Cell<u64>>,
+    ) -> Self {
+        Self {
+            results: results.clone(),
+            previous: previous.clone(),
+            next: next.clone(),
+            page: page.clone(),
+            serial: serial.clone(),
+        }
+    }
+}
+
+fn refresh_card_guide_search(
+    view: &TvStreamsView,
+    dialog: &adw::Dialog,
+    status: &gtk::Label,
+    snapshot: &crate::epg::bindings::PickerMappingSnapshot,
+    entry: &gtk::Entry,
+    ui: &CardSearchUi,
+) {
+    let results = &ui.results;
+    let previous = &ui.previous;
+    let next = &ui.next;
+    let page = &ui.page;
+    let serial = &ui.serial;
+    let generation = serial.get().wrapping_add(1);
+    serial.set(generation);
+    let current_page = page.get();
+    let guide = snapshot.guide_source_id.clone();
+    let query = entry.text().to_string();
+    let snapshot = snapshot.clone();
+    status.set_text(&gettext("Searching selected guide…"));
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        #[weak]
+        dialog,
+        #[weak]
+        status,
+        #[weak]
+        results,
+        #[weak]
+        previous,
+        #[weak]
+        next,
+        #[strong]
+        serial,
+        async move {
+            let found = search_card_guide(guide, query, current_page).await;
+            if serial.get() != generation {
+                return;
+            }
+            while let Some(first) = results.first_child() {
+                results.remove(&first);
+            }
+            match found {
+                Ok(mut channels) => {
+                    let more = channels.len() > 30;
+                    channels.truncate(30);
+                    previous.set_sensitive(current_page > 0);
+                    next.set_sensitive(more);
+                    for (id, name) in channels {
+                        let button = gtk::Button::with_label(&format!("{name} — [{id}]"));
+                        button.set_halign(gtk::Align::Fill);
+                        let snap = snapshot.clone();
+                        button.connect_clicked(glib::clone!(
+                            #[weak]
+                            view,
+                            #[weak]
+                            dialog,
+                            #[weak]
+                            status,
+                            move |_| card_picker_apply(&view, &dialog, &status, &snap, id.clone())
+                        ));
+                        results.append(&button);
+                    }
+                    status.set_text(&format!(
+                        "{} / {}",
+                        gettext("Guide search page"),
+                        current_page + 1
+                    ));
+                }
+                Err(err) => status.set_text(&gettext(err)),
+            }
+        }
+    ));
+}
+
+pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
+    let Some(parent) = view.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let data = match load_card_mapping_data(row_id.clone()).await {
+                Ok(data) => data,
+                Err(reason) => {
+                    // No selected/ready guide is not a mapping dialog. Opening
+                    // a modal just to report it steals D-pad focus from the
+                    // original card. Keep focus and point to guide management.
+                    if let Some(overlay) = view
+                        .ancestor(adw::ToastOverlay::static_type())
+                        .and_downcast::<adw::ToastOverlay>()
+                    {
+                        overlay.add_toast(adw::Toast::new(&gettext(reason)));
+                    }
+                    return;
+                }
+            };
+            let dialog = adw::Dialog::new();
+            dialog.set_title(&gettext("Programme mapping"));
+            dialog.set_content_width(520);
+            let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            body.set_margin_top(12);
+            body.set_margin_bottom(12);
+            body.set_margin_start(12);
+            body.set_margin_end(12);
+            label(
+                &format!(
+                    "{}: {}",
+                    gettext("Selected programme guide"),
+                    data.guide_name
+                ),
+                &body,
+            );
+            label(&data.existing, &body);
+            label(&gettext("Choose an exact identity for THIS stream; regional, language and time-shift schedules may differ."), &body);
+            let status = gtk::Label::new(None);
+            status.set_xalign(0.0);
+            status.set_wrap(true);
+            for (exact, why) in &data.suggestions {
+                let button = gtk::Button::with_label(&format!("{why} — [{exact}]"));
+                button.set_halign(gtk::Align::Fill);
+                let target = exact.clone();
+                let snapshot = data.snapshot.clone();
+                button.connect_clicked(glib::clone!(
+                    #[weak]
+                    view,
+                    #[weak]
+                    dialog,
+                    #[weak]
+                    status,
+                    move |_| card_picker_apply(&view, &dialog, &status, &snapshot, target.clone())
+                ));
+                body.append(&button);
+            }
+            if data.suggestions.is_empty() {
+                label(&gettext("No safe, same-broadcaster suggestions. Use exact search if you know the intended channel."), &body);
+            }
+            let search_toggle =
+                gtk::Button::with_label(&gettext("Search all guide channels / choose exact ID…"));
+            search_toggle.set_halign(gtk::Align::Start);
+            body.append(&search_toggle);
+            let advanced = gtk::Revealer::new();
+            advanced.set_reveal_child(false);
+            let search_area = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            let entry = text("");
+            entry.set_placeholder_text(Some(&gettext("Exact XMLTV ID or station name")));
+            editable_control(&entry, &search_area);
+            let scroll = gtk::ScrolledWindow::new();
+            scroll.set_min_content_height(200);
+            scroll.set_max_content_height(240);
+            let results = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            scroll.set_child(Some(&results));
+            search_area.append(&scroll);
+            let pager = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let prev = gtk::Button::with_label(&gettext("Previous"));
+            let next = gtk::Button::with_label(&gettext("Next"));
+            prev.set_sensitive(false);
+            next.set_sensitive(false);
+            pager.append(&prev);
+            pager.append(&next);
+            search_area.append(&pager);
+            advanced.set_child(Some(&search_area));
+            body.append(&advanced);
+            body.append(&status);
+            let close = gtk::Button::with_label(&gettext("Cancel"));
+            close.connect_clicked(glib::clone!(
+                #[weak]
+                dialog,
+                move |_| {
+                    dialog.close();
+                }
+            ));
+            body.append(&close);
+            let snapshot = data.snapshot.clone();
+            let current_page = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+            let generation = std::rc::Rc::new(std::cell::Cell::new(0_u64));
+            search_toggle.connect_clicked(glib::clone!(
+                #[weak]
+                view,
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                #[weak]
+                entry,
+                #[weak]
+                results,
+                #[weak]
+                prev,
+                #[weak]
+                next,
+                #[weak]
+                advanced,
+                #[strong]
+                current_page,
+                #[strong]
+                generation,
+                #[strong]
+                snapshot,
+                move |_| {
+                    advanced.set_reveal_child(true);
+                    entry.grab_focus();
+                    refresh_card_guide_search(
+                        &view,
+                        &dialog,
+                        &status,
+                        &snapshot,
+                        &entry,
+                        &CardSearchUi::new(&results, &prev, &next, &current_page, &generation),
+                    );
+                }
+            ));
+            entry.connect_changed(glib::clone!(
+                #[weak]
+                view,
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                #[weak]
+                results,
+                #[weak]
+                prev,
+                #[weak]
+                next,
+                #[weak]
+                advanced,
+                #[strong]
+                current_page,
+                #[strong]
+                generation,
+                #[strong]
+                snapshot,
+                move |entry| {
+                    current_page.set(0);
+                    if advanced.reveals_child() {
+                        refresh_card_guide_search(
+                            &view,
+                            &dialog,
+                            &status,
+                            &snapshot,
+                            entry,
+                            &CardSearchUi::new(&results, &prev, &next, &current_page, &generation),
+                        );
+                    }
+                }
+            ));
+            next.connect_clicked(glib::clone!(
+                #[weak]
+                view,
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                #[weak]
+                entry,
+                #[weak]
+                results,
+                #[weak]
+                prev,
+                #[strong]
+                current_page,
+                #[strong]
+                generation,
+                #[strong]
+                snapshot,
+                move |next| {
+                    current_page.set(current_page.get().saturating_add(1));
+                    refresh_card_guide_search(
+                        &view,
+                        &dialog,
+                        &status,
+                        &snapshot,
+                        &entry,
+                        &CardSearchUi::new(&results, &prev, next, &current_page, &generation),
+                    );
+                }
+            ));
+            prev.connect_clicked(glib::clone!(
+                #[weak]
+                view,
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                #[weak]
+                entry,
+                #[weak]
+                results,
+                #[weak]
+                next,
+                #[strong]
+                current_page,
+                #[strong]
+                generation,
+                #[strong]
+                snapshot,
+                move |prev| {
+                    current_page.set(current_page.get().saturating_sub(1));
+                    refresh_card_guide_search(
+                        &view,
+                        &dialog,
+                        &status,
+                        &snapshot,
+                        &entry,
+                        &CardSearchUi::new(&results, prev, &next, &current_page, &generation),
+                    );
+                }
+            ));
+            let restore_id = row_id.clone();
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| view.restore_card_mapping_focus(&restore_id)
+            ));
+            dialog.set_child(Some(&body));
+            dialog.present(Some(&parent));
+        }
+    ));
+}
+
 pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
     show_epg_mapping_editor_with_hint(view, id, None);
 }
@@ -1231,6 +1785,7 @@ mod model_for_test {
             logo_url: None,
             channel_number: None,
             has_user_overrides: false,
+            is_favourite: false,
         };
         ChannelDetail {
             effective,

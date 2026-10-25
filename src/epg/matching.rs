@@ -72,6 +72,8 @@ pub enum MatchMethod {
     RowOverride,
     ConfirmedGlobalAlias,
     ExactTvgId,
+    /// Read-only, collision-free identity reconstruction; never a saved alias.
+    AutomaticIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +132,146 @@ pub fn normalized_name(text: &str) -> String {
         .map(|part| part.case_fold().collect::<String>())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Only identity-preserving conversions produce an automatic programme target.
+/// Names alone NEVER establish identity; the guide's exact ID and its own
+/// display label must both corroborate region or station identity. Candidates
+/// are evaluated against the complete selected guide, not another guide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoIdentityKind {
+    Quality,
+    Region,
+    UsStation,
+}
+
+/// The candidate set is intentionally short and versioned by this code; adding
+/// a region/provider heuristic requires a contract and negative-case tests.
+pub fn automatic_identity_candidates(original: &str) -> Vec<(String, AutoIdentityKind)> {
+    let Some((stem, suffix)) = original.split_once('@') else {
+        return Vec::new();
+    };
+    if suffix.contains('@') || stem.is_empty() || suffix.is_empty() {
+        return Vec::new();
+    }
+    if matches!(
+        suffix.to_ascii_lowercase().as_str(),
+        "sd" | "hd"
+            | "fhd"
+            | "fullhd"
+            | "uhd"
+            | "4k"
+            | "8k"
+            | "720p"
+            | "1080p"
+            | "2160p"
+            | "hevc"
+            | "h264"
+            | "h265"
+    ) {
+        return vec![(stem.to_owned(), AutoIdentityKind::Quality)];
+    }
+    // A narrowly defined German regional identity: preserve the *entire*
+    // named affiliate; never map an NDR region to generic NDR.de.
+    if stem == "NDRFernsehen.de" {
+        let variant = match suffix {
+            "Niedersachsen" => Some("NDRFernsehenNiedersachsen.de"),
+            "Hamburg" => Some("NDRHamburg.de"),
+            "MecklenburgVorpommern" => Some("NDRMecklenburg-Vorpommern.de"),
+            "SchleswigHolstein" => Some("NDRSchleswig-Holstein.de"),
+            _ => None,
+        };
+        if let Some(target) = variant {
+            return vec![(target.to_owned(), AutoIdentityKind::Region)];
+        }
+    }
+    // A US network + specific K/W broadcast station (the network alone is not
+    // enough). The TV/DT/CD/LD/LP *designation* is an explicit suffix; an
+    // unspecified station such as ABC.us@KAAL remains a manual case.
+    let Some(network) = stem.strip_suffix(".us") else {
+        return Vec::new();
+    };
+    if !(2..=12).contains(&network.len()) || !network.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Vec::new();
+    }
+    for designation in ["TV", "DT", "CD", "LD", "LP"] {
+        if let Some(call) = suffix.strip_suffix(designation) {
+            if (3..=5).contains(&call.len())
+                && (call.starts_with('K') || call.starts_with('W'))
+                && call.bytes().all(|b| b.is_ascii_uppercase())
+            {
+                return vec![(format!("{network}{call}.us"), AutoIdentityKind::UsStation)];
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// A guide label is corroboration, not a replacement for the structural ID.
+/// All checks use plain ASCII components found in exact candidate identities;
+/// provider prefixes and case-insensitive full-name similarity alone cannot
+/// produce a target.
+pub fn corroborated_auto_identity(
+    original: &str,
+    kind: AutoIdentityKind,
+    channel: &GuideChannel,
+) -> bool {
+    let lowered = channel.display_name.to_ascii_lowercase();
+    match kind {
+        AutoIdentityKind::Quality => true,
+        AutoIdentityKind::Region => {
+            let Some((_, region)) = original.split_once('@') else {
+                return false;
+            };
+            let region = region.to_ascii_lowercase();
+            let label: String = lowered
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect();
+            label.contains("ndr") && label.contains(&region)
+        }
+        AutoIdentityKind::UsStation => {
+            let Some((stem, suffix)) = original.split_once('@') else {
+                return false;
+            };
+            let Some(network) = stem.strip_suffix(".us") else {
+                return false;
+            };
+            let call = ["TV", "DT", "CD", "LD", "LP"]
+                .iter()
+                .find_map(|suffix_designator| suffix.strip_suffix(suffix_designator));
+            let Some(call) = call else { return false };
+            let words = lowered
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .collect::<Vec<_>>();
+            let network_key = network.to_ascii_lowercase();
+            let call_key = call.to_ascii_lowercase();
+            words.contains(&network_key.as_str()) && words.contains(&call_key.as_str())
+        }
+    }
+}
+
+/// Full selected-guide scan only. A candidate without exactly one unique
+/// corroborated guide identity is not a binding. Region and US identity can
+/// never be inferred from a display name by itself.
+pub fn automatic_identity_target(
+    original: &str,
+    selected_guide: &str,
+    channels: &[GuideChannel],
+) -> Option<String> {
+    let candidates = automatic_identity_candidates(original);
+    let mut results = Vec::new();
+    for (id, kind) in candidates {
+        let matches = channels.iter().filter(|channel| {
+            channel.source_id == selected_guide
+                && channel.channel_id == id
+                && corroborated_auto_identity(original, kind, channel)
+        });
+        for _ in matches {
+            results.push(id.clone());
+        }
+    }
+    (results.len() == 1).then(|| results.remove(0))
 }
 
 /// Alias is already filtered by its exact source+case-sensitive tvg-id in SQLite.
@@ -200,6 +342,16 @@ pub fn match_in_source(
                 source_id: id.clone(),
                 channel_id: tvg_id.to_owned(),
                 method: MatchMethod::ExactTvgId,
+            };
+        }
+    }
+
+    if let Some(original) = row.tvg_id.as_deref() {
+        if let Some(target) = automatic_identity_target(original, id, channels) {
+            return MatchDecision::Matched {
+                source_id: id.clone(),
+                channel_id: target,
+                method: MatchMethod::AutomaticIdentity,
             };
         }
     }

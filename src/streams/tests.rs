@@ -114,12 +114,14 @@ fn exact_migration_v1_with_fk_and_d6_constraints() {
     assert_eq!(
         tables,
         vec![
+            "iptv_channel_favourites",
             "iptv_channel_imported_facets",
             "iptv_channel_override_facets",
             "iptv_channel_overrides",
             "iptv_channels",
             "iptv_source_default_facets",
-            "iptv_sources"
+            "iptv_sources",
+            "iptv_view_preferences"
         ]
     );
     let index_count: i64 = conn
@@ -899,4 +901,66 @@ fn logo_references_protect_other_and_disabled_sources() {
         )
         .unwrap();
     assert!(f.store.referenced_logo_cache_names().unwrap().is_empty());
+}
+
+#[test]
+fn d35_favourites_persist_across_reopen_and_filter_sql_before_paging_and_facets() {
+    let f = Fixture::new();
+    let (source, _) = f.new_source("All channels", 5);
+    let all = f.store.query_channels(&query_all()).unwrap();
+    assert_eq!(all.total, 5);
+    let a = all.items[0].id.clone();
+    let b = all.items[3].id.clone();
+    assert!(!f.store.favourites_only().unwrap());
+    assert!(f.store.toggle_favourite(&a).unwrap());
+    assert!(f.store.toggle_favourite(&b).unwrap());
+    assert!(f.store.query_channels(&query_all()).unwrap().items[0].is_favourite);
+    f.store.set_favourites_only(true).unwrap();
+    let reopen = Storage::at(f.path.clone());
+    reopen.initialize().unwrap();
+    assert!(reopen.favourites_only().unwrap());
+    let mut q = query_all();
+    q.favourites_only = true;
+    q.limit = 1;
+    let page = reopen.query_channels(&q).unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.items.len(), 1);
+    assert!(page.items[0].is_favourite);
+    let choices = reopen
+        .query_filter_options(&q, FilterDimension::Source)
+        .unwrap();
+    assert_eq!(choices.choices.len(), 1);
+    assert_eq!(choices.choices[0].count, 2);
+    assert_eq!(reopen.channel_position(&q, &a).unwrap(), Some(0));
+    assert_eq!(reopen.channel_position(&q, &all.items[1].id).unwrap(), None);
+    q.offset = 1;
+    assert_eq!(reopen.query_channels(&q).unwrap().items[0].id, b);
+    assert!(!reopen.toggle_favourite(&a).unwrap());
+    assert_eq!(reopen.query_channels(&q).unwrap().total, 1);
+    let fake = uuid::Uuid::new_v4().to_string();
+    assert_eq!(reopen.toggle_favourite(&fake), Err(StorageError::NotFound));
+    assert_eq!(
+        reopen.toggle_favourite("untrusted"),
+        Err(StorageError::InvalidInput)
+    );
+    // Retain starred identity for transient missing refresh; remove it only
+    // when an owner explicitly deletes the complete playlist source.
+    f.conn()
+        .execute(
+            "UPDATE iptv_channels SET is_present=0,missing_since=1 WHERE id=?1",
+            [&b],
+        )
+        .unwrap();
+    assert_eq!(reopen.purge_expired_missing(NOW).unwrap(), 0);
+    let confirmed =
+        ConfirmedSourceDeletion::after_user_confirmation(&reopen.get_source(&source.id).unwrap());
+    reopen.delete_source_confirmed(&confirmed).unwrap();
+    let stars: i64 = reopen
+        .connect()
+        .unwrap()
+        .query_row("SELECT count(*) FROM iptv_channel_favourites", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(stars, 0);
 }

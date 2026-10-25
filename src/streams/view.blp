@@ -89,6 +89,13 @@ template $TvStreamsView: Adw.Bin {
           label: _("Clear Filters");
         }
 
+        Gtk.Button favourites_button {
+          label: "☆";
+          tooltip-text: _("Show favourites only");
+          width-request: 40;
+          height-request: 40;
+        }
+
         Gtk.Button manage_button {
           label: _("Manage Sources");
         }
@@ -128,6 +135,11 @@ template $TvStreamsView: Adw.Bin {
           icon-name: "tv-symbolic";
           title: _("No My Channels Yet");
           description: _("Add a playlist or manage existing sources");
+          child: Gtk.Button show_all_button {
+            label: _("Show all channels");
+            halign: center;
+            visible: false;
+          };
         };
       }
 
