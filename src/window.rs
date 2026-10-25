@@ -622,7 +622,11 @@ impl TvWindow {
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
                 // Expanded row actions own their D-pad interior and Left exit.
                 // Route before the historical list -> page switcher boundary.
-                if self.imp().streams_view.focus_expanded_action_key(&focused, key) {
+                if self
+                    .imp()
+                    .streams_view
+                    .focus_expanded_action_key(&focused, key)
+                {
                     return true;
                 }
                 // Escape from any virtualized row using one remote key, no
@@ -1194,7 +1198,9 @@ mod playback_navigation_tests {
             .remote_action_test_buttons()
             .expect("expanded selected row must be bound");
         assert!(
-            buttons.iter().all(|button| button.is_mapped() && button.is_sensitive()),
+            buttons
+                .iter()
+                .all(|button| button.is_mapped() && button.is_sensitive()),
             "all three actions must be mapped and enabled without a guide"
         );
         let assert_action = |index: usize| {
@@ -1203,7 +1209,10 @@ mod playback_navigation_tests {
                 TvWindow::is_within(&focused, buttons[index].upcast_ref()),
                 "the expected expanded-row action must own focus: {index}"
             );
-            assert!(buttons[index].has_focus(), "GTK focus styling requires focus");
+            assert!(
+                buttons[index].has_focus(),
+                "GTK focus styling requires focus"
+            );
         };
         // A disabled or unmatched programme guide must never gate Play/focus.
         streams.remote_action_test_status("Selected programme guide disabled");
@@ -1258,7 +1267,10 @@ mod playback_navigation_tests {
         assert!(!buttons.iter().any(|button| button.has_focus()));
         assert!(streams.contains_results_focus(&window.focused_widget().expect("after rebind")));
         assert!(streams.show_and_focus_test_results());
-        assert_eq!(streams.remote_action_test_selected_id().as_deref(), Some(ids[0].as_str()));
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
 
         // Collapse and Back/Escape semantics remain unchanged; Home exits
         // My Channels, but no action button can hijack a modal's keys.

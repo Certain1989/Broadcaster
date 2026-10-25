@@ -641,13 +641,12 @@ impl TvStreamsView {
         self.invalidate_epg();
         // A filter/source refresh may recycle the currently focused action.
         // Restore focus to the new list item, never to a detached button.
-        imp.restore_results_focus.set(
-            imp.bindings.borrow().values().any(|binding| {
+        imp.restore_results_focus
+            .set(imp.bindings.borrow().values().any(|binding| {
                 binding.ui.play.has_focus()
                     || binding.ui.edit.has_focus()
                     || binding.ui.mapping.has_focus()
-            }),
-        );
+            }));
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
         imp.in_flight.borrow_mut().clear();
@@ -1090,7 +1089,9 @@ impl TvStreamsView {
                     .and_then(|r| r.channel(item.position()))
                 {
                     #[cfg(test)]
-                    view.imp().fake_edit_calls.set(view.imp().fake_edit_calls.get() + 1);
+                    view.imp()
+                        .fake_edit_calls
+                        .set(view.imp().fake_edit_calls.get() + 1);
                     view.edit_selected(channel.id);
                 }
             }
@@ -1108,7 +1109,9 @@ impl TvStreamsView {
                     .and_then(|r| r.channel(item.position()))
                 {
                     #[cfg(test)]
-                    view.imp().fake_mapping_calls.set(view.imp().fake_mapping_calls.get() + 1);
+                    view.imp()
+                        .fake_mapping_calls
+                        .set(view.imp().fake_mapping_calls.get() + 1);
                     super::editor::show_epg_mapping_editor(&view, channel.id);
                 }
             }
@@ -2051,12 +2054,13 @@ impl TvStreamsView {
         let position = self.imp().selection.get()?.selected();
         self.imp().bindings.borrow().values().find_map(|binding| {
             let (slot, _) = binding.connection.as_ref()?;
-            (slot.position() == position)
-                .then(|| [
+            (slot.position() == position).then(|| {
+                [
                     binding.ui.play.clone(),
                     binding.ui.edit.clone(),
                     binding.ui.mapping.clone(),
-                ])
+                ]
+            })
         })
     }
 
@@ -2237,9 +2241,7 @@ impl TvStreamsView {
                 gtk::gdk::Key::Left => imp.results_list.grab_focus(),
                 gtk::gdk::Key::Up if index == 0 => imp.results_list.grab_focus(),
                 gtk::gdk::Key::Up => buttons[index - 1].grab_focus(),
-                gtk::gdk::Key::Down if index == buttons.len() - 1 => {
-                    imp.results_list.grab_focus()
-                }
+                gtk::gdk::Key::Down if index == buttons.len() - 1 => imp.results_list.grab_focus(),
                 gtk::gdk::Key::Down => buttons[index + 1].grab_focus(),
                 // Right remains in the action group; Left is its explicit exit.
                 gtk::gdk::Key::Right => true,
