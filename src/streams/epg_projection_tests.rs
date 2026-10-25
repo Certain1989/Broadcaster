@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::epg_projection::{next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService};
+use super::epg_projection::{
+    next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService,
+};
 use std::sync::{atomic::AtomicBool, Arc};
 
 #[test]
@@ -53,7 +55,9 @@ fn more_than_25_admissions_recover_after_release_without_budget_leak() {
 #[test]
 fn cancellation_releases_all_waiting_tickets() {
     let service = ProjectionService::new();
-    let mut waiting = (0..24).map(|_| service.admit().unwrap()).collect::<Vec<_>>();
+    let mut waiting = (0..24)
+        .map(|_| service.admit().unwrap())
+        .collect::<Vec<_>>();
     assert!(service.admit().is_none());
     waiting.truncate(3); // rapid unbind of 21 recycled GTK row identities
     assert_eq!(service.pending(), 3);
@@ -67,16 +71,29 @@ fn cancellation_releases_all_waiting_tickets() {
 fn injected_time_crosses_current_stop_next_start_gap_and_overlap() {
     let at = 1_800_000_000;
     let within_current = next_projection_deadline(at, true, None, [(at - 600, at + 12)]);
-    assert_eq!(within_current, at + 12, "half-open current must expire at stop");
+    assert_eq!(
+        within_current,
+        at + 12,
+        "half-open current must expire at stop"
+    );
 
     let gap = next_projection_deadline(at, false, None, [(at - 600, at - 1), (at + 23, at + 80)]);
     assert_eq!(gap, at + 23, "a guide gap is unknown, not inferred off-air");
 
-    let overlap = next_projection_deadline(at, true, None, [(at - 100, at + 45), (at + 20, at + 120)]);
-    assert_eq!(overlap, at + 20, "new overlapping programme changes certainty");
+    let overlap =
+        next_projection_deadline(at, true, None, [(at - 100, at + 45), (at + 20, at + 120)]);
+    assert_eq!(
+        overlap,
+        at + 20,
+        "new overlapping programme changes certainty"
+    );
 
     let progress = next_projection_deadline(at, true, None, [(at - 300, at + 600)]);
-    assert_eq!(progress, at + 60, "progress gets a bounded single-view update");
+    assert_eq!(
+        progress,
+        at + 60,
+        "progress gets a bounded single-view update"
+    );
 }
 
 #[test]
@@ -103,19 +120,38 @@ fn injected_36h_72h_freshness_boundaries_and_overflow() {
 fn sqlite_data_version_detects_external_writes_not_own_connection() {
     // The revision observer MUST keep one connection open. A new connection
     // each poll would return incomparable PRAGMA data_version values.
-    let path = std::env::temp_dir().join(format!("broadcaster-epg-revision-{}.sqlite", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!(
+        "broadcaster-epg-revision-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
     let writer = rusqlite::Connection::open(&path).unwrap();
-    writer.execute_batch("CREATE TABLE revision_sample (x INTEGER);").unwrap();
+    writer
+        .execute_batch("CREATE TABLE revision_sample (x INTEGER);")
+        .unwrap();
     let observer = rusqlite::Connection::open(&path).unwrap();
     let version = || -> i64 {
-        observer.query_row("PRAGMA data_version", [], |row| row.get(0)).unwrap()
+        observer
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap()
     };
     let before = version();
-    writer.execute("INSERT INTO revision_sample(x) VALUES (1)", []).unwrap();
-    assert_ne!(version(), before, "independent committed writer must invalidate");
+    writer
+        .execute("INSERT INTO revision_sample(x) VALUES (1)", [])
+        .unwrap();
+    assert_ne!(
+        version(),
+        before,
+        "independent committed writer must invalidate"
+    );
     let after = version();
-    observer.execute("INSERT INTO revision_sample(x) VALUES (2)", []).unwrap();
-    assert_eq!(version(), after, "data_version ignores writes on observer connection");
+    observer
+        .execute("INSERT INTO revision_sample(x) VALUES (2)", [])
+        .unwrap();
+    assert_eq!(
+        version(),
+        after,
+        "data_version ignores writes on observer connection"
+    );
     drop(observer);
     drop(writer);
     let _ = std::fs::remove_file(path);
@@ -129,7 +165,9 @@ async fn cancelling_waiting_row_releases_ticket_without_a_worker_permit() {
     let worker = service.clone();
     let cancel = token.clone();
     let pending = tokio::spawn(async move {
-        worker.read("synthetic-row".into(), 1_800_000_000, cancel).await
+        worker
+            .read("synthetic-row".into(), 1_800_000_000, cancel)
+            .await
     });
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     assert_eq!(service.pending(), 1);
