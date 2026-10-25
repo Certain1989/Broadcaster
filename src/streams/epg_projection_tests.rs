@@ -4,6 +4,7 @@
 use super::epg_projection::{
     next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService,
 };
+use adw::glib;
 use std::sync::{atomic::AtomicBool, Arc};
 
 #[test]
