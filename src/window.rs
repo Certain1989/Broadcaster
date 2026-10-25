@@ -1197,11 +1197,27 @@ mod playback_navigation_tests {
         let buttons = streams
             .remote_action_test_buttons()
             .expect("expanded selected row must be bound");
+        let button_states: Vec<_> = buttons
+            .iter()
+            .map(|button| {
+                let reveal = button
+                    .ancestor(gtk::Revealer::static_type())
+                    .and_downcast::<gtk::Revealer>();
+                (
+                    button.is_mapped(),
+                    button.is_visible(),
+                    button.is_sensitive(),
+                    reveal.as_ref().map(|reveal| reveal.reveals_child()),
+                    reveal.as_ref().map(|reveal| reveal.is_mapped()),
+                )
+            })
+            .collect();
         assert!(
             buttons
                 .iter()
                 .all(|button| button.is_mapped() && button.is_sensitive()),
-            "all three actions must be mapped and enabled without a guide"
+            "all three actions must be mapped and enabled without a guide; states: {button_states:?}; selected={:?}",
+            streams.remote_action_test_selected_id()
         );
         let assert_action = |index: usize| {
             let focused = window.focused_widget().expect("focused action");
