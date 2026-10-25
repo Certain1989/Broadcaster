@@ -1239,6 +1239,18 @@ mod playback_navigation_tests {
                 "GTK focus styling requires focus"
             );
         };
+        // Repeated Right must not make any of the expanded actions lose GTK focus.
+        // This verifies the routed widget state, not compositor-rendered pixels.
+        for (index, button) in buttons.iter().enumerate() {
+            assert!(button.grab_focus(), "action {index} must accept focus");
+            assert_action(index);
+            for _ in 0..10 {
+                assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+                assert_action(index);
+            }
+        }
+        assert!(buttons[0].grab_focus());
+
         // A disabled or unmatched programme guide must never gate Play/focus.
         streams.remote_action_test_status("Selected programme guide disabled");
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
