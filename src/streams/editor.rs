@@ -663,16 +663,20 @@ async fn save_epg_mapping(
     .await
 }
 
-fn confirm_epg_mapping(
-    view: &TvStreamsView,
-    parent: &gtk::Window,
-    action: MappingAction,
+struct MappingChoice {
     row: String,
     playlist: String,
     source: String,
     target: String,
     imported_tvg: Option<String>,
     source_name: String,
+}
+
+fn confirm_epg_mapping(
+    view: &TvStreamsView,
+    parent: &gtk::Window,
+    action: MappingAction,
+    choice: MappingChoice,
 ) {
     let dialog = adw::Dialog::new();
     dialog.set_title(&gettext("Confirm Programme Mapping"));
@@ -696,11 +700,11 @@ fn confirm_epg_mapping(
             &format!(
                 "{}: {}\n{}: {}\n{}: {}",
                 gettext("Imported exact tvg-id (case-sensitive)"),
-                imported_tvg.as_deref().unwrap_or(""),
+                choice.imported_tvg.as_deref().unwrap_or(""),
                 gettext("Selected programme guide"),
-                source_name,
+                choice.source_name,
                 gettext("XMLTV channel ID"),
-                target
+                choice.target
             ),
             &body,
         );
@@ -744,10 +748,10 @@ fn confirm_epg_mapping(
         view,
         move |_| {
             approve.set_sensitive(false);
-            let row = row.clone();
-            let playlist = playlist.clone();
-            let source = source.clone();
-            let target = target.clone();
+            let row = choice.row.clone();
+            let playlist = choice.playlist.clone();
+            let source = choice.source.clone();
+            let target = choice.target.clone();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
@@ -905,12 +909,16 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                             &view,
                             &window,
                             action,
-                            stable_id.clone(),
-                            playlist_id.clone(),
-                            selected_guide.map_or_else(String::new, |guide| guide.id.clone()),
-                            id,
-                            imported_tvg.clone(),
-                            selected_guide.map_or_else(String::new, |guide| guide.name.clone()),
+                            MappingChoice {
+                                row: stable_id.clone(),
+                                playlist: playlist_id.clone(),
+                                source: selected_guide
+                                    .map_or_else(String::new, |guide| guide.id.clone()),
+                                target: id,
+                                imported_tvg: imported_tvg.clone(),
+                                source_name: selected_guide
+                                    .map_or_else(String::new, |guide| guide.name.clone()),
+                            },
                         );
                     }
                 ));
