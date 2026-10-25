@@ -1488,7 +1488,7 @@ impl TvStreamsView {
 
     fn paint_epg(ui: &RowUi, result: ProjectionOutcome) {
         Self::clear_epg(ui);
-        let mut status: String;
+        let status: String;
         match result {
             ProjectionOutcome::Busy => status = gettext("Programme lookup busy; retrying"),
             ProjectionOutcome::Cancelled | ProjectionOutcome::SourceChanged => return,
