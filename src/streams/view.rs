@@ -2061,6 +2061,19 @@ impl TvStreamsView {
     }
 
     #[cfg(test)]
+    pub(crate) fn remote_action_test_activate(&self) {
+        let selected = self.imp().selection.get().expect("selection").selected();
+        self.imp()
+            .results_list
+            .emit_by_name::<()>("activate", &[&selected]);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_selected_id(&self) -> Option<ChannelId> {
+        self.imp().selected_id.borrow().clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn remote_action_test_counts(&self) -> (usize, usize, usize) {
         let imp = self.imp();
         (
