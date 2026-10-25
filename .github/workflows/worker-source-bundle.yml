@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Certain1989
+# SPDX-License-Identifier: CC0-1.0
+
+name: Worker source bundle
+
+# Source transport only. This does not run application tests or approve merges.
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'Optional full 40-hex Broadcaster commit SHA to export'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete public source history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create self-contained exact-commit Git bundle
+        id: source
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.target_sha }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha="${REQUESTED_SHA:-$PUSH_SHA}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid commit SHA" >&2; exit 1; }
+          # Explicitly fetch even on dispatch, rather than silently using an old HEAD.
+          git fetch --no-tags origin "$sha"
+          [[ "$(git cat-file -t "$sha")" == commit ]] || exit 1
+          git update-ref refs/heads/worker-source-export "$sha"
+          mkdir -p export
+          git bundle create export/broadcaster-source.bundle refs/heads/worker-source-export
+          printf '%s\n' "$sha" > export/SOURCE_SHA
+          git rev-parse "$sha^{tree}" > export/SOURCE_TREE
+          (cd export && sha256sum broadcaster-source.bundle SOURCE_SHA SOURCE_TREE > SHA256SUMS)
+          # A fresh empty bare repository must be able to verify the complete history.
+          git init -q --bare "$RUNNER_TEMP/source-verify.git"
+          git --git-dir="$RUNNER_TEMP/source-verify.git" bundle verify "$PWD/export/broadcaster-source.bundle"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload source transport artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: broadcaster-source-${{ steps.source.outputs.sha }}
+          path: export/
+          if-no-files-found: error
+          retention-days: 30
