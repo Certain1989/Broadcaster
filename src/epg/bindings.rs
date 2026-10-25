@@ -12,7 +12,7 @@ use super::{
     },
     model::{select_programmes, EpgError, GuideChannel, NowNext},
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +269,49 @@ pub fn set_global_alias(
     .map_err(db)?;
     tx.commit().map_err(db)
 }
+/// Store an all-playlist exact-ID alias only for the literal imported tvg-id
+/// the user saw on the confirmation sheet. A playlist refresh may retain the
+/// row UUID while changing its tvg-id; the comparison and UPSERT therefore
+/// MUST share one immediate write transaction. Mismatch is fail-closed.
+pub fn set_global_alias_if_imported_id_matches(
+    conn: &mut Connection,
+    _: ConfirmedGlobalMapping,
+    sample_iptv_channel_id: &str,
+    expected_imported_tvg_id: &str,
+    guide_source_id: &str,
+    guide_channel_id: &str,
+    at: i64,
+) -> Result<(), BindingError> {
+    id(expected_imported_tvg_id, 512)?;
+    fk(conn)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    let (playlist, imported_tvg) = row_in_playlist(&tx, sample_iptv_channel_id)?;
+    if imported_tvg.as_deref() != Some(expected_imported_tvg_id) {
+        return Err(BindingError::InvalidInput);
+    }
+    guide_channel_exists(&tx, guide_source_id, guide_channel_id)?;
+    let selected = resolve_source_id(&tx, sample_iptv_channel_id, &playlist)?;
+    if selected.as_deref() != Some(guide_source_id) {
+        return Err(BindingError::InvalidInput);
+    }
+    tx.execute(
+        "INSERT INTO epg_global_id_aliases
+         (guide_source_id,iptv_tvg_id,guide_channel_id,updated_at) VALUES (?1,?2,?3,?4)
+         ON CONFLICT(guide_source_id,iptv_tvg_id) DO UPDATE
+         SET guide_channel_id=excluded.guide_channel_id,updated_at=excluded.updated_at",
+        params![
+            guide_source_id,
+            expected_imported_tvg_id,
+            guide_channel_id,
+            at
+        ],
+    )
+    .map_err(db)?;
+    tx.commit().map_err(db)
+}
+
 pub fn clear_global_alias(
     conn: &mut Connection,
     _: ConfirmedGlobalMapping,
