@@ -114,8 +114,7 @@ pub(super) fn programme_next_in_timezone(
         return gettext("Unknown time");
     };
     let mut parts = Vec::new();
-    if programme_clock_at(reference_utc, zone)
-        .is_some_and(|reference| reference.date != point.date)
+    if programme_clock_at(reference_utc, zone).is_some_and(|reference| reference.date != point.date)
     {
         parts.push(point.date.clone());
     }
