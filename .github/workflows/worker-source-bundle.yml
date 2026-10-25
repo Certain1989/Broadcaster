@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Certain1989
+# SPDX-License-Identifier: CC0-1.0
+
 name: Worker source bundle
 
 # Source transport only. This does not run application tests or approve merges.
