@@ -572,7 +572,17 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     dialog.set_content_height(650);
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
+    let guides = button(&gettext("Programme Guides"), &actions);
     let close = button(&gettext("Close"), &actions);
+    guides.connect_clicked(glib::clone!(
+        #[weak]
+        view,
+        move |_| {
+            if let Some(window) = parent(&view) {
+                crate::epg::desktop::show_guide_manager(&window);
+            }
+        }
+    ));
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_vexpand(true);
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
