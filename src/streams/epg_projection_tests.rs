@@ -528,7 +528,14 @@ fn final_composed_status_retains_aging_partial_and_failed_refresh_with_now() {
     let range = "12:00 – 12:30";
 
     assert_eq!(
-        compose_epg_status(Freshness::Aging, &coverage, false, Some(range), false, false),
+        compose_epg_status(
+            Freshness::Aging,
+            &coverage,
+            false,
+            Some(range),
+            false,
+            false
+        ),
         format!(
             "{range} · {}",
             gettext("Guide cache aging; coverage unverified")
@@ -536,7 +543,14 @@ fn final_composed_status_retains_aging_partial_and_failed_refresh_with_now() {
         "a current Now must not erase the 36h+ unverified coverage warning"
     );
     assert_eq!(
-        compose_epg_status(Freshness::Fresh, &coverage, false, Some(range), false, false),
+        compose_epg_status(
+            Freshness::Fresh,
+            &coverage,
+            false,
+            Some(range),
+            false,
+            false
+        ),
         format!("{range} · {}", gettext("Guide coverage is partial")),
         "a current Now must not erase partial-coverage qualification"
     );
