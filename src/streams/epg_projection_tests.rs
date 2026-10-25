@@ -180,3 +180,266 @@ async fn cancelling_waiting_row_releases_ticket_without_a_worker_permit() {
     assert_eq!(service.pending(), 0);
     drop(held);
 }
+
+fn alias_fixture() -> rusqlite::Connection {
+    use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+    use rusqlite::params;
+
+    let c = rusqlite::Connection::open_in_memory().expect("fabricated sqlite");
+    c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    c.execute_batch(MIGRATION_001).unwrap();
+    c.execute_batch(MIGRATION_002).unwrap();
+    for playlist in ["playlist-a", "playlist-b"] {
+        c.execute(
+            "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES (?1,?1,'local_file','/fabricated/playlist',1,1)",
+            [playlist],
+        )
+        .unwrap();
+    }
+    for (id, playlist, order, tvg) in [
+        ("a1", "playlist-a", 0, "CHANNEL.ID"),
+        ("b1", "playlist-b", 0, "CHANNEL.ID"),
+        ("a2", "playlist-a", 1, "channel.id"),
+    ] {
+        c.execute(
+            "INSERT INTO iptv_channels
+             (id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+             VALUES (?1,?2,?3,'Fabricated','https://example.invalid/stream',?4,1,1)",
+            params![id, playlist, order, tvg],
+        )
+        .unwrap();
+    }
+    for guide in ["shared", "exception"] {
+        c.execute(
+            "INSERT INTO epg_sources
+             (id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+             VALUES (?1,?1,'local_file','/fabricated/guide',1,1,1,1000)",
+            [guide],
+        )
+        .unwrap();
+    }
+    for (source, target) in [
+        ("shared", "global-target"),
+        ("shared", "manual-target"),
+        ("exception", "CHANNEL.ID"),
+    ] {
+        c.execute(
+            "INSERT INTO epg_channels (source_id,channel_id,display_name)
+             VALUES (?1,?2,'Fabricated programme channel')",
+            params![source, target],
+        )
+        .unwrap();
+    }
+    c
+}
+
+#[test]
+fn exact_global_alias_rejects_stale_same_uuid_tvg_id_without_side_effects() {
+    use crate::epg::bindings::{
+        set_global_alias_if_imported_id_matches, set_shared_guide, BindingError,
+        ConfirmedGlobalMapping, ConfirmedGuideSelection,
+    };
+    let mut c = alias_fixture();
+    set_shared_guide(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("shared"),
+    )
+    .unwrap();
+
+    // The editor showed CHANNEL.ID, then a playlist refresh retained a1's
+    // UUID and URL while changing its imported tvg-id to a different key.
+    c.execute("UPDATE iptv_channels SET tvg_id='CHANGED.ID' WHERE id='a1'", [])
+        .unwrap();
+    let consent = || ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams();
+    assert_eq!(
+        set_global_alias_if_imported_id_matches(
+            &mut c,
+            consent(),
+            "a1",
+            "CHANNEL.ID",
+            "shared",
+            "global-target",
+            2,
+        ),
+        Err(BindingError::InvalidInput),
+        "user consent for CHANNEL.ID must not create an alias for CHANGED.ID"
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    // Reject a differently cased expectation even if it looks similar.
+    assert_eq!(
+        set_global_alias_if_imported_id_matches(
+            &mut c,
+            consent(),
+            "b1",
+            "channel.id",
+            "shared",
+            "global-target",
+            3,
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn exact_global_alias_two_playlists_preserves_scope_case_and_override_order() {
+    use crate::epg::{
+        bindings::{
+            resolve_row, set_global_alias_if_imported_id_matches, set_playlist_exception,
+            set_row_mapping, set_shared_guide, ConfirmedGlobalMapping,
+            ConfirmedGuideSelection, ConfirmedRowMapping,
+        },
+        matching::{MatchDecision, MatchMethod},
+    };
+    let mut c = alias_fixture();
+    let cancel = AtomicBool::new(false);
+    set_shared_guide(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("shared"),
+    )
+    .unwrap();
+    set_global_alias_if_imported_id_matches(
+        &mut c,
+        ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
+        "a1",
+        "CHANNEL.ID",
+        "shared",
+        "global-target",
+        2,
+    )
+    .unwrap();
+
+    for id in ["a1", "b1"] {
+        assert!(matches!(
+            resolve_row(&c, id, &cancel).unwrap(),
+            MatchDecision::Matched {
+                method: MatchMethod::ConfirmedGlobalAlias,
+                source_id,
+                channel_id,
+            } if source_id == "shared" && channel_id == "global-target"
+        ));
+    }
+    assert!(
+        !matches!(
+            resolve_row(&c, "a2", &cancel).unwrap(),
+            MatchDecision::Matched { method: MatchMethod::ConfirmedGlobalAlias, .. }
+        ),
+        "lower-case imported tvg-id cannot inherit upper-case alias"
+    );
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1",
+        "shared",
+        "manual-target",
+        3,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve_row(&c, "a1", &cancel).unwrap(),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            channel_id,
+            ..
+        } if channel_id == "manual-target"
+    ));
+    set_playlist_exception(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-b",
+        Some("exception"),
+        4,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve_row(&c, "b1", &cancel).unwrap(),
+        MatchDecision::Matched {
+            source_id,
+            channel_id,
+            ..
+        } if source_id == "exception" && channel_id == "CHANNEL.ID"
+    ));
+    // An unrelated playlist/guide exception cannot override the manual row
+    // or rewrite the shared guide's exact alias entry.
+    assert!(matches!(
+        resolve_row(&c, "a1", &cancel).unwrap(),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    assert_eq!(
+        c.query_row(
+            "SELECT iptv_tvg_id FROM epg_global_id_aliases WHERE guide_source_id='shared'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap(),
+        "CHANNEL.ID"
+    );
+}
+
+#[test]
+fn exact_global_alias_validates_expected_id_and_selected_guide() {
+    use crate::epg::bindings::{
+        set_global_alias_if_imported_id_matches, set_shared_guide, BindingError,
+        ConfirmedGlobalMapping, ConfirmedGuideSelection,
+    };
+    let mut c = alias_fixture();
+    let consent = || ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams();
+    set_shared_guide(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("shared"),
+    )
+    .unwrap();
+    for invalid in ["", " CHANNEL.ID", "CHANNEL.ID ", "CHANNEL\n.ID"] {
+        assert_eq!(
+            set_global_alias_if_imported_id_matches(
+                &mut c,
+                consent(),
+                "a1",
+                invalid,
+                "shared",
+                "global-target",
+                3
+            ),
+            Err(BindingError::InvalidInput)
+        );
+    }
+    // The guide selection may have been changed after confirmation.
+    set_shared_guide(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("exception"),
+    )
+    .unwrap();
+    assert_eq!(
+        set_global_alias_if_imported_id_matches(
+            &mut c,
+            consent(),
+            "a1",
+            "CHANNEL.ID",
+            "shared",
+            "global-target",
+            4,
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
