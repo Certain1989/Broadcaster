@@ -867,6 +867,25 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             let clear_row =
                 gtk::Button::with_label(&gettext("Remove this stream's manual mapping"));
             let close = gtk::Button::with_label(&gettext("Close"));
+            let bulk = gtk::Button::with_label(&gettext("Review possible mappings in this guide"));
+            bulk.set_sensitive(!guides.is_empty());
+            bulk.set_halign(gtk::Align::Start);
+            body.append(&bulk);
+            bulk.connect_clicked(glib::clone!(
+                #[weak]
+                view,
+                #[strong]
+                guides,
+                #[strong]
+                picker,
+                #[strong]
+                window,
+                move |_| {
+                    if let Some(guide) = guides.get(picker.selected() as usize) {
+                        show_epg_bulk_review(&view, &window, guide.id.clone());
+                    }
+                }
+            ));
             playlist.set_sensitive(!guides.is_empty());
             for control in [
                 &single,
@@ -1070,4 +1089,578 @@ mod editor_tests {
         assert!(filled_region(" ", " ").is_err());
         assert!(filled_region(&"x".repeat(65), "Label").is_err());
     }
+}
+
+// M1's candidate assistant never mutates an inferred mapping directly. It
+// exposes at most one small page of controls, uses background SQLite snapshots,
+// and requires a second explicit impact confirmation before the atomic write.
+const GUIDE_REVIEW_PAGE_SIZE: usize = 16;
+const GUIDE_REVIEW_MAX_SELECTIONS: usize = 4_096;
+
+/// Do not queue an unbounded number of whole-guide snapshots. A rejected job
+/// is preferable to starving GTK, SQLite imports or the playback pipeline.
+fn guide_work_permit() -> Result<tokio::sync::OwnedSemaphorePermit, &'static str> {
+    static GATE: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    GATE.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "Two guide review tasks are already active")
+}
+
+fn review_reason(reason: crate::epg::candidates::CandidateReason) -> &'static str {
+    use crate::epg::candidates::{CandidateReason, FeedClass};
+    match reason {
+        CandidateReason::Feed(FeedClass::Quality) => "Quality variant — review only",
+        CandidateReason::Feed(FeedClass::Region) => "Regional schedule — verify individually",
+        CandidateReason::Feed(FeedClass::Language) => "Language variant — verify individually",
+        CandidateReason::Feed(FeedClass::TimeShift) => "Time-shifted feed — verify individually",
+        CandidateReason::Feed(FeedClass::Provider) => "Distribution/provider — verify individually",
+        CandidateReason::Feed(FeedClass::Unknown) => "Unknown feed — verify individually",
+        CandidateReason::NameOnly => "Name similarity is not an alias identity",
+    }
+}
+
+fn populate_guide_review_page(
+    review: &crate::epg::candidates::GuideReview,
+    page: usize,
+    rows: &gtk::Box,
+    navigation: &gtk::Label,
+    selected: &std::rc::Rc<std::cell::RefCell<BTreeSet<String>>>,
+) {
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    let count = review.proposals.len();
+    let start = page.saturating_mul(GUIDE_REVIEW_PAGE_SIZE).min(count);
+    let end = (start + GUIDE_REVIEW_PAGE_SIZE).min(count);
+    navigation.set_text(&format!(
+        "{} {}–{} / {} • {} {}",
+        gettext("Review rows"),
+        start.saturating_add(usize::from(count != 0)),
+        end,
+        count,
+        selected.borrow().len(),
+        gettext("selected")
+    ));
+    for item in &review.proposals[start..end] {
+        let original = item.candidate.original_tvg_id.clone();
+        let text = format!(
+            "{} → {}\n{} • {}: {} • {}: {}",
+            original,
+            item.candidate.full_xmltv_id,
+            gettext(review_reason(item.candidate.reason)),
+            gettext("Current rows"),
+            item.affected_rows,
+            gettext("Manual exclusions"),
+            item.already_bound_rows
+        );
+        let choice = gtk::CheckButton::with_label(&text);
+        choice.set_tooltip_text(Some(&gettext(
+            "Not automatically mapped. Confirmation creates a guide-scoped alias for the original case-sensitive ID, including future same-ID streams.",
+        )));
+        choice.set_active(selected.borrow().contains(&original));
+        let selected = selected.clone();
+        choice.connect_toggled(move |control| {
+            if control.is_active() {
+                if selected.borrow().len() >= GUIDE_REVIEW_MAX_SELECTIONS {
+                    control.set_active(false);
+                    return;
+                }
+                selected.borrow_mut().insert(original.clone());
+            } else {
+                selected.borrow_mut().remove(&original);
+            }
+        });
+        choice.set_halign(gtk::Align::Fill);
+        rows.append(&choice);
+    }
+}
+
+async fn compute_guide_review(
+    guide: String,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<crate::epg::candidates::GuideReview, &'static str> {
+    let permit = guide_work_permit()?;
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Programme data unavailable")?;
+            crate::epg::candidates::load_guide_review(&mut conn, &guide, &cancel).map_err(|error| {
+                use crate::epg::candidates::ReviewLoadError;
+                match error {
+                    ReviewLoadError::Unavailable => "Guide disabled or not imported yet",
+                    ReviewLoadError::Cancelled => "Review cancelled",
+                    ReviewLoadError::TooLarge => "Review memory or row budget exceeded",
+                    ReviewLoadError::Storage => "Unable to read programme data",
+                }
+            })
+        })
+        .await
+        .map_err(|_| "Programme mapping worker unavailable")?
+    })
+    .await
+}
+
+async fn prepare_guide_bulk(
+    guide: String,
+    choices: Vec<crate::epg::bulk::AliasChoice>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<crate::epg::bulk::BulkPreview, &'static str> {
+    let permit = guide_work_permit()?;
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Programme data unavailable")?;
+            // Match validation, impact and the fingerprint now share one
+            // consistent SQLite read transaction (no TOCTOU gap).
+            crate::epg::bulk::preview_discovered_bulk(&mut conn, &guide, &choices, &cancel)
+                .map_err(|_| "Candidate or guide state changed; reopen the review")
+        })
+        .await
+        .map_err(|_| "Programme mapping worker unavailable")?
+    })
+    .await
+}
+
+async fn commit_guide_bulk(
+    preview: crate::epg::bulk::BulkPreview,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<crate::epg::bulk::SessionUndo, &'static str> {
+    let permit = guide_work_permit()?;
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let mut conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Programme data unavailable")?;
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |value| value.as_secs() as i64);
+            crate::epg::bulk::apply_bulk(
+                &mut conn,
+                crate::epg::bulk::ConfirmedBulkReview::after_user_confirmation(),
+                preview,
+                at,
+                &cancel,
+            )
+            .map_err(|_| "Mapping state changed or write failed; no partial batch was saved")
+        })
+        .await
+        .map_err(|_| "Programme mapping worker unavailable")?
+    })
+    .await
+}
+
+fn present_bulk_undo(
+    parent: &gtk::Window,
+    view: &TvStreamsView,
+    undo: crate::epg::bulk::SessionUndo,
+) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&gettext("Mappings saved"));
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(20);
+    body.set_margin_bottom(20);
+    body.set_margin_start(20);
+    body.set_margin_end(20);
+    label(&gettext("Your confirmed aliases were saved. Same-session undo is available only while nothing relevant has changed."), &body);
+    let error = gtk::Label::new(None);
+    error.set_xalign(0.0);
+    error.set_wrap(true);
+    body.append(&error);
+    let undo_button = gtk::Button::with_label(&gettext("Undo this batch"));
+    body.append(&undo_button);
+    let close = gtk::Button::with_label(&gettext("Close"));
+    body.append(&close);
+    close.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    let undo_slot = std::rc::Rc::new(std::cell::RefCell::new(Some(undo)));
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    dialog.connect_closed({
+        let cancelled = cancelled.clone();
+        move |_| cancelled.store(true, std::sync::atomic::Ordering::Release)
+    });
+    undo_button.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        error,
+        #[weak]
+        view,
+        #[weak]
+        undo_button,
+        #[strong]
+        cancelled,
+        move |_| {
+            let Some(token) = undo_slot.borrow_mut().take() else {
+                return;
+            };
+            undo_button.set_sensitive(false);
+            let cancelled = cancelled.clone();
+            spawn(glib::clone!(
+                #[weak]
+                error,
+                #[weak]
+                dialog,
+                #[weak]
+                view,
+                async move {
+                    let result = crate::utils::tokio(async move {
+                        tokio::task::spawn_blocking(move || {
+                            let mut conn = super::storage::Storage::new()
+                                .connect()
+                                .map_err(|_| "Programme database unavailable")?;
+                            crate::epg::bulk::undo_same_session(&mut conn, token, &cancelled)
+                                .map_err(|_| "Undo refused: mappings or guide state changed")
+                        })
+                        .await
+                        .map_err(|_| "Programme mapping worker unavailable")?
+                    })
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            view.epg_changed();
+                            dialog.close();
+                        }
+                        Err(message) => error.set_text(&gettext(message)),
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.set_child(Some(&body));
+    dialog.present(Some(parent));
+}
+
+fn present_bulk_confirmation(
+    parent: &gtk::Window,
+    view: &TvStreamsView,
+    preview: crate::epg::bulk::BulkPreview,
+) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&gettext("Confirm programme mappings"));
+    dialog.set_content_width(660);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(16);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+    let items = preview.impact();
+    let (mut selected, mut manual, mut elsewhere) = (0_u64, 0_u64, 0_u64);
+    for item in items {
+        selected = selected.saturating_add(item.selected_guide_rows);
+        manual = manual.saturating_add(item.manual_exclusions);
+        elsewhere = elsewhere.saturating_add(item.other_guide_rows);
+    }
+    label(&format!(
+        "{}: {}\n{}: {} • {}: {} • {}: {}\n{}",
+        gettext("Distinct original IPTV ID alias keys"), items.len(),
+        gettext("Currently selected-guide rows"), selected,
+        gettext("Manual mapping exclusions"), manual,
+        gettext("Rows selecting other guides"), elsewhere,
+        gettext("Each guide-scoped alias can also affect FUTURE imported rows with exactly the same case-sensitive tvg-id. No inferred mapping is activated without your approval.")
+    ), &body);
+    // A small illustrative page; never instantiate 4,096 impact widgets.
+    let details = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    for item in items.iter().take(12) {
+        label(
+            &format!(
+                "{} → {} ({}: {}, {}: {})",
+                item.choice.original_tvg_id,
+                item.choice.full_xmltv_id,
+                gettext("Current rows"),
+                item.selected_guide_rows,
+                gettext("Manual exclusions"),
+                item.manual_exclusions
+            ),
+            &details,
+        );
+    }
+    if items.len() > 12 {
+        label(
+            &format!(
+                "{} {}",
+                items.len() - 12,
+                gettext("additional aliases included in the batch")
+            ),
+            &details,
+        );
+    }
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_min_content_height(120);
+    scroller.set_max_content_height(230);
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_child(Some(&details));
+    body.append(&scroller);
+    let error = gtk::Label::new(None);
+    error.set_xalign(0.0);
+    error.set_wrap(true);
+    body.append(&error);
+    let approve = gtk::Button::with_label(&gettext("Confirm and apply all listed aliases"));
+    let cancel_button = gtk::Button::with_label(&gettext("Back without changes"));
+    body.append(&approve);
+    body.append(&cancel_button);
+    cancel_button.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    let preview_slot = std::rc::Rc::new(std::cell::RefCell::new(Some(preview)));
+    let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    dialog.connect_closed({
+        let cancellation = cancellation.clone();
+        move |_| cancellation.store(true, std::sync::atomic::Ordering::Release)
+    });
+    let parent = parent.clone();
+    let present_parent = parent.clone();
+    approve.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        error,
+        #[weak]
+        approve,
+        #[weak]
+        view,
+        #[strong]
+        cancellation,
+        move |_| {
+            let Some(preview) = preview_slot.borrow_mut().take() else {
+                return;
+            };
+            approve.set_sensitive(false);
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                error,
+                #[weak]
+                view,
+                #[strong]
+                parent,
+                #[strong]
+                cancellation,
+                async move {
+                    match commit_guide_bulk(preview, cancellation).await {
+                        Ok(undo) => {
+                            view.epg_changed();
+                            dialog.close();
+                            present_bulk_undo(&parent, &view, undo);
+                        }
+                        Err(message) => error.set_text(&gettext(message)),
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.set_child(Some(&body));
+    dialog.present(Some(&present_parent));
+}
+
+fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: String) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title(&gettext("Review suggested programme mappings"));
+    dialog.set_content_width(760);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(16);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+    label(&gettext("Candidates are NOT confirmed matches. Verify complete XMLTV IDs, feed/region warnings and cross-playlist effects before approving."), &body);
+    let overview = gtk::Label::new(Some(&gettext("Building selected-guide index…")));
+    overview.set_wrap(true);
+    overview.set_xalign(0.0);
+    body.append(&overview);
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_min_content_height(290);
+    scroll.set_max_content_height(410);
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_child(Some(&list));
+    body.append(&scroll);
+    let position = gtk::Label::new(None);
+    body.append(&position);
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let previous = gtk::Button::with_label(&gettext("Previous page"));
+    let next = gtk::Button::with_label(&gettext("Next page"));
+    let preview = gtk::Button::with_label(&gettext("Preview selected aliases"));
+    let close = gtk::Button::with_label(&gettext("Close"));
+    for control in [&previous, &next, &preview, &close] {
+        control.set_sensitive(control == &close);
+        controls.append(control);
+    }
+    body.append(&controls);
+    close.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    dialog.connect_closed({
+        let cancelled = cancelled.clone();
+        move |_| cancelled.store(true, std::sync::atomic::Ordering::Release)
+    });
+    dialog.set_child(Some(&body));
+    dialog.present(Some(parent));
+    let parent = parent.clone();
+    spawn(glib::clone!(
+        #[weak]
+        overview,
+        #[weak]
+        previous,
+        #[weak]
+        next,
+        #[weak]
+        preview,
+        #[weak]
+        list,
+        #[weak]
+        position,
+        #[weak]
+        view,
+        #[strong]
+        cancelled,
+        async move {
+            match compute_guide_review(guide.clone(), cancelled.clone()).await {
+                Ok(review) if !cancelled.load(std::sync::atomic::Ordering::Acquire) => {
+                    let c = &review.counts;
+                    overview.set_text(&format!(
+                        "{}: {} • {}: {}\n{}: {} • {}: {} • {}: {}\n{}: {} • {}: {} • {}: {} • {}: {}\n{}: {}",
+                        gettext("Selected guide"), review.guide_source_id,
+                        gettext("Last successful import (UTC timestamp)"), review.last_success_at,
+                        gettext("Selected playlist rows"), c.playlist_rows,
+                        gettext("Manual/confirmed"), c.manual_or_alias,
+                        gettext("Exact IDs"), c.exact_ids,
+                        gettext("Feed candidates for review"), c.feed_review,
+                        gettext("Name-only hints (not aliasable)"), c.name_only,
+                        gettext("Ambiguous"), c.ambiguous,
+                        gettext("Unmatched"), c.unmatched,
+                        gettext("Missing imported IDs"), c.no_imported_id
+                    ));
+                    let review = std::rc::Rc::new(review);
+                    let selected = std::rc::Rc::new(std::cell::RefCell::new(BTreeSet::new()));
+                    for item in &review.proposals {
+                        if item.candidate.default_review_eligible
+                            && selected.borrow().len() < GUIDE_REVIEW_MAX_SELECTIONS
+                        {
+                            selected
+                                .borrow_mut()
+                                .insert(item.candidate.original_tvg_id.clone());
+                        }
+                    }
+                    let current = std::rc::Rc::new(std::cell::Cell::new(0usize));
+                    populate_guide_review_page(&review, 0, &list, &position, &selected);
+                    let pages = review.proposals.len().div_ceil(GUIDE_REVIEW_PAGE_SIZE);
+                    previous.set_sensitive(false);
+                    next.set_sensitive(pages > 1);
+                    preview.set_sensitive(!review.proposals.is_empty());
+                    for (button, increment) in [(&previous, false), (&next, true)] {
+                        let review = review.clone();
+                        let selected = selected.clone();
+                        let current = current.clone();
+                        let list = list.clone();
+                        let position = position.clone();
+                        let previous = previous.clone();
+                        let next = next.clone();
+                        button.connect_clicked(move |_| {
+                            let new_page = if increment {
+                                current.get().saturating_add(1)
+                            } else {
+                                current.get().saturating_sub(1)
+                            };
+                            if new_page >= pages {
+                                return;
+                            }
+                            current.set(new_page);
+                            populate_guide_review_page(
+                                &review, new_page, &list, &position, &selected,
+                            );
+                            previous.set_sensitive(new_page > 0);
+                            next.set_sensitive(new_page + 1 < pages);
+                        });
+                    }
+                    preview.connect_clicked(glib::clone!(
+                        #[weak]
+                        preview,
+                        #[weak]
+                        overview,
+                        #[weak]
+                        view,
+                        #[strong]
+                        parent,
+                        #[strong]
+                        review,
+                        #[strong]
+                        selected,
+                        #[strong]
+                        cancelled,
+                        move |_| {
+                            let choices = review
+                                .proposals
+                                .iter()
+                                .filter(|item| {
+                                    selected.borrow().contains(&item.candidate.original_tvg_id)
+                                })
+                                .map(|item| crate::epg::bulk::AliasChoice {
+                                    original_tvg_id: item.candidate.original_tvg_id.clone(),
+                                    full_xmltv_id: item.candidate.full_xmltv_id.clone(),
+                                })
+                                .collect::<Vec<_>>();
+                            if choices.is_empty() {
+                                overview.set_text(&gettext(
+                                    "Select at least one proposed ID to preview.",
+                                ));
+                                return;
+                            }
+                            preview.set_sensitive(false);
+                            spawn(glib::clone!(
+                                #[weak]
+                                preview,
+                                #[weak]
+                                overview,
+                                #[weak]
+                                view,
+                                #[strong]
+                                parent,
+                                #[strong]
+                                cancelled,
+                                #[strong]
+                                guide,
+                                async move {
+                                    let result =
+                                        prepare_guide_bulk(guide, choices, cancelled.clone()).await;
+                                    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                                        return;
+                                    }
+                                    preview.set_sensitive(true);
+                                    match result {
+                                        Ok(impact) => {
+                                            present_bulk_confirmation(&parent, &view, impact)
+                                        }
+                                        Err(reason) => overview.set_text(&gettext(reason)),
+                                    }
+                                }
+                            ));
+                        }
+                    ));
+                }
+                Ok(_) => (),
+                Err(reason) => overview.set_text(&gettext(reason)),
+            }
+        }
+    ));
 }

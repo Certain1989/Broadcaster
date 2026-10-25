@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::candidates::{
-    CandidateIndex, CandidateReason, Discovery, FeedClass, RULE_PROFILE_VERSION,
+    load_guide_review, CandidateIndex, CandidateReason, Discovery, FeedClass, ReviewLoadError,
+    RULE_PROFILE_VERSION,
 };
 use super::{matching::IptvRow, model::GuideChannel};
 use std::collections::HashSet;
@@ -210,4 +211,84 @@ fn indexed_20k_repeated_iptv_rows_are_grouped_once_per_original_id() {
         "M1 indexed 15000-channel x 20000-row batch lookup: {:?}",
         start.elapsed()
     );
+}
+
+#[test]
+fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
+    use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+    use rusqlite::{params, Connection};
+    use std::sync::atomic::AtomicBool;
+    let mut conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    conn.execute_batch(MIGRATION_001).unwrap();
+    conn.execute_batch(MIGRATION_002).unwrap();
+    conn.execute(
+        "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES ('test','Demo','local_file','/fake',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+         VALUES ('selected','Guide','local_file','/fake',1,1,1,99)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES ('selected','ZDF','ZDF')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE epg_settings SET shared_guide_source_id='selected' WHERE singleton=1",
+        [],
+    )
+    .unwrap();
+    for (id, tvg) in [
+        ("one", "ZDF@HD"),
+        ("two", "ZDF@HD"),
+        ("three", "zdf@HD"),
+        ("four", "ZDF"),
+        ("five", ""),
+    ] {
+        conn.execute(
+            "INSERT INTO iptv_channels(id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+             VALUES (?1,'test',0,'ZDF','https://invalid.example/never-opened',?2,1,1)",
+            params![id, tvg],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO epg_channel_overrides(iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+         VALUES ('two','selected','ZDF',1)",
+        [],
+    )
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    let review = load_guide_review(&mut conn, "selected", &cancel).unwrap();
+    assert_eq!(review.guide_source_id, "selected");
+    assert_eq!(review.last_success_at, 99);
+    assert_eq!(review.counts.playlist_rows, 5);
+    assert_eq!(review.counts.manual_or_alias, 1);
+    assert_eq!(review.counts.exact_ids, 1);
+    assert_eq!(review.counts.no_imported_id, 1);
+    assert_eq!(review.proposals.len(), 1);
+    assert_eq!(review.proposals[0].candidate.original_tvg_id, "ZDF@HD");
+    assert_eq!(review.proposals[0].candidate.full_xmltv_id, "ZDF");
+    assert_eq!(review.proposals[0].affected_rows, 2);
+    assert_eq!(review.proposals[0].already_bound_rows, 1);
+    assert!(review.proposals[0].candidate.default_review_eligible);
+
+    cancel.store(true, std::sync::atomic::Ordering::Release);
+    assert!(matches!(
+        load_guide_review(&mut conn, "selected", &cancel),
+        Err(ReviewLoadError::Cancelled)
+    ));
+    cancel.store(false, std::sync::atomic::Ordering::Release);
+    conn.execute("UPDATE epg_sources SET enabled=0 WHERE id='selected'", [])
+        .unwrap();
+    assert!(matches!(
+        load_guide_review(&mut conn, "selected", &cancel),
+        Err(ReviewLoadError::Unavailable)
+    ));
 }

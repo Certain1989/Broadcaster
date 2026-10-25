@@ -245,3 +245,182 @@ impl<'a> CandidateIndex<'a> {
         batch
     }
 }
+
+/// A bounded, selected-guide snapshot for a human review screen. Unlike the
+/// XMLTV importer, this is a UI work budget, not an EPG feed rejection limit.
+/// Rebuild this snapshot before preparing a SQLite bulk confirmation token;
+/// caller-owned cancellation also invalidates its GTK delivery.
+const MAX_REVIEW_GUIDE_ROWS: usize = 100_000;
+const MAX_REVIEW_IPTV_ROWS: usize = 50_000;
+const MAX_REVIEW_SNAPSHOT_BYTES: usize = 48 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewLoadError {
+    Unavailable,
+    Cancelled,
+    TooLarge,
+    Storage,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct ReviewCounts {
+    pub playlist_rows: usize,
+    pub manual_or_alias: usize,
+    pub exact_ids: usize,
+    pub no_imported_id: usize,
+    pub ambiguous: usize,
+    pub unmatched: usize,
+    pub name_only: usize,
+    pub feed_review: usize,
+}
+
+#[derive(Debug)]
+pub struct GuideReview {
+    pub guide_source_id: String,
+    pub last_success_at: i64,
+    pub counts: ReviewCounts,
+    pub proposals: Vec<BatchCandidate>,
+}
+
+/// Read exclusively safe matching metadata. Never fetch stream URLs, request
+/// headers, programme descriptions, guide origin locators or provider XML.
+/// A single SQLite read transaction prevents mixed guide / playlist revisions.
+/// Both source counts and candidate groups are computed on a blocking worker.
+pub(crate) fn review_in_transaction(
+    tx: &rusqlite::Connection,
+    guide: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<GuideReview, ReviewLoadError> {
+    use rusqlite::{params, OptionalExtension};
+    use std::sync::atomic::Ordering;
+
+    if guide.is_empty() || guide.len() > 64 || cancelled.load(Ordering::Acquire) {
+        return Err(ReviewLoadError::Cancelled);
+    }
+    let last_success_at: Option<i64> = tx
+        .query_row(
+            "SELECT last_success_at FROM epg_sources WHERE id=?1 AND enabled=1",
+            [guide],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| ReviewLoadError::Storage)?
+        .flatten();
+    let last_success_at = last_success_at.ok_or(ReviewLoadError::Unavailable)?;
+    let mut byte_budget = 0usize;
+    let mut channels = Vec::new();
+    {
+        let mut stmt = tx
+            .prepare("SELECT channel_id,display_name FROM epg_channels WHERE source_id=?1 ORDER BY channel_id")
+            .map_err(|_| ReviewLoadError::Storage)?;
+        let mut records = stmt.query([guide]).map_err(|_| ReviewLoadError::Storage)?;
+        while let Some(record) = records.next().map_err(|_| ReviewLoadError::Storage)? {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(ReviewLoadError::Cancelled);
+            }
+            if channels.len() >= MAX_REVIEW_GUIDE_ROWS {
+                return Err(ReviewLoadError::TooLarge);
+            }
+            let id: String = record.get(0).map_err(|_| ReviewLoadError::Storage)?;
+            let display: String = record.get(1).map_err(|_| ReviewLoadError::Storage)?;
+            byte_budget = byte_budget
+                .saturating_add(id.len())
+                .saturating_add(display.len());
+            if byte_budget > MAX_REVIEW_SNAPSHOT_BYTES {
+                return Err(ReviewLoadError::TooLarge);
+            }
+            channels.push(GuideChannel {
+                source_id: guide.to_owned(),
+                channel_id: id,
+                display_name: display,
+            });
+        }
+    }
+    let index = CandidateIndex::build(guide, &channels);
+    let mut rows = Vec::new();
+    let mut already_bound_ids = HashSet::new();
+    let mut counts = ReviewCounts::default();
+    {
+        let mut stmt = tx
+            .prepare(
+                "SELECT c.id,c.source_id,c.tvg_id,c.tvg_name,
+                        COALESCE(co.display_name_override,c.imported_name),
+                        (eo.iptv_channel_id IS NOT NULL OR a.iptv_tvg_id IS NOT NULL)
+                 FROM iptv_channels c
+                 JOIN iptv_sources s ON s.id=c.source_id
+                 JOIN epg_settings settings ON settings.singleton=1
+                 LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
+                 LEFT JOIN epg_channel_overrides eo ON eo.iptv_channel_id=c.id
+                 LEFT JOIN epg_global_id_aliases a ON a.guide_source_id=?1 AND a.iptv_tvg_id=c.tvg_id
+                 LEFT JOIN iptv_channel_overrides co ON co.channel_id=c.id
+                 WHERE c.is_present=1 AND s.enabled=1
+                   AND COALESCE(eo.guide_source_id,l.guide_source_id,settings.shared_guide_source_id)=?1
+                 ORDER BY c.source_id,c.id",
+            )
+            .map_err(|_| ReviewLoadError::Storage)?;
+        let mut records = stmt
+            .query(params![guide])
+            .map_err(|_| ReviewLoadError::Storage)?;
+        while let Some(record) = records.next().map_err(|_| ReviewLoadError::Storage)? {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(ReviewLoadError::Cancelled);
+            }
+            if rows.len() >= MAX_REVIEW_IPTV_ROWS {
+                return Err(ReviewLoadError::TooLarge);
+            }
+            let row = IptvRow {
+                id: record.get(0).map_err(|_| ReviewLoadError::Storage)?,
+                playlist_source_id: record.get(1).map_err(|_| ReviewLoadError::Storage)?,
+                tvg_id: record.get(2).map_err(|_| ReviewLoadError::Storage)?,
+                tvg_name: record.get(3).map_err(|_| ReviewLoadError::Storage)?,
+                effective_name: record.get(4).map_err(|_| ReviewLoadError::Storage)?,
+            };
+            let bound: bool = record.get(5).map_err(|_| ReviewLoadError::Storage)?;
+            byte_budget = byte_budget
+                .saturating_add(row.id.len())
+                .saturating_add(row.playlist_source_id.len())
+                .saturating_add(row.tvg_id.as_deref().map_or(0, str::len))
+                .saturating_add(row.tvg_name.as_deref().map_or(0, str::len))
+                .saturating_add(row.effective_name.len());
+            if byte_budget > MAX_REVIEW_SNAPSHOT_BYTES {
+                return Err(ReviewLoadError::TooLarge);
+            }
+            if bound {
+                already_bound_ids.insert(row.id.clone());
+            }
+            match index.discover(&row, bound) {
+                Discovery::NoImportedId => counts.no_imported_id += 1,
+                Discovery::AlreadyBound => counts.manual_or_alias += 1,
+                Discovery::ExactExists => counts.exact_ids += 1,
+                Discovery::Ambiguous { .. } => counts.ambiguous += 1,
+                Discovery::None => counts.unmatched += 1,
+                Discovery::Unique(candidate) => match candidate.reason {
+                    CandidateReason::NameOnly => counts.name_only += 1,
+                    CandidateReason::Feed(_) => counts.feed_review += 1,
+                },
+            }
+            rows.push(row);
+        }
+    }
+    let bound = already_bound_ids.iter().map(String::as_str).collect();
+    let proposals = index.preview_batch(&rows, &bound);
+    counts.playlist_rows = rows.len();
+    Ok(GuideReview {
+        guide_source_id: guide.to_owned(),
+        last_success_at,
+        counts,
+        proposals,
+    })
+}
+
+/// A complete single-revision read, safe to call off GTK's main loop.
+pub fn load_guide_review(
+    conn: &mut rusqlite::Connection,
+    guide: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<GuideReview, ReviewLoadError> {
+    let tx = conn.transaction().map_err(|_| ReviewLoadError::Storage)?;
+    let review = review_in_transaction(&tx, guide, cancelled)?;
+    tx.commit().map_err(|_| ReviewLoadError::Storage)?;
+    Ok(review)
+}

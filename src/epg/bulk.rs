@@ -6,7 +6,7 @@
 //! This module does not infer identity; only the caller's approved original IDs
 //! are eligible, and transaction-time state is checked before any insert.
 
-use super::candidates::RULE_PROFILE_VERSION;
+use super::candidates::{self, RULE_PROFILE_VERSION};
 use rusqlite::{params, types::ValueRef, Connection, OptionalExtension, TransactionBehavior};
 use std::{
     collections::{hash_map::RandomState, HashSet},
@@ -294,15 +294,17 @@ fn fingerprint(
 
 /// Preview can be computed on a blocking worker. Only the caller's explicit
 /// approved candidate choices are considered; no suggestion is applied here.
-pub fn preview_bulk(
+fn preview_with_validator(
     conn: &mut Connection,
     guide: &str,
     choices: &[AliasChoice],
     cancel: &AtomicBool,
+    validate: impl FnOnce(&Connection) -> Result<(), BulkError>,
 ) -> Result<BulkPreview, BulkError> {
     foreign_keys(conn)?;
     let tx = conn.transaction().map_err(sql)?;
     validate_choices(&tx, guide, choices)?;
+    validate(&tx)?;
     let mut sorted = choices.to_vec();
     sorted.sort_by(|a, b| a.original_tvg_id.cmp(&b.original_tvg_id));
     let impacts = sorted
@@ -318,6 +320,51 @@ pub fn preview_bulk(
     preview.before = fingerprint(&tx, &preview, cancel)?;
     tx.commit().map_err(sql)?;
     Ok(preview)
+}
+
+/// For an explicitly reviewed batch, re-check candidate identity and complete
+/// collision buckets in the *same SQLite snapshot* as the impact/fingerprint.
+/// Invalidation between old GTK display and approval therefore cannot silently
+/// turn a formerly plausible suggestion into a confirmed alias.
+pub fn preview_discovered_bulk(
+    conn: &mut Connection,
+    guide: &str,
+    choices: &[AliasChoice],
+    cancel: &AtomicBool,
+) -> Result<BulkPreview, BulkError> {
+    preview_with_validator(conn, guide, choices, cancel, |snapshot| {
+        let review =
+            candidates::review_in_transaction(snapshot, guide, cancel).map_err(|reason| {
+                match reason {
+                    candidates::ReviewLoadError::Cancelled => BulkError::Cancelled,
+                    candidates::ReviewLoadError::Unavailable => BulkError::MissingGuideOrTarget,
+                    candidates::ReviewLoadError::TooLarge => BulkError::Storage,
+                    candidates::ReviewLoadError::Storage => BulkError::Storage,
+                }
+            })?;
+        if choices.iter().all(|choice| {
+            review.proposals.iter().any(|item| {
+                item.candidate.original_tvg_id == choice.original_tvg_id
+                    && item.candidate.full_xmltv_id == choice.full_xmltv_id
+                    && item.candidate.guide_source_id == guide
+            })
+        }) {
+            Ok(())
+        } else {
+            Err(BulkError::Stale)
+        }
+    })
+}
+
+/// Explicit aliases created by other approved UI workflows remain available
+/// without an inferred-candidate prerequisite.
+pub fn preview_bulk(
+    conn: &mut Connection,
+    guide: &str,
+    choices: &[AliasChoice],
+    cancel: &AtomicBool,
+) -> Result<BulkPreview, BulkError> {
+    preview_with_validator(conn, guide, choices, cancel, |_| Ok(()))
 }
 
 /// Entire batch is atomic, prevalidated under SQLite's IMMEDIATE write lock.

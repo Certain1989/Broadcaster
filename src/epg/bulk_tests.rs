@@ -316,3 +316,32 @@ fn same_count_programme_revision_and_guide_disable_veto_approval() {
     ));
     assert_eq!(alias_count(&c), 0);
 }
+
+#[test]
+fn discovery_and_impact_share_one_read_revision_with_collision_veto() {
+    let mut c = connection();
+    let token = preview_discovered_bulk(&mut c, "guide-a", &[choice()], &cancel()).unwrap();
+    assert_eq!(token.impact()[0].selected_guide_rows, 2);
+    // Another feed variant makes the original stem ambiguous, although the
+    // originally proposed full target still exists in this guide.
+    c.execute(
+        "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES ('guide-a','ZDF@SD','ZDF SD')",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        preview_discovered_bulk(&mut c, "guide-a", &[choice()], &cancel()),
+        Err(BulkError::Stale)
+    ));
+    assert!(matches!(
+        apply_bulk(
+            &mut c,
+            ConfirmedBulkReview::after_user_confirmation(),
+            token,
+            102,
+            &cancel()
+        ),
+        Err(BulkError::Stale)
+    ));
+    assert_eq!(alias_count(&c), 0);
+}
