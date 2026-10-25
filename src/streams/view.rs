@@ -16,7 +16,9 @@ use std::sync::{
     Arc,
 };
 
-use super::epg_projection::{next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService};
+use super::epg_projection::{
+    next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService,
+};
 use crate::epg::{
     bindings::SemanticProgrammeState,
     cache::{Coverage, Freshness},
@@ -1149,7 +1151,12 @@ impl TvStreamsView {
             .iter()
             .filter_map(|(key, bound)| {
                 (bound.next_update_at.is_some_and(|deadline| deadline <= now))
-                    .then(|| bound.connection.as_ref().map(|(slot, _)| (*key, slot.clone())))
+                    .then(|| {
+                        bound
+                            .connection
+                            .as_ref()
+                            .map(|(slot, _)| (*key, slot.clone()))
+                    })
                     .flatten()
             })
             .collect();
@@ -1185,9 +1192,13 @@ impl TvStreamsView {
         {
             return next_projection_deadline(
                 at,
-                now_next.as_ref().is_some_and(|value| value.current.is_some()),
+                now_next
+                    .as_ref()
+                    .is_some_and(|value| value.current.is_some()),
                 page.last_success_at,
-                page.programmes.iter().map(|item| (item.start_utc, item.stop_utc)),
+                page.programmes
+                    .iter()
+                    .map(|item| (item.start_utc, item.stop_utc)),
             );
         }
         at.saturating_add(120)
@@ -1349,9 +1360,7 @@ impl TvStreamsView {
         Self::clear_epg(ui);
         let mut status: String;
         match result {
-            ProjectionOutcome::Busy => {
-                status = gettext("Programme lookup busy; retrying")
-            }
+            ProjectionOutcome::Busy => status = gettext("Programme lookup busy; retrying"),
             ProjectionOutcome::Cancelled | ProjectionOutcome::SourceChanged => return,
             ProjectionOutcome::Read(Err(_)) => {
                 status = gettext("Programme information unavailable")
