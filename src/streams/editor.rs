@@ -634,7 +634,7 @@ async fn save_epg_mapping(
                     // transaction but cannot compare it to the confirmed ID.
                     // Do not allow a playlist refresh to expand consent to B.
                     return Err("All-stream mapping needs an atomic imported-ID check");
-                },
+                }
                 MappingAction::PlaylistException => set_playlist_exception(
                     &mut conn,
                     ConfirmedGuideSelection::after_user_confirmation(),
@@ -825,8 +825,9 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             error.set_wrap(true);
             body.append(&error);
             let single = gtk::Button::with_label(&gettext("Use for this stream"));
-            let shared =
-                gtk::Button::with_label(&gettext("Review all-stream exact-ID mapping (unavailable)"));
+            let shared = gtk::Button::with_label(&gettext(
+                "Review all-stream exact-ID mapping (unavailable)",
+            ));
             single.set_sensitive(!guides.is_empty());
             shared.set_sensitive(
                 !guides.is_empty()
