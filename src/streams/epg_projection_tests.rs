@@ -250,8 +250,11 @@ fn exact_global_alias_rejects_stale_same_uuid_tvg_id_without_side_effects() {
 
     // The editor showed CHANNEL.ID, then a playlist refresh retained a1's
     // UUID and URL while changing its imported tvg-id to a different key.
-    c.execute("UPDATE iptv_channels SET tvg_id='CHANGED.ID' WHERE id='a1'", [])
-        .unwrap();
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='CHANGED.ID' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
     let consent = || ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams();
     assert_eq!(
         set_global_alias_if_imported_id_matches(
@@ -267,7 +270,8 @@ fn exact_global_alias_rejects_stale_same_uuid_tvg_id_without_side_effects() {
         "user consent for CHANNEL.ID must not create an alias for CHANGED.ID"
     );
     assert_eq!(
-        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r
+            .get::<_, i64>(0))
             .unwrap(),
         0
     );
@@ -285,7 +289,8 @@ fn exact_global_alias_rejects_stale_same_uuid_tvg_id_without_side_effects() {
         Err(BindingError::InvalidInput)
     );
     assert_eq!(
-        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r
+            .get::<_, i64>(0))
             .unwrap(),
         0
     );
@@ -296,8 +301,8 @@ fn exact_global_alias_two_playlists_preserves_scope_case_and_override_order() {
     use crate::epg::{
         bindings::{
             resolve_row, set_global_alias_if_imported_id_matches, set_playlist_exception,
-            set_row_mapping, set_shared_guide, ConfirmedGlobalMapping,
-            ConfirmedGuideSelection, ConfirmedRowMapping,
+            set_row_mapping, set_shared_guide, ConfirmedGlobalMapping, ConfirmedGuideSelection,
+            ConfirmedRowMapping,
         },
         matching::{MatchDecision, MatchMethod},
     };
@@ -333,7 +338,10 @@ fn exact_global_alias_two_playlists_preserves_scope_case_and_override_order() {
     assert!(
         !matches!(
             resolve_row(&c, "a2", &cancel).unwrap(),
-            MatchDecision::Matched { method: MatchMethod::ConfirmedGlobalAlias, .. }
+            MatchDecision::Matched {
+                method: MatchMethod::ConfirmedGlobalAlias,
+                ..
+            }
         ),
         "lower-case imported tvg-id cannot inherit upper-case alias"
     );
@@ -438,7 +446,8 @@ fn exact_global_alias_validates_expected_id_and_selected_guide() {
         Err(BindingError::InvalidInput)
     );
     assert_eq!(
-        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r.get::<_, i64>(0))
+        c.query_row("SELECT COUNT(*) FROM epg_global_id_aliases", [], |r| r
+            .get::<_, i64>(0))
             .unwrap(),
         0
     );
