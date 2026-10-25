@@ -108,7 +108,10 @@ impl ProjectionService {
                     let version = connection
                         .query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0))
                         .map_err(|_| EpgError::Storage)?;
-                    *guard = Some(RevisionProbe { connection, version });
+                    *guard = Some(RevisionProbe {
+                        connection,
+                        version,
+                    });
                     return Ok(false);
                 }
                 let observer = guard.as_mut().expect("observer initialized");
@@ -207,7 +210,11 @@ impl ProjectionService {
 
     #[cfg(test)]
     pub async fn hold_all_permits_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
-        self.permits.clone().acquire_many_owned(MAX_ACTIVE as u32).await.unwrap()
+        self.permits
+            .clone()
+            .acquire_many_owned(MAX_ACTIVE as u32)
+            .await
+            .unwrap()
     }
 
     #[cfg(test)]
