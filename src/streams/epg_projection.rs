@@ -157,8 +157,23 @@ impl ProjectionService {
         let service = self.clone();
         crate::utils::tokio(async move {
             let _ticket = ticket;
-            let Ok(_permit) = permits.acquire_owned().await else {
-                return ProjectionOutcome::Cancelled;
+            // The atomic UI cancellation token has no async notifier. Check
+            // it while waiting so recycled rows release their admission slot
+            // even when both blocking workers are occupied by slow lookups.
+            let _permit = loop {
+                tokio::select! {
+                    acquired = permits.clone().acquire_owned() => {
+                        match acquired {
+                            Ok(permit) => break permit,
+                            Err(_) => return ProjectionOutcome::Cancelled,
+                        }
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        if cancelled.load(Ordering::Acquire) {
+                            return ProjectionOutcome::Cancelled;
+                        }
+                    }
+                }
             };
             if cancelled.load(Ordering::Acquire) {
                 return ProjectionOutcome::Cancelled;
@@ -188,6 +203,11 @@ impl ProjectionService {
             }
         })
         .await
+    }
+
+    #[cfg(test)]
+    pub async fn hold_all_permits_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
+        self.permits.clone().acquire_many_owned(MAX_ACTIVE as u32).await.unwrap()
     }
 
     #[cfg(test)]
