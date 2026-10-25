@@ -6,6 +6,7 @@
 //! back all changes, retaining the prior complete guide for offline readers.
 use super::{
     headroom::ImportHeadroom,
+    limits,
     model::{EpgError, LimitKind},
     xmltv::{decode_xmltv_rows_omitting_c1, StreamedRows, StreamingLimits},
 };
@@ -14,13 +15,11 @@ use std::{
     cell::Cell,
     io::BufRead,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-const MAX_OPERATION: Duration = Duration::from_secs(90 * 60);
 // Cap only the main database plus WAL. Staging and SQLite TEMP may use
 // separate filesystems; this does not impose a total disk-footprint bound.
-const MAX_DATABASE_AND_WAL: u64 = 6 * 1024 * 1024 * 1024;
 
 #[cfg(test)]
 std::thread_local! {
@@ -217,7 +216,6 @@ pub(crate) fn import_xmltv_guarded<R: BufRead>(
 // including the existing rowid marker and the validation-only omission ledger.
 // SQLite may roll back implicitly on SQLITE_FULL. Restore/read back the previous
 // cap BEFORE COMMIT on success; errors require explicit outer cleanup.
-const MAX_TEMP_PAGE_BYTES: i64 = 128 * 1024 * 1024;
 
 fn temp_pragma(conn: &Connection, sql: &str) -> Result<i64, EpgError> {
     conn.query_row(sql, [], |row| row.get(0))
@@ -273,7 +271,7 @@ fn import_xmltv_inner<R: BufRead>(
     if previous <= 0 || page_size <= 0 || allocated < 0 {
         return Err(EpgError::Storage);
     }
-    let ceiling = MAX_TEMP_PAGE_BYTES / page_size;
+    let ceiling = limits::SQLITE_TEMP_PAGE_BYTES / page_size;
     if ceiling <= 0 {
         return Err(EpgError::Storage);
     }
@@ -393,7 +391,7 @@ fn import_xmltv_scoped<R: BufRead>(
         if cancelled.load(Ordering::Acquire) {
             return Err(EpgError::Cancelled);
         }
-        if started.elapsed() >= MAX_OPERATION {
+        if started.elapsed() >= limits::IMPORT_DEADLINE {
             return Err(EpgError::Capacity(LimitKind::Duration));
         }
         if !database.is_empty() {
@@ -401,7 +399,7 @@ fn import_xmltv_scoped<R: BufRead>(
             let wal = std::fs::metadata(format!("{database}-wal"))
                 .map(|m| m.len())
                 .unwrap_or(0);
-            if db.saturating_add(wal) > MAX_DATABASE_AND_WAL {
+            if db.saturating_add(wal) > limits::DATABASE_AND_WAL_BYTES {
                 return Err(EpgError::Capacity(LimitKind::Database));
             }
         }

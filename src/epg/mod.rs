@@ -12,6 +12,7 @@ mod capacity_bench;
 pub mod desktop;
 mod headroom;
 pub mod ingest;
+mod limits;
 pub mod matching;
 #[cfg(test)]
 mod matching_tests;
