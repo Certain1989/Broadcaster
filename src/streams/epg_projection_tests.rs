@@ -452,3 +452,172 @@ fn exact_global_alias_validates_expected_id_and_selected_guide() {
         0
     );
 }
+
+#[test]
+fn programme_range_disambiguates_fall_back_spring_forward_and_midnight() {
+    use super::view::programme_range_in_timezone;
+
+    // Explicit zone, rather than changing TZ globally or assuming the runner
+    // is configured for Germany. All timestamps are unambiguous UTC seconds.
+    let berlin = glib::TimeZone::from_identifier(Some("Europe/Berlin"))
+        .expect("test fixture requires Europe/Berlin zoneinfo");
+
+    // A POSITIVE 30-minute programme traverses a repeated local hour.
+    // 00:45Z -> 01:15Z, 25 October 2026, is NOT 02:45 -> 02:15 backwards.
+    assert_eq!(
+        programme_range_in_timezone(1_792_889_100, 1_792_890_900, &berlin),
+        "02:45 +0200 – 02:15 +0100"
+    );
+    // 29 March 2026: the skipped 02:00 hour is not a two-hour programme.
+    assert_eq!(
+        programme_range_in_timezone(1_774_745_100, 1_774_746_900, &berlin),
+        "01:45 +0100 – 03:15 +0200"
+    );
+    assert_eq!(
+        programme_range_in_timezone(1_782_896_400, 1_782_898_200, &berlin),
+        "11:00 – 11:30",
+        "ordinary same-day, stable-offset programme stays compact"
+    );
+    assert_eq!(
+        programme_range_in_timezone(1_778_881_500, 1_778_883_300, &berlin),
+        "2026-05-15 23:45 – 2026-05-16 00:15",
+        "local calendar rollover must be visible without an offset change"
+    );
+}
+
+#[test]
+fn repeated_next_hour_and_cross_date_next_are_not_ambiguous() {
+    use super::view::programme_next_in_timezone;
+
+    let berlin = glib::TimeZone::from_identifier(Some("Europe/Berlin"))
+        .expect("test fixture requires Europe/Berlin zoneinfo");
+    // Same wall time twice; label both versions distinctly.
+    assert_eq!(
+        programme_next_in_timezone(1_792_887_300, 1_792_887_300, &berlin),
+        "02:15 +0200"
+    );
+    assert_eq!(
+        programme_next_in_timezone(1_792_890_900, 1_792_887_300, &berlin),
+        "02:15 +0100"
+    );
+    assert_eq!(
+        programme_next_in_timezone(1_778_883_300, 1_778_881_500, &berlin),
+        "2026-05-16 00:15"
+    );
+    assert_eq!(
+        programme_next_in_timezone(1_782_898_200, 1_782_896_400, &berlin),
+        "11:30",
+        "normal Next stays compact"
+    );
+}
+
+#[test]
+fn final_composed_status_retains_aging_partial_and_failed_refresh_with_now() {
+    use super::view::compose_epg_status;
+    use crate::epg::cache::{Coverage, Freshness};
+    use gettextrs::gettext;
+
+    let now_utc = 1_800_000_000_i64;
+    let last_success_at = now_utc - 129_601;
+    assert_eq!(now_utc - last_success_at, 129_601);
+    let coverage = Coverage::Partial {
+        observed_start_utc: Some(now_utc - 60),
+        observed_stop_utc: Some(now_utc + 1_800),
+    };
+    let range = "12:00 – 12:30";
+
+    assert_eq!(
+        compose_epg_status(Freshness::Aging, &coverage, false, Some(range), false, false),
+        format!(
+            "{range} · {}",
+            gettext("Guide cache aging; coverage unverified")
+        ),
+        "a current Now must not erase the 36h+ unverified coverage warning"
+    );
+    assert_eq!(
+        compose_epg_status(Freshness::Fresh, &coverage, false, Some(range), false, false),
+        format!("{range} · {}", gettext("Guide coverage is partial")),
+        "a current Now must not erase partial-coverage qualification"
+    );
+    assert_eq!(
+        compose_epg_status(Freshness::Aging, &coverage, false, Some(range), false, true),
+        format!(
+            "{range} · {} · {}",
+            gettext("Guide cache aging; coverage unverified"),
+            gettext("Last refresh failed; cached guide")
+        ),
+        "both independent warnings must survive and print only once"
+    );
+    assert_eq!(
+        compose_epg_status(Freshness::Aging, &coverage, false, None, false, true),
+        format!(
+            "{} · {}",
+            gettext("Guide cache aging; coverage unverified"),
+            gettext("Last refresh failed; cached guide")
+        ),
+        "missing current interval must not fabricate a time range"
+    );
+}
+
+#[test]
+fn final_composed_status_never_promotes_stale_truncated_or_ambiguous_now() {
+    use super::view::compose_epg_status;
+    use crate::epg::cache::{Coverage, Freshness};
+    use gettextrs::gettext;
+
+    let partial = Coverage::Partial {
+        observed_start_utc: None,
+        observed_stop_utc: None,
+    };
+    let fabricated_range = "FAKE NOW RANGE";
+    for freshness in [
+        Freshness::Stale,
+        Freshness::NeverFetched,
+        Freshness::Unknown,
+    ] {
+        let rendered = compose_epg_status(
+            freshness,
+            &partial,
+            false,
+            Some(fabricated_range),
+            false,
+            false,
+        );
+        assert!(
+            !rendered.contains(fabricated_range),
+            "untrusted or stale data must not create Now: {rendered}"
+        );
+    }
+    for (coverage, truncated) in [
+        (&partial, true),
+        (&Coverage::NoData, false),
+        (&Coverage::Disabled, false),
+    ] {
+        let rendered = compose_epg_status(
+            Freshness::Fresh,
+            coverage,
+            truncated,
+            Some(fabricated_range),
+            false,
+            false,
+        );
+        assert!(!rendered.contains(fabricated_range));
+    }
+
+    assert_eq!(
+        compose_epg_status(
+            Freshness::Fresh,
+            &partial,
+            false,
+            Some(fabricated_range),
+            true,
+            false
+        ),
+        format!(
+            "{} · {}",
+            gettext("Overlapping programme entries; now unknown"),
+            gettext("Guide coverage is partial")
+        ),
+        "ambiguous programmes must not present the fabricated range"
+    );
+}
