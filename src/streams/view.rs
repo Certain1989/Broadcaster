@@ -2093,7 +2093,10 @@ impl TvStreamsView {
             "selected={:?} expanded={:?} rows0={:?} bound={bound:?}",
             imp.selection.get().map(|selection| selection.selected()),
             imp.expanded_id.borrow().as_deref(),
-            imp.rows.get().and_then(|rows| rows.channel(0)).map(|channel| channel.id),
+            imp.rows
+                .get()
+                .and_then(|rows| rows.channel(0))
+                .map(|channel| channel.id),
         )
     }
 
