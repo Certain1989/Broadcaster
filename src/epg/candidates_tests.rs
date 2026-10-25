@@ -281,14 +281,27 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
     assert_eq!(review.last_success_at, 99);
     assert_eq!(review.counts.playlist_rows, 6);
     // The pre-existing case-distinct zdf@HD row is also a name-only hint.
-    assert_eq!(review.counts.name_only, 2);
-    assert_eq!(review.name_only_hints.len(), 2);
+    assert_eq!(review.counts.name_only, 3);
+    assert_eq!(review.name_only_hints.len(), 3);
     assert!(!review.name_only_truncated);
     let hint = review
         .name_only_hints
         .iter()
-        .find(|candidate| candidate.original_tvg_id == "Case-Sensitive.Original")
+        .find(|candidate| candidate.original_tvg_id.as_deref() == Some("Case-Sensitive.Original"))
         .expect("unlinked name hint must be separately inspectable");
+    assert_eq!(hint.row_id, "hint");
+    assert_eq!(hint.playlist_source_id, "test");
+    assert_eq!(
+        hint.original_tvg_id.as_deref(),
+        Some("Case-Sensitive.Original")
+    );
+    let blank = review
+        .name_only_hints
+        .iter()
+        .find(|hint| hint.row_id == "five")
+        .expect("blank tvg-id should still be a single-row name-only hint");
+    assert_eq!(blank.original_tvg_id.as_deref(), Some(""));
+    assert_eq!(blank.full_xmltv_id, "ZDF");
     assert_eq!(hint.imported_name, "Distinct Station");
     assert_eq!(hint.full_xmltv_id, "Unique.xml@HD");
     assert_eq!(hint.guide_display_name, "Distinct Station");
@@ -322,9 +335,35 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
     )
     .unwrap();
     let after_deletion = load_guide_review(&mut conn, "selected", &cancel).unwrap();
-    assert_eq!(after_deletion.counts.name_only, 1);
+    assert_eq!(after_deletion.counts.name_only, 2);
     assert!(after_deletion
         .name_only_hints
         .iter()
-        .all(|candidate| candidate.original_tvg_id != "Case-Sensitive.Original"));
+        .all(|candidate| candidate.original_tvg_id.as_deref() != Some("Case-Sensitive.Original")));
+}
+
+#[test]
+fn blank_and_unicode_name_only_candidates_never_enable_bulk_or_cross_guide_binding() {
+    let catalog = vec![
+        guide("de", "Das-Erste.de", "Dás Erste"),
+        guide("fr", "Different.fr", "Dás Erste"),
+    ];
+    let index = CandidateIndex::build("de", &catalog);
+    let stream = row("station", None, "  DÁS   ERSTE ");
+    assert_eq!(index.discover(&stream, false), Discovery::NoImportedId);
+    let decision = index.discover_name_only(&stream);
+    expect_unique(decision, "Das-Erste.de", CandidateReason::NameOnly, false);
+    assert!(index.preview_batch(&[stream], &HashSet::new()).is_empty());
+    let collisions = vec![
+        guide("de", "Local@Nord", "Regional TV"),
+        guide("de", "Local@Sued", "Regional TV"),
+    ];
+    assert_eq!(
+        CandidateIndex::build("de", &collisions).discover_name_only(&row(
+            "regional",
+            None,
+            "Regional TV"
+        )),
+        Discovery::Ambiguous { count: 2 },
+    );
 }

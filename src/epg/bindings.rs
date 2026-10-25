@@ -226,6 +226,112 @@ pub fn set_row_mapping(
     .map_err(db)?;
     tx.commit().map_err(db)
 }
+/// A name hint is only a navigational convenience. Confirm the *one* row,
+/// guide import generation, literal ID, displayed name and exact XMLTV target
+/// under the same write transaction before a per-stream override is stored.
+/// The shared guide, aliases and ordinary explicit mapping API are unchanged.
+pub struct HintMappingSnapshot<'a> {
+    pub row_id: &'a str,
+    pub playlist_id: &'a str,
+    pub tvg_id: Option<&'a str>,
+    pub effective_name: &'a str,
+    pub guide_source_id: &'a str,
+    pub channel_id: &'a str,
+    pub last_success_at: i64,
+}
+
+pub fn set_row_mapping_from_hint_if_unchanged(
+    conn: &mut Connection,
+    _: ConfirmedRowMapping,
+    expected: HintMappingSnapshot<'_>,
+    at: i64,
+) -> Result<(), BindingError> {
+    let HintMappingSnapshot {
+        row_id: iptv_channel_id,
+        playlist_id: expected_playlist_id,
+        tvg_id: expected_tvg_id,
+        effective_name: expected_effective_name,
+        guide_source_id,
+        channel_id: guide_channel_id,
+        last_success_at: expected_last_success_at,
+    } = expected;
+    fk(conn)?;
+    id(iptv_channel_id, 64)?;
+    id(expected_playlist_id, 64)?;
+    id(guide_source_id, 64)?;
+    id(guide_channel_id, 512)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    let current: Option<(String, Option<String>, String)> = tx
+        .query_row(
+            "SELECT c.source_id,c.tvg_id,COALESCE(o.display_name_override,c.imported_name)
+             FROM iptv_channels c JOIN iptv_sources s ON s.id=c.source_id
+             LEFT JOIN iptv_channel_overrides o ON o.channel_id=c.id
+             WHERE c.id=?1 AND c.is_present=1 AND s.enabled=1",
+            [iptv_channel_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(db)?;
+    let Some((playlist_id, actual_tvg_id, effective_name)) = current else {
+        return Err(BindingError::NotFound);
+    };
+    if playlist_id != expected_playlist_id
+        || actual_tvg_id.as_deref() != expected_tvg_id
+        || effective_name != expected_effective_name
+        || resolve_source_id(&tx, iptv_channel_id, &playlist_id)?.as_deref()
+            != Some(guide_source_id)
+    {
+        return Err(BindingError::InvalidInput);
+    }
+    // A newly created manual override or exact-ID alias since inspection is
+    // a changed binding decision, not permission to replace it silently.
+    let changed_binding: i64 = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_channel_overrides WHERE iptv_channel_id=?1)
+               OR EXISTS(SELECT 1 FROM epg_global_id_aliases
+                         WHERE guide_source_id=?2 AND iptv_tvg_id=?3)",
+            params![iptv_channel_id, guide_source_id, expected_tvg_id],
+            |row| row.get(0),
+        )
+        .map_err(db)?;
+    if changed_binding != 0 {
+        return Err(BindingError::InvalidInput);
+    }
+    let imported_at: Option<i64> = tx
+        .query_row(
+            "SELECT last_success_at FROM epg_sources WHERE id=?1 AND enabled=1",
+            [guide_source_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db)?
+        .flatten();
+    if imported_at != Some(expected_last_success_at) {
+        return Err(BindingError::InvalidInput);
+    }
+    guide_channel_exists(&tx, guide_source_id, guide_channel_id)?;
+    tx.execute(
+        "INSERT INTO epg_channel_overrides
+         (iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+         VALUES (?1,?2,?3,?4)",
+        params![iptv_channel_id, guide_source_id, guide_channel_id, at],
+    )
+    .map_err(db)?;
+    tx.commit().map_err(db)
+}
+
+/// Read-only selected-guide diagnosis; does not consult stream URLs or EPG
+/// schedule bodies. Return None if no effective shared/playlist/row choice.
+pub fn selected_guide_for_row(
+    conn: &Connection,
+    iptv_channel_id: &str,
+) -> Result<Option<String>, BindingError> {
+    let (playlist, _) = row_in_playlist(conn, iptv_channel_id)?;
+    resolve_source_id(conn, iptv_channel_id, &playlist)
+}
+
 pub fn clear_row_mapping(
     conn: &mut Connection,
     _: ConfirmedRowMapping,

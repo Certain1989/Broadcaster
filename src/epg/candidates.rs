@@ -160,6 +160,12 @@ impl<'a> CandidateIndex<'a> {
         }
         // A whole-guide name index is a review-only fallback. Blank imported
         // IDs never create future-effect aliases even if names are identical.
+        self.discover_name_only(row)
+    }
+
+    /// Separate presentation-only lookup: blank original IDs may produce a
+    /// single-stream suggestion, but never a binding or an alias candidate.
+    pub fn discover_name_only(&self, row: &IptvRow) -> Discovery {
         let mut ids = HashSet::new();
         for name in [row.tvg_name.as_deref(), Some(row.effective_name.as_str())]
             .into_iter()
@@ -173,7 +179,7 @@ impl<'a> CandidateIndex<'a> {
         match ids.len() {
             0 => Discovery::None,
             1 => Discovery::Unique(Candidate {
-                original_tvg_id: original.to_owned(),
+                original_tvg_id: row.tvg_id.clone().unwrap_or_default(),
                 full_xmltv_id: (*ids.iter().next().expect("one candidate")).to_owned(),
                 guide_source_id: self.guide_source_id.to_owned(),
                 reason: CandidateReason::NameOnly,
@@ -279,7 +285,10 @@ pub struct ReviewCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameOnlyHint {
-    pub original_tvg_id: String,
+    /// Stable per-stream identity, never a global original-ID alias key.
+    pub row_id: String,
+    pub playlist_source_id: String,
+    pub original_tvg_id: Option<String>,
     pub imported_name: String,
     pub full_xmltv_id: String,
     pub guide_display_name: String,
@@ -408,32 +417,59 @@ pub(crate) fn review_in_transaction(
             if bound {
                 already_bound_ids.insert(row.id.clone());
             }
-            match index.discover(&row, bound) {
-                Discovery::NoImportedId => counts.no_imported_id += 1,
-                Discovery::AlreadyBound => counts.manual_or_alias += 1,
-                Discovery::ExactExists => counts.exact_ids += 1,
-                Discovery::Ambiguous { .. } => counts.ambiguous += 1,
-                Discovery::None => counts.unmatched += 1,
-                Discovery::Unique(candidate) => match candidate.reason {
-                    CandidateReason::NameOnly => {
-                        counts.name_only += 1;
-                        if name_only_hints.len() < MAX_REVIEW_NAME_HINTS {
-                            name_only_hints.push(NameOnlyHint {
-                                original_tvg_id: candidate.original_tvg_id,
-                                imported_name: row.effective_name.clone(),
-                                guide_display_name: guide_names
-                                    .get(candidate.full_xmltv_id.as_str())
-                                    .copied()
-                                    .unwrap_or("")
-                                    .to_owned(),
-                                full_xmltv_id: candidate.full_xmltv_id,
-                            });
-                        } else {
-                            name_only_truncated = true;
-                        }
+            // A blank original tvg-id can still offer a *per-row*, human-
+            // confirmed exact-target shortcut based on a unique name clue.
+            // It is never fed into bulk alias preview or future-ID linking.
+            let name_hint = match index.discover(&row, bound) {
+                Discovery::NoImportedId => {
+                    counts.no_imported_id += 1;
+                    match index.discover_name_only(&row) {
+                        Discovery::Unique(candidate) => Some(candidate),
+                        _ => None,
                     }
-                    CandidateReason::Feed(_) => counts.feed_review += 1,
+                }
+                Discovery::AlreadyBound => {
+                    counts.manual_or_alias += 1;
+                    None
+                }
+                Discovery::ExactExists => {
+                    counts.exact_ids += 1;
+                    None
+                }
+                Discovery::Ambiguous { .. } => {
+                    counts.ambiguous += 1;
+                    None
+                }
+                Discovery::None => {
+                    counts.unmatched += 1;
+                    None
+                }
+                Discovery::Unique(candidate) => match candidate.reason {
+                    CandidateReason::NameOnly => Some(candidate),
+                    CandidateReason::Feed(_) => {
+                        counts.feed_review += 1;
+                        None
+                    }
                 },
+            };
+            if let Some(candidate) = name_hint {
+                counts.name_only += 1;
+                if name_only_hints.len() < MAX_REVIEW_NAME_HINTS {
+                    name_only_hints.push(NameOnlyHint {
+                        row_id: row.id.clone(),
+                        playlist_source_id: row.playlist_source_id.clone(),
+                        original_tvg_id: row.tvg_id.clone(),
+                        imported_name: row.effective_name.clone(),
+                        guide_display_name: guide_names
+                            .get(candidate.full_xmltv_id.as_str())
+                            .copied()
+                            .unwrap_or("")
+                            .to_owned(),
+                        full_xmltv_id: candidate.full_xmltv_id,
+                    });
+                } else {
+                    name_only_truncated = true;
+                }
             }
             rows.push(row);
         }

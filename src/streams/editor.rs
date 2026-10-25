@@ -595,10 +595,62 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
 #[derive(Clone, Copy)]
 enum MappingAction {
     Row,
+    SuggestedRow,
     ExactAlias,
     PlaylistException,
     ClearPlaylistException,
     ClearRow,
+}
+
+/// Immutable, selected-guide review snapshot provenance. Never persisted as
+/// a global or automatic rule; a changed row/guide/target blocks confirmation.
+#[derive(Clone)]
+struct HintPrefill {
+    row_id: String,
+    playlist_id: String,
+    original_tvg_id: Option<String>,
+    effective_name: String,
+    guide_id: String,
+    full_xmltv_id: String,
+    guide_last_success_at: i64,
+}
+
+async fn effective_row_guide(row_id: String) -> Result<Option<String>, &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::bindings::selected_guide_for_row;
+            let conn = super::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Cannot open programme data")?;
+            selected_guide_for_row(&conn, &row_id)
+                .map_err(|_| "Cannot check selected programme guide")
+        })
+        .await
+        .map_err(|_| "Programme mapping worker unavailable")?
+    })
+    .await
+}
+
+fn guide_health(guide: &crate::epg::sources::GuideSource) -> String {
+    if !guide.enabled {
+        return gettext("Guide disabled — enable and refresh it before reviewing matches");
+    }
+    let Some(imported) = guide.last_success_at else {
+        return gettext("No successful import — refresh the guide before reviewing matches");
+    };
+    let time = crate::utils::format_timestamp_full(imported)
+        .map_or_else(|| gettext("unknown time"), |v| v.to_string());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let age = if imported > now {
+        gettext("import time in future; verify clock")
+    } else if now - imported > 259_200 {
+        gettext("older than three days; may be stale")
+    } else {
+        gettext("imported, but current programme coverage is not guaranteed")
+    };
+    format!("{}: {} — {}", gettext("Last successful import"), time, age)
 }
 
 async fn save_epg_mapping(
@@ -608,13 +660,15 @@ async fn save_epg_mapping(
     source: String,
     target: String,
     expected_tvg_id: Option<String>,
+    hint: Option<HintPrefill>,
 ) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             use crate::epg::bindings::{
                 clear_row_mapping, set_global_alias_if_imported_id_matches,
-                set_playlist_exception, set_row_mapping, ConfirmedGlobalMapping,
-                ConfirmedGuideSelection, ConfirmedRowMapping, BindingError,
+                set_playlist_exception, set_row_mapping, set_row_mapping_from_hint_if_unchanged,
+                ConfirmedGlobalMapping,
+                ConfirmedGuideSelection, ConfirmedRowMapping, HintMappingSnapshot, BindingError,
             };
             let mut conn = super::storage::Storage::new()
                 .connect()
@@ -631,6 +685,27 @@ async fn save_epg_mapping(
                     &target,
                     at,
                 ),
+                MappingAction::SuggestedRow => hint
+                    .as_ref()
+                    .filter(|h| h.row_id == row && h.playlist_id == playlist
+                        && h.guide_id == source && h.full_xmltv_id == target)
+                    .ok_or(BindingError::InvalidInput)
+                    .and_then(|h| {
+                        set_row_mapping_from_hint_if_unchanged(
+                            &mut conn,
+                            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                            HintMappingSnapshot {
+                                row_id: &row,
+                                playlist_id: &h.playlist_id,
+                                tvg_id: h.original_tvg_id.as_deref(),
+                                effective_name: &h.effective_name,
+                                guide_source_id: &source,
+                                channel_id: &target,
+                                last_success_at: h.guide_last_success_at,
+                            },
+                            at,
+                        )
+                    }),
                 MappingAction::ExactAlias => expected_tvg_id
                     .as_deref()
                     .ok_or(BindingError::InvalidInput)
@@ -666,7 +741,7 @@ async fn save_epg_mapping(
                 ),
             };
             result.map_err(|_| {
-                if matches!(action, MappingAction::ExactAlias) {
+                if matches!(action, MappingAction::ExactAlias | MappingAction::SuggestedRow) {
                     "Imported tvg-id or guide changed. Reopen mapping and reconfirm."
                 } else {
                     "Guide target missing or selection changed"
@@ -686,6 +761,7 @@ struct MappingChoice {
     target: String,
     imported_tvg: Option<String>,
     source_name: String,
+    hint: Option<HintPrefill>,
 }
 
 fn confirm_epg_mapping(
@@ -704,11 +780,35 @@ fn confirm_epg_mapping(
     body.set_margin_end(16);
     label(&match action {
         MappingAction::Row => gettext("Confirm mapping for THIS stream only?"),
+        MappingAction::SuggestedRow => gettext("Name resemblance is NOT schedule evidence. Confirm this exact XMLTV ID for THIS stream only?"),
         MappingAction::ExactAlias => gettext("Confirm mapping for ALL streams with this exact case-sensitive tvg-id across playlists selecting this guide?"),
         MappingAction::PlaylistException => gettext("Make this guide an explicit exception for all channels of this playlist?"),
         MappingAction::ClearPlaylistException => gettext("Remove this playlist exception and return to the shared guide default?"),
         MappingAction::ClearRow => gettext("Clear only this stream's saved guide mapping?"),
     }, &body);
+    if matches!(action, MappingAction::SuggestedRow) {
+        label(
+            &format!(
+                "{}: {}\n{}: {}\n{}: {}\n{}: {}",
+                gettext("Playlist channel"),
+                choice
+                    .hint
+                    .as_ref()
+                    .map_or("", |h| h.effective_name.as_str()),
+                gettext("Original imported tvg-id"),
+                choice
+                    .imported_tvg
+                    .as_deref()
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or("(none)"),
+                gettext("Guide"),
+                choice.source_name,
+                gettext("Full XMLTV ID (case-sensitive)"),
+                choice.target,
+            ),
+            &body,
+        );
+    }
     if matches!(action, MappingAction::ExactAlias) {
         // Literal strings, never markup. This is the exact scope a future
         // atomic E3 API must compare under the same write transaction.
@@ -729,7 +829,7 @@ fn confirm_epg_mapping(
     body.append(&error);
     let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let approve = gtk::Button::with_label(&match action {
-        MappingAction::Row => gettext("Confirm This Stream Only"),
+        MappingAction::Row | MappingAction::SuggestedRow => gettext("Confirm This Stream Only"),
         MappingAction::ExactAlias => gettext("Confirm All Matching Streams"),
         MappingAction::PlaylistException => gettext("Confirm Playlist Exception"),
         MappingAction::ClearPlaylistException | MappingAction::ClearRow => {
@@ -771,6 +871,7 @@ fn confirm_epg_mapping(
             let source = choice.source.clone();
             let target = choice.target.clone();
             let expected_tvg = choice.imported_tvg.clone();
+            let hint = choice.hint.clone();
             spawn(glib::clone!(
                 #[weak]
                 dialog,
@@ -781,8 +882,16 @@ fn confirm_epg_mapping(
                 #[weak]
                 view,
                 async move {
-                    match save_epg_mapping(action, row, playlist, source, target, expected_tvg)
-                        .await
+                    match save_epg_mapping(
+                        action,
+                        row,
+                        playlist,
+                        source,
+                        target,
+                        expected_tvg,
+                        hint,
+                    )
+                    .await
                     {
                         Ok(()) => {
                             dialog.close();
@@ -802,6 +911,10 @@ fn confirm_epg_mapping(
 }
 
 pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
+    show_epg_mapping_editor_with_hint(view, id, None);
+}
+
+fn show_epg_mapping_editor_with_hint(view: &TvStreamsView, id: String, hint: Option<HintPrefill>) {
     let (Some(window), Some(streams)) = (view.root().and_downcast::<gtk::Window>(), view.service())
     else {
         return;
@@ -819,6 +932,17 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             let Ok(guides) = manager.list().await else {
                 return;
             };
+            // Name-hint shortcuts must still refer to the very same stream.
+            // The transactional confirmation independently repeats this check.
+            if hint.as_ref().is_some_and(|h| {
+                h.row_id != detail.effective.id
+                    || h.playlist_id != detail.effective.source_id
+                    || h.original_tvg_id != detail.imported.tvg_id
+                    || h.effective_name != detail.effective.visible_name
+            }) {
+                return;
+            }
+            let effective_guide = effective_row_guide(detail.effective.id.clone()).await;
             let dialog = adw::Dialog::new();
             dialog.set_title(&gettext("Programme Mapping"));
             dialog.set_content_width(530);
@@ -841,9 +965,51 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
             let choices: Vec<&str> = names.iter().map(String::as_str).collect();
             let picker = gtk::DropDown::from_strings(&choices);
             picker.set_sensitive(!guides.is_empty());
+            // Default to the stream's actual row > playlist > shared guide,
+            // not arbitrarily to the first guide in a list.
+            let selected_id = hint
+                .as_ref()
+                .map(|h| h.guide_id.as_str())
+                .or_else(|| effective_guide.as_ref().ok().and_then(Option::as_deref));
+            if hint.is_some() && !guides.iter().any(|g| Some(g.id.as_str()) == selected_id) {
+                return;
+            }
+            if let Some(idx) = selected_id.and_then(|id| guides.iter().position(|g| g.id == id)) {
+                picker.set_selected(idx as u32);
+            }
+            let selection_explanation = match &effective_guide {
+                Ok(Some(id)) => {
+                    let name = guides.iter().find(|g| &g.id == id)
+                        .map_or_else(|| gettext("missing guide"), |g| g.name.clone());
+                    format!("{}: {}", gettext("Effective guide for this stream"), name)
+                }
+                Ok(None) => gettext("No effective guide selected. Choose one explicitly; otherwise the EPG cannot match this stream."),
+                Err(_) => gettext("Effective guide could not be checked. Reopen mapping after checking programme data."),
+            };
+            label(&selection_explanation, &body);
             body.append(&picker);
+            let health = gtk::Label::new(None);
+            health.set_xalign(0.0);
+            health.set_wrap(true);
+            if let Some(guide) = guides.get(picker.selected() as usize) {
+                health.set_text(&guide_health(guide));
+            }
+            body.append(&health);
+            picker.connect_selected_notify({
+                let guides = guides.clone();
+                let health = health.clone();
+                move |picker| {
+                    if let Some(guide) = guides.get(picker.selected() as usize) {
+                        health.set_text(&guide_health(guide));
+                    }
+                }
+            });
+            if hint.is_some() {
+                picker.set_sensitive(false);
+                label(&gettext("Suggested from a unique display name only. Check schedules, regional feeds and language before confirming. No global alias will be created."), &body);
+            }
             label(&gettext("Exact XMLTV channel ID (case-sensitive)"), &body);
-            let channel = text("");
+            let channel = text(hint.as_ref().map_or("", |h| h.full_xmltv_id.as_str()));
             editable_control(&channel, &body);
             let error = gtk::Label::new(None);
             error.set_xalign(0.0);
@@ -854,7 +1020,8 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 gtk::Button::with_label(&gettext("Use for all streams with this exact tvg-id"));
             single.set_sensitive(!guides.is_empty());
             shared.set_sensitive(
-                !guides.is_empty()
+                hint.is_none()
+                    && !guides.is_empty()
                     && detail
                         .imported
                         .tvg_id
@@ -868,7 +1035,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 gtk::Button::with_label(&gettext("Remove this stream's manual mapping"));
             let close = gtk::Button::with_label(&gettext("Close"));
             let bulk = gtk::Button::with_label(&gettext("Review possible mappings in this guide"));
-            bulk.set_sensitive(!guides.is_empty());
+            bulk.set_sensitive(hint.is_none() && !guides.is_empty());
             bulk.set_halign(gtk::Align::Start);
             body.append(&bulk);
             bulk.connect_clicked(glib::clone!(
@@ -886,7 +1053,11 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                     }
                 }
             ));
-            playlist.set_sensitive(!guides.is_empty());
+            playlist.set_sensitive(hint.is_none() && !guides.is_empty());
+            if hint.is_some() {
+                clear_playlist.set_sensitive(false);
+                clear_row.set_sensitive(false);
+            }
             for control in [
                 &single,
                 &shared,
@@ -906,7 +1077,14 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 }
             ));
             for (button, action) in [
-                (single, MappingAction::Row),
+                (
+                    single,
+                    if hint.is_some() {
+                        MappingAction::SuggestedRow
+                    } else {
+                        MappingAction::Row
+                    },
+                ),
                 (shared, MappingAction::ExactAlias),
                 (playlist, MappingAction::PlaylistException),
                 (clear_playlist, MappingAction::ClearPlaylistException),
@@ -920,6 +1098,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                 let stable_id = detail.effective.id.clone();
                 let playlist_id = detail.effective.source_id.clone();
                 let imported_tvg = detail.imported.tvg_id.clone();
+                let hint = hint.clone();
                 button.connect_clicked(glib::clone!(
                     #[weak]
                     view,
@@ -934,11 +1113,15 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                             return;
                         }
                         let id = channel.text().to_string();
-                        if matches!(action, MappingAction::Row | MappingAction::ExactAlias)
-                            && (id.is_empty()
-                                || id.len() > 512
-                                || id.trim() != id
-                                || id.chars().any(char::is_control))
+                        if matches!(
+                            action,
+                            MappingAction::Row
+                                | MappingAction::SuggestedRow
+                                | MappingAction::ExactAlias
+                        ) && (id.is_empty()
+                            || id.len() > 512
+                            || id.trim() != id
+                            || id.chars().any(char::is_control))
                         {
                             error.set_text(&gettext("Enter a valid exact XMLTV channel ID"));
                             return;
@@ -956,6 +1139,7 @@ pub(crate) fn show_epg_mapping_editor(view: &TvStreamsView, id: String) {
                                 imported_tvg: imported_tvg.clone(),
                                 source_name: selected_guide
                                     .map_or_else(String::new, |guide| guide.name.clone()),
+                                hint: hint.clone(),
                             },
                         );
                     }
@@ -1184,6 +1368,7 @@ fn populate_read_only_name_hints_page(
     page: usize,
     rows: &gtk::Box,
     navigation: &gtk::Label,
+    view: &TvStreamsView,
 ) {
     while let Some(child) = rows.first_child() {
         rows.remove(&child);
@@ -1202,26 +1387,49 @@ fn populate_read_only_name_hints_page(
         } else {
             String::new()
         },
-        gettext("Cannot be selected or applied as aliases")
+        gettext("Choose one hint to inspect, then confirm only that stream")
     ));
     for hint in &review.name_only_hints[start..end] {
-        label(
-            &format!(
-                "{}: {} · {}: {}\n{}: {} · {}: {}\n{}: {} · {}",
-                gettext("Original M3U tvg-id"),
-                hint.original_tvg_id,
-                gettext("Playlist channel name"),
-                hint.imported_name,
-                gettext("Complete XMLTV ID"),
-                hint.full_xmltv_id,
-                gettext("XMLTV channel name"),
-                hint.guide_display_name,
-                gettext("Selected guide"),
-                review.guide_source_id,
-                gettext("Name similarity only — no alias action")
-            ),
-            rows,
-        );
+        let button = gtk::Button::with_label(&format!(
+            "{}: {} · {}: {}\n{}: {} · {}: {}\n{}: {} · {}",
+            gettext("Original M3U tvg-id"),
+            hint.original_tvg_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .unwrap_or("(none)"),
+            gettext("Playlist channel name"),
+            hint.imported_name,
+            gettext("Complete XMLTV ID"),
+            hint.full_xmltv_id,
+            gettext("XMLTV channel name"),
+            hint.guide_display_name,
+            gettext("Selected guide"),
+            review.guide_source_id,
+            gettext("Inspect exact target for THIS stream only")
+        ));
+        button.set_halign(gtk::Align::Fill);
+        button.set_can_focus(true);
+        let prefill = HintPrefill {
+            row_id: hint.row_id.clone(),
+            playlist_id: hint.playlist_source_id.clone(),
+            original_tvg_id: hint.original_tvg_id.clone(),
+            effective_name: hint.imported_name.clone(),
+            guide_id: review.guide_source_id.clone(),
+            full_xmltv_id: hint.full_xmltv_id.clone(),
+            guide_last_success_at: review.last_success_at,
+        };
+        button.connect_clicked(glib::clone!(
+            #[weak]
+            view,
+            move |_| {
+                show_epg_mapping_editor_with_hint(
+                    &view,
+                    prefill.row_id.clone(),
+                    Some(prefill.clone()),
+                );
+            }
+        ));
+        rows.append(&button);
     }
 }
 
@@ -1647,6 +1855,7 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                         let review = review.clone();
                         let selected = selected.clone();
                         let current = current.clone();
+                        let view = view.clone();
                         let read_only_hints = read_only_hints.clone();
                         let list = list.clone();
                         let position = position.clone();
@@ -1658,7 +1867,9 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                             read_only_hints.set(hints);
                             current.set(0);
                             if hints {
-                                populate_read_only_name_hints_page(&review, 0, &list, &position);
+                                populate_read_only_name_hints_page(
+                                    &review, 0, &list, &position, &view,
+                                );
                             } else {
                                 populate_guide_review_page(&review, 0, &list, &position, &selected);
                             }
@@ -1676,6 +1887,7 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                         let review = review.clone();
                         let selected = selected.clone();
                         let current = current.clone();
+                        let view = view.clone();
                         let list = list.clone();
                         let position = position.clone();
                         let previous = previous.clone();
@@ -1700,7 +1912,7 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                             current.set(new_page);
                             if hints {
                                 populate_read_only_name_hints_page(
-                                    &review, new_page, &list, &position,
+                                    &review, new_page, &list, &position, &view,
                                 );
                             } else {
                                 populate_guide_review_page(

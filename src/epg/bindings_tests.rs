@@ -731,3 +731,222 @@ fn snapshot_generation_and_locked_mapping_write_do_not_mix_or_partially_commit()
     drop(reader);
     std::fs::remove_file(&path).unwrap();
 }
+
+#[test]
+fn name_hint_confirms_only_one_row_and_never_creates_implicit_alias() {
+    let mut c = setup();
+    add_channel(&c, "g", "exact.Target@HD", "Station");
+    selected(&mut c, "g");
+    set_row_mapping_from_hint_if_unchanged(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        HintMappingSnapshot {
+            row_id: "a1",
+            playlist_id: "playlist-a",
+            tvg_id: Some("TVG.EXACT"),
+            effective_name: "Station",
+            guide_source_id: "g",
+            channel_id: "exact.Target@HD",
+            last_success_at: 1000,
+        },
+        55,
+    )
+    .unwrap();
+    assert_eq!(count(&c, "epg_channel_overrides"), 1);
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
+    assert!(matches!(resolve(&c, "a1"), MatchDecision::Matched {
+        method: MatchMethod::RowOverride, channel_id, ..
+    } if channel_id == "exact.Target@HD"));
+    assert!(!matches!(
+        resolve(&c, "b1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    // A different stream with no imported ID can only create its own override.
+    set_row_mapping_from_hint_if_unchanged(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        HintMappingSnapshot {
+            row_id: "b2",
+            playlist_id: "playlist-b",
+            tvg_id: None,
+            effective_name: "Unique Non-ID",
+            guide_source_id: "g",
+            channel_id: "exact.Target@HD",
+            last_success_at: 1000,
+        },
+        56,
+    )
+    .unwrap();
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
+    assert_eq!(count(&c, "epg_channel_overrides"), 2);
+    fk_ok(&c);
+}
+
+#[test]
+fn name_hint_revalidates_snapshot_and_fails_closed_on_changes() {
+    let mut c = setup();
+    add_channel(&c, "g", "Target@HD", "Station");
+    add_guide(&c, "other", true);
+    selected(&mut c, "g");
+    let confirm = |c: &mut Connection| {
+        set_row_mapping_from_hint_if_unchanged(
+            c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            HintMappingSnapshot {
+                row_id: "a1",
+                playlist_id: "playlist-a",
+                tvg_id: Some("TVG.EXACT"),
+                effective_name: "Station",
+                guide_source_id: "g",
+                channel_id: "Target@HD",
+                last_success_at: 1000,
+            },
+            70,
+        )
+    };
+    let check_refused = |c: &mut Connection| {
+        assert!(confirm(c).is_err());
+        assert_eq!(count(c, "epg_channel_overrides"), 0);
+        assert_eq!(count(c, "epg_global_id_aliases"), 0);
+    };
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='changed' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    check_refused(&mut c);
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='TVG.EXACT' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE iptv_channels SET imported_name='Renamed' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    check_refused(&mut c);
+    c.execute(
+        "UPDATE iptv_channels SET imported_name='Station' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    set_playlist_exception(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        Some("other"),
+        10,
+    )
+    .unwrap();
+    check_refused(&mut c);
+    set_playlist_exception(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        None,
+        11,
+    )
+    .unwrap();
+    c.execute(
+        "UPDATE epg_sources SET last_success_at=1001 WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    check_refused(&mut c);
+    c.execute(
+        "UPDATE epg_sources SET last_success_at=1000 WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    c.execute("UPDATE epg_sources SET enabled=0 WHERE id='g'", [])
+        .unwrap();
+    check_refused(&mut c);
+    c.execute("UPDATE epg_sources SET enabled=1 WHERE id='g'", [])
+        .unwrap();
+    c.execute(
+        "DELETE FROM epg_channels WHERE source_id='g' AND channel_id='Target@HD'",
+        [],
+    )
+    .unwrap();
+    check_refused(&mut c);
+    add_channel(&c, "g", "Target@HD", "Station");
+    c.execute(
+        "UPDATE iptv_channels SET is_present=0, missing_since=99 WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    check_refused(&mut c);
+    c.execute(
+        "UPDATE iptv_channels SET is_present=1, missing_since=NULL WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    assert!(confirm(&mut c).is_ok());
+}
+
+#[test]
+fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
+    let mut c = setup();
+    add_channel(&c, "g", "Target", "Station");
+    selected(&mut c, "g");
+    set_global_alias_if_imported_id_matches(
+        &mut c,
+        ConfirmedGlobalMapping::after_user_confirmation_for_all_matching_streams(),
+        "a1",
+        "TVG.EXACT",
+        "g",
+        "Target",
+        20,
+    )
+    .unwrap();
+    assert_eq!(
+        set_row_mapping_from_hint_if_unchanged(
+            &mut c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            HintMappingSnapshot {
+                row_id: "a1",
+                playlist_id: "playlist-a",
+                tvg_id: Some("TVG.EXACT"),
+                effective_name: "Station",
+                guide_source_id: "g",
+                channel_id: "Target",
+                last_success_at: 1000,
+            },
+            21,
+        ),
+        Err(BindingError::InvalidInput),
+    );
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    c.execute("DELETE FROM epg_global_id_aliases", []).unwrap();
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1",
+        "g",
+        "Target",
+        22,
+    )
+    .unwrap();
+    assert_eq!(
+        set_row_mapping_from_hint_if_unchanged(
+            &mut c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            HintMappingSnapshot {
+                row_id: "a1",
+                playlist_id: "playlist-a",
+                tvg_id: Some("TVG.EXACT"),
+                effective_name: "Station",
+                guide_source_id: "g",
+                channel_id: "Target",
+                last_success_at: 1000,
+            },
+            23,
+        ),
+        Err(BindingError::InvalidInput),
+    );
+    assert_eq!(count(&c, "epg_channel_overrides"), 1);
+}
