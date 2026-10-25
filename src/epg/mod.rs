@@ -7,6 +7,9 @@ pub mod bindings;
 #[cfg(test)]
 mod bindings_tests;
 pub mod cache;
+pub mod candidates;
+#[cfg(test)]
+mod candidates_tests;
 #[cfg(test)]
 mod capacity_bench;
 pub mod desktop;
