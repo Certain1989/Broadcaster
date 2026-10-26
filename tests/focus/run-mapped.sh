@@ -95,6 +95,13 @@ tests=(
   gtk_focus001_streams_collapsed_star_two_key_reachability
   gtk_focus001_xtest_live_search_down_native_propagation
   gtk_focus001_xtest_mediathek_search_down_up
+  gtk_focus001_live_search_switcher_roundtrip
+  gtk_focus001_streams_search_switcher_roundtrip
+  gtk_focus001_live_search_keyboard_horizontal_reverse
+  gtk_focus001_mediathek_compact_toolbar_ownership_inventory
+  gtk_focus001_streams_empty_toolbar_ownership_inventory
+  gtk_focus001_app_menu_escape_restores_focus
+  gtk_focus001_mediathek_osk_modal_escape_return
 )
 pass=0
 fail=0
@@ -117,7 +124,7 @@ trace_excerpt() {
 for test_name in "${tests[@]}"; do
   printf '\nFOCUS001 RUN %s\n' "$test_name"
   log="$scratch/$test_name.log"
-  if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" ]] && (( !xtest_ready )); then
+  if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" || "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ]] && (( !xtest_ready )); then
     environment=$((environment + 1))
     echo "FOCUS001 ENVIRONMENT $test_name (XTest emitter unavailable)"
     continue

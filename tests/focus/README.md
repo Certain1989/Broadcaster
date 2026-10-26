@@ -63,3 +63,27 @@ Up/Down/Left/Right are directional operations; Back/Escape/Home are semantic
 operations and have separate test coverage. Existing `#[ignore]` GTK tests
 elsewhere are not universally covered here. The owner retains the final Fedora
 Bigscreen Wayland physical remote and visible-ring acceptance gates.
+
+## Continuation-003 (test-only expansion; original base 452d12b)
+
+Seven more independent, individually enumerated mapped GTK cases are included
+for Live/My Channels global switcher return, Live Search↔Keyboard, compact
+Mediathek's seven toolbar controls, the empty My Channels toolbar, the main
+app-menu popover, and Mediathek OSK modal return. The first five use the real
+mapped `TvWindow`/GTK ownership path but not hardware-equivalent input; the
+last two require the native XTest emitter and verified editable input delivery.
+The compact/empty-toolbar inventories intentionally claim **HELPER_ONLY**
+focusability, not native directional coverage. Local CANDIDATE_DIRTY isolated-Xvfb execution on base `452d12b`
+completed all 20 enumerated cases: **13 PASS / 7 known RED, 0 timeout / 0
+environment / 0 unrun**. The new seven were all PASS locally, not a
+post-publication published-commit rerun or CI result. Revalidate against
+the exact Git commit after publication.
+
+The TSV also enumerates explicit NOT_COVERED route and state classes including
+all-tab native activation, Mediathek full adjacency, managers, guide mapping,
+OSK grid, scroll virtualization and playback. No untested class is silently
+called automated; rendered-focus contrast remains
+**RENDERED_INDICATOR_NOT_AUTOMATED** until a reproducible pixel oracle with
+negative control or an owner physical acceptance verifies it. Unknown toolbar
+ordering or reverse-edge policy remains OWNER_DECISION_REQUIRED, not silently
+asserted as a product design decision.

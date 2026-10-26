@@ -2013,4 +2013,199 @@ mod focus001_mapped_regressions {
         assert_owner(&window, buttons[0].upcast_ref(), "Edit Up -> Play");
         window.close();
     }
+
+    /// The three pages share the same global Up/Down boundary. Run the Live
+    /// variant in its own GTK process, not a multi-page simulated mock.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable GSettings"]
+    fn gtk_focus001_live_search_switcher_roundtrip() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        assert_owner(&window, &search, "Live Search start");
+        key(&window, gtk::gdk::Key::Up);
+        let switcher = window
+            .focused_widget()
+            .expect("Live Search Up must retain owner");
+        assert_eq!(switcher.type_().name(), "AdwViewSwitcherButton");
+        assert_owner(&window, &switcher, "Live Search Up to category");
+        key(&window, gtk::gdk::Key::Down);
+        assert_owner(&window, &search, "Live category Down returns Search");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable GSettings"]
+    fn gtk_focus001_streams_search_switcher_roundtrip() {
+        let (_app, window) = mapped_window("streams");
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        assert_owner(&window, &search, "My Channels Search start");
+        key(&window, gtk::gdk::Key::Up);
+        let switcher = window
+            .focused_widget()
+            .expect("My Channels Search Up owner");
+        assert_eq!(switcher.type_().name(), "AdwViewSwitcherButton");
+        assert_owner(&window, &switcher, "My Channels Search Up to category");
+        key(&window, gtk::gdk::Key::Down);
+        assert_owner(&window, &search, "My Channels category Down returns Search");
+        window.close();
+    }
+
+    /// Search and OSK launcher are a horizontal pair, not part of the
+    /// historical vertical list-navigation chain. Real mapped focus is read.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable GSettings"]
+    fn gtk_focus001_live_search_keyboard_horizontal_reverse() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let controls = window.imp().live_view.toolbar_focus_targets();
+        assert_eq!(controls.len(), 2);
+        assert!(controls[0].grab_focus());
+        assert_owner(&window, &controls[0], "Live Search horizontal start");
+        key(&window, gtk::gdk::Key::Right);
+        assert_owner(&window, &controls[1], "Live Search Right to Keyboard");
+        key(&window, gtk::gdk::Key::Left);
+        assert_owner(&window, &controls[0], "Live Keyboard Left to Search");
+        window.close();
+    }
+
+    /// Do not conflate GTK focusability with D-pad reachability. This
+    /// structural case verifies every enabled real Mediathek toolbar target
+    /// at a compact width, and is separately labelled HELPER_ONLY in TSV.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable GSettings"]
+    fn gtk_focus001_mediathek_compact_toolbar_ownership_inventory() {
+        let (_app, window) = mapped_window("mediathek");
+        window.set_default_size(640, 480);
+        settle();
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_eq!(
+            controls.len(),
+            7,
+            "all documented toolbar classes are present"
+        );
+        for (index, control) in controls.iter().enumerate() {
+            assert!(
+                control.is_mapped() && control.is_visible() && control.is_sensitive(),
+                "Mediathek compact toolbar index {index} unavailable"
+            );
+            assert!(
+                control.grab_focus(),
+                "Mediathek toolbar index {index} not focusable"
+            );
+            assert_owner(
+                &window,
+                control,
+                &format!("compact Mediathek control {index}"),
+            );
+        }
+        window.close();
+    }
+
+    /// Empty My Channels must not silently make all toolbar actions orphaned
+    /// when the underlying SQLite service has not provided any rows.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable GSettings"]
+    fn gtk_focus001_streams_empty_toolbar_ownership_inventory() {
+        let (_app, window) = mapped_window("streams");
+        let controls = window.imp().streams_view.toolbar_focus_targets();
+        assert_eq!(controls.len(), 12);
+        let mut enabled = 0;
+        for (index, control) in controls.iter().enumerate() {
+            if !control.is_mapped() || !control.is_visible() || !control.is_sensitive() {
+                eprintln!("FOCUS001 disabled/hidden empty-toolbar index={index}");
+                continue;
+            }
+            enabled += 1;
+            assert!(
+                control.grab_focus(),
+                "enabled My Channels control {index} unreachable"
+            );
+            assert_owner(
+                &window,
+                control,
+                &format!("empty My Channels control {index}"),
+            );
+        }
+        assert!(enabled >= 3, "no usable controls remain on an empty list");
+        window.close();
+    }
+
+    /// Opening the real application menu must not strand the keyboard focus
+    /// behind a mapped popover, and Escape must dismiss the popover.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with real XTest key injection"]
+    fn gtk_focus001_app_menu_escape_restores_focus() {
+        let (_app, window) = mapped_window("mediathek");
+        let menu = window.imp().menu_button.get();
+        assert_native_input_delivery(&window.imp().mediathek_view.toolbar_focus_targets()[0]);
+        assert!(menu.grab_focus());
+        menu.popup();
+        settle();
+        let popover = menu.popover().expect("actual application menu popover");
+        assert!(popover.is_mapped(), "application menu failed to map");
+        let owner = window
+            .focused_widget()
+            .expect("menu must have a focus owner");
+        assert!(
+            TvWindow::is_within(&owner, popover.upcast_ref()),
+            "menu opened but focus remained outside topmost popover: {}",
+            owner.type_().name()
+        );
+        native_x11_key("Escape");
+        assert!(!popover.is_mapped(), "Escape left application menu open");
+        let owner = window.focused_widget().expect("Escape orphaned focus");
+        assert!(
+            owner.is_mapped() && owner.is_sensitive(),
+            "Escape returned to invalid owner"
+        );
+        window.close();
+    }
+
+    /// The real OSK launches from a page toolbar and is a topmost AdwDialog,
+    /// not a detached mock grid. Direct click opens it; physical XTest keys
+    /// exercise modal propagation and dismissal independently.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with real XTest key injection"]
+    fn gtk_focus001_mediathek_osk_modal_escape_return() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_native_input_delivery(&controls[0]);
+        let launcher = controls[1]
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("OSK button");
+        assert!(launcher.grab_focus());
+        launcher.emit_clicked();
+        settle();
+        let dialog = window.visible_dialog().expect("OSK dialog must appear");
+        assert!(dialog.is_mapped(), "OSK dialog must map");
+        let owner = window.focused_widget().expect("OSK must own focus");
+        assert!(
+            TvWindow::is_within(&owner, dialog.upcast_ref()),
+            "OSK opened without keyboard focus inside its modal"
+        );
+        native_x11_key("Right");
+        let after = window.focused_widget().expect("OSK Right lost focus");
+        assert!(
+            TvWindow::is_within(&after, dialog.upcast_ref()) && after.is_mapped(),
+            "OSK D-pad Right escaped the topmost dialog"
+        );
+        native_x11_key("Escape");
+        settle();
+        assert!(
+            window.visible_dialog().is_none(),
+            "OSK Escape failed to dismiss topmost dialog"
+        );
+        let owner = window.focused_widget().expect("OSK Escape lost focus");
+        assert!(
+            TvWindow::is_within(&owner, &controls[0]) || TvWindow::is_within(&owner, &controls[1]),
+            "OSK Escape did not return to Search or its launcher"
+        );
+        window.close();
+    }
 }
