@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
 surface	case	initial	key	expected	observed	GTK owner/indicator	direction reverse	status	remaining gate
 Mediathek	gtk_focus001_mediathek_down_up_roundtrip	Search	Down then Up	adjacent toolbar button then Search	Down GtkToggleButton; Up GtkButton instead of Search	window focus=true; has_visible_focus=false	non-reversible	RED	physical GDK dispatch and Wayland ring
 Mediathek	gtk_focus001_mediathek_horizontal_filter_roundtrips	Keyboard / Broadcaster / Duration	Right then Left	adjacent visible sibling then original	three pairs reversed as expected	window focus=true; has_visible_focus=false	strict roundtrip	TESTED	physical D-pad and visual CSS/pixel contrast

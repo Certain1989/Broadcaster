@@ -1,3 +1,4 @@
+<!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
 <!-- SPDX-License-Identifier: CC0-1.0 -->
 # FOCUS-001 mapped GTK regression suite (independent, test-only)
 
@@ -21,3 +22,5 @@ shows that a wrong focus owner is caught.
 `focus-coverage.tsv` records what was exercised and what remains untested.
 No live playlist, XMLTV corpus, network stream or private environment values
 are used by the tests.
+
+The TSV file begins with SPDX comment lines; ignore lines starting with `#` when importing.

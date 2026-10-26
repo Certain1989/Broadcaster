@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: CC0-1.0
 # Run GTK focus tests in distinct processes: gtk::init cannot be concurrently
 # invoked on arbitrary Rust test threads. Fail on the first real RED regression.
