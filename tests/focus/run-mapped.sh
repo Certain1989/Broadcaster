@@ -107,6 +107,10 @@ tests=(
   gtk_focus001_xtest_manage_sources_refresh_down_reaches_lower_row
   gtk_focus001_xtest_mediathek_complete_toolbar_graph
   gtk_focus001_xtest_global_three_page_switcher_activation
+  gtk_focus001_xtest_negative_control_rejects_wrong_arrow
+  gtk_focus001_xtest_osk_native_key_grid_and_layout
+  gtk_focus001_xtest_programme_guides_empty_manager_and_add_dialog
+  gtk_focus001_xtest_streams_empty_toolbar_native_graph
 )
 pass=0
 fail=0

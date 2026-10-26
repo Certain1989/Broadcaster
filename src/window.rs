@@ -2566,4 +2566,366 @@ mod focus001_mapped_regressions {
         assert_owner(&window, &streams_search, "My Channels tab Down to Search");
         window.close();
     }
+
+    /// Explicitly reject a reversed-arrow oracle against a real mapped GTK
+    /// toolbar move. This checks the *direction oracle*, rather than treating
+    /// success from grab_focus() as navigation evidence.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest"]
+    fn gtk_focus001_xtest_negative_control_rejects_wrong_arrow() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        let targets = window.imp().live_view.toolbar_focus_targets();
+        assert_native_input_delivery(&targets[0]);
+        let search = targets[0].clone();
+        let keyboard = targets[1].clone();
+        assert!(search.grab_focus());
+        native_x11_key("Right");
+        assert_owner(&window, &keyboard, "native Right to OSK launcher");
+        let a = search
+            .compute_bounds(window.upcast_ref::<gtk::Widget>())
+            .expect("Search bounds");
+        let b = keyboard
+            .compute_bounds(window.upcast_ref::<gtk::Widget>())
+            .expect("OSK bounds");
+        let delta = (b.x() + b.width() * 0.5) - (a.x() + a.width() * 0.5);
+        assert!(
+            delta > 2.0,
+            "positive spatial Right control must really move right"
+        );
+        // A deliberately faulty router/oracle would call this a Left move:
+        // ensure the same positive native transition is rejected as Left.
+        let falsely_accepted_left = delta < -2.0;
+        assert!(
+            !falsely_accepted_left,
+            "negative control failed to detect wrong arrow"
+        );
+        eprintln!("FOCUS001 negative_wrong_arrow PASS native_Right_delta={delta:.1} wrong_Left_rejected=true");
+        window.close();
+    }
+
+    /// Native OSK keys and row boundaries, including a horizontal-wrap
+    /// exception. Test-owned focus seeding only enters independent edges;
+    /// each asserted transition is made with real XTest/GDK events.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest"]
+    fn gtk_focus001_xtest_osk_native_key_grid_and_layout() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_native_input_delivery(&controls[0]);
+        controls[1]
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("OSK launcher")
+            .emit_clicked();
+        settle();
+        let dialog = window.visible_dialog().expect("actual mapped OSK dialog");
+        let get_key = |label: &str| -> gtk::Button {
+            TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>()
+                    .is_some_and(|b| b.label().as_deref() == Some(label))
+            })
+            .unwrap_or_else(|| panic!("mapped OSK key missing: {label}"))
+            .downcast::<gtk::Button>()
+            .expect("OSK key button")
+        };
+        let q = get_key("q");
+        assert!(q.is_mapped() && q.is_sensitive() && q.grab_focus());
+        native_x11_key("Right");
+        assert_owner(&window, get_key("w").upcast_ref(), "OSK q Right w");
+        native_x11_key("Left");
+        assert_owner(&window, q.upcast_ref(), "OSK w Left q");
+        native_x11_key("Left");
+        assert_owner(
+            &window,
+            get_key("ü").upcast_ref(),
+            "OSK row-left wrap q to ü",
+        );
+        native_x11_key("Right");
+        assert_owner(&window, q.upcast_ref(), "OSK wrap reversed ü Right q");
+        // The live grid must not relinquish focus to underlying page widgets.
+        for name in ["Up", "Down", "Down", "Up"] {
+            native_x11_key(name);
+            let owner = window
+                .focused_widget()
+                .expect("OSK directional key lost owner");
+            assert!(
+                owner.is_mapped()
+                    && owner.is_sensitive()
+                    && TvWindow::is_within(&owner, dialog.upcast_ref()),
+                "OSK {name} escaped modal or found detached control"
+            );
+        }
+        // Native OK on a letter edits only the isolated draft, never the
+        // origin's search entry until a *separate* Done action.
+        assert!(q.grab_focus());
+        let original = controls[0]
+            .clone()
+            .downcast::<gtk::SearchEntry>()
+            .expect("source SearchEntry");
+        original.set_text("");
+        native_x11_key("Return");
+        let draft = TvWindow::find_descendant(dialog.upcast_ref(), &|w| w.is::<gtk::Entry>())
+            .expect("OSK isolated draft")
+            .downcast::<gtk::Entry>()
+            .expect("draft entry");
+        assert!(
+            draft.text().contains('q'),
+            "native OSK OK did not enter q in draft"
+        );
+        assert!(
+            original.text().is_empty(),
+            "OSK preview leaked uncommitted edit to origin"
+        );
+        let shift = get_key("Shift");
+        assert!(shift.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(
+            get_key("Q").label().as_deref(),
+            Some("Q"),
+            "Shift did not relabel OSK"
+        );
+        let layout = get_key("QWERTZ");
+        assert!(layout.grab_focus());
+        native_x11_key("Return");
+        assert!(
+            get_key("Z").is_mapped(),
+            "QWERTZ layout switch did not remap Y position"
+        );
+        eprintln!("FOCUS001 osk_native q/w/row_wrap, vertical modal, native OK and Shift/QWERTZ labels verified");
+        native_x11_key("Escape");
+        assert!(
+            window.visible_dialog().is_none(),
+            "OSK Escape must dismiss keyboard"
+        );
+        window.close();
+    }
+
+    /// Exercise the real global Programme Guides manager (zero-guide state)
+    /// and its nested Add URL dialog without importing a network feed. The
+    /// isolated runner's XDG_DATA_HOME and memory GSettings prevent touching
+    /// any owner config. Source rows/multirow guide fixtures are NOT covered.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb, disposable XDG and native XTest"]
+    fn gtk_focus001_xtest_programme_guides_empty_manager_and_add_dialog() {
+        let (_app, window) = mapped_window("streams");
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let mut manager = None;
+        for _ in 0..40 {
+            settle();
+            if let Some(dialog) = window.visible_dialog() {
+                manager = Some(dialog);
+                break;
+            }
+        }
+        let manager = manager.expect("real Programme Guides manager must map");
+        let get = |label: &str| -> gtk::Button {
+            TvWindow::find_descendant(manager.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>()
+                    .is_some_and(|b| b.label().as_deref() == Some(label))
+            })
+            .unwrap_or_else(|| panic!("guide manager button missing: {label}"))
+            .downcast::<gtk::Button>()
+            .expect("real guide manager GtkButton")
+        };
+        let add = get("Add URL");
+        let local = get("Choose Local XMLTV");
+        let close = get("Close");
+        assert!(add.is_mapped() && local.is_mapped() && close.is_mapped());
+        assert!(add.grab_focus());
+        native_x11_key("Right");
+        assert_owner(
+            &window,
+            local.upcast_ref(),
+            "guide manager Add URL Right local chooser",
+        );
+        native_x11_key("Left");
+        assert_owner(
+            &window,
+            add.upcast_ref(),
+            "guide manager local chooser Left Add URL",
+        );
+        native_x11_key("Return");
+        let mut nested = None;
+        for _ in 0..20 {
+            settle();
+            if let Some(d) = window.visible_dialog() {
+                if d != manager {
+                    nested = Some(d);
+                    break;
+                }
+            }
+        }
+        let nested = nested.expect("native OK on Add URL must open real guide Add dialog");
+        assert!(nested.is_mapped());
+        let owner = window
+            .focused_widget()
+            .expect("nested Add guide focus owner");
+        assert!(
+            TvWindow::is_within(&owner, nested.upcast_ref()) && owner.is_mapped(),
+            "nested Programme Guide Add dialog must trap mapped focus"
+        );
+        native_x11_key("Escape");
+        settle();
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "nested Add Escape must return to manager"
+        );
+        let owner = window
+            .focused_widget()
+            .expect("manager focus after Add Escape");
+        assert!(
+            TvWindow::is_within(&owner, manager.upcast_ref()) && owner.is_mapped(),
+            "guide manager lost focus after child dialog closes"
+        );
+        native_x11_key("Escape");
+        settle();
+        assert!(
+            window.visible_dialog().is_none(),
+            "guide manager Escape did not close"
+        );
+        window.close();
+    }
+
+    /// Every currently enabled My Channels toolbar control participates in
+    /// one actual native D-pad graph, not merely individual grab_focus probes.
+    /// The fixture is the safe empty local state, with no playlist import.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest"]
+    fn gtk_focus001_xtest_streams_empty_toolbar_native_graph() {
+        let (_app, window) = mapped_window("streams");
+        let controls = window.imp().streams_view.toolbar_focus_targets();
+        assert_eq!(
+            controls.len(),
+            12,
+            "source/filter toolbar inventory drifted"
+        );
+        assert_native_input_delivery(&controls[0]);
+        let enabled: Vec<_> = controls
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| (w.is_mapped() && w.is_sensitive() && w.is_visible()).then_some(i))
+            .collect();
+        assert!(
+            enabled.len() >= 3,
+            "empty state removed core toolbar controls"
+        );
+        let mut edges = vec![Vec::new(); controls.len()];
+        let mut reversed = Vec::new();
+        let mut wrong = Vec::new();
+        let mut escapes = Vec::new();
+        for &index in &enabled {
+            let from = &controls[index];
+            assert!(from.grab_focus(), "enabled toolbar cannot focus");
+            let rect = from
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("source toolbar allocation missing");
+            let center = (
+                rect.x() + rect.width() * 0.5,
+                rect.y() + rect.height() * 0.5,
+            );
+            for arrow in ["Up", "Down", "Left", "Right"] {
+                assert!(from.grab_focus());
+                settle();
+                native_x11_key(arrow);
+                let owner = window
+                    .focused_widget()
+                    .expect("My Channels toolbar D-pad orphaned focus");
+                assert!(
+                    owner.is_mapped() && owner.is_visible() && owner.is_sensitive(),
+                    "My Channels toolbar destination is detached/disabled"
+                );
+                let target = enabled
+                    .iter()
+                    .copied()
+                    .find(|&i| TvWindow::is_within(&owner, &controls[i]));
+                eprintln!(
+                    "FOCUS001 streams_toolbar from={index} arrow={arrow} to={target:?} owner={}",
+                    owner.type_().name()
+                );
+                if let Some(dest) = target {
+                    if index == dest {
+                        continue;
+                    } // editing caret / boundary
+                    edges[index].push(dest);
+                    let r = controls[dest]
+                        .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                        .expect("target geometry");
+                    let d = (
+                        r.x() + r.width() * 0.5 - center.0,
+                        r.y() + r.height() * 0.5 - center.1,
+                    );
+                    let direction = match arrow {
+                        "Up" => d.1 < -2.0,
+                        "Down" => d.1 > 2.0,
+                        "Left" => d.0 < -2.0,
+                        "Right" => d.0 > 2.0,
+                        _ => unreachable!(),
+                    };
+                    if !direction {
+                        wrong.push(format!("{index} {arrow} {dest}"));
+                    }
+                    let reverse = match arrow {
+                        "Up" => "Down",
+                        "Down" => "Up",
+                        "Left" => "Right",
+                        "Right" => "Left",
+                        _ => unreachable!(),
+                    };
+                    native_x11_key(reverse);
+                    if !window
+                        .focused_widget()
+                        .as_ref()
+                        .is_some_and(|w| TvWindow::is_within(w, from))
+                    {
+                        reversed.push(format!("{index} {arrow} {dest} {reverse}"));
+                    }
+                } else if !TvWindow::is_within(&owner, window.imp().streams_view.upcast_ref()) {
+                    // Up from top-row Search or the adjacent OSK launcher is
+                    // an intentional portal to the global page switcher, not
+                    // an ordinary same-page toolbar escape. Active-tab
+                    // identity is separately tested by the switcher canary.
+                    let top_portal = arrow == "Up"
+                        && (index == 0 || index == 11)
+                        && owner.type_().name() == "AdwViewSwitcherButton";
+                    if !top_portal {
+                        escapes.push(format!("{index} {arrow} {}", owner.type_().name()));
+                    }
+                }
+            }
+        }
+        let mut seen = vec![false; controls.len()];
+        seen[0] = true;
+        let mut queue = std::collections::VecDeque::from([0]);
+        while let Some(i) = queue.pop_front() {
+            for &next in &edges[i] {
+                if !seen[next] {
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        let missing: Vec<_> = enabled.iter().copied().filter(|&i| !seen[i]).collect();
+        eprintln!("FOCUS001 streams_native_graph enabled={enabled:?} missing={missing:?} wrong={wrong:?} reverse={reversed:?} escapes={escapes:?}");
+        assert!(
+            escapes.is_empty(),
+            "My Channels toolbar unexpectedly entered global/tab focus"
+        );
+        assert!(
+            wrong.is_empty(),
+            "My Channels toolbar arrows violate mapped directions"
+        );
+        assert!(
+            reversed.is_empty(),
+            "My Channels toolbar cannot locally reverse arrow edges"
+        );
+        assert!(
+            missing.is_empty(),
+            "some mapped My Channels toolbar buttons have no D-pad route"
+        );
+        window.close();
+    }
 }

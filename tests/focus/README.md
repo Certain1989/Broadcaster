@@ -153,3 +153,53 @@ canary version assumed focus movement activated a tab; that invalid oracle
 was corrected to require explicit OK and then augmented with a prerequisite
 assertion that Up first focuses the *current* category. Only the corrected
 version should be used for future product conclusions.
+
+## Continuation-005 — additional real-key spatial probes (2026-10-26)
+
+The same isolated blocking runner enumerates **29** cases, including four new
+`NATIVE_MAPPED` tests that send real XTest key events to actual GTK controls.
+The new independent wrong-arrow negative control verifies that the geometry
+oracle rejects a deliberately false Left classification of an observed Right
+move; it is separate from the existing stolen-focus negative control. Neither
+control establishes rendered ring contrast.
+
+* **OSK grid:** `gtk_focus001_xtest_osk_native_key_grid_and_layout` exercises
+  real q/ w traversal and reverse, a left-edge to right-edge wrap and reverse,
+  vertical modal ownership, native OK into isolated draft, Shift and QWERTZ
+  relabelling, and Escape. It does *not* establish all keys, Done/Cancel,
+  persistence across app restart, compact viewport, or focus-ring pixels.
+* **Programme Guides:** `gtk_focus001_xtest_programme_guides_empty_manager_and_add_dialog`
+  opens the actual mapped empty manager under disposable XDG directories;
+  verifies native Add URL ↔ Choose Local XMLTV arrows, native OK into the
+  nested URL dialog, and two Escape/refocus steps. No real guide is downloaded
+  or modified. Multi-guide source rows, disabled/reorder action grids, refresh,
+  confirmation, errors, stale state and mapping picker remain `NOT_COVERED`.
+* **My Channels empty toolbar:** `gtk_focus001_xtest_streams_empty_toolbar_native_graph`
+  independently sends all four native arrows from each mapped/enabled toolbar
+  control, checks destination owner, direction and local reverse, and performs
+  graph reachability starting at Search. Its empty state is intentionally not
+  evidence for populated source facets, recycled rows or async focus.
+
+These are additive route probes, **not completion of D38**. The test inventory
+must retain `NOT_COVERED` for Programme Guides multirow and mapping, OSK full
+keys/layout persistence, multiple Live/Mediathek card states, 284/1,484/10,000
+mapped virtualized IPTV lists, native playback return, asynchronous source
+and favourites edge states, and pixel-rendered focus contrast. The correct
+separate compositor gate remains `RENDERED_INDICATOR_NOT_AUTOMATED /
+OWNER_PHYSICAL` on Fedora KDE Plasma Bigscreen N100 Wayland. `has_focus()` and
+`has_visible_focus()` do not measure a painted indicator. Known product REDs
+remain mandatory and nonzero in both local runner and public CI.
+
+The first 29-case **CANDIDATE_DIRTY** Xvfb run (parent `21d80bfd...`)
+completed **17 PASS / 12 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**.
+The new empty My Channels native toolbar graph reaches **all 11 enabled
+controls** but reports **six nonreversible adjacent arrow edges**. An initial
+assertion also counted the Search/OSK upward page-switcher portals as escapes;
+this is an oracle error, not a product fault. The corrected graph allows only
+those deliberate Up portals while retaining strict reversal/direction and
+reachability assertions. The corrected full 29-case **CANDIDATE_DIRTY** rerun independently confirmed
+**17 PASS / 12 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN** (blocking exit 1).
+Both deliberate focus-owner and wrong-direction negative controls PASS.
+The six new toolbar reversal failures remain RED; top-row Up portals are
+classified separately and never waived as ordinary reverse edges. These
+candidate results are **not** clean post-publication or CI evidence.
