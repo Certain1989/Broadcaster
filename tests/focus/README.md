@@ -328,3 +328,37 @@ and fullscreen return, deep/last virtualized row and performance gates,
 reproducible local-vs-CI Live XTest discrepancies, full 10k runtime focus
 correction, and physical Fedora Wayland rendered ring. The test/audit
 assignment remains PARTIAL until these feasible native routes are measured.
+
+
+## Continuation-006 after 975b03 — current/picker correctness and populated manager graphs
+
+The prior 49-case published baseline is commit
+`975b03b23b93099955f352c34f9ffa99422eb316`, tree
+`f88d2eb2202204fe36abcd2c961a512c0514f0a1`.
+It was recovered from the **complete independently verified** Git bundle,
+then staged and validated as a clean 219-entry checkout using the canonical
+`broadcaster-source-sync.sh stage`, `verify` and `check --mode all`. Cargo
+metadata, formatting, Clippy `-D warnings` and 325 ordinary tests passed;
+98 display-dependent tests were ignored by ordinary Cargo. This confirms
+source provenance, **not** remote focus acceptance.
+
+The test-only continuation adds five isolated Xvfb/XTest cases against a
+separate candidate tree. Each activation sends actual XTest keys to visible,
+sensitive, mapped GTK widgets; the setup `grab_focus()` calls are disclosed
+and **do not** prove native D-pad reachability from the preceding card or
+manager header. Every SQLite source and guide is disposable, no real URL is
+fetched, and no production player is started.
+
+| New coverage | Isolated local XTest evidence | Scope limit |
+| --- | --- | --- |
+| Current-guide mapping commit | Native exact-ID OK creates the correct source/ID override, closes modal and returns to same card action: **PASS** | No candidate scoring or entry from unexpanded card by all directions |
+| Guide removed while mapping modal is open | External deletion of disposable guide/metadata followed by native candidate OK produces no orphaned override, keeps picker open: **PASS** | Not the full concurrent GUI guide manager refresh/delete transaction |
+| Three-row Programme Guides vertical | Native Down/Down/Up/Up on real mapped default buttons, geometry-sorted: **PASS** | Does not activate Refresh or default-confirm commits |
+| Three-row Programme Guides enabled graph | Every geometrically available Left/Right/Up/Down edge between the **11 enabled** real guide-row actions (one disabled Refresh) delivered by XTest: **PASS** | Does not prove navigating from toolbar into manager header, nesting all dialogs, persisted edits or pixel focus |
+| Three-row Manage Sources enabled graph | 19 enabled real GTK controls, **58** genuine arrow events and **32** mismatched target edges: **RED**. Every mismatch is recorded without short-circuiting earlier cases | Safe source rename/reorder persistence, network/cancellation, focus-rendering and closing manager separately require coverage |
+
+All five cases are **CANDIDATE_DIRTY** evidence until published and
+independently checked at their new exact commit. Previous REDs remain required
+and are **never** converted to expected-green skips. Even if every newly
+measured route passes, the whole-app audit is **PARTIAL** until the remaining
+explicit untested states in the TSV and D38 inventory receive native evidence.

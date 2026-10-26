@@ -3665,6 +3665,463 @@ mod focus001_mapped_regressions {
         window.close();
     }
 
+    /// A current, unchanged synthetic guide MUST permit the explicit native
+    /// mapping transaction and then restore the same source-qualified owner.
+    /// This is the success-path counterpart to the stale/CAS RED probes.
+    #[test]
+    #[ignore = "native XTest complete synthetic guide choice and SQLite commit"]
+    fn gtk_focus001_xtest_mapping_current_guide_apply_and_return() {
+        let (_app, window, row_id, guide_id) = focus001_mapping_open(1, 1);
+        let dialog = (0..45)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog()
+            })
+            .expect("real mapping dialog opened by native OK");
+        let search = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                button.label().as_deref() == Some("Search all guide channels / choose exact ID…")
+            })
+        })
+        .expect("mapped full guide catalogue toggle");
+        assert!(search.is_mapped() && search.grab_focus());
+        native_x11_key("Return");
+        let choice = (0..45)
+            .find_map(|_| {
+                settle();
+                TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                        button
+                            .label()
+                            .as_deref()
+                            .is_some_and(|label| label.contains("[focus.0.000]"))
+                    })
+                })
+            })
+            .expect("native synthetic current guide ID button");
+        assert!(choice.is_mapped() && choice.is_sensitive() && choice.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..45 {
+            settle();
+            if window.visible_dialog().is_none() {
+                break;
+            }
+        }
+        let storage = crate::streams::storage::Storage::new();
+        let conn = storage.connect().expect("isolated mapping DB");
+        let saved: (String,String) = conn.query_row(
+            "SELECT guide_source_id,guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+            [&row_id], |r| Ok((r.get(0)?,r.get(1)?)),
+        ).expect("native Apply must commit explicit guide ID");
+        assert_eq!(saved, (guide_id, "focus.0.000".to_owned()));
+        assert!(
+            window.visible_dialog().is_none(),
+            "successful Apply closes mapping modal"
+        );
+        let buttons = window
+            .imp()
+            .streams_view
+            .remote_action_test_buttons()
+            .expect("source card after Apply");
+        assert_owner(
+            &window,
+            buttons[2].upcast_ref(),
+            "mapping Apply restores card action",
+        );
+        eprintln!(
+            "FOCUS001 mapping_current native_apply=1 saved_id=exact modal_closed=1 origin_return=1"
+        );
+        window.close();
+    }
+
+    /// A selected guide can disappear while its real modal is open. User OK
+    /// must never recreate an override with a now-orphaned XMLTV reference.
+    #[test]
+    #[ignore = "native XTest mapping guide removal while modal is open"]
+    fn gtk_focus001_xtest_mapping_removed_guide_rejects_apply() {
+        let (_app, window, row_id, guide_id) = focus001_mapping_open(1, 1);
+        let dialog = (0..45)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog()
+            })
+            .expect("real mapping dialog");
+        let search = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                button.label().as_deref() == Some("Search all guide channels / choose exact ID…")
+            })
+        })
+        .expect("search guide channel action");
+        assert!(search.grab_focus());
+        native_x11_key("Return");
+        let choice = (0..45)
+            .find_map(|_| {
+                settle();
+                TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                        button
+                            .label()
+                            .as_deref()
+                            .is_some_and(|label| label.contains("[focus.0.000]"))
+                    })
+                })
+            })
+            .expect("guide row before external removal");
+        let storage = crate::streams::storage::Storage::new();
+        let conn = storage.connect().expect("isolated fixture connection");
+        conn.execute("DELETE FROM epg_channels WHERE source_id=?1", [&guide_id])
+            .expect("remove only disposable guide channels");
+        conn.execute("DELETE FROM epg_sources WHERE id=?1", [&guide_id])
+            .expect("remove only disposable guide source");
+        assert!(choice.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..45 {
+            settle();
+        }
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&row_id],
+                |r| r.get(0),
+            )
+            .expect("inspect orphaned guide rejection");
+        eprintln!(
+            "FOCUS001 guide_removed_before_apply saved={count} dialog_open={}",
+            window.visible_dialog().is_some()
+        );
+        assert_eq!(
+            count, 0,
+            "RED: removed XMLTV guide must not produce an orphaned saved override"
+        );
+        assert_eq!(
+            window.visible_dialog(),
+            Some(dialog),
+            "removed guide should require fresh manual choice"
+        );
+        native_x11_key("Escape");
+        window.close();
+    }
+
+    /// Guide manager's native vertical route must traverse its actual
+    /// displayed row order, not a synthetic focus-only sequence.
+    #[test]
+    #[ignore = "native three-guide manager vertical row directionality"]
+    fn gtk_focus001_xtest_programme_guides_vertical_three_row_dpad() {
+        crate::epg::desktop::focus001_seed_disposable_guides(3);
+        let (_app, window) = mapped_window("streams");
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let manager = (0..60)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog().filter(|d| {
+                    TvWindow::find_descendant(d.upcast_ref(), &|w| {
+                        w.downcast_ref::<gtk::Button>()
+                            .is_some_and(|b| b.label().as_deref() == Some("Use as Shared Default"))
+                    })
+                    .is_some()
+                })
+            })
+            .expect("populated guide manager");
+        let mut actions = Vec::<gtk::Button>::new();
+        let mut todo = vec![manager.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = todo.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                if button.label().as_deref() == Some("Use as Shared Default") {
+                    actions.push(button.clone());
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                todo.push(w);
+            }
+        }
+        assert_eq!(actions.len(), 3);
+        actions.sort_by(|a, b| {
+            let ya = a
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("guide row geometry")
+                .y();
+            let yb = b
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("guide row geometry")
+                .y();
+            ya.total_cmp(&yb)
+        });
+        for (i, button) in actions.iter().enumerate() {
+            assert!(
+                button.is_mapped() && button.is_sensitive(),
+                "guide {i} action unavailable"
+            );
+        }
+        assert!(actions[0].grab_focus());
+        native_x11_key("Down");
+        assert_owner(
+            &window,
+            actions[1].upcast_ref(),
+            "guide first row Down second row same column",
+        );
+        native_x11_key("Down");
+        assert_owner(
+            &window,
+            actions[2].upcast_ref(),
+            "guide second row Down third row",
+        );
+        native_x11_key("Up");
+        assert_owner(
+            &window,
+            actions[1].upcast_ref(),
+            "guide third row Up second row",
+        );
+        native_x11_key("Up");
+        assert_owner(
+            &window,
+            actions[0].upcast_ref(),
+            "guide second row Up first row",
+        );
+        eprintln!("FOCUS001 guide_manager native_three_row_vertical=4 reversal=complete");
+        native_x11_key("Escape");
+        window.close();
+    }
+
+    /// Exhaustively exercise the enabled three-guide manager's internal
+    /// geometric 4-direction graph. Only the starting control is seeded;
+    /// every observed transition uses native XTest D-pad key delivery.
+    /// Collect mismatches rather than aborting on the first RED edge.
+    #[test]
+    #[ignore = "native mapped four-direction graph of all enabled 3-guide controls"]
+    fn gtk_focus001_xtest_programme_guides_complete_enabled_grid() {
+        crate::epg::desktop::focus001_seed_disposable_guides(3);
+        let (_app, window) = mapped_window("streams");
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let dialog = (0..60)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog().filter(|d| {
+                    TvWindow::find_descendant(d.upcast_ref(), &|w| {
+                        w.downcast_ref::<gtk::Button>()
+                            .is_some_and(|b| b.label().as_deref() == Some("Use as Shared Default"))
+                    })
+                    .is_some()
+                })
+            })
+            .expect("three-row guide manager");
+        let mut controls = Vec::<gtk::Button>::new();
+        let mut todo = vec![dialog.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = todo.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                if matches!(
+                    button.label().as_deref(),
+                    Some("Use as Shared Default" | "Refresh" | "Edit" | "Remove")
+                ) && button.is_mapped()
+                    && button.is_sensitive()
+                {
+                    controls.push(button.clone());
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                todo.push(w);
+            }
+        }
+        assert_eq!(
+            controls.len(),
+            11,
+            "three 4-action rows, one disabled Refresh"
+        );
+        // The controls may be rendered in an order different from tree traversal.
+        // Derive every expected arrow target solely from their live geometry.
+        let page = window.upcast_ref::<gtk::Widget>();
+        let rects: Vec<ToolbarRect> = controls
+            .iter()
+            .map(|b| ToolbarRect::of(b.upcast_ref(), page).expect("mapped guide geometry"))
+            .collect();
+        let mut attempted = 0;
+        let mut missing = Vec::<String>::new();
+        for (from, button) in controls.iter().enumerate() {
+            for (key, name) in [
+                (gtk::gdk::Key::Right, "Right"),
+                (gtk::gdk::Key::Left, "Left"),
+                (gtk::gdk::Key::Down, "Down"),
+                (gtk::gdk::Key::Up, "Up"),
+            ] {
+                let Some(to) = spatial_neighbor(&rects, from, key) else {
+                    continue;
+                };
+                assert!(
+                    button.grab_focus(),
+                    "mapped guide button did not accept focus"
+                );
+                assert_owner(&window, button.upcast_ref(), "guide grid seed");
+                native_x11_key(name);
+                attempted += 1;
+                let owner = window.focused_widget();
+                if !owner.as_ref().is_some_and(|w| {
+                    w.is_mapped()
+                        && w.is_sensitive()
+                        && TvWindow::is_within(w, controls[to].upcast_ref())
+                }) {
+                    missing.push(format!(
+                        "{} {} -> {} expected {} got {}",
+                        button.label().unwrap_or_default(),
+                        name,
+                        from,
+                        controls[to].label().unwrap_or_default(),
+                        owner.map_or("none".to_owned(), |w| w.type_().name().to_string())
+                    ));
+                }
+            }
+        }
+        eprintln!(
+            "FOCUS001 three_guide_grid enabled={} actual_native_edges={} wrong={} examples={:?}",
+            controls.len(),
+            attempted,
+            missing.len(),
+            missing.iter().take(8).collect::<Vec<_>>()
+        );
+        assert!(attempted >= 22, "too few real geometric guide-row edges");
+        assert!(
+            missing.is_empty(),
+            "RED: populated guide manager geometric routes: {} wrong of {attempted}",
+            missing.len()
+        );
+        native_x11_key("Escape");
+        window.close();
+    }
+
+    /// Three real disposable source-manager rows, seven controls each. Build
+    /// the enabled 4-way graph from measured GTK bounds and XTest every edge.
+    /// This catches inaccessible second-row controls beyond one Refresh Down.
+    #[test]
+    #[ignore = "native four-direction graph of all enabled source manager actions"]
+    fn gtk_focus001_xtest_manage_sources_complete_three_row_grid() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let scratch = std::env::temp_dir().join(format!(
+            "broadcaster-focus001-source-graph-{}",
+            uuid::Uuid::new_v4()
+        ));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&scratch)
+            .expect("private disposable source graph fixture");
+        let path = scratch.join("manager.sqlite");
+        crate::streams::view::TvStreamsView::focus001_seed_disposable_manager_sources(
+            path.clone(),
+            3,
+        );
+        let loaded = streams.focus001_attach_disposable_service(path);
+        for _ in 0..45 {
+            if loaded.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(loaded.get(), "synthetic three-source fixture not loaded");
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.show_manager();
+        let manager = (0..60)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog().filter(|d| {
+                    TvWindow::find_descendant(d.upcast_ref(), &|w| {
+                        w.downcast_ref::<gtk::Button>()
+                            .is_some_and(|b| b.label().as_deref() == Some("Replace"))
+                    })
+                    .is_some()
+                })
+            })
+            .expect("real populated source manager");
+        let mut controls = Vec::<gtk::Button>::new();
+        let mut todo = vec![manager.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = todo.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                if matches!(
+                    button.label().as_deref(),
+                    Some("Refresh" | "Defaults" | "Rename" | "Replace" | "Delete" | "↑" | "↓")
+                ) && button.is_mapped()
+                    && button.is_sensitive()
+                {
+                    controls.push(button.clone());
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                todo.push(w);
+            }
+        }
+        assert_eq!(
+            controls.len(),
+            19,
+            "three seven-action rows with disabled boundary moves"
+        );
+        let page = window.upcast_ref::<gtk::Widget>();
+        let rects: Vec<ToolbarRect> = controls
+            .iter()
+            .map(|b| ToolbarRect::of(b.upcast_ref(), page).expect("source action geometry"))
+            .collect();
+        let mut checked = 0;
+        let mut missing = Vec::<String>::new();
+        for (from, button) in controls.iter().enumerate() {
+            for (direction, name) in [
+                (gtk::gdk::Key::Right, "Right"),
+                (gtk::gdk::Key::Left, "Left"),
+                (gtk::gdk::Key::Down, "Down"),
+                (gtk::gdk::Key::Up, "Up"),
+            ] {
+                let Some(to) = spatial_neighbor(&rects, from, direction) else {
+                    continue;
+                };
+                assert!(
+                    button.grab_focus(),
+                    "enabled mapped source action cannot receive focus"
+                );
+                native_x11_key(name);
+                checked += 1;
+                let owner = window.focused_widget();
+                if !owner.as_ref().is_some_and(|w| {
+                    w.is_mapped()
+                        && w.is_sensitive()
+                        && TvWindow::is_within(w, controls[to].upcast_ref())
+                }) {
+                    missing.push(format!(
+                        "{}[{from}] {name} -> {}[{to}] got {}",
+                        button.label().unwrap_or_default(),
+                        controls[to].label().unwrap_or_default(),
+                        owner.map_or("none".to_owned(), |w| w.type_().name().to_string())
+                    ));
+                }
+            }
+        }
+        eprintln!(
+            "FOCUS001 source_three_row_grid enabled={} native_edges={} wrong={} examples={:?}",
+            controls.len(),
+            checked,
+            missing.len(),
+            missing.iter().take(10).collect::<Vec<_>>()
+        );
+        assert!(
+            checked >= 30,
+            "too few real source-manager geometric edges enumerated"
+        );
+        assert!(
+            missing.is_empty(),
+            "RED: real source-manager directional graph has {} wrong of {checked} arrows",
+            missing.len()
+        );
+        native_x11_key("Escape");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("clean synthetic source fixture");
+    }
+
     #[test]
     #[ignore = "native XTest favourite mode persists ON-OFF-ON in disposable SQLite"]
     fn gtk_focus001_xtest_favourites_footer_native_async_roundtrip() {
