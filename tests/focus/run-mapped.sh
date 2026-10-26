@@ -166,6 +166,12 @@ tests=(
   gtk_focus001_xtest_manage_sources_complete_three_row_grid
   gtk_focus001_local_rendered_indicator_negative_control_probe
   gtk_focus001_xtest_osk_qwertz_reopen_retains_layout
+  gtk_focus001_xtest_manage_sources_empty_add_guide_connected
+  gtk_focus001_xtest_manage_sources_confirm_disposable_delete_and_fallback
+  gtk_focus001_xtest_guides_add_blank_rejected_and_cancel_connected
+  gtk_focus001_xtest_streams_populated_toolbar_compact_native
+  gtk_focus001_xtest_streams_populated_toolbar_tv_native
+  gtk_focus001_xtest_streams_virtual_native_dpad_1484
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.

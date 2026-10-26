@@ -362,3 +362,136 @@ independently checked at their new exact commit. Previous REDs remain required
 and are **never** converted to expected-green skips. Even if every newly
 measured route passes, the whole-app audit is **PARTIAL** until the remaining
 explicit untested states in the TSV and D38 inventory receive native evidence.
+
+## Continuation-007 — connected modal journeys, native populated toolbars and finite gaps
+
+This test-only candidate starts from the **complete, exact published source
+`2f7d1dd80a5fd9cc3a6b97be850cae020d8de10d`**, not the older bundled E4
+source. All proposed changes here are inside the existing `#[cfg(test)]`
+window test module, the blocking mapped-test runner, this README and the
+public tab-separated route ledger; runtime widgets, focus handlers and
+styles are unchanged. Until the exact new commit is published, source edits
+and every locally executed check remain **CANDIDATE_DIRTY**, not a claimed
+clean post-publication validation.
+
+The 54-case published baseline was confirmed separately from CI run
+[40384187602](https://github.com/Certain1989/Broadcaster/actions/runs/40384187602):
+**54 required / 33 PASS / 21 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**.
+The first locally recorded candidate at the preceding revision was 32 PASS /
+22 RED. This one-case host/result difference must not be papered over. The
+same published SHA passed formatting, Clippy, ordinary unit tests, both
+Flatpak architectures and REUSE; Rust CI correctly failed the mandatory
+focus gate. The following six new, isolated GTK tests extend the suite to
+**60 required** and are always blocking, including any new REDs:
+
+* `gtk_focus001_xtest_manage_sources_empty_add_guide_connected` follows real
+  native OK from a disposable, empty manager header into Add Playlist,
+  inspects enabled Add actions and nested focus, escapes to the manager,
+  opens Programme Guides and returns to the page. **PASS** locally.
+* `gtk_focus001_xtest_manage_sources_confirm_disposable_delete_and_fallback`
+  natively opens Delete, confirms Keep Source preserves the disposable
+  SQLite row, reopens confirmation and deliberately deletes only this
+  self-created row, verifies SQLite became empty and checks manager focus.
+  **RED**: after the valid deletion the manager stays open, but its GTK window
+  focus owner is `None`. This is a newly proven async/rebind defect, not a
+  database deletion failure or real-data operation. The starting Delete
+  button was seeded by GTK; native D-pad route into that lower action row
+  is already separately RED and must not be inferred from this test.
+* `gtk_focus001_xtest_guides_add_blank_rejected_and_cancel_connected` opens
+  the empty guide manager, native OK into the Add URL dialog, native OK on
+  blank Save Guide (validation rejects it), native OK Cancel and checks
+  mapped return. No URL or network operation occurs. **PASS** locally.
+* `gtk_focus001_xtest_streams_populated_toolbar_compact_native` and
+  `gtk_focus001_xtest_streams_populated_toolbar_tv_native` install two
+  synthetic My Channels rows and inject four native arrows from each
+  visible, sensitive toolbar control at **640×480** and **1280×800**.
+  A native Left consumed by `GtkSearchEntry` caret editing is *not* a
+  spatial transition even when `GtkText` child bounds differ from the
+  SearchEntry parent. The corrected oracle explicitly recognizes that
+  retained logical focus. Each size sampled **44 key events**; **PASS**
+  locally after this correction. Independent full graph reachability,
+  reverse paths and rendered focus pixels remain separate requirements.
+* `gtk_focus001_xtest_streams_virtual_native_dpad_1484` complements the
+  existing 284/10,000/15,000 row probes with 1,484 actual mapped GTK rows
+  under 640×480, 50 native Down then 50 Up, checked selected row, mapped
+  owner and source-qualified starting identity. **PASS** locally. Middle
+  and last page are **not** reached by this test.
+
+**This does not close the app-wide audit.** There is an explicit, finite
+sampled-state inventory in `focus-coverage.tsv`; **91 additional specific
+missing route/state entries** are marked `NOT_COVERED` with evidence `NONE`.
+Those are outstanding test tasks, not product failures and not additional
+runner cases. The numbers are not a coverage percentage; a large count of
+required tests can coexist with major *untested* classes. A genuine RED is
+valid for a tested route, whereas a helper-invoked menu/card focus is not
+proof that a remote can reach that action from its previous screen.
+
+### Whole-app control/state coverage reconciliation
+
+| Surface | Existing native or added evidence | Remaining `NOT_COVERED` native classes |
+| --- | --- | --- |
+| Playlist and guide managers | Empty/three-row source manager, full 19-enabled-action geometric probes (32/58 wrong), nested Rename/Defaults/Replace/Delete safe dialogs, one synthetic confirmed deletion, three-guide enabled grid, empty guide Add URL invalid/Cancel | Fully connected D-pad entry into every lower control, native source toggle/reorder/rename/replace/save/refresh with persistence, async failures, guide add/edit/default/removal commits, complete 640-pixel modal graph, Home/Back contracts |
+| Programme mapping and facets | No-guide safe return, exact-guide selection/pager/Apply/Cancel, changed timestamp/removed guide rejection; same-second changed-catalogue RED | 0/1/many realistic candidate graph, explicit/playlist/shared guide scope variants, source/group/country/language selectors and clear, edited row disappearing and real concurrent update |
+| On-screen keyboard | Three native text transactions and short QWERTY/QWERTZ/Shift navigation; QWERTZ same-session reopen RED | Complete key/row/symbol/caret edge graph, compact grid, form-specific edits, process-restart preference, rendered per-key focus |
+| Switcher, toolbar and popovers | Native three-tab wrong-origin portal RED, full empty toolbar graphs, seven Mediathek filters, two new **populated My Channels** viewport arrow samples | Populated Live/Mediathek first/middle/last result routes at both sizes, nested facets/sort/popovers, all-tab entry/reverse, Home versus Back paths, true connected toolbar reachability |
+| Cards and playback return | Native Live OK→Play RED / Right test has cross-host variation, My Channels first-OK then seeded explicit fake Play and Escape, star remote RED | Every Live/Mediathek/card action from header to primary and back, native first/middle/last results, safe fake playback failure/cancel, result paging and loading/error transitions |
+| Favourites and virtual lists | Favourites ON/OFF/ON SQLite persistence with lost focus RED; native first 28/50 rows/reversal for 284/1,484/10,000/15,000 | Last-favourite removal, focused row disappearing, async rebind/source reload, genuinely native middle/last 10k/15k traversal, latency/RSS budget; helper `scroll_to` RED is **not** native long jump |
+| Painted focus and semantics | Actual X11 Live keyboard cue pixel oracle RED with working visible and hidden-ring controls, owner/direction negative canaries PASS | Pixel probes on filter/star/card/footer/manager/guide/OSK, local-versus-CI timing/theme equivalence; final Fedora Bigscreen Wayland physical acceptance is distinct |
+
+### Read-only action presentation inventory
+
+| View | Concrete action markup | Current accessible/visual concern | Consistent proposed treatment for *later* implementation |
+| --- | --- | --- | --- |
+| Live card | `src/live/card.blp` primary `Gtk.Button` uses `play-symbolic`, localized *Play* tooltip, circular style | First OK leaves focus off Play in current native test; tooltip does not itself prove a distinct accessible name or painted ring | Keep Play icon, deliberate OK only when already on Play, explicit accessible name, visible ring and adequate mapped target |
+| Mediathek card | `src/mediathek/card.blp` `Adw.SplitButton` uses `play-symbolic`; Copy `copy-symbolic`, Download `document-save-symbolic`, Website `globe-alt2-symbolic`, all with tooltips | More action types than Live; split-button menu and reverse edges need direct native testing | Same Play semantics; retain task-specific Copy, Download, Website icons with explicit accessible names and predictable split-button navigation |
+| My Channels card | `src/streams/view.rs` expanded actions are **text** buttons `Play`, `Edit Metadata`, `Programme mapping`; collapsed star uses glyph `☆`/`★` with tooltip and `set_size_request(36, 36)` | Star is too small and native-inaccessible; equivalent Play differs visually from Live/Mediathek; tooltip alone is inadequate proof of accessible naming | `play-symbolic`, `document-edit-symbolic`, `view-list-symbolic`, `non-starred-symbolic` / `starred-symbolic` (Edit/List/star icons verified in the restored Adwaita theme); provide explicit changing accessible name, tooltip, ≥48×44 hit target, persistent visible focus |
+| Playlist/guide managers | Multi-line **text** button grids (Refresh, Defaults, Rename, Replace, Delete and move arrows; guides use Default/Refresh/Edit/Remove) | Enabling, keyboard order and row wraps vary; 32/58 native source-arrow edge mismatches; newly proven deletion focus loss | Keep unambiguous text or icons with accessible labels; repair spatial navigation and async focus ownership in a separately authorized product pass |
+
+The icon inventory is **read-only source evidence**, not a promise all
+runtime icon names render with the same appearance on the owner's target
+compositor, nor permission to edit Blueprint/CSS/production components. The
+chosen proposed Edit/Mapping/star symbolic assets were present in the
+restored Linux Adwaita icon directory. Final visual and hit-target
+verification belongs to the implementation review and owner N100 check.
+
+### Consolidated correction register (proposed, not authorized changes)
+
+* **P0 — Primary focus and reachability:** Live first OK→Play, selected My
+  Channels Left to global tab, collapsed favourite star reachability, async
+  favourites footer disappearing focus; manager lower-row Replace/Delete
+  32/58 wrong arrows and manager losing all focus after confirmed source
+  deletion. Reproduction is retained in existing and new `gtk_focus001_*`
+  cases. Suspected production handlers: `src/window.rs`, `src/live/view.rs`,
+  read-only `src/live/card.rs`, `src/streams/view.rs`,
+  `src/streams/management.rs`.
+* **P1 — Form, scoping and cue consistency:** Mediathek reverse-edge
+  failures, incorrect global switcher current-tab portal, guide/map picker
+  stale-same-second Apply despite changed catalogue (data correctness), OSK
+  QWERTZ per-dialog reset, focus paint missing under current Xvfb capture,
+  My Channels Play/Edit/Mapping/star presentation and accessible/size
+  consistency. Suspected product paths: `src/mediathek/view.rs`,
+  `src/streams/editor.rs` and guide identity/version checks outside the
+  test allowlist, `src/keyboard.rs`, `src/window.rs`, cards/Blueprint and
+  stylesheet, plus editor/EPG DB binding paths as authorized separately.
+* **P2 — Long-list identity and portability:** helper-seeded GTK
+  virtualization jump leaves focus on an unmapped recycled list-item at
+  sampled 284/1,484/10,000/15,000 indices; native first 28/50 rows PASS but
+  middle/last remains uncovered. Live Search Down and Right-to-Play
+  PASS/RED status differs by host at identical baseline revisions. Require
+  bounded source-qualified row restoration and measured test input timing;
+  investigate `src/streams/view.rs` and GTK/XTest fixture/compositor.
+
+Proposed future production correction allowlist, subject to **separate owner
+approval and independent review**, is `src/window.rs`, `src/live/view.rs`,
+`src/live/card.rs`, `src/mediathek/view.rs`, `src/streams/view.rs`,
+`src/streams/management.rs`, `src/streams/editor.rs`, `src/keyboard.rs`,
+appropriate Blueprint/CSS/icon resources and exactly the M1 guide-binding
+integrity paths required by an independently scoped stale-CAS correction.
+Avoid database migration changes, quota expansion, changed security or
+refresh policy merely to make focus tests green.
+
+The test suite remains intentionally blocking until actual product fixes
+pass; the test author must not mark the whole-app test/audit **DONE** while
+one of the explicitly feasible inventory classes still reads `NOT_COVERED`.
+This work does not replace the required independent integrated code review or
+the owner's KDE Plasma Bigscreen N100/Wayland remote and rendered-focus test.

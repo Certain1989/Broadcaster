@@ -4672,4 +4672,310 @@ mod focus001_mapped_regressions {
         );
         window.close();
     }
+
+    // Connected, native-key manager journeys use ONLY disposable SQLite fixtures;
+    // neither owner playlists nor network inputs can enter these tests.
+    fn focus001_manager_fixture(count: u32) -> (TvApplication, TvWindow, std::path::PathBuf) {
+        let (app, window) = mapped_window("streams");
+        let scratch =
+            std::env::temp_dir().join(format!("focus001-manager-{}", uuid::Uuid::new_v4()));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&scratch)
+            .expect("private, disposable test-only SQLite directory");
+        let path = scratch.join("manager.sqlite");
+        crate::streams::view::TvStreamsView::focus001_seed_disposable_manager_sources(
+            path.clone(),
+            count,
+        );
+        let view = &window.imp().streams_view;
+        let ready = view.focus001_attach_disposable_service(path);
+        for _ in 0..50 {
+            if ready.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(ready.get(), "disposable source manager not ready");
+        assert_native_input_delivery(&view.toolbar_focus_targets()[0]);
+        (app, window, scratch)
+    }
+
+    fn focus001_button_in(dialog: &adw::Dialog, label: &str) -> gtk::Button {
+        TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|button| button.label().as_deref() == Some(label))
+        })
+        .unwrap_or_else(|| panic!("mapped dialog missing enabled action {label}"))
+        .downcast::<gtk::Button>()
+        .expect("mapped native GTK button")
+    }
+
+    fn focus001_dialog_after(window: &TvWindow, old: Option<&adw::Dialog>) -> adw::Dialog {
+        for _ in 0..55 {
+            settle();
+            if let Some(dialog) = window.visible_dialog() {
+                if old.is_none_or(|before| before != &dialog) {
+                    assert!(dialog.is_mapped(), "new dialog is not mapped");
+                    return dialog;
+                }
+            }
+        }
+        panic!("native OK did not open expected modal");
+    }
+
+    #[test]
+    #[ignore = "native mapped zero-source manager header, Add modal, cancel/guide return"]
+    fn gtk_focus001_xtest_manage_sources_empty_add_guide_connected() {
+        let (_app, window, scratch) = focus001_manager_fixture(0);
+        window.imp().streams_view.show_manager();
+        let manager = focus001_dialog_after(&window, None);
+        for label in ["Add Playlist", "Programme Guides", "Close"] {
+            let button = focus001_button_in(&manager, label);
+            assert!(
+                button.is_mapped() && button.is_sensitive(),
+                "empty manager missing {label}"
+            );
+            let bounds = button
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("visible manager header geometry");
+            assert!(bounds.width() >= 16.0 && bounds.height() >= 16.0);
+        }
+        let add = focus001_button_in(&manager, "Add Playlist");
+        assert!(add.grab_focus());
+        native_x11_key("Return");
+        let nested = focus001_dialog_after(&window, Some(&manager));
+        for label in ["Choose Local M3U File", "Enter Playlist URL"] {
+            let action = focus001_button_in(&nested, label);
+            assert!(action.is_mapped() && action.is_sensitive());
+        }
+        let owner = window.focused_widget().expect("Add menu owner");
+        assert!(
+            owner.is_mapped() && TvWindow::is_within(&owner, nested.upcast_ref()),
+            "Add menu opened without real native modal focus confinement"
+        );
+        native_x11_key("Escape");
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "Add Escape restores manager"
+        );
+        let guides = focus001_button_in(&manager, "Programme Guides");
+        assert!(guides.grab_focus());
+        native_x11_key("Return");
+        let guide_manager = focus001_dialog_after(&window, Some(&manager));
+        assert!(focus001_button_in(&guide_manager, "Add URL").is_mapped());
+        native_x11_key("Escape");
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "Guide manager Escape returns to source manager"
+        );
+        native_x11_key("Escape");
+        assert!(
+            window.visible_dialog().is_none(),
+            "source manager must dismiss on Escape"
+        );
+        let owner = window
+            .focused_widget()
+            .expect("manager Escape must restore page focus");
+        assert!(
+            owner.is_mapped()
+                && owner.is_sensitive()
+                && TvWindow::is_within(&owner, window.imp().streams_view.upcast_ref()),
+            "empty manager loses page focus on dismissal"
+        );
+        eprintln!(
+            "FOCUS001 source_manager_empty native_header=3 add_modal=2 guide_modal=1 dismiss=ok"
+        );
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove private disposable manager fixture");
+    }
+
+    #[test]
+    #[ignore = "native mapped disposable one-source Delete/Keep and confirmed deletion SQLite"]
+    fn gtk_focus001_xtest_manage_sources_confirm_disposable_delete_and_fallback() {
+        let (_app, window, scratch) = focus001_manager_fixture(1);
+        let path = scratch.join("manager.sqlite");
+        window.imp().streams_view.show_manager();
+        let manager = focus001_dialog_after(&window, None);
+        let delete = focus001_button_in(&manager, "Delete");
+        assert!(delete.is_sensitive() && delete.grab_focus());
+        native_x11_key("Return");
+        let confirmation = focus001_dialog_after(&window, Some(&manager));
+        let keep = focus001_button_in(&confirmation, "Keep Source");
+        assert!(keep.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "Keep must return to manager"
+        );
+        let store = crate::streams::storage::Storage::at(path.clone());
+        assert_eq!(
+            store.list_sources().expect("scratch read").len(),
+            1,
+            "Keep Source may never delete disposable source"
+        );
+        let delete = focus001_button_in(&manager, "Delete");
+        assert!(delete.grab_focus());
+        native_x11_key("Return");
+        let confirmation = focus001_dialog_after(&window, Some(&manager));
+        let confirm = focus001_button_in(&confirmation, "Delete Permanently");
+        assert!(confirm.grab_focus());
+        native_x11_key("Return");
+        let mut remaining = usize::MAX;
+        for _ in 0..60 {
+            settle();
+            remaining = store.list_sources().expect("scratch deletion read").len();
+            if remaining == 0 {
+                break;
+            }
+        }
+        assert_eq!(
+            remaining, 0,
+            "native synthetic Delete confirmation must persist"
+        );
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "delete completion must return to manager"
+        );
+        let owner = window
+            .focused_widget()
+            .expect("delete completion focus owner");
+        assert!(
+            owner.is_mapped()
+                && owner.is_sensitive()
+                && TvWindow::is_within(&owner, manager.upcast_ref()),
+            "source delete rebind orphans manager focus"
+        );
+        eprintln!("FOCUS001 source_manager_delete native_confirm=1 cancel_verified=1 SQLite_remaining={remaining}");
+        native_x11_key("Escape");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable deleted source fixture");
+    }
+
+    #[test]
+    #[ignore = "native mapped zero-guide Add URL validation/Cancel return; no network"]
+    fn gtk_focus001_xtest_guides_add_blank_rejected_and_cancel_connected() {
+        crate::epg::desktop::focus001_seed_disposable_guides(0);
+        let (_app, window) = mapped_window("streams");
+        assert_native_input_delivery(&window.imp().streams_view.toolbar_focus_targets()[0]);
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let manager = focus001_dialog_after(&window, None);
+        let add = focus001_button_in(&manager, "Add URL");
+        assert!(add.grab_focus());
+        native_x11_key("Return");
+        let nested = focus001_dialog_after(&window, Some(&manager));
+        let save = focus001_button_in(&nested, "Save Guide");
+        assert!(save.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(
+            window.visible_dialog(),
+            Some(nested.clone()),
+            "blank guide URL must be refused without async network operation"
+        );
+        let cancel = focus001_button_in(&nested, "Cancel");
+        assert!(cancel.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(
+            window.visible_dialog(),
+            Some(manager.clone()),
+            "guide Add Cancel must restore actual guide manager"
+        );
+        let owner = window.focused_widget().expect("guide Cancel return owner");
+        assert!(owner.is_mapped() && TvWindow::is_within(&owner, manager.upcast_ref()));
+        eprintln!("FOCUS001 guide_add native_empty_rejected=1 cancel_return=1 no_network=1");
+        native_x11_key("Escape");
+        window.close();
+    }
+
+    fn focus001_populated_toolbar_viewport(width: i32, height: i32) {
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(width, height);
+        let streams = &window.imp().streams_view;
+        let ids = streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
+        let toolbar = streams.toolbar_focus_targets();
+        assert_native_input_delivery(&toolbar[0]);
+        let mut sampled = 0u32;
+        let mut wrong = Vec::<String>::new();
+        for (i, control) in toolbar.iter().enumerate() {
+            if !control.is_mapped() || !control.is_visible() || !control.is_sensitive() {
+                continue;
+            }
+            let Some(before) = control.compute_bounds(window.upcast_ref::<gtk::Widget>()) else {
+                continue;
+            };
+            if !control.grab_focus() {
+                continue;
+            }
+            for key in ["Up", "Down", "Left", "Right"] {
+                assert!(control.grab_focus(), "populated toolbar origin unavailable");
+                native_x11_key(key);
+                sampled += 1;
+                let owner = window.focused_widget().expect("native toolbar lost focus");
+                if !owner.is_mapped() || !owner.is_sensitive() {
+                    wrong.push(format!("index={i} {key}: invalid owner"));
+                    continue;
+                }
+                // SearchEntry caret keys can retain the same logical control
+                // even if the focused GtkText child has a smaller allocation.
+                // Such an editor-consumed arrow is not a spatial transition.
+                if TvWindow::is_within(&owner, control) {
+                    continue;
+                }
+                let Some(after) = owner.compute_bounds(window.upcast_ref::<gtk::Widget>()) else {
+                    continue;
+                };
+                let dx = (after.x() + after.width() / 2.0) - (before.x() + before.width() / 2.0);
+                let dy = (after.y() + after.height() / 2.0) - (before.y() + before.height() / 2.0);
+                let wrong_dir = match key {
+                    "Right" => dx < -4.0,
+                    "Left" => dx > 4.0,
+                    "Down" => dy < -4.0,
+                    "Up" => dy > 4.0,
+                    _ => false,
+                };
+                if wrong_dir {
+                    wrong.push(format!("index={i} {key}: dx={dx:.1} dy={dy:.1}"));
+                }
+            }
+        }
+        eprintln!("FOCUS001 streams_populated width={width} height={height} native_samples={sampled} wrong={wrong:?}");
+        assert!(
+            sampled >= 12,
+            "populated toolbar lacks sufficient native key delivery"
+        );
+        assert!(
+            wrong.is_empty(),
+            "RED: populated toolbar violates screen geometry: {wrong:?}"
+        );
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native full My Channels populated toolbar spatial probes at compact viewport"]
+    fn gtk_focus001_xtest_streams_populated_toolbar_compact_native() {
+        focus001_populated_toolbar_viewport(640, 480);
+    }
+
+    #[test]
+    #[ignore = "native full My Channels populated toolbar spatial probes at TV viewport"]
+    fn gtk_focus001_xtest_streams_populated_toolbar_tv_native() {
+        focus001_populated_toolbar_viewport(1280, 800);
+    }
+
+    #[test]
+    #[ignore = "native XTest compact 1484-row 50-step/reverse GTK ListView recycling"]
+    fn gtk_focus001_xtest_streams_virtual_native_dpad_1484() {
+        focus001_virtual_dpad_route(1_484, 50);
+    }
 }
