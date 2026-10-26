@@ -1498,3 +1498,190 @@ mod spatial_navigation_tests {
         );
     }
 }
+
+// Independent FOCUS-001 regression probes. Deliberately test-only: the
+// production key router, CSS and focus policy remain completely unchanged.
+#[cfg(test)]
+mod focus001_mapped_regressions {
+    use super::*;
+
+    fn mapped_window(page: &str) -> (TvApplication, TvWindow) {
+        let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("valid bundled GTK resources");
+        gio::resources_register(&resource);
+        gtk::init().expect("Xvfb GTK display required");
+        let app = TvApplication::new();
+        let window = TvWindow::new(&app);
+        window.set_default_size(1280, 800);
+        window.imp().stack.set_visible_child_name(page);
+        window.present();
+        settle();
+        (app, window)
+    }
+
+    fn settle() {
+        for _ in 0..24 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    }
+
+    fn owns_focus(window: &TvWindow, expected: &gtk::Widget) -> bool {
+        window.focused_widget().is_some_and(|owner| {
+            owner.has_focus()
+                && owner.is_mapped()
+                && owner.is_visible()
+                && owner.is_sensitive()
+                && TvWindow::is_within(&owner, expected)
+        })
+    }
+
+    fn assert_owner(window: &TvWindow, expected: &gtk::Widget, edge: &str) {
+        let owner = window
+            .focused_widget()
+            .expect("GTK window lost its focus owner");
+        eprintln!(
+            "FOCUS001 edge={edge} owner={} mapped={} sensitive={} focus={} visible_focus={} flags={:?}",
+            owner.type_().name(),
+            owner.is_mapped(),
+            owner.is_sensitive(),
+            owner.has_focus(),
+            owner.has_visible_focus(),
+            owner.state_flags()
+        );
+        assert!(
+            owns_focus(window, expected),
+            "{edge}: expected mapped/enabled focus within {}, actually {}",
+            expected.type_().name(),
+            owner.type_().name()
+        );
+        // A GTK has_focus() assertion is NOT proof of an actually painted ring.
+        // CSS/rendered contrast is tracked as a separate evidence status.
+    }
+
+    fn key(window: &TvWindow, direction: gtk::gdk::Key) {
+        assert_eq!(
+            window.handle_remote_key(direction, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop,
+            "window capture path did not handle the remote key {direction:?}"
+        );
+        settle();
+    }
+
+    /// Regression canary: Down from Mediathek Search must not skip the
+    /// intermediate controls, and Up from its adjacent target must return.
+    /// Unlike the earlier view-only test, this runs TvWindow's capture router.
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_mediathek_down_up_roundtrip() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        let search = &controls[0];
+        assert!(search.grab_focus());
+        assert_owner(&window, search, "initial Mediathek Search");
+        key(&window, gtk::gdk::Key::Down);
+        let next = window.focused_widget().expect("Down lost focus");
+        assert!(
+            controls
+                .iter()
+                .any(|widget| TvWindow::is_within(&next, widget)),
+            "Mediathek Search Down skipped all intermediary toolbar filters"
+        );
+        assert!(next != *search, "Down must make forward progress");
+        assert_owner(&window, &next, "Mediathek Search --Down--> next");
+        key(&window, gtk::gdk::Key::Up);
+        assert_owner(&window, search, "Mediathek Down then Up must reverse");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_mediathek_horizontal_filter_roundtrips() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_eq!(controls.len(), 7);
+        for (from, to) in [(1, 2), (4, 5), (5, 6)] {
+            assert!(controls[from].grab_focus());
+            assert_owner(&window, &controls[from], "filter origin");
+            key(&window, gtk::gdk::Key::Right);
+            assert_owner(&window, &controls[to], "filter Right sibling");
+            key(&window, gtk::gdk::Key::Left);
+            assert_owner(&window, &controls[from], "filter Left reverses Right");
+        }
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_live_first_row_up_to_search() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert!(window.imp().live_view.focus_first_channel_for_test());
+        let list = TvWindow::find_descendant(
+            window.imp().live_view.upcast_ref::<gtk::Widget>(),
+            &|widget| widget.is::<gtk::ListBox>(),
+        )
+        .expect("real mapped Live ListBox");
+        assert_owner(&window, &list, "Live first row");
+        key(&window, gtk::gdk::Key::Up);
+        assert_owner(&window, &search, "Live first row --Up--> Search");
+        // Search Down is not asserted here: in the current window handler it
+        // returns Proceed to GTK's native event propagation, which direct
+        // method invocation cannot synthesize. See coverage matrix.
+        window.close();
+    }
+
+    /// Owner-reported known RED: Left from a selected My Channels row
+    /// unexpectedly exits to the global My Channels category switcher.
+    /// Keep the asserted expected containment rather than normalizing the bug.
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_streams_row_left_stays_in_page() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        let before = window.focused_widget().expect("selected My Channels row");
+        assert!(streams.contains_results_focus(&before));
+        assert_owner(&window, &before, "My Channels selected row");
+        key(&window, gtk::gdk::Key::Left);
+        let after = window.focused_widget().expect("Left lost focus completely");
+        eprintln!(
+            "FOCUS001 My Channels Left: {} -> {}",
+            before.type_().name(),
+            after.type_().name()
+        );
+        assert!(
+            streams.contains_results_focus(&after),
+            "RED: Left from a selected My Channels row jumped to page controls"
+        );
+        assert_owner(&window, &after, "My Channels Left containment");
+        window.close();
+    }
+
+    /// A disposable focus thief proves the ownership oracle detects a
+    /// regression; the product focus router is not changed for this test.
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_negative_control_detects_stolen_focus() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        assert!(controls[0].grab_focus());
+        assert_owner(&window, &controls[0], "negative control origin");
+        assert!(
+            controls[1].grab_focus(),
+            "test-only focus thief must be mapped"
+        );
+        assert!(
+            !owns_focus(&window, &controls[0]),
+            "negative control FAILED to detect deliberate focus theft"
+        );
+        assert_owner(&window, &controls[1], "negative control stolen owner");
+        window.close();
+    }
+}

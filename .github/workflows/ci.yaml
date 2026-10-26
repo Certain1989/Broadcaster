@@ -80,6 +80,8 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_playback_window_origin_and_cold_start -- --ignored --test-threads=1
+      - name: Block PR on mapped GTK remote focus regression suite
+        run: bash tests/focus/run-mapped.sh
       - name: Verify isolated first-launch fullscreen settings
         run: bash tests/first-launch-fullscreen.sh
       - name: Exercise MPV remote overlay state transitions
