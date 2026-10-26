@@ -2188,6 +2188,53 @@ impl TvStreamsView {
         ids
     }
 
+    /// Create one genuine manager row in a disposable SQLite database.
+    /// No playlist retrieval or real owner data is involved.
+    #[cfg(test)]
+    pub(crate) fn focus001_seed_disposable_manager_source(path: std::path::PathBuf) {
+        use super::model::{
+            IncomingChannel, OriginKind, SourceDefaults, SourceDraft, SourceOrigin,
+            ValidatedSnapshot,
+        };
+        let store = super::storage::Storage::at(path);
+        store
+            .initialize()
+            .expect("initialize disposable source fixture");
+        let id = uuid::Uuid::new_v4().to_string();
+        let snapshot = ValidatedSnapshot::new(
+            id.clone(),
+            vec![IncomingChannel {
+                order: 0,
+                imported_name: "Synthetic channel".into(),
+                stream_url: "https://example.invalid/unused".into(),
+                tvg_id: None,
+                tvg_name: None,
+                group_title: None,
+                logo_url: None,
+                channel_number: None,
+                region: None,
+                languages: Default::default(),
+                countries: Default::default(),
+                user_agent: None,
+                referer: None,
+            }],
+        )
+        .expect("synthetic snapshot");
+        let draft = SourceDraft {
+            name: "FOCUS001 disposable playlist".into(),
+            origin: SourceOrigin {
+                kind: OriginKind::RemoteUrl,
+                locator: "https://example.invalid/disposable.m3u".into(),
+            },
+            enabled: true,
+            order: 0,
+            defaults: SourceDefaults::default(),
+        };
+        store
+            .create_source_with_initial_snapshot(&id, &draft, &snapshot, 1_800_000_000)
+            .expect("create disposable manager source");
+    }
+
     /// Supply an isolated SQLite service so FOCUS-001 can exercise the real
     /// favourites footer click/async persistence path, never a user's DB.
     #[cfg(test)]

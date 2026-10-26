@@ -273,6 +273,38 @@ impl TvLiveView {
         spawn(async move { slf.reload().await });
     }
 
+    /// Synthetic row inserted into the real Live ListBox, using the actual
+    /// row activation and Play controls; no stream is ever requested by setup.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_disposable_live_row(&self) -> (gtk::ListBoxRow, gtk::Button) {
+        let channel = ChannelObject::new(
+            "focus001.synthetic",
+            "FOCUS001 synthetic channel",
+            "https://example.invalid/never-play",
+        );
+        let card: TvLiveCard = glib::Object::builder()
+            .property("channel", &channel)
+            .build();
+        fn play_button(root: &gtk::Widget) -> Option<gtk::Button> {
+            if let Some(button) = root.downcast_ref::<gtk::Button>() {
+                if button.action_name().as_deref() == Some("card.play") {
+                    return Some(button.clone());
+                }
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                if let Some(found) = play_button(&current) {
+                    return Some(found);
+                }
+                child = current.next_sibling();
+            }
+            None
+        }
+        let play = play_button(card.upcast_ref()).expect("actual Live Play action button");
+        self.imp().channels_list.append(&card);
+        (card.upcast(), play)
+    }
+
     pub fn focus_search(&self) {
         self.imp().focus_search();
     }

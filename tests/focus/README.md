@@ -87,3 +87,32 @@ called automated; rendered-focus contrast remains
 negative control or an owner physical acceptance verifies it. Unknown toolbar
 ordering or reverse-edge policy remains OWNER_DECISION_REQUIRED, not silently
 asserted as a product design decision.
+
+## Continuation-004 — native owner-card and source-manager canaries
+
+The same blocking isolated runner now enumerates 23 mapped GTK cases. Three
+new real XTest input cases exercise a disposable Live row and the **actual**
+Manage Sources dialog created with a single synthetic, valid SQLite source.
+The live row uses the production `TvLiveCard` and ListBox activation path;
+merely entering it never invokes the Play action. The manager graph traverses
+real enabled controls with directional key events; it **never clicks** Replace
+or Delete. Test setup is `#[cfg(test)]` only. No real feeds, user data, network
+requests, or mpv playback are used.
+
+Locally against **CANDIDATE_DIRTY** based on published commit
+`4c44bd7502cf658501c2a63b93202cc8d3e44068`, native tests show:
+Live OK leaves focus on the card instead of Play (**RED**), while Live Right
+focuses Play directly (**PASS**). The source manager Refresh/Defaults/Rename
+upper controls and enable switch are reachable, but no observed native arrow
+edge from that reachable subgraph enters the second row with Replace/Delete
+(**RED**, one disposable source; both Move arrows disabled). The manager audit
+records bounded actual-key traces; direct `grab_focus` is used only to revisit
+an already discovered owner and must not be mistaken for a full physical replay.
+
+All previously known RED tests remain active and mandatory. This extension
+does **not** declare app-wide route completion: Programme Guides, all manager
+mutations, exact per-key OSK grid, large GTK list virtualization, full
+Mediathek adjacency, source reload, native card Play activation/return, and
+rendered focus contrast still require automated or owner-physical evidence.
+The prescribed spatial/reverse directions are owner-defined; absence of
+route coverage is not an outstanding generic policy decision.

@@ -2208,4 +2208,174 @@ mod focus001_mapped_regressions {
         );
         window.close();
     }
+    /// Native OK on a collapsed Live card must expand directly into primary
+    /// Play focus. Entry never constitutes a separate playback activation.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest"]
+    fn gtk_focus001_xtest_live_card_ok_focuses_play() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        let search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let (row, play) = window
+            .imp()
+            .live_view
+            .focus001_install_disposable_live_row();
+        settle();
+        assert!(
+            row.is_mapped() && row.grab_focus(),
+            "synthetic Live row unmapped"
+        );
+        assert_owner(&window, row.upcast_ref(), "Live collapsed row before OK");
+        native_x11_key("Return");
+        assert_owner(
+            &window,
+            play.upcast_ref(),
+            "Live OK entry must directly focus Play",
+        );
+        window.close();
+    }
+
+    /// Right must be a one-step alternative portal into Live card actions.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest"]
+    fn gtk_focus001_xtest_live_card_right_focuses_play() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        let search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let (row, play) = window
+            .imp()
+            .live_view
+            .focus001_install_disposable_live_row();
+        settle();
+        assert!(row.is_mapped() && row.grab_focus());
+        assert_owner(&window, row.upcast_ref(), "Live collapsed row before Right");
+        native_x11_key("Right");
+        assert_owner(
+            &window,
+            play.upcast_ref(),
+            "Live Right entry must directly focus Play",
+        );
+        window.close();
+    }
+
+    /// Actual Manage Sources modal and full two-row production action layout.
+    /// Only arrow travel is exercised, never a destructive activation.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb, disposable SQLite and native XTest"]
+    fn gtk_focus001_xtest_manage_sources_refresh_down_reaches_lower_row() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let fixture = std::env::temp_dir().join(format!(
+            "broadcaster-focus001-manager-{}",
+            uuid::Uuid::new_v4()
+        ));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&fixture)
+            .expect("private disposable directory");
+        let path = fixture.join("manager.sqlite");
+        crate::streams::view::TvStreamsView::focus001_seed_disposable_manager_source(path.clone());
+        let ready = streams.focus001_attach_disposable_service(path);
+        for _ in 0..30 {
+            if ready.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(ready.get(), "disposable manager service did not initialize");
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.show_manager();
+        let mut refresh = None;
+        let mut replace = None;
+        let mut delete = None;
+        for _ in 0..30 {
+            settle();
+            if let Some(dialog) = window.visible_dialog() {
+                refresh = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>()
+                        .is_some_and(|b| b.label().as_deref() == Some("Refresh"))
+                });
+                replace = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>()
+                        .is_some_and(|b| b.label().as_deref() == Some("Replace"))
+                });
+                delete = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>()
+                        .is_some_and(|b| b.label().as_deref() == Some("Delete"))
+                });
+            }
+            if refresh.is_some() && replace.is_some() && delete.is_some() {
+                break;
+            }
+        }
+        let refresh = refresh.expect("real source Refresh button");
+        let replace = replace.expect("real source Replace button");
+        let delete = delete.expect("real source Delete button");
+        assert!(refresh.grab_focus());
+        assert_owner(&window, &refresh, "Manage Sources Refresh initial");
+        // Explore actual modal directions. Each state is first reached from
+        // Refresh by native keys, then revisited with GTK grab_focus for a
+        // bounded directed adjacency inventory; this is not physical replay.
+        let dialog = window.visible_dialog().expect("manager remains open");
+        let mut queue =
+            std::collections::VecDeque::from([(refresh.clone(), Vec::<&'static str>::new())]);
+        let mut seen = vec![refresh.clone()];
+        let mut found_replace = None;
+        let mut found_delete = None;
+        while let Some((from, route)) = queue.pop_front() {
+            assert!(seen.len() <= 24, "manager graph escaped bounded fixture");
+            for arrow in ["Up", "Down", "Left", "Right"] {
+                assert!(from.grab_focus(), "visited manager focus target detached");
+                settle();
+                native_x11_key(arrow);
+                let owner = window
+                    .focused_widget()
+                    .expect("manager D-pad lost focus owner");
+                assert!(
+                    owner.is_mapped()
+                        && owner.is_visible()
+                        && owner.is_sensitive()
+                        && TvWindow::is_within(&owner, dialog.upcast_ref()),
+                    "manager D-pad {arrow} escaped dialog or focused an invalid widget"
+                );
+                let mut next_route = route.clone();
+                next_route.push(arrow);
+                let display = owner
+                    .downcast_ref::<gtk::Button>()
+                    .and_then(|button| button.label())
+                    .map_or_else(
+                        || owner.type_().name().to_string(),
+                        |label| label.to_string(),
+                    );
+                eprintln!(
+                    "FOCUS001 manager route={} owner={display}",
+                    next_route.join(",")
+                );
+                if TvWindow::is_within(&owner, &replace) {
+                    found_replace = Some(next_route.clone());
+                }
+                if TvWindow::is_within(&owner, &delete) {
+                    found_delete = Some(next_route.clone());
+                }
+                if !seen.contains(&owner) {
+                    seen.push(owner.clone());
+                    queue.push_back((owner, next_route));
+                }
+            }
+        }
+        eprintln!(
+            "FOCUS001 manager lower-row reachability Replace={found_replace:?} Delete={found_delete:?} visited={}",
+            seen.len()
+        );
+        assert!(
+            found_replace.is_some() && found_delete.is_some(),
+            "actual Manage Sources Replace and Delete must BOTH be reachable by D-pad"
+        );
+        window.close();
+        std::fs::remove_dir_all(&fixture).expect("remove disposable source fixture");
+    }
 }

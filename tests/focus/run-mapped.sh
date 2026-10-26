@@ -102,6 +102,9 @@ tests=(
   gtk_focus001_streams_empty_toolbar_ownership_inventory
   gtk_focus001_app_menu_escape_restores_focus
   gtk_focus001_mediathek_osk_modal_escape_return
+  gtk_focus001_xtest_live_card_ok_focuses_play
+  gtk_focus001_xtest_live_card_right_focuses_play
+  gtk_focus001_xtest_manage_sources_refresh_down_reaches_lower_row
 )
 pass=0
 fail=0
