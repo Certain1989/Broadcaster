@@ -105,6 +105,8 @@ tests=(
   gtk_focus001_xtest_live_card_ok_focuses_play
   gtk_focus001_xtest_live_card_right_focuses_play
   gtk_focus001_xtest_manage_sources_refresh_down_reaches_lower_row
+  gtk_focus001_xtest_mediathek_complete_toolbar_graph
+  gtk_focus001_xtest_global_three_page_switcher_activation
 )
 pass=0
 fail=0

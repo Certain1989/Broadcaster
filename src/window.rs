@@ -2378,4 +2378,192 @@ mod focus001_mapped_regressions {
         window.close();
         std::fs::remove_dir_all(&fixture).expect("remove disposable source fixture");
     }
+
+    /// Test the seven *real* Mediathek toolbar controls as a native directional
+    /// graph, including every initial arrow, without assuming widget creation
+    /// order equals the on-screen geometry. GTK grab_focus is used only to
+    /// seed each edge independently; every edge itself is delivered by XTest.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest key injection"]
+    fn gtk_focus001_xtest_mediathek_complete_toolbar_graph() {
+        let (_app, window) = mapped_window("mediathek");
+        let targets = window.imp().mediathek_view.toolbar_focus_targets();
+        assert_eq!(targets.len(), 7, "Mediathek toolbar layout changed");
+        assert_native_input_delivery(&targets[0]);
+        let arrows = ["Up", "Down", "Left", "Right"];
+        let mut graph = vec![Vec::<usize>::new(); targets.len()];
+        let mut reverse_failures = Vec::new();
+        let mut wrong_directions = Vec::new();
+        for (from_index, from) in targets.iter().enumerate() {
+            assert!(from.is_mapped() && from.is_sensitive() && from.grab_focus());
+            let from_rect = from
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("mapped Mediathek target geometry");
+            let from_x = from_rect.x() + from_rect.width() / 2.0;
+            let from_y = from_rect.y() + from_rect.height() / 2.0;
+            for arrow in arrows {
+                assert!(
+                    from.grab_focus(),
+                    "Mediathek source target lost focusability"
+                );
+                settle();
+                native_x11_key(arrow);
+                let after = window
+                    .focused_widget()
+                    .expect("native arrow lost GTK owner");
+                assert!(
+                    after.is_mapped() && after.is_visible() && after.is_sensitive(),
+                    "Mediathek native {arrow} from target {from_index} orphaned focus"
+                );
+                let destination = targets.iter().position(|t| TvWindow::is_within(&after, t));
+                eprintln!(
+                    "FOCUS001 mediathek_toolbar from={from_index} key={arrow} to={destination:?} owner={}",
+                    after.type_().name()
+                );
+                if let Some(to_index) = destination {
+                    if to_index == from_index {
+                        continue; // GTK editing caret / layout boundary
+                    }
+                    graph[from_index].push(to_index);
+                    let to_rect = targets[to_index]
+                        .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                        .expect("mapped destination geometry");
+                    let to_x = to_rect.x() + to_rect.width() / 2.0;
+                    let to_y = to_rect.y() + to_rect.height() / 2.0;
+                    let forward = match arrow {
+                        "Up" => to_y < from_y - 2.0,
+                        "Down" => to_y > from_y + 2.0,
+                        "Left" => to_x < from_x - 2.0,
+                        "Right" => to_x > from_x + 2.0,
+                        _ => unreachable!(),
+                    };
+                    if !forward {
+                        wrong_directions.push(format!("{from_index} {arrow} -> {to_index}"));
+                    }
+                    let opposite = match arrow {
+                        "Up" => "Down",
+                        "Down" => "Up",
+                        "Left" => "Right",
+                        "Right" => "Left",
+                        _ => unreachable!(),
+                    };
+                    // Independent native reverse edge. A detected local toolbar
+                    // step should reverse where layout/data did not change.
+                    native_x11_key(opposite);
+                    let return_owner = window.focused_widget();
+                    if !return_owner
+                        .as_ref()
+                        .is_some_and(|w| TvWindow::is_within(w, from))
+                    {
+                        reverse_failures.push(format!(
+                            "{from_index} {arrow} -> {to_index} {opposite} -> {}",
+                            return_owner.as_ref().map_or("NONE", |w| w.type_().name())
+                        ));
+                    }
+                }
+            }
+        }
+        // A real reachable graph rather than individually grab-focusable
+        // targets: all enabled toolbar classes must have an arrow route from
+        // Search (editor caret steps are not graph edges).
+        let mut seen = vec![false; targets.len()];
+        seen[0] = true;
+        let mut queue = std::collections::VecDeque::from([0]);
+        while let Some(from) = queue.pop_front() {
+            for &to in &graph[from] {
+                if !seen[to] {
+                    seen[to] = true;
+                    queue.push_back(to);
+                }
+            }
+        }
+        eprintln!(
+            "FOCUS001 mediathek_native_graph reachable={seen:?} wrong_directions={wrong_directions:?} reverse_failures={reverse_failures:?}"
+        );
+        assert!(
+            wrong_directions.is_empty(),
+            "D-pad chose non-spatial toolbar target"
+        );
+        assert!(
+            reverse_failures.is_empty(),
+            "Mediathek toolbar local arrows failed to reverse"
+        );
+        assert!(
+            seen.iter().all(|b| *b),
+            "D-pad cannot reach all seven Mediathek toolbar controls"
+        );
+        window.close();
+    }
+
+    /// Activate all three *real* view-switcher pages using the actual key
+    /// dispatcher; the earlier global boundary tests never activated a page.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest key injection"]
+    fn gtk_focus001_xtest_global_three_page_switcher_activation() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let live_search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&live_search);
+        assert!(live_search.grab_focus());
+        native_x11_key("Up");
+        let category = window.focused_widget().expect("Live category must focus");
+        assert_eq!(category.type_().name(), "AdwViewSwitcherButton");
+        // A focus portal must target the *current* page, not merely any
+        // switcher button. Otherwise even the first OK changes pages.
+        native_x11_key("Return");
+        eprintln!(
+            "FOCUS001 global Live Search Up, then OK page={:?}",
+            window.imp().stack.visible_child_name()
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("live"),
+            "Live Search Up must target the current Live category before Right"
+        );
+        native_x11_key("Right");
+        let next_category = window.focused_widget().expect("next category must focus");
+        assert_eq!(next_category.type_().name(), "AdwViewSwitcherButton");
+        assert_ne!(
+            next_category, category,
+            "Right must move to adjacent category"
+        );
+        eprintln!(
+            "FOCUS001 global switcher Live Right focused={} visible_page_before_OK={:?}",
+            next_category.type_().name(),
+            window.imp().stack.visible_child_name()
+        );
+        native_x11_key("Return");
+        eprintln!(
+            "FOCUS001 global switcher after OK page={:?}",
+            window.imp().stack.visible_child_name()
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("mediathek"),
+            "OK on the next category must activate Mediathek"
+        );
+        native_x11_key("Down");
+        let mediathek_search = window.imp().mediathek_view.toolbar_focus_targets()[0].clone();
+        assert_owner(&window, &mediathek_search, "Mediathek tab Down to Search");
+        native_x11_key("Up");
+        assert_eq!(
+            window.focused_widget().as_ref().map(|w| w.type_().name()),
+            Some("AdwViewSwitcherButton"),
+            "Mediathek Search Up should return to its category"
+        );
+        native_x11_key("Right");
+        let next_category = window.focused_widget().expect("My Channels category focus");
+        assert_eq!(next_category.type_().name(), "AdwViewSwitcherButton");
+        native_x11_key("Return");
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("streams"),
+            "OK on the next category must activate My Channels"
+        );
+        native_x11_key("Down");
+        let streams_search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_owner(&window, &streams_search, "My Channels tab Down to Search");
+        window.close();
+    }
 }

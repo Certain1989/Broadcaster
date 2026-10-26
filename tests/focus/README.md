@@ -116,3 +116,40 @@ Mediathek adjacency, source reload, native card Play activation/return, and
 rendered focus contrast still require automated or owner-physical evidence.
 The prescribed spatial/reverse directions are owner-defined; absence of
 route coverage is not an outstanding generic policy decision.
+
+## Continuation-004 source recovery and extra route probes
+
+The exact `afd260bf6428442282676ee2f76fb67aa386f71e` published source
+was recovered from a verified full Git bundle. Two new **test-only** isolated
+native-XTest probes inventory all seven Mediathek toolbar controls as a
+bidirectional spatial graph (logging every initial arrow and reverse) and
+exercise actual three-page switcher activation/focus return. These are not
+production focus fixes; the baseline canaries remain blocking. Run status
+must be distinguished from older published CI and from physical Wayland.
+
+### New native graph candidate evidence (after verified source recovery)
+
+The **dirty** four-path candidate on exact clean parent `afd260bf6428442282676ee2f76fb67aa386f71e` passed
+locked/offline Cargo metadata, formatting, strict Clippy and ordinary unit tests
+(325 PASS, 74 IGNORED). The expanded isolated Xvfb/XTest runner executed
+25/25 cases: **14 PASS / 11 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**;
+it correctly returned nonzero. The two new native tests are RED and have
+separately reproduced failures; they must remain failing until corrected.
+
+The seven-control Mediathek mapped graph confirms every target is reachable
+from Search, but five directional steps fail the opposite-key return oracle:
+`0 Down -> 4 Up`, `1 Down -> 6 Up`, `2 Down -> 6 Up`, `4 Up -> 1 Down`,
+`5 Up -> 1 Down`. No control-center move ran opposite the arrow, but full
+reversibility is not satisfied. The global switcher check identifies a separate
+entry-identity failure: native Up from **Live Search** enters an
+`AdwViewSwitcherButton`, but pressing native OK *immediately activates
+Mediathek* rather than remaining on Live. This is not a claim that Right
+skips a page: it proves the initial portal chose a switcher control for the
+wrong page. The test intentionally stops there until this is repaired.
+
+Evidence is local CANDIDATE_DIRTY; published commit validation and CI at any
+subsequent source SHA require independent transport. The first three-page
+canary version assumed focus movement activated a tab; that invalid oracle
+was corrected to require explicit OK and then augmented with a prerequisite
+assertion that Up first focuses the *current* category. Only the corrected
+version should be used for future product conclusions.
