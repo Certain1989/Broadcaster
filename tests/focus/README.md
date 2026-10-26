@@ -180,7 +180,7 @@ control establishes rendered ring contrast.
   graph reachability starting at Search. Its empty state is intentionally not
   evidence for populated source facets, recycled rows or async focus.
 
-These are additive route probes, **not completion of D38**. The test inventory
+These are additive route probes, **not completion of app-wide navigation coverage**. The test inventory
 must retain `NOT_COVERED` for Programme Guides multirow and mapping, OSK full
 keys/layout persistence, multiple Live/Mediathek card states, 284/1,484/10,000
 mapped virtualized IPTV lists, native playback return, asynchronous source
@@ -203,3 +203,63 @@ Both deliberate focus-owner and wrong-direction negative controls PASS.
 The six new toolbar reversal failures remain RED; top-row Up portals are
 classified separately and never waived as ordinary reverse edges. These
 candidate results are **not** clean post-publication or CI evidence.
+
+## Continuation-006 — published-baseline reconciliation and new executable probes
+
+**Source and evidentiary separation:** The complete 219-file application Git
+checkout at `51ec867e01d4a3a29dae365687792f6a537706da`
+(tree `2a5f53de11b8219bd5759d30bf79b9f1ebc0baf9`) was recovered from an
+independently SHA-256-verified *full Git bundle*. The preceding 29-case native
+suite was already checked from that published clean commit both locally and
+in CI [run 40342903096](https://github.com/Certain1989/Broadcaster/actions/runs/40342903096):
+**17 PASS / 12 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**. An ordinary
+`cargo test` does not execute the `#[ignore]` GTK cases. Older README sections
+above are *historical candidate milestones* and do not override this verified
+baseline. The authoritative TSV now separates **evidence level** (actual XTest
+route, helper-only, model-only, or owner hardware) from **outcome** (PASS, RED,
+FLAKY, ENVIRONMENT, NOT_COVERED), viewport, and exact published versus dirty
+validation; it does not treat helper seeding or focus state as a pixel oracle.
+
+All new tests are **CANDIDATE_DIRTY** against that immutable published
+source until independently published, clean-source restaged and rerun. This
+extension adds isolated XTest routes and disposable synthetic fixture helpers
+in the already authorized `#[cfg(test)]` modules. The existing native runner
+remains fail-closed and preserves all 12 published baseline RED assertions.
+
+| Native package/state | Added executable test | Evidence and limits |
+| --- | --- | --- |
+| Live OSK at 1280×800 | `gtk_focus001_xtest_live_osk_full_transaction_tv` | XTest OK into mapped modal, real q/w reversal, letters, symbols, space, backspace, caret, case/layout; Done/Cancel return and edit commit/cancel; local PASS |
+| Mediathek OSK at 640×480 | `gtk_focus001_xtest_mediathek_osk_full_transaction_compact` | Equivalent compact-viewport OSK key/control categories; local PASS |
+| My Channels OSK at 1280×800 | `gtk_focus001_xtest_streams_osk_full_transaction_tv` | Equivalent real OSK key graph and origin restoration; local PASS |
+| Three Programme Guides (one disabled) | `gtk_focus001_xtest_programme_guides_three_rows_native_actions` | Real registry and mapped manager, four action controls in three rows; native Right/Left across first row and Edit/Remove modal return; local PASS. No actual refresh, confirmation commit or multirow D-pad reachability proved |
+| Three playlist sources | `gtk_focus001_xtest_manage_sources_three_rows_native_modal_actions` | Isolated SQLite fixture; all seven buttons in each actual mapped row, reorder sensitivity boundaries; native middle Refresh Down fails to reach enabled lower action (**RED**). Four modal transitions via native OK/Escape without destructive confirmation |
+| My Channels large lists: 284 / 1,484 / 10,000 / 15,000 | `gtk_focus001_xtest_streams_virtualized_*_rows` | Actual GtkListView allocations with synthetic page backing and native input *canary*; helper-seeded scroll_to middle leaves focus owner unmapped (**RED**). Because the reposition uses `scroll_to` and terminates before the middle arrow, this is **helper-only mapped GTK recycling evidence, NOT proof of native D-pad long-list coverage** |
+
+The runner also refuses to execute a ledger with malformed columns, unknown status or evidence classes, phantom tests, or any missing required runner case; multiple rows per genuine test may document distinct states. `NONE` means **no evidence at all** for an explicitly `NOT_COVERED` class, not a fifth verified evidence method. This is a documentation-integrity gate, not an excuse to skip RED tests.
+
+Each synthetic sample is ephemeral. No actual media/guide URL is fetched, no
+playback backend is started, and no owner data or mutable runtime executable
+section is changed. Failing routes are **gating product findings**, not
+expected-green/waived tests. Known same-SHA Live cross-host disagreements still
+require an actual second-host deterministic comparison; there is no fabricated
+consensus from this source branch.
+
+### App-wide package coverage — tests, not product acceptance
+
+| Package | Measured native area | Genuinely NOT_COVERED / owner gate |
+| --- | --- | --- |
+| A Managers | zero and three guide rows, one and three source rows; sampled real arrow actions and modal returns (one source lower-row RED) | complete connected route from each row to every enabled action, safe mutations/async/error/reorder/confirmation, cross-row reversal |
+| B Mapping and facets | pre-existing synthetic card mapping action reachability only | real populated exact-guide picker, suggestions, scoped Apply/Cancel, full search pager, stale-refresh/remove negative CAS, facet picker interactive routes |
+| C OSK | 3 real page modals at two viewports with sampled key categories and Done/Cancel; PASS | every row/edge/wrap/layout, editor/guide modal and preference across application restart, painted contrast |
+| D Switcher and toolbar | prior 29-case published XTest empty/native and helper scans; RED reverse and wrong-page portal | populated toolbar, source selectors, full compact+TV control graph across all three pages, popover modal return |
+| E Cards and playback | Live OK-to-Play RED, Right cross-host mismatch, My Channels collapsed/expanded action RED, sampled Mediathek | first/middle/last actual Native D-pad routes for all three card types, safe Play second-OK/failing-backend/return, Mediathek search/list/pagination |
+| F Async and virtual rows | existing favourites footer RED; mapped GtkListView synthetic scroll+focus RED at 284/1484/10000/15000 | native arrows over recycled page boundaries, favourites ON→OFF→ON persistence, last favourite disappears, source update/rebind, bound latency/RSS |
+| G Visual oracle and reliability | stolen owner and wrong-direction negative oracles PASS; structural GTK indicator checked | deterministic rendered pixel focus-ring contrast and deliberately hidden-ring negative control, real owner Wayland/N100 device, cross-host Live timing discrepancy |
+
+**Stop rule:** The assignment is **PARTIAL** while any feasible interactive class in
+this grid lacks native route evidence. A RED measured with correct native
+input **counts as coverage**, but a not-run route, helper-only scroll,
+structural focus flag, untested fixture or conjectured hardware obstacle does
+not. There is no authorization to change production navigation in this
+branch. The final product correction register and owner acceptance are tracked
+separately, not published with the public test suite.

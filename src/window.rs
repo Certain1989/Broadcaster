@@ -2379,6 +2379,174 @@ mod focus001_mapped_regressions {
         std::fs::remove_dir_all(&fixture).expect("remove disposable source fixture");
     }
 
+    /// Exercise multiple REAL source manager rows, reorder boundaries and
+    /// nested action dialogs with fully disposable SQLite source records.
+    /// All activation is a native OK after the selected button is mapped;
+    /// actions that would fetch or delete a source are never confirmed.
+    #[test]
+    #[ignore = "needs isolated XTest + disposable three-source SQLite manager"]
+    fn gtk_focus001_xtest_manage_sources_three_rows_native_modal_actions() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let fixture = std::env::temp_dir().join(format!(
+            "broadcaster-focus001-multi-{}",
+            uuid::Uuid::new_v4()
+        ));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&fixture)
+            .expect("isolated manager scratch");
+        let path = fixture.join("manager.sqlite");
+        crate::streams::view::TvStreamsView::focus001_seed_disposable_manager_sources(
+            path.clone(),
+            3,
+        );
+        let ready = streams.focus001_attach_disposable_service(path);
+        for _ in 0..45 {
+            if ready.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(ready.get(), "three-source service did not initialize");
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.show_manager();
+        let mut dialog = None;
+        for _ in 0..45 {
+            settle();
+            if let Some(d) = window.visible_dialog() {
+                if TvWindow::find_descendant(d.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>()
+                        .is_some_and(|b| b.label().as_deref() == Some("Replace"))
+                })
+                .is_some()
+                {
+                    dialog = Some(d);
+                    break;
+                }
+            }
+        }
+        let manager = dialog.expect("real three-source manager not mapped");
+        let mut buttons = Vec::<gtk::Button>::new();
+        let mut queue = vec![manager.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = queue.pop() {
+            if let Some(b) = widget.downcast_ref::<gtk::Button>() {
+                buttons.push(b.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                queue.push(w);
+            }
+        }
+        let get = |label: &str| -> Vec<gtk::Button> {
+            buttons
+                .iter()
+                .filter(|b| b.label().as_deref() == Some(label))
+                .cloned()
+                .collect()
+        };
+        for label in [
+            "Refresh", "Defaults", "Rename", "Replace", "Delete", "↑", "↓",
+        ] {
+            let group = get(label);
+            assert_eq!(group.len(), 3, "every row must render {label}");
+            for (i, b) in group.iter().enumerate() {
+                assert!(b.is_mapped() && b.is_visible(), "{label}[{i}] not mapped");
+                assert!(
+                    b.compute_bounds(window.upcast_ref::<gtk::Widget>())
+                        .is_some(),
+                    "{label}[{i}] no mapped geometry"
+                );
+            }
+        }
+        // Tree traversal order is not the displayed ListBox order. Discover
+        // the middle row by the paired enabled move controls, and verify
+        // exactly one first/last boundary without relying on that ordering.
+        let up = get("↑");
+        let down = get("↓");
+        let middle = (0..3)
+            .find(|&i| up[i].is_sensitive() && down[i].is_sensitive())
+            .expect("middle source must permit both reorder directions");
+        assert_eq!(up.iter().filter(|b| b.is_sensitive()).count(), 2);
+        assert_eq!(down.iter().filter(|b| b.is_sensitive()).count(), 2);
+        assert_eq!((0..3).filter(|&i| !up[i].is_sensitive()).count(), 1);
+        assert_eq!((0..3).filter(|&i| !down[i].is_sensitive()).count(), 1);
+        let mut missing = Vec::<String>::new();
+        // Start with the mapped upper row, then send genuine arrows. An
+        // unreachable lower control is recorded as RED at the END, after the
+        // permitted safe nested modal actions have all been checked.
+        let from = get("Refresh")[middle].clone();
+        assert!(from.grab_focus());
+        native_x11_key("Down");
+        let after = window.focused_widget().expect("middle-row Down lost focus");
+        let lower = [
+            get("Replace")[middle].clone(),
+            get("Delete")[middle].clone(),
+            get("↑")[middle].clone(),
+            get("↓")[middle].clone(),
+        ];
+        if !lower
+            .iter()
+            .any(|button| TvWindow::is_within(&after, button.upcast_ref()))
+        {
+            missing.push(format!(
+                "middle Refresh Down reached {}, not lower action",
+                after.type_().name()
+            ));
+        }
+        // Inspect native OK/Back for each destructive/setup dialog, without
+        // activating a network fetch, file picker, or destructive confirmation.
+        for (label, nested_action) in [
+            ("Rename", "Save"),
+            ("Defaults", "Save"),
+            ("Replace", "Replace HTTP(S) URL"),
+            ("Delete", "Keep Source"),
+        ] {
+            let button = get(label)[middle].clone();
+            assert!(button.grab_focus(), "{label} must accept enabled GTK focus");
+            native_x11_key("Return");
+            settle();
+            let nested = window.visible_dialog().expect("source action opens modal");
+            assert_ne!(
+                nested, manager,
+                "{label} native OK did not open child dialog"
+            );
+            let found = TvWindow::find_descendant(nested.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>()
+                    .is_some_and(|b| b.label().as_deref() == Some(nested_action))
+            });
+            if found.is_none() {
+                missing.push(format!("{label} nested {nested_action} absent"));
+            }
+            native_x11_key("Escape");
+            settle();
+            assert_eq!(
+                window.visible_dialog(),
+                Some(manager.clone()),
+                "{label} Escape must return to original manager"
+            );
+            let owner = window
+                .focused_widget()
+                .expect("source manager modal return owner");
+            assert!(
+                TvWindow::is_within(&owner, manager.upcast_ref()) && owner.is_mapped(),
+                "{label} modal Escape leaves manager without mapped focus"
+            );
+        }
+        eprintln!("FOCUS001 source_multi_native rows=3 disabled_boundaries=checked nested_modal_actions=4 missing={missing:?}");
+        assert!(
+            missing.is_empty(),
+            "source manager three-row native action defects: {missing:?}"
+        );
+        native_x11_key("Escape");
+        settle();
+        window.close();
+        std::fs::remove_dir_all(&fixture).expect("clean disposable manager source fixture");
+    }
+
     /// Test the seven *real* Mediathek toolbar controls as a native directional
     /// graph, including every initial arrow, without assuming widget creation
     /// order equals the on-screen geometry. GTK grab_focus is used only to
@@ -2701,6 +2869,201 @@ mod focus001_mapped_regressions {
         window.close();
     }
 
+    // The existing q/w canary covers neither commit/cancel nor the other
+    // pages. Each wrapper below is an isolated native-XTest process. The
+    // source is the actual search field of the mapped production view.
+    fn focus001_native_osk_transaction(page: &str, width: i32) {
+        let (_app, window) = mapped_window(page);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        if page == "live" {
+            window.imp().live_view.show_toolbar_for_test();
+        }
+        settle();
+        let controls = match page {
+            "live" => window.imp().live_view.toolbar_focus_targets(),
+            "mediathek" => window.imp().mediathek_view.toolbar_focus_targets(),
+            "streams" => window.imp().streams_view.toolbar_focus_targets(),
+            _ => unreachable!(),
+        };
+        let origin = controls[0]
+            .clone()
+            .downcast::<gtk::SearchEntry>()
+            .expect("real page SearchEntry");
+        assert_native_input_delivery(origin.upcast_ref());
+        let keyboard = if page == "streams" {
+            &controls[11]
+        } else {
+            &controls[1]
+        };
+        let launcher = keyboard
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("OSK launcher");
+        assert!(launcher.is_mapped() && launcher.grab_focus());
+        native_x11_key("Return");
+        settle();
+        let dialog = window.visible_dialog().expect("native OK opens actual OSK");
+        assert!(dialog.is_mapped());
+        let get = |name: &str| -> gtk::Button {
+            TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>()
+                    .is_some_and(|b| b.label().as_deref() == Some(name))
+            })
+            .unwrap_or_else(|| panic!("{page} OSK missing key '{name}'"))
+            .downcast::<gtk::Button>()
+            .expect("key is GtkButton")
+        };
+        let keys = [
+            "1",
+            "0",
+            "q",
+            "w",
+            "ü",
+            "a",
+            "ä",
+            "z",
+            ".",
+            ":",
+            "~",
+            "Backspace",
+            "←",
+            "Space",
+            "→",
+            "Clear",
+            "Shift",
+            "QWERTZ",
+            "Symbols",
+            "Done",
+            "Cancel",
+        ];
+        for label in keys {
+            let button = get(label);
+            let bounds = button
+                .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                .expect("mapped OSK button must have window allocation");
+            assert!(button.is_mapped() && button.is_visible() && button.is_sensitive());
+            assert!(
+                bounds.width() > 0.0 && bounds.height() > 0.0,
+                "{page} OSK {label} at {width}px has no hit/focus area"
+            );
+            // Text keys already expose their visible label as the GTK
+            // accessible name; the two icon-only caret controls require a
+            // distinct descriptive tooltip for their actual action.
+            if label == "←" || label == "→" {
+                assert!(
+                    button
+                        .tooltip_text()
+                        .is_some_and(|hint| hint.contains("Caret")),
+                    "{page} OSK caret action {label} has no accessible help"
+                );
+            } else {
+                assert!(button.label().is_some(), "{page} OSK {label} unlabeled");
+            }
+        }
+        let q = get("q");
+        assert!(q.grab_focus());
+        native_x11_key("Right");
+        assert_owner(&window, get("w").upcast_ref(), "OSK q Right w");
+        native_x11_key("Left");
+        assert_owner(&window, q.upcast_ref(), "OSK w Left q");
+        let draft = TvWindow::find_descendant(dialog.upcast_ref(), &|w| w.is::<gtk::Entry>())
+            .expect("OSK live draft")
+            .downcast::<gtk::Entry>()
+            .unwrap();
+        origin.set_text("");
+        assert!(q.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(draft.text().as_str(), "q");
+        assert!(origin.text().is_empty(), "typing must not leak draft");
+        let space = get("Space");
+        assert!(space.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(draft.text().as_str(), "q ");
+        let backspace = get("Backspace");
+        assert!(backspace.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(draft.text().as_str(), "q");
+        let caret_left = get("←");
+        assert!(caret_left.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(draft.position(), 0);
+        let caret_right = get("→");
+        assert!(caret_right.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(draft.position(), 1);
+        let symbols = get("Symbols");
+        assert!(symbols.grab_focus());
+        native_x11_key("Return");
+        assert!(
+            get("!").is_mapped(),
+            "Symbols must relabel mapped letter grid"
+        );
+        assert!(get("Letters").grab_focus());
+        native_x11_key("Return");
+        assert!(get("q").is_mapped());
+        assert!(get("Shift").grab_focus());
+        native_x11_key("Return");
+        assert!(get("Q").is_mapped());
+        assert!(get("QWERTZ").grab_focus());
+        native_x11_key("Return");
+        assert!(get("QWERTY").is_mapped(), "QWERTZ switch missing");
+        let done = get("Done");
+        assert!(done.grab_focus());
+        native_x11_key("Return");
+        settle();
+        assert!(
+            window.visible_dialog().is_none(),
+            "native Done did not close OSK"
+        );
+        assert_eq!(
+            origin.text().as_str(),
+            "q",
+            "native Done failed to commit draft"
+        );
+        let restored = window
+            .focused_widget()
+            .expect("Done requires focus restoration");
+        assert!(
+            TvWindow::is_within(&restored, origin.upcast_ref())
+                || TvWindow::is_within(&restored, launcher.upcast_ref()),
+            "Done must return to origin/launcher on same page"
+        );
+        assert!(launcher.grab_focus());
+        native_x11_key("Return");
+        settle();
+        let dialog = window.visible_dialog().expect("OSK must reopen");
+        let cancel = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Cancel"))
+        })
+        .expect("Cancel mapped on reopen")
+        .downcast::<gtk::Button>()
+        .unwrap();
+        assert!(cancel.grab_focus());
+        native_x11_key("Return");
+        settle();
+        assert!(window.visible_dialog().is_none(), "Cancel must dismiss OSK");
+        assert_eq!(origin.text().as_str(), "q", "Cancel changed source text");
+        eprintln!("FOCUS001 osk_transaction page={page} viewport={width} native=true categories=letters,symbols,space,backspace,caret,shift,layout,done,cancel");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native isolated XTest OSK transaction"]
+    fn gtk_focus001_xtest_live_osk_full_transaction_tv() {
+        focus001_native_osk_transaction("live", 1280);
+    }
+    #[test]
+    #[ignore = "native isolated XTest OSK transaction"]
+    fn gtk_focus001_xtest_mediathek_osk_full_transaction_compact() {
+        focus001_native_osk_transaction("mediathek", 640);
+    }
+    #[test]
+    #[ignore = "native isolated XTest OSK transaction"]
+    fn gtk_focus001_xtest_streams_osk_full_transaction_tv() {
+        focus001_native_osk_transaction("streams", 1280);
+    }
+
     /// Exercise the real global Programme Guides manager (zero-guide state)
     /// and its nested Add URL dialog without importing a network feed. The
     /// isolated runner's XDG_DATA_HOME and memory GSettings prevent touching
@@ -2788,6 +3151,215 @@ mod focus001_mapped_regressions {
             "guide manager Escape did not close"
         );
         window.close();
+    }
+
+    /// Populated production Guide manager on a fully disposable registry.
+    /// Tests three different controls per row, disabled Refresh state and
+    /// nested confirmation/settings return. It never fetches or removes data.
+    #[test]
+    #[ignore = "requires isolated native XTest and disposable guide registry"]
+    fn gtk_focus001_xtest_programme_guides_three_rows_native_actions() {
+        crate::epg::desktop::focus001_seed_disposable_guides(3);
+        let (_app, window) = mapped_window("streams");
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let mut dialog = None;
+        for _ in 0..60 {
+            settle();
+            if let Some(d) = window.visible_dialog() {
+                if TvWindow::find_descendant(d.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Button>()
+                        .is_some_and(|b| b.label().as_deref() == Some("Use as Shared Default"))
+                })
+                .is_some()
+                {
+                    dialog = Some(d);
+                    break;
+                }
+            }
+        }
+        let manager = dialog.expect("three source rows must paint in actual manager");
+        let mut all = Vec::<gtk::Button>::new();
+        let mut queue = vec![manager.clone().upcast::<gtk::Widget>()];
+        while let Some(node) = queue.pop() {
+            if let Some(button) = node.downcast_ref::<gtk::Button>() {
+                all.push(button.clone());
+            }
+            let mut child = node.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                queue.push(w);
+            }
+        }
+        let labeled = |label: &str| -> Vec<gtk::Button> {
+            all.iter()
+                .filter(|b| b.label().as_deref() == Some(label))
+                .cloned()
+                .collect()
+        };
+        let defaults = labeled("Use as Shared Default");
+        let refresh = labeled("Refresh");
+        let edit = labeled("Edit");
+        let remove = labeled("Remove");
+        for group in [&defaults, &refresh, &edit, &remove] {
+            assert_eq!(
+                group.len(),
+                3,
+                "every populated guide must show all four actions"
+            );
+            for b in group {
+                assert!(b.is_mapped() && b.is_visible());
+                let bounds = b
+                    .compute_bounds(window.upcast_ref::<gtk::Widget>())
+                    .expect("mapped guide actions require real geometry");
+                assert!(bounds.width() > 0.0 && bounds.height() > 0.0);
+            }
+        }
+        assert!(refresh[0].is_sensitive());
+        assert!(
+            !refresh[1].is_sensitive(),
+            "disabled guide must disable Refresh"
+        );
+        assert!(refresh[2].is_sensitive());
+        // Arrow graph across the real first-row buttons: deliberately RED if
+        // the UI cannot reach an enabled action by spatial input.
+        assert!(defaults[0].grab_focus());
+        native_x11_key("Right");
+        assert_owner(
+            &window,
+            refresh[0].upcast_ref(),
+            "guide default Right refresh",
+        );
+        native_x11_key("Right");
+        assert_owner(&window, edit[0].upcast_ref(), "guide refresh Right edit");
+        native_x11_key("Right");
+        assert_owner(&window, remove[0].upcast_ref(), "guide edit Right remove");
+        native_x11_key("Left");
+        assert_owner(&window, edit[0].upcast_ref(), "guide remove Left edit");
+        // Open the actual Edit settings with native OK; Escape must restore
+        // manager focus, without changing the guide's persisted fields.
+        native_x11_key("Return");
+        settle();
+        let nested = window.visible_dialog().expect("guide settings modal");
+        assert_ne!(nested, manager, "native Edit must open a nested dialog");
+        assert!(TvWindow::find_descendant(nested.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Apply"))
+        })
+        .is_some());
+        native_x11_key("Escape");
+        settle();
+        assert_eq!(window.visible_dialog(), Some(manager.clone()));
+        // Destructive control opens a confirmation only, not an implicit
+        // deletion; closing it preserves the original three guide rows.
+        assert!(remove[2].grab_focus());
+        native_x11_key("Return");
+        settle();
+        let confirmation = window.visible_dialog().expect("guide delete confirmation");
+        assert_ne!(confirmation, manager);
+        assert!(TvWindow::find_descendant(confirmation.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Keep Guide"))
+        })
+        .is_some());
+        native_x11_key("Escape");
+        settle();
+        assert_eq!(window.visible_dialog(), Some(manager.clone()));
+        eprintln!("FOCUS001 guide_manager populated=3 disabled_refresh=1 native_edges=4 edit_and_remove_modal_return=checked");
+        native_x11_key("Escape");
+        settle();
+        window.close();
+    }
+
+    /// Real mapped GTK ListView scrolling/recycling at the licensed M1-scale
+    /// counts, with only a single synthetic page hydrated each time. Native
+    /// arrow delivery is asserted on interior rows; no real provider/SQLite.
+    fn focus001_virtual_mapped_test(total: u32) {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let positions = [0u32, total / 2, total - 1];
+        for position in positions {
+            let id = streams.focus001_mapped_virtual_page(total, position);
+            settle();
+            assert!(
+                streams.show_and_focus_test_results(),
+                "mapped GTK ListView focus failed at {total}/{position}"
+            );
+            settle();
+            let owner = window
+                .focused_widget()
+                .expect("virtualized list lost GTK owner");
+            eprintln!(
+                "FOCUS001 virtual_after_scroll total={total} index={position} owner={} within_list={} mapped={} visible={} sensitive={} focus={}",
+                owner.type_().name(), streams.contains_results_focus(&owner),
+                owner.is_mapped(), owner.is_visible(), owner.is_sensitive(), owner.has_focus()
+            );
+            assert!(
+                streams.contains_results_focus(&owner)
+                    && owner.is_mapped()
+                    && owner.is_visible()
+                    && owner.is_sensitive(),
+                "virtualized focus owner detached at {total}/{position}"
+            );
+            assert_eq!(
+                streams.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str()),
+                "recycling selected an unrelated source-qualified channel"
+            );
+            let (slots, pages, n) = streams.focus001_mapped_virtual_stats();
+            eprintln!("FOCUS001 virtual_mapped total={total} index={position} created_slots={slots} cached_pages={pages} selected_key={id}");
+            assert_eq!(n, total, "actual GtkListView model truncated");
+            assert!(
+                slots < total.min(700) as usize,
+                "mapped GtkListView allocated too many bound slots ({slots} of {total})"
+            );
+            assert!(pages <= 5, "real ListView page cache exceeded retention");
+            // This native key must keep focus in the live ListView even as
+            // GTK's viewport responds. Do not use direct router invocation.
+            if position > 0 && position + 1 < total {
+                native_x11_key("Down");
+                let after = window
+                    .focused_widget()
+                    .expect("native Down orphaned list focus");
+                assert!(
+                    streams.contains_results_focus(&after) && after.is_mapped(),
+                    "native Down escaped live virtualized rows at {total}/{position}"
+                );
+                native_x11_key("Up");
+                let back = window
+                    .focused_widget()
+                    .expect("native Up orphaned list focus");
+                assert!(
+                    streams.contains_results_focus(&back) && back.is_mapped(),
+                    "native Up did not return to virtualized list"
+                );
+            }
+        }
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped GtkListView 284-row recycling"]
+    fn gtk_focus001_xtest_streams_virtualized_284_rows() {
+        focus001_virtual_mapped_test(284);
+    }
+    #[test]
+    #[ignore = "native XTest mapped GtkListView 1484-row recycling"]
+    fn gtk_focus001_xtest_streams_virtualized_1484_rows() {
+        focus001_virtual_mapped_test(1_484);
+    }
+    #[test]
+    #[ignore = "native XTest mapped GtkListView 10000-row recycling"]
+    fn gtk_focus001_xtest_streams_virtualized_10000_rows() {
+        focus001_virtual_mapped_test(10_000);
+    }
+    #[test]
+    #[ignore = "native XTest mapped GtkListView 15000-row boundary"]
+    fn gtk_focus001_xtest_streams_virtualized_15000_rows() {
+        focus001_virtual_mapped_test(15_000);
     }
 
     /// Every currently enabled My Channels toolbar control participates in

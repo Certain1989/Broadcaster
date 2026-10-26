@@ -105,13 +105,55 @@ tests=(
   gtk_focus001_xtest_live_card_ok_focuses_play
   gtk_focus001_xtest_live_card_right_focuses_play
   gtk_focus001_xtest_manage_sources_refresh_down_reaches_lower_row
+  gtk_focus001_xtest_manage_sources_three_rows_native_modal_actions
   gtk_focus001_xtest_mediathek_complete_toolbar_graph
   gtk_focus001_xtest_global_three_page_switcher_activation
   gtk_focus001_xtest_negative_control_rejects_wrong_arrow
   gtk_focus001_xtest_osk_native_key_grid_and_layout
   gtk_focus001_xtest_programme_guides_empty_manager_and_add_dialog
+  gtk_focus001_xtest_programme_guides_three_rows_native_actions
   gtk_focus001_xtest_streams_empty_toolbar_native_graph
+  gtk_focus001_xtest_streams_virtualized_284_rows
+  gtk_focus001_xtest_streams_virtualized_1484_rows
+  gtk_focus001_xtest_streams_virtualized_10000_rows
+  gtk_focus001_xtest_streams_virtualized_15000_rows
+  gtk_focus001_xtest_live_osk_full_transaction_tv
+  gtk_focus001_xtest_mediathek_osk_full_transaction_compact
+  gtk_focus001_xtest_streams_osk_full_transaction_tv
 )
+# Fail closed when the public coverage ledger invents a test, omits a
+# required mapped case, or uses an unrecognized evidence/outcome class.
+# A repeated test ID is permitted only to document distinct measured states.
+printf '%s\n' "${tests[@]}" >"$scratch/required-cases"
+if ! awk -F '\t' '
+  FNR == NR { required[$1] = 1; next }
+  /^#/ || /^surface\t/ { next }
+  {
+    if (NF != 12) { printf "FOCUS001 LEDGER malformed columns line=%d\n", FNR > "/dev/stderr"; errors++; next }
+    if ($8 !~ /^(PASS|RED|FLAKY|ENVIRONMENT|NOT_COVERED)$/) {
+      printf "FOCUS001 LEDGER unknown outcome line=%d\n", FNR > "/dev/stderr"; errors++
+    }
+    if ($10 !~ /^(NATIVE_MAPPED|HELPER_ONLY|MODEL_ONLY|OWNER_PHYSICAL|NONE)$/) {
+      printf "FOCUS001 LEDGER unknown evidence level line=%d\n", FNR > "/dev/stderr"; errors++
+    }
+    if ($2 ~ /^gtk_focus001_/) {
+      if (!($2 in required)) {
+        printf "FOCUS001 LEDGER phantom test=%s\n", $2 > "/dev/stderr"; errors++
+      }
+      seen[$2]++
+    }
+  }
+  END {
+    for (name in required) if (!(name in seen)) {
+      printf "FOCUS001 LEDGER missing required test=%s\n", name > "/dev/stderr"; errors++
+    }
+    exit (errors ? 1 : 0)
+  }
+' "$scratch/required-cases" tests/focus/focus-coverage.tsv; then
+  printf 'FOCUS001 ENVIRONMENT coverage ledger mismatch; required suite unrun\n' >&2
+  exit 2
+fi
+
 pass=0
 fail=0
 timeout_count=0
