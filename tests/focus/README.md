@@ -495,3 +495,97 @@ pass; the test author must not mark the whole-app test/audit **DONE** while
 one of the explicitly feasible inventory classes still reads `NOT_COVERED`.
 This work does not replace the required independent integrated code review or
 the owner's KDE Plasma Bigscreen N100/Wayland remote and rendered-focus test.
+
+
+## Continuation-008 — mapped source-manager portal and cross-view connected toolbar evidence
+
+This revision begins from the full, genuine, clean public FOCUS head
+`71439e3a7574559bc0bf6ee6c270ef03b25e28b9`, Git tree
+`a6aac1d39b3934865bfddcb39b6cc2173d141f3e`, independently staged
+and checked via the canonical verified Git bundle and source-sync script.
+The historically bundled E4 checkout was **not used** as source. No runtime
+routing, CSS, production data, Cargo dependencies, migration or input quota
+changed; all Rust additions remain inside the existing `#[cfg(test)]` module.
+
+The two *new connected manager-launcher cases* were executed in isolated,
+mapped Xvfb/XTest processes and PASS at 640×480 and 1280×800. With three
+synthetic SQLite playlist sources, the native route starts at Search and uses
+`Down, Down, Down, Right` (toolbar indices 0→2→5→8→9), then native Return
+opens the real Manage Sources dialog. The manager has mapped Add Playlist,
+Programme Guides and Close buttons; native Escape restores a mapped My
+Channels owner. Test discovery seeds source controls only to build the
+survey graph; **the recorded successful route is separately replayed from
+Search using native key events**, not claimed from seeding Manage focus.
+Native keyboard delivery is independently proved by actual SearchEntry text.
+This closes the original `AUDIT_GAP_AS01` route at the two sampled viewports;
+it does **not** establish that every manager card action is accessible.
+
+Six further new cases independently run each enabled toolbar graph at compact
+and TV size: Live **8** surveyed native arrows per viewport (Search + OSK
+launcher), Mediathek **28** per viewport (seven currently enabled toolbar
+controls), My Channels **44** per viewport (twelve-target inventory including
+populated synthetic cards, with available enabled controls). All six locally
+PASS with no native missing Search-to-toolbar route; every claimed reachable
+control is visited by a separately replayed XTest path starting from Search.
+A disabled control is not counted as reachable. These cases do not claim
+loaded Mediathek results, Live first/middle/last rows, popup actions, reverse
+arrow symmetry, stable rendered ring, or async card/state transitions.
+
+### Exact original 91-gap reconciliation
+
+The original 91 `AUDIT_GAP_*` IDs are retained unrenumbered in
+`focus-coverage.tsv` and every row now specifies its missing test fixture,
+entry/route/state and owning test-only source path or exclusive device
+constraint. Current evidence closes exactly **1 of 91** (`AS01`) via both
+native manager-launcher tests. The remaining 90 entries are **NOT_COVERED**
+(89 feasible native omissions and one truly owner-physical N100 Wayland
+check). Categories: A Sources **1/18** closed, A Guides **0/9**, B mapping
+**0/14**, C OSK **0/9**, D switcher/composite graph **0/10**, E cards
+**0/11**, F favourites/virtualization **0/11**, G actual rendered focus
+**0/9**. Group D remains open despite newly verified toolbar subgraphs,
+because its specific rows require populated result/card, switcher,
+reverse/Back or modal combined journeys. The B/F/G exceptions similarly
+cannot be closed by previously available helper-only, structural focus or
+first-50-row evidence. `NOT_COVERED_PRECISE_BLOCKER` in column 9 is a test
+implementation requirement, **not a claim that owner approval is needed for
+feasible #[cfg(test)] test additions**. Only `AUDIT_GAP_G09` is genuinely
+physical-only. New missing states, if found, must be added without silently
+reducing this denominator.
+
+This is **PARTIAL test/audit coverage**. Existing public known product RED
+canaries remain blocking, including Live first-OK Play focus, Mediathek
+reverse routing, source manager lower Replace/Delete and post-delete owner,
+My Channels star/footer focus, QWERTZ reopen, same-second XMLTV mapping CAS,
+rendered Live X11 focus cue, detached recycled list owner and host-dependent
+Live behavior. No existing RED expectations or runner failure status were
+relaxed. The remaining 90 gap rows are not phantom tests and must not be
+counted as passes, observed defects, or 90 new required test functions.
+
+### Consolidated production correction boundary (read-only recommendations)
+
+**P0 remote interaction:** restore native first-OK Play focus in Live, reach
+My Channels collapsed star and source-manager lower Replace/Delete; retain
+source manager owner after deleting the only synthetic source; preserve
+favourites footer focus across SQLite reload. Handlers for separate owner
+approval: `src/window.rs`, `src/live/view.rs` (read-only `src/live/card.rs`),
+`src/streams/view.rs`, `src/streams/management.rs`.
+
+**P1 navigation/storage:** repair Mediathek up/down/Back graph and current-tab
+switcher focus; persist OSK layout across reopen. The independently
+reproduced M1-012 same-second source-catalogue change still needs a monotonic
+SQLite revision guard in the separately scoped EPG binding/ingest paths,
+not a last-success-second timestamp comparison. Read-only candidate owners:
+`src/window.rs`, `src/mediathek/view.rs`, `src/keyboard.rs`,
+`src/streams/editor.rs`, `src/epg/bindings.rs`, `src/epg/ingest.rs`.
+
+**P2 rendered/scale:** diagnose host-dependent Live XTest differences,
+X11/GTK focus-ring cues, icon/tooltip/target-size inconsistencies and
+GTK virtualization far-list selected-owner recycling. Keep CSS/icons,
+production card code and GTK blueprint read-only for this test assignment.
+Separate N100 Wayland/physical remote validation remains owner-only.
+
+Individual actual key traces, reproduced source owners and the existing
+cross-view Play/Copy/Download/Edit/Mapping/star icon/accessibility inventory
+remain in earlier sections of this README and the cumulative private handoff.
+No code review, M1 acceptance, E5 activation, merge or release follows from
+these tests.

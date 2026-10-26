@@ -4978,4 +4978,256 @@ mod focus001_mapped_regressions {
     fn gtk_focus001_xtest_streams_virtual_native_dpad_1484() {
         focus001_virtual_dpad_route(1_484, 50);
     }
+
+    // Probe the complete *physical* arrow route from the actual Search control
+    // to Manage Sources at two screen sizes. The seed grab_focus calls below
+    // discover candidate edges; only a separately replayed Search-origin
+    // XTest sequence establishes accessibility, never a directly seeded
+    // final Manage button. Every sampled edge is reversible/provenanced.
+    fn focus001_streams_manage_launcher_connected(width: i32, height: i32) {
+        let (_app, window, scratch) = focus001_manager_fixture(3);
+        window.set_default_size(width, height);
+        settle();
+        let controls = window.imp().streams_view.toolbar_focus_targets();
+        const START: usize = 0;
+        const GOAL: usize = 9;
+        let usable = |i: usize| {
+            controls[i].is_mapped() && controls[i].is_visible() && controls[i].is_sensitive()
+        };
+        assert!(usable(START) && usable(GOAL));
+        let keys = ["Up", "Down", "Left", "Right"];
+        let mut graph = vec![Vec::<(usize, &'static str)>::new(); controls.len()];
+        let mut count = 0;
+        for i in 0..controls.len() {
+            if !usable(i) {
+                continue;
+            }
+            for arrow in keys {
+                assert!(controls[i].grab_focus(), "native survey origin {i}");
+                settle();
+                native_x11_key(arrow);
+                count += 1;
+                if let Some(owner) = window.focused_widget() {
+                    if let Some(j) = controls.iter().enumerate().find_map(|(j, w)| {
+                        (usable(j) && TvWindow::is_within(&owner, w)).then_some(j)
+                    }) {
+                        if j != i {
+                            graph[i].push((j, arrow));
+                        }
+                    }
+                }
+            }
+        }
+        let mut previous = vec![None::<(usize, &'static str)>; controls.len()];
+        let mut queue = std::collections::VecDeque::from([START]);
+        let mut found = vec![false; controls.len()];
+        found[START] = true;
+        while let Some(i) = queue.pop_front() {
+            if i == GOAL {
+                break;
+            }
+            for &(j, key) in &graph[i] {
+                if !found[j] {
+                    found[j] = true;
+                    previous[j] = Some((i, key));
+                    queue.push_back(j);
+                }
+            }
+        }
+        let mut route = Vec::new();
+        let mut cursor = GOAL;
+        while cursor != START {
+            let Some((before, arrow)) = previous[cursor] else {
+                break;
+            };
+            route.push((before, cursor, arrow));
+            cursor = before;
+        }
+        route.reverse();
+        eprintln!("FOCUS001 manager_launcher viewport={width}x{height} edges={count} reachable={} route={route:?}", found[GOAL]);
+        assert!(
+            found[GOAL],
+            "RED: Manage Sources is not D-pad reachable from Search"
+        );
+        assert!(controls[START].grab_focus());
+        for (before, after, arrow) in route {
+            assert_owner(&window, &controls[before], "connected manager origin");
+            native_x11_key(arrow);
+            assert_owner(&window, &controls[after], "native reachable manager hop");
+        }
+        assert_owner(&window, &controls[GOAL], "native manage action portal");
+        native_x11_key("Return");
+        let manager = focus001_dialog_after(&window, None);
+        for label in ["Add Playlist", "Programme Guides", "Close"] {
+            let action = focus001_button_in(&manager, label);
+            assert!(
+                action.is_mapped() && action.is_sensitive(),
+                "manager {label} action"
+            );
+        }
+        let focused = window
+            .focused_widget()
+            .expect("manager initial native owner");
+        assert!(focused.is_mapped() && TvWindow::is_within(&focused, manager.upcast_ref()));
+        native_x11_key("Escape");
+        assert!(window.visible_dialog().is_none());
+        let returned = window
+            .focused_widget()
+            .expect("manager Escape restores focus");
+        assert!(
+            returned.is_mapped()
+                && TvWindow::is_within(&returned, window.imp().streams_view.upcast_ref())
+        );
+        eprintln!("FOCUS001 manager_launcher_visited native=1 modal=1 escape_return=1 viewport={width}x{height}");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable source rows");
+    }
+
+    #[test]
+    #[ignore = "native XTest Search-to-Manage Sources path, mapped manager, compact"]
+    fn gtk_focus001_xtest_streams_manage_launcher_connected_compact() {
+        focus001_streams_manage_launcher_connected(640, 480);
+    }
+
+    #[test]
+    #[ignore = "native XTest Search-to-Manage Sources path, mapped manager, TV"]
+    fn gtk_focus001_xtest_streams_manage_launcher_connected_tv() {
+        focus001_streams_manage_launcher_connected(1280, 800);
+    }
+
+    // Native XTest connected reachability across *all currently enabled*
+    // toolbar actions in each page; the individual seed grabs only discover
+    // possible graph edges. Every claimed path is replayed from Search with
+    // genuine keyboard events, checking each mapped focused owner. A missing
+    // edge remains a blocking RED instead of being excused as a focusable button.
+    fn focus001_page_connected_toolbar(page: &str, width: i32) {
+        let (_app, window) = mapped_window(page);
+        let height = if width == 640 { 480 } else { 800 };
+        window.set_default_size(width, height);
+        if page == "live" {
+            window.imp().live_view.show_toolbar_for_test();
+        }
+        if page == "streams" {
+            let streams = &window.imp().streams_view;
+            streams.install_remote_action_test_rows();
+            settle();
+            assert!(streams.show_and_focus_test_results());
+        }
+        settle();
+        let controls = match page {
+            "live" => window.imp().live_view.toolbar_focus_targets(),
+            "mediathek" => window.imp().mediathek_view.toolbar_focus_targets(),
+            "streams" => window.imp().streams_view.toolbar_focus_targets(),
+            _ => panic!("unsupported synthetic page"),
+        };
+        assert!(!controls.is_empty(), "page has no remote toolbar");
+        assert_native_input_delivery(&controls[0]);
+        let available = |i: usize| {
+            controls[i].is_mapped() && controls[i].is_visible() && controls[i].is_sensitive()
+        };
+        let mut links = vec![Vec::<(usize, &'static str)>::new(); controls.len()];
+        let mut sampled = 0usize;
+        for i in 0..controls.len() {
+            if !available(i) {
+                continue;
+            }
+            for key in ["Up", "Down", "Left", "Right"] {
+                assert!(controls[i].grab_focus(), "survey origin unavailable: {i}");
+                settle();
+                native_x11_key(key);
+                sampled += 1;
+                if let Some(owner) = window.focused_widget() {
+                    if let Some(j) = controls.iter().enumerate().find_map(|(j, candidate)| {
+                        (available(j) && TvWindow::is_within(&owner, candidate)).then_some(j)
+                    }) {
+                        if i != j {
+                            links[i].push((j, key));
+                        }
+                    }
+                }
+            }
+        }
+        // Breadth-first shortest actual-key routes from Search. Each route
+        // is reexecuted in the real mapped GTK window, not model-simulated.
+        let mut parent = vec![None::<(usize, &'static str)>; controls.len()];
+        let mut found = vec![false; controls.len()];
+        found[0] = true;
+        let mut queue = std::collections::VecDeque::from([0]);
+        while let Some(i) = queue.pop_front() {
+            for &(j, key) in &links[i] {
+                if !found[j] {
+                    found[j] = true;
+                    parent[j] = Some((i, key));
+                    queue.push_back(j);
+                }
+            }
+        }
+        let missing: Vec<usize> = (0..controls.len())
+            .filter(|&i| available(i) && !found[i])
+            .collect();
+        eprintln!("FOCUS001 connected_toolbar page={page} viewport={width}x{height} sampled={sampled} missing={missing:?} edges={links:?}");
+        assert!(
+            missing.is_empty(),
+            "RED: page toolbar enabled control lacks native arrow path from Search: {missing:?}"
+        );
+        for target in 0..controls.len() {
+            if !available(target) {
+                continue;
+            }
+            let mut path = Vec::<(usize, usize, &'static str)>::new();
+            let mut cur = target;
+            while cur != 0 {
+                let (from, key) = parent[cur].expect("found route must have predecessor");
+                path.push((from, cur, key));
+                cur = from;
+            }
+            path.reverse();
+            assert!(controls[0].grab_focus());
+            assert_owner(&window, &controls[0], "connected graph Search origin");
+            for (from, to, key) in &path {
+                assert_owner(&window, &controls[*from], "graph route origin");
+                native_x11_key(key);
+                assert_owner(&window, &controls[*to], "native graph route destination");
+            }
+            assert_owner(
+                &window,
+                &controls[target],
+                "native route reachable toolbar control",
+            );
+            eprintln!("FOCUS001 route page={page} dest={target} native={path:?}");
+        }
+        eprintln!("FOCUS001 connected_toolbar PASS page={page} viewport={width}x{height} native_samples={sampled}");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native connected Live toolbar complete enabled graph 640x480"]
+    fn gtk_focus001_xtest_live_connected_toolbar_compact() {
+        focus001_page_connected_toolbar("live", 640);
+    }
+    #[test]
+    #[ignore = "native connected Live toolbar complete enabled graph 1280x800"]
+    fn gtk_focus001_xtest_live_connected_toolbar_tv() {
+        focus001_page_connected_toolbar("live", 1280);
+    }
+    #[test]
+    #[ignore = "native connected Mediathek toolbar complete enabled graph 640x480"]
+    fn gtk_focus001_xtest_mediathek_connected_toolbar_compact() {
+        focus001_page_connected_toolbar("mediathek", 640);
+    }
+    #[test]
+    #[ignore = "native connected Mediathek toolbar complete enabled graph 1280x800"]
+    fn gtk_focus001_xtest_mediathek_connected_toolbar_tv() {
+        focus001_page_connected_toolbar("mediathek", 1280);
+    }
+    #[test]
+    #[ignore = "native connected populated My Channels toolbar complete enabled graph 640x480"]
+    fn gtk_focus001_xtest_streams_connected_toolbar_compact() {
+        focus001_page_connected_toolbar("streams", 640);
+    }
+    #[test]
+    #[ignore = "native connected populated My Channels toolbar complete enabled graph 1280x800"]
+    fn gtk_focus001_xtest_streams_connected_toolbar_tv() {
+        focus001_page_connected_toolbar("streams", 1280);
+    }
 }

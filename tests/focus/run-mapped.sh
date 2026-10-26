@@ -172,6 +172,14 @@ tests=(
   gtk_focus001_xtest_streams_populated_toolbar_compact_native
   gtk_focus001_xtest_streams_populated_toolbar_tv_native
   gtk_focus001_xtest_streams_virtual_native_dpad_1484
+  gtk_focus001_xtest_streams_manage_launcher_connected_compact
+  gtk_focus001_xtest_streams_manage_launcher_connected_tv
+  gtk_focus001_xtest_live_connected_toolbar_compact
+  gtk_focus001_xtest_live_connected_toolbar_tv
+  gtk_focus001_xtest_mediathek_connected_toolbar_compact
+  gtk_focus001_xtest_mediathek_connected_toolbar_tv
+  gtk_focus001_xtest_streams_connected_toolbar_compact
+  gtk_focus001_xtest_streams_connected_toolbar_tv
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.
