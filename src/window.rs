@@ -1684,4 +1684,333 @@ mod focus001_mapped_regressions {
         assert_owner(&window, &controls[1], "negative control stolen owner");
         window.close();
     }
+
+    fn native_x11_key(key_name: &str) {
+        let emitter = std::env::var_os("FOCUS001_XTEST_BIN")
+            .expect("test runner must provide an actual XTest key emitter");
+        let output = std::process::Command::new(emitter)
+            .arg(key_name)
+            .output()
+            .expect("execute isolated real X11 key emitter");
+        assert!(
+            output.status.success(),
+            "real X11 {key_name} emission failed with {:?}",
+            output.status.code()
+        );
+        settle();
+    }
+
+    // Prove XTest events actually reach the mapped GTK editable before using
+    // a route result as product evidence. XTest returning success is not proof
+    // of dispatch, particularly under Xvfb without a window manager.
+    fn assert_native_input_delivery(search: &gtk::Widget) {
+        let entry = search
+            .clone()
+            .downcast::<gtk::SearchEntry>()
+            .expect("real mapped search-entry target");
+        entry.set_text("");
+        assert!(entry.grab_focus());
+        settle();
+        native_x11_key("a");
+        if entry.text().as_str() != "a" {
+            eprintln!(
+                "FOCUS001 INPUT_UNVERIFIED expected real keypress to type in mapped SearchEntry"
+            );
+            panic!("native X11 input not confirmed at focused GTK control");
+        }
+        eprintln!("FOCUS001 INPUT_CONFIRMED XTest typed into mapped GTK SearchEntry");
+        entry.set_text("");
+        settle();
+        assert!(entry.grab_focus());
+    }
+
+    /// Native GDK propagation is essential for this edge: direct invocation
+    /// of handle_remote_key() returns Proceed and cannot synthesize GTK's
+    /// subsequent Search-to-List arrow traversal.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with real XTest key injection"]
+    fn gtk_focus001_xtest_live_search_down_native_propagation() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let search = window.imp().live_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        assert_owner(&window, &search, "Live Search before native Down");
+        assert_native_input_delivery(&search);
+        native_x11_key("Down");
+        let list = TvWindow::find_descendant(
+            window.imp().live_view.upcast_ref::<gtk::Widget>(),
+            &|widget| widget.is::<gtk::ListBox>(),
+        )
+        .expect("mapped Live list");
+        assert_owner(
+            &window,
+            &list,
+            "Live Search native Down must reach first row",
+        );
+        native_x11_key("Up");
+        assert_owner(&window, &search, "Live native Down Up round-trip");
+        window.close();
+    }
+
+    /// Reproduce the owner's Mediathek route with GDK key delivery rather
+    /// than invoking the capture router in isolation.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with real XTest key injection"]
+    fn gtk_focus001_xtest_mediathek_search_down_up() {
+        let (_app, window) = mapped_window("mediathek");
+        let controls = window.imp().mediathek_view.toolbar_focus_targets();
+        let search = &controls[0];
+        assert!(search.grab_focus());
+        assert_owner(&window, search, "Mediathek before real Down");
+        assert_native_input_delivery(search);
+        native_x11_key("Down");
+        let first = window
+            .focused_widget()
+            .expect("real Down must retain focus");
+        assert!(
+            controls.iter().any(|c| TvWindow::is_within(&first, c)),
+            "native Down skipped Mediathek toolbar controls"
+        );
+        assert_ne!(first, *search, "native Down must advance");
+        native_x11_key("Up");
+        assert_owner(&window, search, "Mediathek native Down Up must reverse");
+        window.close();
+    }
+
+    /// The owner's collapsed-row favourite star must be reachable without
+    /// Tab/mouse. Probe all two-key D-pad approaches without assuming a
+    /// particular geometry-selected direction. Longer paths are unverified.
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with native XTest injection"]
+    fn gtk_focus001_streams_collapsed_star_two_key_reachability() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        let row = window.focused_widget().expect("selected fabricated row");
+        assert_owner(&window, &row, "collapsed row start");
+        let star = streams
+            .remote_action_test_star()
+            .expect("selected synthetic card has a star button");
+        assert!(star.is_visible() && star.is_mapped() && star.is_sensitive());
+        assert_native_input_delivery(&streams.toolbar_focus_targets()[0]);
+        assert!(row.grab_focus());
+        let keys = [
+            gtk::gdk::Key::Up,
+            gtk::gdk::Key::Down,
+            gtk::gdk::Key::Left,
+            gtk::gdk::Key::Right,
+        ];
+        let mut reachable = false;
+        for first in keys {
+            assert!(row.grab_focus(), "reset selected row for each probe");
+            native_x11_key(first.name().expect("direction keysym").as_str());
+            if owns_focus(&window, star.upcast_ref()) {
+                reachable = true;
+                break;
+            }
+            let intermediate = window.focused_widget();
+            for second in keys {
+                let Some(ref origin) = intermediate else {
+                    continue;
+                };
+                if !origin.is_mapped() || !origin.is_sensitive() || !origin.grab_focus() {
+                    continue;
+                }
+                native_x11_key(second.name().expect("direction keysym").as_str());
+                if owns_focus(&window, star.upcast_ref()) {
+                    reachable = true;
+                    break;
+                }
+            }
+            if reachable {
+                break;
+            }
+        }
+        assert!(
+            reachable,
+            "RED: selected collapsed card star cannot be reached within two D-pad moves"
+        );
+        assert_owner(&window, star.upcast_ref(), "collapsed star D-pad arrival");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb with real XTest key injection"]
+    fn gtk_focus001_streams_collapsed_star_native_reachability() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        let row = window.focused_widget().expect("selected collapsed row");
+        assert_owner(&window, &row, "collapsed row before native Right");
+        let star = streams
+            .remote_action_test_star()
+            .expect("selected bound card exposes a native favourite button");
+        assert!(star.is_mapped(), "card favourite button must be mapped");
+        native_x11_key("Right");
+        assert_owner(
+            &window,
+            star.upcast_ref(),
+            "collapsed card row --Right--> reachable favourite button",
+        );
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_global_mediathek_search_up_down_switcher() {
+        let (_app, window) = mapped_window("mediathek");
+        let search = window.imp().mediathek_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        assert_owner(&window, &search, "Search initial");
+        key(&window, gtk::gdk::Key::Up);
+        let switcher = window.focused_widget().expect("Search Up target");
+        assert!(
+            switcher.type_().name() == "AdwViewSwitcherButton",
+            "Search Up must focus a global category, got {}",
+            switcher.type_().name()
+        );
+        assert_owner(&window, &switcher, "Search --Up--> category");
+        key(&window, gtk::gdk::Key::Down);
+        assert_owner(&window, &search, "category --Down--> Search");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires isolated mapped GTK/Xvfb and disposable SQLite"]
+    fn gtk_focus001_streams_favourites_footer_async_focus_retention() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        use std::os::unix::fs::DirBuilderExt;
+        let fixture =
+            std::env::temp_dir().join(format!("broadcaster-focus001-{}", uuid::Uuid::new_v4()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&fixture)
+            .expect("private disposable DB folder");
+        let ready = streams.focus001_attach_disposable_service(fixture.join("focus.sqlite"));
+        for _ in 0..20 {
+            if ready.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(ready.get(), "fixture service did not initialize");
+        let footer = streams.toolbar_focus_targets()[8].clone();
+        let button = footer
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("favourites footer is mapped GTK Button");
+        assert!(button.is_mapped());
+        for index in 0..3 {
+            assert!(button.grab_focus());
+            assert_owner(&window, &footer, "favourites footer before OK");
+            button.emit_clicked();
+            for _ in 0..20 {
+                if button.is_sensitive() {
+                    break;
+                }
+                settle();
+            }
+            assert!(button.is_sensitive(), "favourites write timed out");
+            assert_owner(
+                &window,
+                &footer,
+                &format!("favourites footer retained focus after click {index}"),
+            );
+        }
+        window.close();
+        std::fs::remove_dir_all(&fixture).expect("remove disposable SQLite fixture");
+    }
+
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_streams_back_escape_home_are_semantic() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        streams.remote_action_test_activate();
+        settle();
+        key(&window, gtk::gdk::Key::Right);
+        let play = streams.remote_action_test_buttons().expect("actions")[0].clone();
+        assert_owner(&window, play.upcast_ref(), "expanded Play");
+        key(&window, gtk::gdk::Key::Back);
+        assert!(window.imp().stack.visible_child_name().as_deref() == Some("streams"));
+        let owner = window.focused_widget().expect("Back collapsed row");
+        assert!(
+            streams.contains_results_focus(&owner),
+            "Back must restore row"
+        );
+        streams.remote_action_test_activate();
+        settle();
+        key(&window, gtk::gdk::Key::Right);
+        key(&window, gtk::gdk::Key::Escape);
+        let owner = window.focused_widget().expect("Escape collapsed row");
+        assert!(
+            streams.contains_results_focus(&owner),
+            "Escape must restore row"
+        );
+        assert!(window.imp().stack.visible_child_name().as_deref() == Some("streams"));
+        key(&window, gtk::gdk::Key::HomePage);
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("mediathek")
+        );
+        window.close();
+    }
+
+    /// Expanded actions must retain keyboard focus under ten repeated Right
+    /// events, and Up/Down must follow Play/Edit/Programme without a mouse.
+    #[test]
+    #[ignore = "requires separately isolated mapped GTK/Xvfb + compiled test schema"]
+    fn gtk_focus001_streams_expanded_actions_right_ten_retains_owner() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        streams.remote_action_test_activate();
+        settle();
+        let buttons = streams
+            .remote_action_test_buttons()
+            .expect("fabricated selected row has Play/Edit/Programme actions");
+        key(&window, gtk::gdk::Key::Right);
+        assert_owner(
+            &window,
+            buttons[0].upcast_ref(),
+            "selected row Right -> Play",
+        );
+        for (index, button) in buttons.iter().enumerate() {
+            assert_owner(
+                &window,
+                button.upcast_ref(),
+                "expanded action initial focus",
+            );
+            for repeat in 0..10 {
+                key(&window, gtk::gdk::Key::Right);
+                assert_owner(
+                    &window,
+                    button.upcast_ref(),
+                    &format!("action {index} Right repeat {repeat}"),
+                );
+            }
+            if index + 1 < buttons.len() {
+                key(&window, gtk::gdk::Key::Down);
+                assert_owner(&window, buttons[index + 1].upcast_ref(), "next action");
+            }
+        }
+        key(&window, gtk::gdk::Key::Up);
+        assert_owner(&window, buttons[1].upcast_ref(), "Programme Up -> Edit");
+        key(&window, gtk::gdk::Key::Up);
+        assert_owner(&window, buttons[0].upcast_ref(), "Edit Up -> Play");
+        window.close();
+    }
 }

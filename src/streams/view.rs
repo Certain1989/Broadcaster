@@ -2188,6 +2188,37 @@ impl TvStreamsView {
         ids
     }
 
+    /// Supply an isolated SQLite service so FOCUS-001 can exercise the real
+    /// favourites footer click/async persistence path, never a user's DB.
+    #[cfg(test)]
+    pub(crate) fn focus001_attach_disposable_service(
+        &self,
+        path: std::path::PathBuf,
+    ) -> std::rc::Rc<Cell<bool>> {
+        let ready = std::rc::Rc::new(Cell::new(false));
+        let completed = ready.clone();
+        let view = self.clone();
+        spawn(async move {
+            let service = StreamsService::with_storage(super::storage::Storage::at(path))
+                .await
+                .expect("disposable SQLite favourites service");
+            view.imp().service.replace(Some(service));
+            completed.set(true);
+        });
+        ready
+    }
+
+    // Expose the actual bound card star to the independent mapped focus
+    // regression. This is a test-only accessor, not an alternative route.
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_star(&self) -> Option<gtk::Button> {
+        let position = self.imp().selection.get()?.selected();
+        self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.position() == position).then(|| binding.ui.star.clone())
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn remote_action_test_buttons(&self) -> Option<[gtk::Button; 3]> {
         let position = self.imp().selection.get()?.selected();
