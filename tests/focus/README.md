@@ -572,7 +572,7 @@ approval: `src/window.rs`, `src/live/view.rs` (read-only `src/live/card.rs`),
 
 **P1 navigation/storage:** repair Mediathek up/down/Back graph and current-tab
 switcher focus; persist OSK layout across reopen. The independently
-reproduced M1-012 same-second source-catalogue change still needs a monotonic
+reproduced same-second source-catalogue change still needs a monotonic
 SQLite revision guard in the separately scoped EPG binding/ingest paths,
 not a last-success-second timestamp comparison. Read-only candidate owners:
 `src/window.rs`, `src/mediathek/view.rs`, `src/keyboard.rs`,
@@ -586,6 +586,6 @@ Separate N100 Wayland/physical remote validation remains owner-only.
 
 Individual actual key traces, reproduced source owners and the existing
 cross-view Play/Copy/Download/Edit/Mapping/star icon/accessibility inventory
-remain in earlier sections of this README and the cumulative private handoff.
+remain in earlier sections of this README and the public route ledger.
 No code review, M1 acceptance, E5 activation, merge or release follows from
 these tests.
