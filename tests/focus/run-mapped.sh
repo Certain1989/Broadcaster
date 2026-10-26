@@ -34,13 +34,43 @@ if command -v "${FOCUS001_CC:-cc}" >/dev/null 2>&1; then
 #include <stdio.h>
 #include <stdlib.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+#include <stdint.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
-    if (argc != 2) return 2;
     Display *display = XOpenDisplay(NULL);
     if (!display) return 3;
+    if (argc == 6 && strcmp(argv[1], "--pixels") == 0) {
+        // Pixel oracle only for disposable mapped GUI: no screenshots persisted.
+        Window focus = None, root = DefaultRootWindow(display), child = None;
+        int revert, dx = 0, dy = 0;
+        XGetInputFocus(display, &focus, &revert);
+        if (focus == None || focus == PointerRoot) return 4;
+        if (!XTranslateCoordinates(display, focus, root, 0, 0, &dx, &dy, &child)) return 5;
+        int x = atoi(argv[2]) + dx, y = atoi(argv[3]) + dy;
+        int w = atoi(argv[4]), h = atoi(argv[5]);
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(display, root, &attr)) return 6;
+        if (x < 0 || y < 0 || w <= 0 || h <= 0 ||
+            x + w > attr.width || y + h > attr.height) return 6;
+        XImage *img = XGetImage(display, root, x, y, w, h, AllPlanes, ZPixmap);
+        if (!img) return 7;
+        uint64_t hash = UINT64_C(14695981039346656037);
+        for (int row = 0; row < h; row++) {
+            for (int col = 0; col < w; col++) {
+                hash ^= XGetPixel(img, col, row);
+                hash *= UINT64_C(1099511628211);
+            }
+        }
+        printf("%016llx\n", (unsigned long long)hash);
+        XDestroyImage(img);
+        XCloseDisplay(display);
+        return 0;
+    }
+    if (argc != 2) return 2;
     int event, error, major, minor;
     if (!XTestQueryExtension(display, &event, &error, &major, &minor)) return 4;
     KeySym symbol = XStringToKeysym(argv[1]);
@@ -120,6 +150,17 @@ tests=(
   gtk_focus001_xtest_live_osk_full_transaction_tv
   gtk_focus001_xtest_mediathek_osk_full_transaction_compact
   gtk_focus001_xtest_streams_osk_full_transaction_tv
+  gtk_focus001_xtest_mapping_no_guide_keeps_card_focus
+  gtk_focus001_xtest_mapping_catalogue_pager_cancel_return
+  gtk_focus001_xtest_mapping_stale_refresh_blocks_apply
+  gtk_focus001_xtest_favourites_footer_native_async_roundtrip
+  gtk_focus001_xtest_streams_virtual_native_dpad_284
+  gtk_focus001_xtest_streams_virtual_native_dpad_10000
+  gtk_focus001_xtest_streams_virtual_native_dpad_15000
+  gtk_focus001_xtest_streams_card_two_ok_fake_playback_return
+  gtk_focus001_xtest_mapping_same_timestamp_catalogue_change_rejected
+  gtk_focus001_local_rendered_indicator_negative_control_probe
+  gtk_focus001_xtest_osk_qwertz_reopen_retains_layout
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.
@@ -175,6 +216,8 @@ trace_excerpt() {
 for test_name in "${tests[@]}"; do
   printf '\nFOCUS001 RUN %s\n' "$test_name"
   log="$scratch/$test_name.log"
+  case_root="$scratch/cases/$test_name"
+  mkdir -p "$case_root/data" "$case_root/config" "$case_root/cache"
   if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" || "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ]] && (( !xtest_ready )); then
     environment=$((environment + 1))
     echo "FOCUS001 ENVIRONMENT $test_name (XTest emitter unavailable)"
@@ -183,8 +226,8 @@ for test_name in "${tests[@]}"; do
   if timeout --signal=TERM --kill-after=5s 120s \
     xvfb-run -a env \
     GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-    XDG_DATA_HOME="$scratch/data" XDG_CONFIG_HOME="$scratch/config" XDG_CACHE_HOME="$scratch/cache" \
-    FOCUS001_XTEST_BIN="$scratch/xtest-key" \
+    XDG_DATA_HOME="$case_root/data" XDG_CONFIG_HOME="$case_root/config" XDG_CACHE_HOME="$case_root/cache" \
+    FOCUS001_XTEST_BIN="$scratch/xtest-key" FOCUS001_PIXEL_BIN="$scratch/xtest-key" \
     cargo test --locked "$test_name" -- --ignored --test-threads=1 --nocapture >"$log" 2>&1; then
     if grep -Eq '^running 1 test$' "$log"; then
       pass=$((pass + 1))

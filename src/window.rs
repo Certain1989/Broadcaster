@@ -3362,6 +3362,721 @@ mod focus001_mapped_regressions {
         focus001_virtual_mapped_test(15_000);
     }
 
+    /// Disposable end-to-end mapping picker catalogue, never an owner source.
+    /// The exact origin is synthesized and the runner isolates XDG storage.
+    fn focus001_mapping_fixture(guide_count: usize, channels: usize) -> (String, String, String) {
+        use crate::epg::network::TrustScope;
+        use crate::epg::sources::{GuideSourceRegistry, SourceOrigin};
+        use crate::streams::storage::Storage;
+        use rusqlite::params;
+
+        let base = std::env::var("XDG_DATA_HOME").expect("runner must isolate XDG data");
+        assert!(base.starts_with("/tmp/"));
+        assert_eq!(std::env::var("GSETTINGS_BACKEND").as_deref(), Ok("memory"));
+        assert!(guide_count <= 3 && channels <= 64);
+        let path = glib::user_data_dir()
+            .join("broadcaster")
+            .join("broadcaster-iptv.sqlite3");
+        crate::streams::view::TvStreamsView::focus001_seed_disposable_manager_sources(path, 1);
+        let storage = Storage::new();
+        let mut conn = storage.connect().expect("disposable mapping database");
+        let (row_id, source_id): (String, String) = conn
+            .query_row(
+                "SELECT id,source_id FROM iptv_channels WHERE is_present=1 LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("one disposable IPTV channel");
+        let registry = GuideSourceRegistry::new(storage);
+        let mut guide_id = String::new();
+        for n in 0..guide_count {
+            let origin = SourceOrigin::entered_remote_url(
+                format!("https://example.invalid/only-test-guide-{n}.xml"),
+                TrustScope::Public,
+            )
+            .expect("synthetic guide URL");
+            let guide = registry
+                .add(&format!("Disposable guide {n}"), &origin)
+                .expect("create disposable guide");
+            if n == 0 {
+                guide_id = guide.id.clone();
+            }
+            conn.execute(
+                "UPDATE epg_sources SET last_success_at=1000 WHERE id=?1",
+                [&guide.id],
+            )
+            .expect("mark synthetic guide as imported");
+            for item in 0..channels {
+                conn.execute(
+                    "INSERT INTO epg_channels(source_id,channel_id,display_name) VALUES(?1,?2,?3)",
+                    params![
+                        guide.id,
+                        format!("focus.{n}.{item:03}"),
+                        format!("Synthetic {n} station {item:03}")
+                    ],
+                )
+                .expect("insert synthetic guide metadata");
+            }
+        }
+        if !guide_id.is_empty() {
+            crate::epg::bindings::set_shared_guide(
+                &mut conn,
+                crate::epg::bindings::ConfirmedGuideSelection::after_user_confirmation(),
+                Some(&guide_id),
+            )
+            .expect("set synthetic shared guide");
+        }
+        (row_id, source_id, guide_id)
+    }
+
+    /// Open the real card's programme picker with native XTest Return and
+    /// ensure the initial result is modal or a focus-preserving no-guide toast.
+    fn focus001_mapping_open(
+        guide_count: usize,
+        channel_count: usize,
+    ) -> (TvApplication, TvWindow, String, String) {
+        let (row_id, source_id, guide_id) = focus001_mapping_fixture(guide_count, channel_count);
+        let (app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.focus001_install_persisted_mapping_row(&row_id, &source_id);
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        native_x11_key("Return"); // expand, never play
+        settle();
+        let actions = streams
+            .remote_action_test_buttons()
+            .expect("mapped action buttons");
+        let mapping = &actions[2];
+        assert!(mapping.is_mapped() && mapping.is_sensitive());
+        // Seed ONLY the already mapped mapping control. Whether it is reachable
+        // from the card by D-pad is a distinct pre-existing RED case.
+        assert!(mapping.grab_focus());
+        assert_owner(&window, mapping.upcast_ref(), "mapping original action");
+        native_x11_key("Return");
+        (app, window, row_id, guide_id)
+    }
+
+    #[test]
+    #[ignore = "native mapped mapping action when no XMLTV guide is selected"]
+    fn gtk_focus001_xtest_mapping_no_guide_keeps_card_focus() {
+        let (_app, window, _row_id, _guide_id) = focus001_mapping_open(0, 0);
+        for _ in 0..15 {
+            settle();
+        }
+        assert!(
+            window.visible_dialog().is_none(),
+            "no guide must not open a phantom picker"
+        );
+        let mapping = window
+            .imp()
+            .streams_view
+            .remote_action_test_buttons()
+            .expect("still-expanded card")[2]
+            .clone();
+        assert_owner(
+            &window,
+            mapping.upcast_ref(),
+            "no-guide toast retains card mapping focus",
+        );
+        eprintln!("FOCUS001 mapping no_guide toast=no_modal owner=mapped_card_action");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped guide picker/search/Cancel with 40 synthetic guide IDs"]
+    fn gtk_focus001_xtest_mapping_catalogue_pager_cancel_return() {
+        let (_app, window, row_id, _guide_id) = focus001_mapping_open(2, 40);
+        let dialog = (0..45)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog()
+            })
+            .expect("real Programme mapping modal from native Return");
+        assert_eq!(dialog.title().as_str(), "Programme mapping");
+        let search_toggle = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                b.label().as_deref() == Some("Search all guide channels / choose exact ID…")
+            })
+        })
+        .expect("real exact-guide search toggle");
+        assert!(search_toggle.is_mapped() && search_toggle.is_sensitive());
+        assert!(search_toggle.grab_focus());
+        native_x11_key("Return");
+        let entry = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Entry>().is_some()
+        })
+        .expect("native search entry");
+        assert_owner(
+            &window,
+            &entry,
+            "mapping search toggle moves to exact search entry",
+        );
+        let next = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Next"))
+        })
+        .expect("next page button")
+        .downcast::<gtk::Button>()
+        .expect("GtkButton");
+        for _ in 0..45 {
+            settle();
+            if next.is_sensitive() {
+                break;
+            }
+        }
+        assert!(
+            next.is_sensitive(),
+            "40 synthetic channels must offer a second native page"
+        );
+        assert!(next.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..45 {
+            settle();
+            if TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Label>()
+                    .is_some_and(|l| l.text() == "Guide search page / 2")
+            })
+            .is_some()
+            {
+                break;
+            }
+        }
+        let previous = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Previous"))
+        })
+        .expect("previous page button")
+        .downcast::<gtk::Button>()
+        .expect("GtkButton");
+        assert!(previous.is_sensitive());
+        let cancel = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|b| b.label().as_deref() == Some("Cancel"))
+        })
+        .expect("real picker cancel");
+        assert!(cancel.grab_focus());
+        native_x11_key("Return");
+        settle();
+        assert!(
+            window.visible_dialog().is_none(),
+            "Cancel closes real mapping modal"
+        );
+        let mapping = window
+            .imp()
+            .streams_view
+            .remote_action_test_buttons()
+            .expect("still-expanded originating card")[2]
+            .clone();
+        assert_owner(
+            &window,
+            mapping.upcast_ref(),
+            "picker Cancel must restore originating action",
+        );
+        let storage = crate::streams::storage::Storage::new();
+        let conn = storage.connect().expect("scratch DB remains readable");
+        let saved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&row_id],
+                |r| r.get(0),
+            )
+            .expect("check mapping without saving");
+        assert_eq!(saved, 0, "Cancel must not silently save a mapping");
+        eprintln!("FOCUS001 mapping picker native_open=1 guide_count=2 channels=40 page_2=1 cancel=1 saved_mapping=0");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest stale selected XMLTV refresh blocks mapping apply"]
+    fn gtk_focus001_xtest_mapping_stale_refresh_blocks_apply() {
+        let (_app, window, row_id, guide_id) = focus001_mapping_open(1, 1);
+        let dialog = (0..45)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog()
+            })
+            .expect("real Programme mapping modal");
+        let search_toggle = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                b.label().as_deref() == Some("Search all guide channels / choose exact ID…")
+            })
+        })
+        .expect("exact guide search");
+        assert!(search_toggle.grab_focus());
+        native_x11_key("Return");
+        let mut choice = None;
+        for _ in 0..45 {
+            settle();
+            choice = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                    b.label()
+                        .as_deref()
+                        .is_some_and(|t| t.contains("[focus.0.000]"))
+                })
+            });
+            if choice.is_some() {
+                break;
+            }
+        }
+        let choice = choice.expect("synthetic guide channel must be rendered");
+        assert!(choice.is_mapped() && choice.is_sensitive());
+        // An external refresh changes the selection snapshot after the modal
+        // opened. Test fixture changes only its own disposable XMLTV rows.
+        let storage = crate::streams::storage::Storage::new();
+        let conn = storage.connect().expect("isolated guide database");
+        conn.execute(
+            "UPDATE epg_sources SET last_success_at=1001 WHERE id=?1",
+            [&guide_id],
+        )
+        .expect("simulate completed external guide refresh");
+        assert!(choice.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..45 {
+            settle();
+        }
+        assert_eq!(
+            window.visible_dialog(),
+            Some(dialog.clone()),
+            "stale source must not close dialog as though it saved"
+        );
+        let saved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&row_id],
+                |r| r.get(0),
+            )
+            .expect("inspect isolated saved mapping");
+        assert_eq!(
+            saved, 0,
+            "refresh invalidated candidate: no stale mapping permitted"
+        );
+        assert!(
+            TvWindow::find_descendant(dialog.upcast_ref(), &|w| w
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text().contains("reopen mapping")))
+            .is_some(),
+            "stale Apply must display an explicit error"
+        );
+        eprintln!("FOCUS001 mapping stale guide refreshed=1 native_apply=1 unchanged_db=1 visible_error=1");
+        native_x11_key("Escape");
+        settle();
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest favourite mode persists ON-OFF-ON in disposable SQLite"]
+    fn gtk_focus001_xtest_favourites_footer_native_async_roundtrip() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let data_dir = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME");
+        assert!(data_dir.starts_with("/tmp/"));
+        let store = crate::streams::storage::Storage::new();
+        let ready = streams.focus001_attach_disposable_service(
+            glib::user_data_dir()
+                .join("broadcaster")
+                .join("broadcaster-iptv.sqlite3"),
+        );
+        for _ in 0..35 {
+            if ready.get() {
+                break;
+            }
+            settle();
+        }
+        assert!(ready.get(), "disposable SQLite favourites service ready");
+        let footer = streams.toolbar_focus_targets()[8].clone();
+        assert!(footer.is_mapped() && footer.is_sensitive());
+        let mut unfocused = 0;
+        for (index, expected) in [true, false, true].into_iter().enumerate() {
+            assert!(footer.grab_focus()); // reset after each product focus-loss RED
+            assert_owner(&window, &footer, "native favourites OK origin");
+            native_x11_key("Return");
+            for _ in 0..45 {
+                settle();
+                if footer.is_sensitive() && store.favourites_only() == Ok(expected) {
+                    break;
+                }
+            }
+            assert!(
+                footer.is_sensitive(),
+                "async SQLite footer button never reenables"
+            );
+            assert_eq!(
+                store.favourites_only(),
+                Ok(expected),
+                "mode persisted from native OK"
+            );
+            let valid = owns_focus(&window, &footer);
+            eprintln!(
+                "FOCUS001 favourites_native toggle={} persisted={} mapped={} retained_owner={}",
+                index,
+                expected,
+                footer.is_mapped(),
+                valid
+            );
+            if !valid {
+                unfocused += 1;
+            }
+        }
+        assert_eq!(
+            unfocused, 0,
+            "RED: at least one native favourites toggle loses original visible focus owner"
+        );
+        window.close();
+    }
+
+    fn focus001_virtual_dpad_route(total: u32, steps: u32) {
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(640, 480);
+        settle();
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.focus001_mapped_virtual_page(total, 0);
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        settle();
+        let original = streams.remote_action_test_selected_id();
+        let mut reached = 0u32;
+        for n in 1..=steps {
+            native_x11_key("Down");
+            let owner = window.focused_widget().expect("Down lost all GTK focus");
+            let current = streams.focus001_selected_index();
+            eprintln!("FOCUS001 virtual_native Down step={n} selected={current} owner={} mapped={} within_list={}",
+                owner.type_().name(), owner.is_mapped(), streams.contains_results_focus(&owner));
+            assert!(
+                owner.is_mapped() && owner.is_sensitive() && streams.contains_results_focus(&owner),
+                "RED: native Down leaves an unmapped/foreign focus widget in virtual GtkListView"
+            );
+            assert_eq!(current, n, "native Down must move to the next visible row");
+            reached = n;
+        }
+        for n in (0..reached).rev() {
+            native_x11_key("Up");
+            assert_eq!(
+                streams.focus001_selected_index(),
+                n,
+                "reverse native Up must return to the previous logical row"
+            );
+            let owner = window.focused_widget().expect("Up lost mapped focus");
+            assert!(owner.is_mapped() && streams.contains_results_focus(&owner));
+        }
+        assert_eq!(
+            streams.remote_action_test_selected_id(),
+            original,
+            "source-qualified row key must survive native viewport recycle"
+        );
+        eprintln!(
+            "FOCUS001 virtual_native viewport=640x480 rows={total} moves={steps} reverse={steps}"
+        );
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest 284-row compact GTK ListView spatial recycling"]
+    fn gtk_focus001_xtest_streams_virtual_native_dpad_284() {
+        focus001_virtual_dpad_route(284, 28);
+    }
+
+    #[test]
+    #[ignore = "native XTest 10k-row compact GTK ListView 50-step/reverse recycling"]
+    fn gtk_focus001_xtest_streams_virtual_native_dpad_10000() {
+        focus001_virtual_dpad_route(10_000, 50);
+    }
+
+    #[test]
+    #[ignore = "native XTest 15k-row boundary compact GTK ListView 50-step/reverse"]
+    fn gtk_focus001_xtest_streams_virtual_native_dpad_15000() {
+        focus001_virtual_dpad_route(15_000, 50);
+    }
+
+    #[test]
+    #[ignore = "native mapped My Channels first OK, second OK fake Play, Escape return"]
+    fn gtk_focus001_xtest_streams_card_two_ok_fake_playback_return() {
+        let (_app, window) = mapped_window("streams");
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let ids = streams.install_remote_action_test_rows();
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
+        native_x11_key("Return");
+        assert_eq!(
+            streams.remote_action_test_counts().0,
+            0,
+            "first native OK only expands, never calls media backend"
+        );
+        let state = streams.remote_action_test_state();
+        eprintln!("FOCUS001 card_first_ok state={state}");
+        assert!(
+            state.contains(&ids[0]),
+            "first OK must retain logical originating row"
+        );
+        let actions = streams
+            .remote_action_test_buttons()
+            .expect("expanded action row");
+        let play = &actions[0];
+        assert!(play.is_mapped() && play.is_sensitive());
+        // The previous suite tests auto-Play focus separately. Seed the
+        // already-visible Play button to exercise an independent second OK.
+        assert!(play.grab_focus());
+        native_x11_key("Return");
+        assert_eq!(
+            streams.remote_action_test_counts().0,
+            1,
+            "second deliberate native OK must call only fake media backend"
+        );
+        native_x11_key("Escape");
+        settle();
+        let owner = window
+            .focused_widget()
+            .expect("Escape must return to a visible owner");
+        assert!(
+            owner.is_mapped() && owner.is_sensitive() && streams.contains_results_focus(&owner),
+            "native Escape after fake playback must restore a reachable card owner"
+        );
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
+        eprintln!("FOCUS001 fake_play native_ok=2 backend_calls=1 escape_return=1");
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "known M1 stale catalogue same-second refresh must not silently save"]
+    fn gtk_focus001_xtest_mapping_same_timestamp_catalogue_change_rejected() {
+        let (_app, window, row_id, guide_id) = focus001_mapping_open(1, 1);
+        let dialog = (0..45)
+            .find_map(|_| {
+                settle();
+                window.visible_dialog()
+            })
+            .expect("real Programme mapping modal");
+        let search_toggle = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                b.label().as_deref() == Some("Search all guide channels / choose exact ID…")
+            })
+        })
+        .expect("exact guide search");
+        assert!(search_toggle.grab_focus());
+        native_x11_key("Return");
+        let mut choice = None;
+        for _ in 0..45 {
+            settle();
+            choice = TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                    b.label()
+                        .as_deref()
+                        .is_some_and(|t| t.contains("[focus.0.000]"))
+                })
+            });
+            if choice.is_some() {
+                break;
+            }
+        }
+        let choice = choice.expect("synthetic guide choice");
+        let storage = crate::streams::storage::Storage::new();
+        let conn = storage.connect().expect("isolated mapping fixture");
+        conn.execute(
+            "UPDATE epg_channels SET display_name='Same-second replacement' WHERE source_id=?1 AND channel_id='focus.0.000'",
+            [&guide_id],
+        ).expect("simulate reimport with identical second timestamp");
+        assert!(choice.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..45 {
+            settle();
+        }
+        let saved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&row_id],
+                |r| r.get(0),
+            )
+            .expect("inspect same-second mapping snapshot");
+        eprintln!("FOCUS001 mapping_same_second selected_id_changed=0 catalog_label_changed=1 saved_count={saved}");
+        assert_eq!(
+            saved, 0,
+            "RED: same-second replacement catalogue must invalidate stale picker snapshot"
+        );
+        assert_eq!(
+            window.visible_dialog(),
+            Some(dialog.clone()),
+            "stale picker must remain open and require fresh confirmation"
+        );
+        native_x11_key("Escape");
+        window.close();
+    }
+
+    /// A test-only screenshot oracle: XGetImage samples actual X11 pixels for
+    /// the same mapped rectangle before/after GTK focus. Never saves user UI.
+    /// An intentionally suppressed ring must NOT change the sampled pixels.
+    #[test]
+    #[ignore = "local X11 pixel capture probe, requires FOCUS001_PIXEL_BIN"]
+    fn gtk_focus001_local_rendered_indicator_negative_control_probe() {
+        let (_app, window) = mapped_window("live");
+        window.imp().live_view.show_toolbar_for_test();
+        settle();
+        let controls = window.imp().live_view.toolbar_focus_targets();
+        let search = controls[0].clone();
+        let button = controls[1].clone();
+        assert_native_input_delivery(&search);
+        assert!(button.is_mapped());
+        let bounds = button
+            .compute_bounds(window.upcast_ref::<gtk::Widget>())
+            .expect("rendered button geometry");
+        let screenshot = || -> String {
+            let tool = std::env::var_os("FOCUS001_PIXEL_BIN")
+                .expect("pixel capture experiment tool missing");
+            let x = (bounds.x() - 3.0).max(0.0) as i32;
+            let y = (bounds.y() - 3.0).max(0.0) as i32;
+            let w = (bounds.width() + 6.0) as i32;
+            let h = (bounds.height() + 6.0) as i32;
+            let out = std::process::Command::new(tool)
+                .args([
+                    "--pixels".to_owned(),
+                    x.to_string(),
+                    y.to_string(),
+                    w.to_string(),
+                    h.to_string(),
+                ])
+                .output()
+                .expect("run mapped X11 pixel oracle");
+            assert!(
+                out.status.success(),
+                "FOCUS001 PIXEL_ENVIRONMENT capture failed: {:?}",
+                out.status.code()
+            );
+            String::from_utf8(out.stdout)
+                .expect("pixel output UTF-8")
+                .split_whitespace()
+                .next()
+                .expect("pixel checksum")
+                .to_owned()
+        };
+        assert!(search.grab_focus());
+        settle();
+        let runtime_unfocused = screenshot();
+        // Move with a real D-pad Right event: programmatic grab_focus can
+        // legitimately affect GTK focus-visible styling independently.
+        native_x11_key("Right");
+        settle();
+        assert_owner(&window, &button, "native Live Search Right keyboard button");
+        let runtime_focused = screenshot();
+        eprintln!(
+            "FOCUS001 PIXEL runtime normal={} focused={}",
+            runtime_unfocused, runtime_focused
+        );
+        let actual_runtime_painted = runtime_unfocused != runtime_focused;
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(".focus001-test-ring:focus { outline: 4px solid rgb(255,0,255); outline-offset: -4px; box-shadow: none; } .focus001-test-hidden, .focus001-test-hidden:focus { outline: none; outline-offset: 0; box-shadow: none; }");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("X11 display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        button.add_css_class("focus001-test-ring");
+        assert!(search.grab_focus());
+        settle();
+        let no_focus = screenshot();
+        // Move with a real D-pad Right event: programmatic grab_focus can
+        // legitimately affect GTK focus-visible styling independently.
+        native_x11_key("Right");
+        settle();
+        assert_owner(&window, &button, "native Live Search Right keyboard button");
+        let painted_focus = screenshot();
+        eprintln!(
+            "FOCUS001 PIXEL ring normal={} focused={}",
+            no_focus, painted_focus
+        );
+        assert_ne!(
+            no_focus, painted_focus,
+            "rendered positive ring must change screenshot pixels"
+        );
+        button.remove_css_class("focus001-test-ring");
+        button.add_css_class("focus001-test-hidden");
+        assert!(search.grab_focus());
+        settle();
+        let hidden_unfocused = screenshot();
+        // Move with a real D-pad Right event: programmatic grab_focus can
+        // legitimately affect GTK focus-visible styling independently.
+        native_x11_key("Right");
+        settle();
+        assert_owner(&window, &button, "native Live Search Right keyboard button");
+        let hidden_focused = screenshot();
+        eprintln!(
+            "FOCUS001 PIXEL hidden normal={} focused={}",
+            hidden_unfocused, hidden_focused
+        );
+        assert_eq!(
+            hidden_unfocused, hidden_focused,
+            "rendered oracle correctly FAILS on intentionally hidden focus ring"
+        );
+        eprintln!("FOCUS001 PIXEL positive_negative_control=PASS runtime_painted={actual_runtime_painted}");
+        assert!(actual_runtime_painted,
+            "RED: real Live keyboard focused/unfocused control draws no distinguishable pixels in Xvfb");
+        window.close();
+    }
+
+    /// Preserve the user's explicit QWERTZ choice when the OSK is closed and
+    /// reopened from the same page. Native Return operates the actual modal
+    /// layout button; this test intentionally exposes per-dialog resets.
+    #[test]
+    #[ignore = "native isolated XTest OSK layout preference retention"]
+    fn gtk_focus001_xtest_osk_qwertz_reopen_retains_layout() {
+        let (_app, window) = mapped_window("streams");
+        let toolbar = window.imp().streams_view.toolbar_focus_targets();
+        let launcher = toolbar[11]
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("real My Channels OSK launcher");
+        assert_native_input_delivery(&toolbar[0]);
+        assert!(launcher.grab_focus());
+        native_x11_key("Return");
+        let first = window.visible_dialog().expect("mapped OSK open");
+        let find_key = |dialog: &adw::Dialog, label: &str| -> gtk::Button {
+            TvWindow::find_descendant(dialog.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>()
+                    .is_some_and(|button| button.label().as_deref() == Some(label))
+            })
+            .unwrap_or_else(|| panic!("missing OSK {label} button"))
+            .downcast::<gtk::Button>()
+            .expect("mapped OSK key")
+        };
+        let toggle = find_key(&first, "QWERTZ");
+        assert!(toggle.is_mapped() && toggle.grab_focus());
+        native_x11_key("Return");
+        assert!(find_key(&first, "QWERTY").is_mapped());
+        let done = find_key(&first, "Done");
+        assert!(done.grab_focus());
+        native_x11_key("Return");
+        settle();
+        assert!(window.visible_dialog().is_none(), "Done must close OSK");
+        assert!(launcher.grab_focus());
+        native_x11_key("Return");
+        settle();
+        let reopened = window.visible_dialog().expect("OSK reopen");
+        let retained = TvWindow::find_descendant(reopened.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>()
+                .is_some_and(|button| button.label().as_deref() == Some("QWERTY"))
+        })
+        .is_some();
+        eprintln!("FOCUS001 osk_qwertz_same_session_retained={retained}");
+        assert!(
+            retained,
+            "RED: OSK resets explicit QWERTZ preference after Done and reopen"
+        );
+        native_x11_key("Escape");
+        window.close();
+    }
+
     /// Every currently enabled My Channels toolbar control participates in
     /// one actual native D-pad graph, not merely individual grab_focus probes.
     /// The fixture is the safe empty local state, with no playlist import.

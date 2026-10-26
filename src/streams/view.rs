@@ -2243,6 +2243,16 @@ impl TvStreamsView {
         (rows.created_slots(), rows.cached_pages(), rows.n_items())
     }
 
+    /// Observable selection only; never a substitute for real D-pad input.
+    #[cfg(test)]
+    pub(crate) fn focus001_selected_index(&self) -> u32 {
+        self.imp()
+            .selection
+            .get()
+            .expect("real selection")
+            .selected()
+    }
+
     /// Create one genuine manager row in a disposable SQLite database.
     /// No playlist retrieval or real owner data is involved.
     #[cfg(test)]
@@ -2296,6 +2306,45 @@ impl TvStreamsView {
                 .create_source_with_initial_snapshot(&id, &draft, &snapshot, 1_800_000_000)
                 .expect("create disposable manager source");
         }
+    }
+
+    /// Map one persisted, disposable IPTV row into the real GtkListView. The
+    /// storage identity must match the card action, so the production picker
+    /// reads its genuine SQLite snapshot instead of a fabricated view-only ID.
+    /// Test-only setup; navigation and picker code remain unchanged.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_persisted_mapping_row(&self, row_id: &str, source_id: &str) {
+        use super::model::ChannelEffective;
+        use std::collections::BTreeSet;
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("mapped rows model");
+        rows.reset(1);
+        rows.insert_page(
+            0,
+            vec![ChannelEffective {
+                id: row_id.to_owned(),
+                source_id: source_id.to_owned(),
+                source_name: "Disposable playlist".into(),
+                visible_name: "Synthetic channel".into(),
+                stream_url: "https://example.invalid/unused.m3u8".into(),
+                group: None,
+                languages: BTreeSet::new(),
+                countries: BTreeSet::new(),
+                region: None,
+                logo_url: None,
+                channel_number: None,
+                has_user_overrides: false,
+                is_favourite: false,
+            }],
+        );
+        imp.results_stack.set_visible_child_name("results");
+        imp.selection
+            .get()
+            .expect("mapped selection")
+            .set_selected(0);
+        imp.selected_id.replace(Some(row_id.to_owned()));
+        imp.expanded_id.replace(None);
+        self.repaint_bound_rows();
     }
 
     /// Supply an isolated SQLite service so FOCUS-001 can exercise the real

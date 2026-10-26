@@ -263,3 +263,68 @@ structural focus flag, untested fixture or conjectured hardware obstacle does
 not. There is no authorization to change production navigation in this
 branch. The final product correction register and owner acceptance are tracked
 separately, not published with the public test suite.
+
+
+## Continuation-006 after ca066 — mapped guide picker, persistence, native recycling and pixel oracle
+
+The earlier 38-case baseline belongs to published commit
+`ca066e2d1a7f0c4754a6f8df2f3c94590feaf6ff` (21 PASS / 17 RED under
+CI 40365806670). The **new cases in this section** were developed on a
+separate **CANDIDATE_DIRTY** tree based on that exact commit, and must not
+be described as validation of a new published SHA until a new Git bundle
+is verified and the complete checkout is retested.
+
+The mapped full-app test suite now enumerates 49 separate bounded cases.
+Eleven additions exercise:
+
+- **Programme mapping:** actual persisted synthetic IPTV card with no guide
+  (PASS, no phantom dialog); two synthetic guides and 40 catalogue IDs
+  through native search page two and Cancel with unchanged SQLite (PASS);
+  refreshed guide `last_success_at` invalidating an open picker (PASS).
+  An equally real native test altering guide data **within the same**
+  `last_success_at` second confirms the previously reported stale-guide
+  correctness defect: the stale selection is erroneously persisted (RED).
+  This test-only worker does not change source mapping/CAS behavior.
+- **OSK layout preference:** native QWERTZ selection, Done and reopen on
+  the same mapped My Channels page resets to QWERTY instead of retaining
+  the explicit choice (**RED**). Persistence across process restarts is
+  separately unverified.
+- **Favourites footer:** native XTest Return toggles ON→OFF→ON and SQLite
+  persistence agrees, but the visible GtkButton loses focus after each
+  toggle (RED). This is not merely a helper call or model-only finding.
+- **Virtualized list:** actual compact 640×480 GtkListView models of 284,
+  10,000 and 15,000 fabricated rows execute **real** native Down then Up
+  28/50 steps with mapped focus and source-qualified stable row identity
+  (PASS). Earlier helper-only `scroll_to` jumps in these large lists still
+  discover an unmapped focused widget (RED); neither proves full deep-page
+  and last-row D-pad traversal or latency/RSS limits.
+- **Playback:** a first native OK expands a card without playback; a
+  second deliberate native OK on the mapped Play control invokes a strictly
+  test-gated synthetic player once, and Escape restores the originating row
+  (PASS). Fullscreen mpv failure/return remains NOT_COVERED.
+- **Actual rendered focus contrast:** disposable X11 `XGetImage` reads
+  pixels from the real Live toolbar button, comparing focused/unfocused
+  keyboard states. At Xvfb the actual button pixel digests are identical
+  (RED). Deliberately **adding a visible outline** changes the pixel digest
+  (positive control); deliberately **suppressing the focus outline** makes
+  the digest identical again (negative control). This gives a working
+  painted-ring oracle rather than CSS-string/GtkStateFlags speculation, but
+  its finding applies to the observed Xvfb renderer; the owner's Wayland
+  N100 hardware/signoff is still mandatory. No committed production CSS or
+  GTK widget markup was changed.
+
+Each case uses an independent temporary XDG data/config/cache root and
+`GSETTINGS_BACKEND=memory` in an isolated Xvfb process to prevent test
+order from contaminating persisted settings or synthetic SQLite fixtures.
+The pixel capture is integrated into the ephemeral, compiled XTest helper
+inside the **same** `run-mapped.sh` runner and retains the fail-closed exit
+contract. No screenshot containing real user content is persisted.
+
+**Unclosed areas:** complete connected manager action/reorder/edit graph,
+full guide picker candidate scopes/facets and mid-dialog removal, editor
+keyboard persistence, compact and populated cross-view toolbar direction,
+first/middle/last real Live and Mediathek result cards, full playback failure
+and fullscreen return, deep/last virtualized row and performance gates,
+reproducible local-vs-CI Live XTest discrepancies, full 10k runtime focus
+correction, and physical Fedora Wayland rendered ring. The test/audit
+assignment remains PARTIAL until these feasible native routes are measured.
