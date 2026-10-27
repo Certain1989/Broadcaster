@@ -70,7 +70,9 @@ int main(int argc, char **argv) {
         XCloseDisplay(display);
         return 0;
     }
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 3) return 2;
+    int repeat = argc == 3 ? atoi(argv[2]) : 1;
+    if (repeat < 1 || repeat > 32) return 2;
     int event, error, major, minor;
     if (!XTestQueryExtension(display, &event, &error, &major, &minor)) return 4;
     KeySym symbol = XStringToKeysym(argv[1]);
@@ -96,8 +98,10 @@ int main(int argc, char **argv) {
         XSetInputFocus(display, target, RevertToParent, CurrentTime);
         XSync(display, False);
     }
-    if (!XTestFakeKeyEvent(display, code, True, CurrentTime)) return 8;
-    if (!XTestFakeKeyEvent(display, code, False, CurrentTime)) return 9;
+    for (int i = 0; i < repeat; i++) {
+        if (!XTestFakeKeyEvent(display, code, True, CurrentTime)) return 8;
+        if (!XTestFakeKeyEvent(display, code, False, CurrentTime)) return 9;
+    }
     XSync(display, False);
     XCloseDisplay(display);
     return 0;
@@ -209,6 +213,50 @@ tests=(
   gtk_focus001_xtest_mediathek_loaded_results_tv
   gtk_focus001_xtest_mediathek_middle_card_ok_primary_play
   gtk_focus001_xtest_mapping_card_native_portal_no_seeding
+  gtk_focus001_recovery_source_graph_0_compact
+  gtk_focus001_recovery_source_graph_1_compact
+  gtk_focus001_recovery_source_graph_3_compact
+  gtk_focus001_recovery_source_graph_0_tv
+  gtk_focus001_recovery_source_graph_1_tv
+  gtk_focus001_recovery_source_graph_3_tv
+  gtk_focus001_recovery_guide_graph_0_compact
+  gtk_focus001_recovery_guide_graph_3_compact
+  gtk_focus001_recovery_guide_graph_0_tv
+  gtk_focus001_recovery_guide_graph_3_tv
+  gtk_focus001_recovery_osk_vertical_live_compact
+  gtk_focus001_recovery_osk_vertical_live_tv
+  gtk_focus001_recovery_osk_vertical_mediathek_compact
+  gtk_focus001_recovery_osk_vertical_mediathek_tv
+  gtk_focus001_recovery_osk_vertical_streams_compact
+  gtk_focus001_recovery_osk_vertical_streams_tv
+  gtk_focus001_recovery_virtual_284_page_boundary
+  gtk_focus001_recovery_virtual_1484_page_boundary
+  gtk_focus001_recovery_virtual_10000_page_boundary
+  gtk_focus001_recovery_virtual_15000_page_boundary
+  gtk_focus001_recovery_mediathek_actions_compact
+  gtk_focus001_recovery_mediathek_actions_tv
+  gtk_focus001_recovery_rich_group_compact
+  gtk_focus001_recovery_rich_group_tv
+  gtk_focus001_recovery_rich_language_compact
+  gtk_focus001_recovery_rich_language_tv
+  gtk_focus001_recovery_rich_country_compact
+  gtk_focus001_recovery_rich_country_tv
+  gtk_focus001_recovery_rich_region_compact
+  gtk_focus001_recovery_rich_region_tv
+  gtk_focus001_recovery_source_graph_2_compact
+  gtk_focus001_recovery_source_graph_2_tv
+  gtk_focus001_recovery_nested_guide_0_compact
+  gtk_focus001_recovery_nested_guide_0_tv
+  gtk_focus001_recovery_nested_guide_3_compact
+  gtk_focus001_recovery_nested_guide_3_tv
+  gtk_focus001_recovery_painted_live_compact
+  gtk_focus001_recovery_painted_live_tv
+  gtk_focus001_recovery_painted_mediathek_compact
+  gtk_focus001_recovery_painted_mediathek_tv
+  gtk_focus001_recovery_painted_streams_compact
+  gtk_focus001_recovery_painted_streams_tv
+  gtk_focus001_xtest_source_manager_actual_remote_back_and_home
+  gtk_focus001_xtest_guide_manager_actual_remote_back_home_escape
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.
@@ -266,7 +314,13 @@ for test_name in "${tests[@]}"; do
   log="$scratch/$test_name.log"
   case_root="$scratch/cases/$test_name"
   mkdir -p "$case_root/data" "$case_root/config" "$case_root/cache"
-  if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" || "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ]] && (( !xtest_ready )); then
+  # Every test relying on the native XTest fixture must fail closed as
+  # ENVIRONMENT if compilation did not succeed. The recovery_* probes also
+  # send XTest keys despite not containing `_xtest_` in their names.
+  if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_recovery_"* ||
+        "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" ||
+        "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ||
+        "$test_name" == *"_rendered_indicator_negative_control_probe"* ]] && (( !xtest_ready )); then
     environment=$((environment + 1))
     echo "FOCUS001 ENVIRONMENT $test_name (XTest emitter unavailable)"
     continue
@@ -291,7 +345,7 @@ for test_name in "${tests[@]}"; do
       timeout_count=$((timeout_count + 1))
       printf 'FOCUS001 TIMEOUT %s exit=%d\n' "$test_name" "$code"
     elif ((code == 125 || code == 126 || code == 127)) || \
-         grep -Eqi '(FOCUS001 INPUT_UNVERIFIED|cannot open display|could not open display|gtk.*initializ.*fail|xvfb.*(failed|error)|failed to resolve dependencies offline)' "$log"; then
+         grep -Eqi '(FOCUS001 INPUT_UNVERIFIED|real X11 .* emission failed with Some\([3-9]\)|cannot open display|could not open display|gtk.*initializ.*fail|xvfb.*(failed|error)|failed to resolve dependencies offline)' "$log"; then
       environment=$((environment + 1))
       printf 'FOCUS001 ENVIRONMENT %s exit=%d\n' "$test_name" "$code"
     else

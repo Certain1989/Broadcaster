@@ -693,3 +693,137 @@ REDs and providing no new boundary coverage. The original 91-ID inventory is
 retained, with only individually justified completed native routes counted.
 No full native 97-case matrix has been executed on this dirty candidate yet.
 Every prior blocking RED and negative-control test remains present and required.
+
+
+### Historical-source recovery native graph suite (new candidate)
+
+
+### Recovery candidate on complete historical source
+
+Twenty new native test-only probes cover source/guide manager directional
+connectivity, three-view OSK vertical/reversal transitions and 132-step
+GTK virtual page-boundary traversal. The fixture source is the genuine,
+verified complete Git commit `979af365c59bea06421949c7734394aeaf6b9830`.
+This is not the latest PR branch; publication and exact-current-source
+validation are explicitly blocked until the full current SHA is transported.
+A locally seeded action is **not** global route coverage: the graph auditor
+requires BFS connectivity from the native modal entry, and far-last-row
+scrolling remains unproven by 132-step page-boundary checks.
+
+**Execution on complete dirty 979 source:** The 20 new native XTest
+cases executed as 16 PASS, 4 RED, 0 timeout/environment/unrun. The four
+REDs are 1/3-source connected manager cases at compact/TV sizes:
+3/9 and 3/25 mapped actions reachable from the genuine modal entry.
+Empty source managers, all four guide internal graph cases, six OSK
+vertical cases and all four virtual page-boundary cases PASS. For the
+large lists, key batches are native XTest events and a mapped owner and
+logical index are checked after each bounded batch. This is NOT a
+whole-list traversal to the last item. No automatic 91-gap closure or
+current published-SHA acceptance is claimed. Existing product REDs and
+test-only scope remain unchanged.
+
+### Connected 2-source, nested guide and X11 painted ring probes (recovery)
+
+Twelve additional independent native cases target the complete two-row source graph at compact/TV viewports, the actual mapped source manager to programme-guide manager entrance and reverse modal path with no/three synthetic guides, and native XTest pixel contrasts across Live, Mediathek and My Channels at both viewports. Positive and suppressed-ring CSS are applied **in tests only** as screenshot oracle controls. These are registered tests, not coverage credits before execution. Missing or RED results remain blocking.
+
+### Rich-facet XTest candidate (not yet executed)
+Eight tests use a disposable three-playlist SQLite catalogue with genuine normalized
+group, language, country and region metadata; each tests native Space/Down/Return
+and Clear Filters at compact and TV sizes. Do not claim equivalent complete
+facet intersection/search/scroll coverage without additional mapped routes.
+
+Two additional pending Mediathek cases traverse the four *actual* expanded
+action controls (Play, Copy Video URL, Download, Open Website), discover the
+native directional graph, replay each route from Play and check Escape identity
+at both compact and TV viewports. They never activate an external URL.
+
+## Distinct physical remote Back/Home canary — continuation recovery 2026-10-27
+
+The prior `gtk_focus001_xtest_source_manager_home_escape_semantics` and
+`gtk_focus001_xtest_guide_manager_home_escape_semantics` cases send the ordinary
+X11 `Home` keysym. The application has a separate `HomePage` GDK remote action,
+which maps from X11 `XF86HomePage`: the old tests do **not** prove remote-Home
+correctness. Xvfb independently reported `XF86Back` and `XF86HomePage` keycodes
+166 and 180, versus ordinary `Home` keycode 110, in this local session.
+
+Two supplemental isolated mapped tests send the actual `XF86Back` and
+`XF86HomePage` keys, assert dialog dismissal, source/guide return and the mapped
+home view, and preserve native `Escape` as a separate semantics check. This
+adds explicit regression oracles but **does not** close the broader AS16/AG08
+manager route gaps merely through naming tests. Full native A–G closure remains
+outstanding unless all required evidence is actually executed and recorded.
+All fixtures use disposable source/guide records, without external network.
+
+
+Local dirty-candidate supplemental XTest result, 2026-10-27: both genuine
+
+targeted `XF86Back`/`XF86HomePage` tests **PASS (2/2)** using the verified
+
+X11 emitter and mapped GTK focus assertions; no network/owner data used.
+
+These are **CANDIDATE_DIRTY** checks on exact c2eb source plus 141-case test
+
+patch, not clean published-source CI, and cannot on their own close compact
+
+manager entrance/exit and rendered-cue routes.
+
+Runner failure classification correction: XTest-dependent `recovery_*` and
+rendered-indicator-negative-control cases are now explicitly guarded by the
+XTest compilation preflight; absent compiled emitter or unsupported X11
+keysym emits **ENVIRONMENT**, not a misleading application **RED**. The
+original blocking test oracles and all runner cases are unchanged.
+
+## Continuation-008 recovered candidate — full mapped native evidence (2026-10-27)
+
+This is **CANDIDATE_DIRTY** evidence against exact complete source commit
+`c2eb77da83c3ac9396bb36c8e1c0bf10347f62fa` / tree
+`9d85e8a24ed68215d6dec7460f12453d1b8876fa`; it is not a
+published-commit clean rerun, a CI pass, or a declaration that FOCUS-001
+is complete. This recovered 141-case candidate was rebuilt from the
+verified source-export Git bundle plus the saved additive test-only diff.
+The full 141 independently isolated Xvfb/XTest native cases were executed
+locally with the same test binary and true X11 emitter, using six concurrent
+independent `/tmp` fixture directories and a 120-second per-case bound:
+
+- **141 required distinct tests:** 93 PASS, **48 product RED**, 0 TIMEOUT,
+  0 ENVIRONMENT, 0 UNRUN. The fail-closed aggregate status is **FAIL** as
+  expected from deliberately retained product-regression assertions.
+- Ordinary locked/offline Cargo metadata, `cargo fmt --check`, strict all-target
+  Clippy `-D warnings`, and `cargo test --locked --offline` all passed;
+  ordinary Cargo ran 325 tests and ignored 190 GUI tests. These ignored
+  GUI tests are counted **only** through their separate mapped native run.
+- The TSV contains **142 `gtk_focus001_*` rows for 141 distinct tests**:
+  one existing test legitimately records two different route/state observations.
+  Every named test row now records its fresh local result, while historical
+  published evidence is retained in the verification field.
+- Of the **91 original `AUDIT_GAP_*` IDs**, this conservative case-by-case
+  reconciliation records **6 PASS / 11 RED / 74 NOT_COVERED**. Thirteen
+  formerly uncovered IDs gained directly mapped native evidence; tests with
+  only seeded focus, partial modal journeys, first-page virtualization, or
+  incomplete action graphs did **not** close their broader route IDs.
+
+The new PASS evidence includes native mapped genuine `XF86Back` and
+`XF86HomePage` (distinct from keyboard `Home`), native letter and symbol
+OSK row traversal, eight persisted group/language/country/region facet
+checks across compact/TV viewports, bounded 284/1484/10000/15000-row
+page-boundary traversal, and nested guide-manager modal routes. Bounded
+native page-boundary traversal **does not demonstrate middle/last 15k row
+reachability**, and the 74 open gaps are not silently reclassified as
+physical-only.
+
+The new RED evidence includes the three-page switcher's wrong current-tab
+activation, source-manager connected lower grid/row failures, inaccessible
+collapsed star, Mediathek Play-to-Copy/Download/Website disconnection,
+My Channels Play/Edit/Mapping graph disconnection, same-second guide
+catalogue stale Apply, and actual X11 rendered focus-ring pixel failures
+in all three views. The X11 pixel oracle separately verifies a synthetic
+positive outline changes pixels and a deliberately suppressed outline
+does not. It does not substitute for the owner's N100 Fedora Wayland
+remote/contrast acceptance or a separate production correction.
+
+`tests/focus/run-mapped.sh` remains the blocking serialized CI entrypoint;
+the faster local verification uses independent Xvfb and `/tmp` per-case
+sandboxes but does not modify or replace required CI. This paragraph
+corrects prior *pending/unvalidated* notes and records the executed state;
+no runtime GUI/CSS/router code, production SQLite behavior, release, or
+CI gate was changed. **FOCUS-001 test/audit still PARTIAL.**

@@ -2308,6 +2308,63 @@ impl TvStreamsView {
         }
     }
 
+    /// Disposable persisted multi-facet fixture for real mapped XTest dropdowns.
+    /// No network request, owner playlist, or production code path is changed.
+    #[cfg(test)]
+    pub(crate) fn focus001_seed_rich_facet_sources(path: std::path::PathBuf) {
+        use super::model::{
+            IncomingChannel, OriginKind, Region, SourceDefaults, SourceDraft, SourceOrigin,
+            ValidatedSnapshot,
+        };
+        let store = super::storage::Storage::at(path);
+        store.initialize().expect("disposable facets SQLite");
+        for index in 0..3u32 {
+            let id = uuid::Uuid::new_v4().to_string();
+            let entries: Vec<_> = (0..4u32)
+                .map(|i| {
+                    let second = i % 2 == 1;
+                    IncomingChannel {
+                        order: i,
+                        imported_name: format!("Fixture channel {index}:{i}"),
+                        stream_url: format!("https://example.invalid/focus/{index}/{i}"),
+                        tvg_id: None,
+                        tvg_name: None,
+                        group_title: Some(if second { "Sport" } else { "News" }.to_owned()),
+                        logo_url: None,
+                        channel_number: None,
+                        region: Some(Region {
+                            code: Some(if second { "DE-BY" } else { "DE-NI" }.to_owned()),
+                            label: Some(if second { "Bavaria" } else { "Lower Saxony" }.to_owned()),
+                        }),
+                        languages: [if second { "en" } else { "de" }.to_owned()]
+                            .into_iter()
+                            .collect(),
+                        countries: [if second { "GB" } else { "DE" }.to_owned()]
+                            .into_iter()
+                            .collect(),
+                        user_agent: None,
+                        referer: None,
+                    }
+                })
+                .collect();
+            let draft = SourceDraft {
+                name: format!("Disposable rich facets {index}"),
+                origin: SourceOrigin {
+                    kind: OriginKind::RemoteUrl,
+                    locator: format!("https://example.invalid/focus-facets-{index}.m3u"),
+                },
+                enabled: true,
+                order: index,
+                defaults: SourceDefaults::default(),
+            };
+            let snapshot = ValidatedSnapshot::new(id.clone(), entries)
+                .expect("canonical language/country/region fixture");
+            store
+                .create_source_with_initial_snapshot(&id, &draft, &snapshot, 1_800_000_000)
+                .expect("persist disposable multi-facet channels");
+        }
+    }
+
     /// Map one persisted, disposable IPTV row into the real GtkListView. The
     /// storage identity must match the card action, so the production picker
     /// reads its genuine SQLite snapshot instead of a fabricated view-only ID.

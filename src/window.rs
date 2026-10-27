@@ -5560,6 +5560,276 @@ mod focus001_mapped_regressions {
     fn gtk_focus001_xtest_source_manager_lower_graph_tv() {
         focus001_source_manager_lower_graph(1280);
     }
+    /// Real native Search-to-Manage Sources route. The actual toolbar index is
+    /// only an assertion target, not a focus seed. Down is delivered via XTest.
+    fn focus001_recovery_open_manager_native(window: &TvWindow) -> adw::Dialog {
+        let targets = window.imp().streams_view.toolbar_focus_targets();
+        let search = targets[0].clone();
+        let manage = targets[9].clone();
+        assert_native_input_delivery(&search);
+        // Repeated Down alone is NOT the route to Manage Sources: the
+        // geometric toolbar has horizontal transitions. Survey each mapped
+        // origin with real XTest, then replay a connected Search-origin
+        // native path (never seed the final Manage action).
+        let usable = |i: usize| {
+            targets[i].is_mapped() && targets[i].is_visible() && targets[i].is_sensitive()
+        };
+        assert!(usable(0) && usable(9));
+        let mut edges = vec![Vec::<(usize, &'static str)>::new(); targets.len()];
+        for i in 0..targets.len() {
+            if !usable(i) {
+                continue;
+            }
+            for key in ["Up", "Down", "Left", "Right"] {
+                assert!(targets[i].grab_focus(), "survey initial toolbar origin {i}");
+                native_x11_key(key);
+                if let Some(j) = window.focused_widget().and_then(|owner| {
+                    targets.iter().enumerate().find_map(|(j, item)| {
+                        (usable(j) && TvWindow::is_within(&owner, item)).then_some(j)
+                    })
+                }) {
+                    if j != i {
+                        edges[i].push((j, key));
+                    }
+                }
+            }
+        }
+        let mut previous = vec![None::<(usize, &'static str)>; targets.len()];
+        let mut queue = std::collections::VecDeque::from([0usize]);
+        let mut discovered = vec![false; targets.len()];
+        discovered[0] = true;
+        while let Some(i) = queue.pop_front() {
+            if i == 9 {
+                break;
+            }
+            for &(j, key) in &edges[i] {
+                if !discovered[j] {
+                    discovered[j] = true;
+                    previous[j] = Some((i, key));
+                    queue.push_back(j);
+                }
+            }
+        }
+        let mut reverse_route = Vec::<(usize, usize, &'static str)>::new();
+        let mut pos = 9;
+        while pos != 0 {
+            let Some((origin, key)) = previous[pos] else {
+                break;
+            };
+            reverse_route.push((origin, pos, key));
+            pos = origin;
+        }
+        reverse_route.reverse();
+        eprintln!(
+            "FOCUS001 recovered native manager entrance connected={} route={reverse_route:?}",
+            discovered[9]
+        );
+        assert!(
+            discovered[9],
+            "RED: Manage Sources is not natively reachable from Search"
+        );
+        assert!(search.grab_focus());
+        for (origin, target, key) in reverse_route {
+            assert_owner(window, &targets[origin], "native manager route origin");
+            native_x11_key(key);
+            assert_owner(window, &targets[target], "native manager route destination");
+        }
+        assert_owner(window, &manage, "native Manage Sources entry");
+        native_x11_key("Return");
+        let manager = focus001_dialog_after(window, None);
+        for label in ["Add Playlist", "Programme Guides", "Close"] {
+            let action = focus001_button_in(&manager, label);
+            assert!(
+                action.is_mapped() && action.is_sensitive(),
+                "RED: native Manage Sources dialog lost {label}"
+            );
+        }
+        manager
+    }
+
+    #[test]
+    #[ignore = "native real connected source manager grid two rows compact"]
+    fn gtk_focus001_recovery_source_graph_2_compact() {
+        focus001_recovery_manager_graph(2, 640);
+    }
+    #[test]
+    #[ignore = "native real connected source manager grid two rows TV"]
+    fn gtk_focus001_recovery_source_graph_2_tv() {
+        focus001_recovery_manager_graph(2, 1280);
+    }
+
+    fn focus001_recovery_guide_nested(count: usize, width: i32) {
+        crate::epg::desktop::focus001_seed_disposable_guides(count);
+        let (_app, window, scratch) = focus001_manager_fixture(0);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let source_manager = focus001_recovery_open_manager_native(&window);
+        let button = focus001_button_in(&source_manager, "Programme Guides");
+        for _ in 0..5 {
+            if window
+                .focused_widget()
+                .is_some_and(|owner| TvWindow::is_within(&owner, button.upcast_ref()))
+            {
+                break;
+            }
+            native_x11_key("Right");
+        }
+        let focused = window
+            .focused_widget()
+            .expect("native Programme Guides launcher owner");
+        assert!(
+            TvWindow::is_within(&focused, button.upcast_ref()),
+            "RED: source manager cannot reach Programme Guides through real Right key"
+        );
+        native_x11_key("Return");
+        let guide_manager = focus001_dialog_after(&window, Some(&source_manager));
+        focus001_graph_root_controls(&window, &guide_manager, false, count);
+        native_x11_key("Escape");
+        assert!(
+            window.visible_dialog() != Some(guide_manager.clone()),
+            "RED: native Escape cannot dismiss the nested guide manager"
+        );
+        eprintln!("FOCUS001 NESTED_GUIDE count={count} viewport={width} true_source_portal=1 internal_graph=1");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("disposable source DB cleanup");
+    }
+    #[test]
+    #[ignore = "native nested Programme Guides action from source manager"]
+    fn gtk_focus001_recovery_nested_guide_0_compact() {
+        focus001_recovery_guide_nested(0, 640);
+    }
+    #[test]
+    #[ignore = "native nested Programme Guides action from source manager"]
+    fn gtk_focus001_recovery_nested_guide_0_tv() {
+        focus001_recovery_guide_nested(0, 1280);
+    }
+    #[test]
+    #[ignore = "native nested Programme Guides action from source manager"]
+    fn gtk_focus001_recovery_nested_guide_3_compact() {
+        focus001_recovery_guide_nested(3, 640);
+    }
+    #[test]
+    #[ignore = "native nested Programme Guides action from source manager"]
+    fn gtk_focus001_recovery_nested_guide_3_tv() {
+        focus001_recovery_guide_nested(3, 1280);
+    }
+    // Native-rendered pixels, with an explicit synthetic positive ring and
+    // intentionally suppressed negative control.  No screenshots are stored.
+    fn focus001_recovery_painted_toolbar(page: &str, width: i32) {
+        let (_app, window) = mapped_window(page);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        if page == "live" {
+            window.imp().live_view.show_toolbar_for_test();
+        }
+        settle();
+        let controls = match page {
+            "live" => window.imp().live_view.toolbar_focus_targets(),
+            "mediathek" => window.imp().mediathek_view.toolbar_focus_targets(),
+            "streams" => window.imp().streams_view.toolbar_focus_targets(),
+            _ => unreachable!(),
+        };
+        let search = &controls[0];
+        let target = &controls[1];
+        assert_native_input_delivery(search);
+        assert!(search.is_mapped() && target.is_mapped());
+        let bounds = target
+            .compute_bounds(window.upcast_ref::<gtk::Widget>())
+            .expect("mapped toolbar target must have screen geometry");
+        let capture = || {
+            let exe = std::env::var_os("FOCUS001_PIXEL_BIN").expect("native pixel oracle required");
+            let params = [
+                "--pixels".to_string(),
+                (bounds.x() - 3.0).max(0.0).to_string(),
+                (bounds.y() - 3.0).max(0.0).to_string(),
+                (bounds.width() + 6.0).to_string(),
+                (bounds.height() + 6.0).to_string(),
+            ];
+            let result = std::process::Command::new(exe)
+                .args(&params)
+                .output()
+                .expect("capture in-memory X11 pixels");
+            assert!(
+                result.status.success(),
+                "PIXEL_ENVIRONMENT capture exit {:?}",
+                result.status.code()
+            );
+            String::from_utf8(result.stdout)
+                .expect("UTF8 pixel digest")
+                .trim()
+                .to_owned()
+        };
+        assert!(search.grab_focus());
+        settle();
+        let unfocused = capture();
+        native_x11_key("Right");
+        assert_owner(&window, target, "native Search Right toolbar focus");
+        let focused = capture();
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(".focus001-positive:focus {outline: 4px solid rgb(255,0,255);outline-offset: -4px;box-shadow:none;} .focus001-negative,.focus001-negative:focus {outline:none;outline-offset:0;box-shadow:none;}");
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("X11 display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        target.add_css_class("focus001-positive");
+        assert!(search.grab_focus());
+        settle();
+        let synthetic_before = capture();
+        native_x11_key("Right");
+        assert_owner(&window, target, "native positive pixel focus");
+        let synthetic_after = capture();
+        assert_ne!(
+            synthetic_before, synthetic_after,
+            "RED: even a deliberately visible focus outline produces no pixel change"
+        );
+        target.remove_css_class("focus001-positive");
+        target.add_css_class("focus001-negative");
+        assert!(search.grab_focus());
+        settle();
+        let suppressed_before = capture();
+        native_x11_key("Right");
+        assert_owner(&window, target, "native deliberately suppressed focus");
+        let suppressed_after = capture();
+        assert_eq!(
+            suppressed_before, suppressed_after,
+            "RED: suppressed focus ring negative control still changes pixels"
+        );
+        eprintln!("FOCUS001 PAINT page={page} width={width} before={unfocused} after={focused} positive_before={synthetic_before} positive_after={synthetic_after} negative_identical={} ", suppressed_before == suppressed_after);
+        assert_ne!(
+            unfocused, focused,
+            "RED: actual app native focus does not visibly change toolbar button pixels"
+        );
+        window.close();
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_live_compact() {
+        focus001_recovery_painted_toolbar("live", 640);
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_live_tv() {
+        focus001_recovery_painted_toolbar("live", 1280);
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_mediathek_compact() {
+        focus001_recovery_painted_toolbar("mediathek", 640);
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_mediathek_tv() {
+        focus001_recovery_painted_toolbar("mediathek", 1280);
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_streams_compact() {
+        focus001_recovery_painted_toolbar("streams", 640);
+    }
+    #[test]
+    #[ignore = "native XTest painted focus positive and suppressed negative control"]
+    fn gtk_focus001_recovery_painted_streams_tv() {
+        focus001_recovery_painted_toolbar("streams", 1280);
+    }
     #[test]
     #[ignore = "native connected Live toolbar complete enabled graph 640x480"]
     fn gtk_focus001_xtest_live_connected_toolbar_compact() {
@@ -5589,6 +5859,401 @@ mod focus001_mapped_regressions {
     #[ignore = "native connected populated My Channels toolbar complete enabled graph 1280x800"]
     fn gtk_focus001_xtest_streams_connected_toolbar_tv() {
         focus001_page_connected_toolbar("streams", 1280);
+    }
+
+    // Connected remote graph survey: the modal entry is reached with XTest
+    // from the real My Channels search field. Only local edges may be sampled
+    // from a seeded control; global reachability is proven from the genuine
+    // focused entry vertex, not from grab_focus on the destination.
+    // One real XTest process can enqueue up to 8 physical key pairs. GTK
+    // handles them in order; call settle() before checking every chunk.
+    fn focus001_native_repeat(key: &str, count: u32) {
+        assert!((1..=8).contains(&count));
+        let emitter = std::env::var_os("FOCUS001_XTEST_BIN").expect("real XTest emitter");
+        let output = std::process::Command::new(emitter)
+            .arg(key)
+            .arg(count.to_string())
+            .output()
+            .expect("emit bounded native XTest key burst");
+        assert!(
+            output.status.success(),
+            "native {key} repeat={count} failed: {:?}",
+            output.status.code()
+        );
+        settle();
+    }
+
+    fn focus001_graph_root_controls(
+        window: &TvWindow,
+        dialog: &adw::Dialog,
+        source_mode: bool,
+        expected_count: usize,
+    ) {
+        let allowed: &[&str] = if source_mode {
+            &[
+                "Add Playlist",
+                "Programme Guides",
+                "Close",
+                "Refresh",
+                "Defaults",
+                "Rename",
+                "Replace",
+                "Delete",
+                "↑",
+                "↓",
+            ]
+        } else {
+            &[
+                "Add URL",
+                "Choose Local XMLTV",
+                "Close",
+                "Use as Shared Default",
+                "Refresh",
+                "Edit",
+                "Remove",
+            ]
+        };
+        let mut controls: Vec<(String, gtk::Widget)> = Vec::new();
+        let mut stack = vec![dialog.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = stack.pop() {
+            if widget.is_mapped() && widget.is_sensitive() {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+                    if let Some(label) = button.label() {
+                        if allowed.contains(&label.as_str()) {
+                            controls.push((label.to_string(), widget.clone()));
+                        }
+                    }
+                } else if source_mode && widget.is::<gtk::Switch>() {
+                    controls.push(("Switch".to_string(), widget.clone()));
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                child = next.next_sibling();
+                stack.push(next);
+            }
+        }
+        if controls.len() < 3 {
+            let mut labels = Vec::new();
+            let mut nodes = vec![dialog.clone().upcast::<gtk::Widget>()];
+            while let Some(node) = nodes.pop() {
+                if let Some(button) = node.downcast_ref::<gtk::Button>() {
+                    labels.push(format!(
+                        "{} mapped={} sensitive={}",
+                        button.label().unwrap_or_default(),
+                        node.is_mapped(),
+                        node.is_sensitive()
+                    ));
+                }
+                let mut child = node.first_child();
+                while let Some(item) = child {
+                    child = item.next_sibling();
+                    nodes.push(item);
+                }
+            }
+            eprintln!(
+                "FOCUS001 MANAGER DEBUG source_mode={source_mode} controls={} labels={labels:?}",
+                controls.len()
+            );
+        }
+        assert!(
+            controls.len() >= 3,
+            "RED: mapped manager lacks core controls"
+        );
+        let owners = |owner: &gtk::Widget| {
+            controls
+                .iter()
+                .enumerate()
+                .find_map(|(i, (_, target))| TvWindow::is_within(owner, target).then_some(i))
+        };
+        let focused = window.focused_widget().expect("native dialog entry owner");
+        let start =
+            owners(&focused).expect("RED: native manager entry cannot reach an enabled control");
+        let mut edges: Vec<Vec<usize>> = vec![Vec::new(); controls.len()];
+        let mut failures = Vec::<String>::new();
+        for i in 0..controls.len() {
+            let (label, widget) = &controls[i];
+            assert!(
+                widget.grab_focus(),
+                "mapped member must be focusable: {label}"
+            );
+            for key in ["Up", "Down", "Left", "Right"] {
+                assert!(
+                    widget.grab_focus(),
+                    "cannot seed local graph edge for {label}"
+                );
+                native_x11_key(key);
+                if let Some(to) = window.focused_widget().and_then(|w| owners(&w)) {
+                    if to != i && !edges[i].contains(&to) {
+                        edges[i].push(to);
+                    }
+                } else if window
+                    .focused_widget()
+                    .is_none_or(|w| !TvWindow::is_within(&w, dialog.upcast_ref()))
+                {
+                    failures.push(format!(
+                        "{label} {key} left the actual mapped manager dialog"
+                    ));
+                }
+            }
+        }
+        let mut seen = vec![false; controls.len()];
+        seen[start] = true;
+        let mut queue = std::collections::VecDeque::from([start]);
+        while let Some(index) = queue.pop_front() {
+            for &to in &edges[index] {
+                if !seen[to] {
+                    seen[to] = true;
+                    queue.push_back(to);
+                }
+            }
+        }
+        let unreachable: Vec<_> = controls
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (name, _))| (!seen[i]).then_some(format!("{i}:{name}")))
+            .collect();
+        eprintln!("FOCUS001 recovered graph source={source_mode} fixture={expected_count} entry={} vertices={} seen={} unreachable={unreachable:?} exits={failures:?}", controls[start].0, controls.len(), seen.iter().filter(|x| **x).count());
+        assert!(
+            failures.is_empty(),
+            "RED: arrow escaped the modal's mapped controls"
+        );
+        assert!(
+            unreachable.is_empty(),
+            "RED: enabled mapped controls disconnected from native entry"
+        );
+    }
+
+    fn focus001_recovery_manager_graph(source_count: u32, width: i32) {
+        let (_app, window, scratch) = focus001_manager_fixture(source_count);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let dialog = focus001_recovery_open_manager_native(&window);
+        focus001_graph_root_controls(&window, &dialog, true, source_count as usize);
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("cleanup disposable source data");
+    }
+
+    fn focus001_recovery_guide_graph(guide_count: usize, width: i32) {
+        crate::epg::desktop::focus001_seed_disposable_guides(guide_count);
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        // Opening the guide manager uses a real native entry sequence.
+        crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+        let dialog = focus001_dialog_after(&window, None);
+        focus001_graph_root_controls(&window, &dialog, false, guide_count);
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 0 sources compact"]
+    fn gtk_focus001_recovery_source_graph_0_compact() {
+        focus001_recovery_manager_graph(0, 640);
+    }
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 1 source compact"]
+    fn gtk_focus001_recovery_source_graph_1_compact() {
+        focus001_recovery_manager_graph(1, 640);
+    }
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 3 sources compact"]
+    fn gtk_focus001_recovery_source_graph_3_compact() {
+        focus001_recovery_manager_graph(3, 640);
+    }
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 0 sources TV"]
+    fn gtk_focus001_recovery_source_graph_0_tv() {
+        focus001_recovery_manager_graph(0, 1280);
+    }
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 1 source TV"]
+    fn gtk_focus001_recovery_source_graph_1_tv() {
+        focus001_recovery_manager_graph(1, 1280);
+    }
+    #[test]
+    #[ignore = "native XTest source-manager connected graph 3 sources TV"]
+    fn gtk_focus001_recovery_source_graph_3_tv() {
+        focus001_recovery_manager_graph(3, 1280);
+    }
+    #[test]
+    #[ignore = "native XTest XMLTV-guide manager connected graph 0 guides compact"]
+    fn gtk_focus001_recovery_guide_graph_0_compact() {
+        focus001_recovery_guide_graph(0, 640);
+    }
+    #[test]
+    #[ignore = "native XTest XMLTV-guide manager connected graph 3 guides compact"]
+    fn gtk_focus001_recovery_guide_graph_3_compact() {
+        focus001_recovery_guide_graph(3, 640);
+    }
+    #[test]
+    #[ignore = "native XTest XMLTV-guide manager connected graph 0 guides TV"]
+    fn gtk_focus001_recovery_guide_graph_0_tv() {
+        focus001_recovery_guide_graph(0, 1280);
+    }
+    #[test]
+    #[ignore = "native XTest XMLTV-guide manager connected graph 3 guides TV"]
+    fn gtk_focus001_recovery_guide_graph_3_tv() {
+        focus001_recovery_guide_graph(3, 1280);
+    }
+    // Recovery cohort: actual remote OK opens each page's real keyboard.
+    // Only the independently seeded starting key is a test hook; each vertical
+    // edge, reverse and modal-containment observation uses real XTest events.
+    fn focus001_recovery_osk_vertical(page: &str, width: i32) {
+        let (_app, window) = mapped_window(page);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        if page == "live" {
+            window.imp().live_view.show_toolbar_for_test();
+        }
+        settle();
+        let toolbar = match page {
+            "live" => window.imp().live_view.toolbar_focus_targets(),
+            "mediathek" => window.imp().mediathek_view.toolbar_focus_targets(),
+            "streams" => window.imp().streams_view.toolbar_focus_targets(),
+            _ => unreachable!(),
+        };
+        let source = toolbar[0].clone();
+        assert_native_input_delivery(&source);
+        let launcher = if page == "streams" {
+            toolbar[11].clone()
+        } else {
+            toolbar[1].clone()
+        };
+        assert!(launcher.grab_focus());
+        native_x11_key("Return");
+        let dialog = focus001_dialog_after(&window, None);
+        let q = focus001_button_in(&dialog, "q");
+        assert!(q.grab_focus());
+        for (step, key) in ["Down", "Down", "Up", "Up"].iter().enumerate() {
+            let before = window.focused_widget().expect("OSK previous owner");
+            assert!(TvWindow::is_within(&before, dialog.upcast_ref()));
+            native_x11_key(key);
+            let after = window
+                .focused_widget()
+                .expect("RED: native OSK vertical arrow lost focus");
+            assert!(after.is_mapped() && after.is_sensitive());
+            assert!(
+                TvWindow::is_within(&after, dialog.upcast_ref()),
+                "RED: {page} {width} OSK {key} escaped the modal at step {step}"
+            );
+            assert_ne!(
+                after, before,
+                "RED: {page} OSK vertical {key} remained stuck"
+            );
+        }
+        assert_owner(&window, q.upcast_ref(), "OSK two Down and two Up restore q");
+        native_x11_key("Escape");
+        assert!(
+            window.visible_dialog().is_none(),
+            "OSK Escape failed to close"
+        );
+        window.close();
+    }
+    #[test]
+    #[ignore = "native XTest Live OSK full vertical Down/Up compact"]
+    fn gtk_focus001_recovery_osk_vertical_live_compact() {
+        focus001_recovery_osk_vertical("live", 640);
+    }
+    #[test]
+    #[ignore = "native XTest Live OSK full vertical Down/Up TV"]
+    fn gtk_focus001_recovery_osk_vertical_live_tv() {
+        focus001_recovery_osk_vertical("live", 1280);
+    }
+    #[test]
+    #[ignore = "native XTest Mediathek OSK full vertical Down/Up compact"]
+    fn gtk_focus001_recovery_osk_vertical_mediathek_compact() {
+        focus001_recovery_osk_vertical("mediathek", 640);
+    }
+    #[test]
+    #[ignore = "native XTest Mediathek OSK full vertical Down/Up TV"]
+    fn gtk_focus001_recovery_osk_vertical_mediathek_tv() {
+        focus001_recovery_osk_vertical("mediathek", 1280);
+    }
+    #[test]
+    #[ignore = "native XTest My Channels OSK full vertical Down/Up compact"]
+    fn gtk_focus001_recovery_osk_vertical_streams_compact() {
+        focus001_recovery_osk_vertical("streams", 640);
+    }
+    #[test]
+    #[ignore = "native XTest My Channels OSK full vertical Down/Up TV"]
+    fn gtk_focus001_recovery_osk_vertical_streams_tv() {
+        focus001_recovery_osk_vertical("streams", 1280);
+    }
+
+    fn focus001_recovery_virtual_page_batched(total: u32) {
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(640, 480);
+        settle();
+        let streams = &window.imp().streams_view;
+        let search = streams.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        streams.focus001_mapped_virtual_page(total, 0);
+        settle();
+        assert!(streams.show_and_focus_test_results());
+        settle();
+        let original = streams.remote_action_test_selected_id();
+        let steps = 132_u32;
+        let mut current = 0_u32;
+        while current < steps {
+            let batch = (steps - current).min(8);
+            focus001_native_repeat("Down", batch);
+            current += batch;
+            let owner = window.focused_widget().expect("native Down lost focus");
+            assert!(
+                owner.is_mapped() && owner.is_sensitive() && streams.contains_results_focus(&owner),
+                "RED: batched native Down left mapped virtual GtkListView"
+            );
+            assert_eq!(
+                streams.focus001_selected_index(),
+                current,
+                "RED: batched native Down lost logical row order"
+            );
+        }
+        while current > 0 {
+            let batch = current.min(8);
+            focus001_native_repeat("Up", batch);
+            current -= batch;
+            let owner = window.focused_widget().expect("native Up lost focus");
+            assert!(
+                owner.is_mapped() && owner.is_sensitive() && streams.contains_results_focus(&owner),
+                "RED: batched native reverse Up left mapped virtual GtkListView"
+            );
+            assert_eq!(
+                streams.focus001_selected_index(),
+                current,
+                "RED: batched native reverse Up lost logical row order"
+            );
+        }
+        assert_eq!(
+            streams.remote_action_test_selected_id(),
+            original,
+            "RED: selected source-qualified ID changed across virtual boundary"
+        );
+        eprintln!("FOCUS001 recovery_virtual_native total={total} down=132 up=132 batches<=8 full_last_row_not_claimed");
+        window.close();
+    }
+
+    // Each sample takes 132 physical Down and 132 Up events. This crosses
+    // a 128-row virtual page boundary, but does not claim the far last row.
+    #[test]
+    #[ignore = "native D-pad 284 item virtual page boundary and reversal"]
+    fn gtk_focus001_recovery_virtual_284_page_boundary() {
+        focus001_recovery_virtual_page_batched(284);
+    }
+    #[test]
+    #[ignore = "native D-pad 1484 item virtual page boundary and reversal"]
+    fn gtk_focus001_recovery_virtual_1484_page_boundary() {
+        focus001_recovery_virtual_page_batched(1_484);
+    }
+    #[test]
+    #[ignore = "native D-pad 10000 item virtual page boundary and reversal"]
+    fn gtk_focus001_recovery_virtual_10000_page_boundary() {
+        focus001_recovery_virtual_page_batched(10_000);
+    }
+    #[test]
+    #[ignore = "native D-pad 15000 item virtual page boundary and reversal"]
+    fn gtk_focus001_recovery_virtual_15000_page_boundary() {
+        focus001_recovery_virtual_page_batched(15_000);
     }
 
     // These probes deliberately enter the real source manager with a native
@@ -6175,6 +6840,124 @@ mod focus001_mapped_regressions {
         std::fs::remove_dir_all(scratch).expect("remove disposable source filter fixture");
     }
 
+    // Four genuine persisted facet dropdowns (not fabricated labels):
+    // native Space, Down, Return, Clear and unchanged unrelated source data.
+    fn focus001_rich_facet_native(facet_index: usize, width: i32) {
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let scratch =
+            std::env::temp_dir().join(format!("focus001-rich-facet-{}", uuid::Uuid::new_v4()));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&scratch)
+            .expect("disposable private facet profile");
+        let file = scratch.join("facets.sqlite");
+        crate::streams::view::TvStreamsView::focus001_seed_rich_facet_sources(file.clone());
+        let view = &window.imp().streams_view;
+        let ready = view.focus001_attach_disposable_service(file);
+        for _ in 0..75 {
+            settle();
+            if ready.get() {
+                break;
+            }
+        }
+        assert!(ready.get(), "rich facet list failed to load");
+        let toolbar = view.toolbar_focus_targets();
+        assert_native_input_delivery(&toolbar[0]);
+        let dropdown = toolbar[facet_index]
+            .clone()
+            .downcast::<gtk::DropDown>()
+            .expect("actual enabled facet");
+        for _ in 0..60 {
+            settle();
+            if dropdown.model().is_some_and(|m| m.n_items() >= 3) {
+                break;
+            }
+        }
+        assert!(dropdown.is_mapped() && dropdown.is_sensitive());
+        assert!(
+            dropdown.model().is_some_and(|m| m.n_items() >= 3),
+            "RED: rich persisted metadata absent from native facet"
+        );
+        assert_eq!(dropdown.selected(), 0);
+        assert!(dropdown.grab_focus());
+        native_x11_key("space");
+        native_x11_key("Down");
+        native_x11_key("Return");
+        for _ in 0..35 {
+            settle();
+            if dropdown.selected() > 0 {
+                break;
+            }
+        }
+        assert!(
+            dropdown.selected() > 0,
+            "RED: native Space/Down/Return could not select rich facet"
+        );
+        let clear = toolbar[7]
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("Clear Filters");
+        assert!(clear.is_mapped() && clear.is_sensitive());
+        assert!(clear.grab_focus());
+        native_x11_key("Return");
+        for _ in 0..35 {
+            settle();
+            if dropdown.selected() == 0 {
+                break;
+            }
+        }
+        assert_eq!(
+            dropdown.selected(),
+            0,
+            "RED: Clear Filters must reset selected persisted facet"
+        );
+        eprintln!("FOCUS001 RICH_FACET facet={facet_index} width={width} native_select=1 native_clear=1 channels=12");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable rich fixture");
+    }
+    #[test]
+    #[ignore = "XTest rich persisted group facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_group_compact() {
+        focus001_rich_facet_native(2, 640);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted group facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_group_tv() {
+        focus001_rich_facet_native(2, 1280);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted language facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_language_compact() {
+        focus001_rich_facet_native(4, 640);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted language facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_language_tv() {
+        focus001_rich_facet_native(4, 1280);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted country facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_country_compact() {
+        focus001_rich_facet_native(5, 640);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted country facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_country_tv() {
+        focus001_rich_facet_native(5, 1280);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted region facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_region_compact() {
+        focus001_rich_facet_native(6, 640);
+    }
+    #[test]
+    #[ignore = "XTest rich persisted region facet and native Clear Filters"]
+    fn gtk_focus001_recovery_rich_region_tv() {
+        focus001_rich_facet_native(6, 1280);
+    }
+
     // Real Mediathek cards, bound to synthetic ShowObject items, are installed
     // on the actual app ListBox. The only injected input remains the XTest
     // arrows/Return; no Mediathek API, link or playback action is triggered.
@@ -6258,6 +7041,114 @@ mod focus001_mapped_regressions {
         focus001_mediathek_loaded_graph(1280);
     }
 
+    // The four *actual* primary and secondary Mediathek actions form one
+    // connected GTK focus row. Native XTest events discover and replay its
+    // whole horizontal graph after an actual row Down/OK expansion.
+    fn focus001_mediathek_secondary_actions(width: i32) {
+        let (_app, window) = mapped_window("streams");
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        assert_native_input_delivery(&window.imp().streams_view.toolbar_focus_targets()[0]);
+        window.imp().stack.set_visible_child_name("mediathek");
+        settle();
+        let med = &window.imp().mediathek_view;
+        med.focus001_install_disposable_results(5, false);
+        settle();
+        let list = med.focus001_result_list();
+        let first = list.row_at_index(0).expect("native first result row");
+        assert!(first.grab_focus());
+        for _ in 0..2 {
+            native_x11_key("Down");
+        }
+        let row = list.row_at_index(2).expect("middle mapped Mediathek card");
+        assert_owner(&window, row.upcast_ref(), "real native middle-card entry");
+        native_x11_key("Return");
+        let labels = ["Play", "Copy Video URL", "Download", "Open Website"];
+        let controls: Vec<gtk::Widget> = labels
+            .iter()
+            .map(|label| {
+                TvWindow::find_descendant(row.upcast_ref(), &|w| {
+                    w.tooltip_text().as_deref() == Some(*label) && w.is_mapped() && w.is_sensitive()
+                })
+                .unwrap_or_else(|| panic!("real mapped action absent: {label}"))
+            })
+            .collect();
+        assert_owner(&window, &controls[0], "native OK must enter primary Play");
+        let mut edges = vec![Vec::<(usize, &'static str)>::new(); controls.len()];
+        let keys = ["Left", "Right", "Up", "Down"];
+        for i in 0..controls.len() {
+            for key in keys {
+                assert!(controls[i].grab_focus(), "actual action not focusable");
+                native_x11_key(key);
+                let focused = window
+                    .focused_widget()
+                    .expect("focused action or neighbour");
+                if let Some(j) = controls
+                    .iter()
+                    .position(|w| TvWindow::is_within(&focused, w))
+                {
+                    if j != i {
+                        edges[i].push((j, key));
+                    }
+                }
+            }
+        }
+        let mut found = vec![false; controls.len()];
+        let mut parent = vec![None::<(usize, &'static str)>; controls.len()];
+        let mut queue = std::collections::VecDeque::from([0usize]);
+        found[0] = true;
+        while let Some(i) = queue.pop_front() {
+            for &(j, key) in &edges[i] {
+                if !found[j] {
+                    found[j] = true;
+                    parent[j] = Some((i, key));
+                    queue.push_back(j);
+                }
+            }
+        }
+        eprintln!("FOCUS001 MED_ACTION_GRAPH width={width} reachable={found:?} edges={edges:?}");
+        assert!(
+            found.iter().all(|yes| *yes),
+            "RED: real four-action Mediathek card lacks complete native focus reachability"
+        );
+        for destination in 1..controls.len() {
+            assert!(controls[0].grab_focus());
+            let mut steps = Vec::<(usize, &'static str)>::new();
+            let mut pos = destination;
+            while pos != 0 {
+                let (previous, key) = parent[pos].expect("real focus graph path");
+                steps.push((pos, key));
+                pos = previous;
+            }
+            for (next, key) in steps.into_iter().rev() {
+                native_x11_key(key);
+                assert_owner(
+                    &window,
+                    &controls[next],
+                    "native replay Mediathek secondary action",
+                );
+            }
+        }
+        native_x11_key("Escape");
+        let owner = window
+            .focused_widget()
+            .expect("native escape Mediathek card");
+        assert!(
+            TvWindow::is_within(&owner, row.upcast_ref()) && owner.is_mapped(),
+            "RED: secondary action Escape lost original card identity"
+        );
+        window.close();
+    }
+    #[test]
+    #[ignore = "real Mediathek 4-action native focus graph at compact size"]
+    fn gtk_focus001_recovery_mediathek_actions_compact() {
+        focus001_mediathek_secondary_actions(640);
+    }
+    #[test]
+    #[ignore = "real Mediathek 4-action native focus graph at TV size"]
+    fn gtk_focus001_recovery_mediathek_actions_tv() {
+        focus001_mediathek_secondary_actions(1280);
+    }
+
     // A separate row-local test isolates the real expanded primary Play
     // portal from any existing top-toolbar Down bug, using only one row seed
     // followed by genuine remote arrows and OK. It never activates a URL.
@@ -6331,6 +7222,121 @@ mod focus001_mapped_regressions {
         assert!(focus001_dialog_after(&window, None).is_mapped());
         native_x11_key("Escape");
         assert!(window.visible_dialog().is_none());
+        window.close();
+    }
+    // The keyboard Home keysym is NOT the remote XF86HomePage keysym.
+    // The older source/guide tests exercised the former and cannot establish
+    // remote semantics. This sends the actual remote keys through XTest.
+    #[test]
+    #[ignore = "connected source-manager actual XF86 Back and Home semantics"]
+    fn gtk_focus001_xtest_source_manager_actual_remote_back_and_home() {
+        let (_app, window, scratch) = focus001_manager_fixture(1);
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert_native_input_delivery(&search);
+        let open = || {
+            assert!(search.grab_focus());
+            for key in ["Down", "Down", "Down", "Right", "Return"] {
+                native_x11_key(key);
+            }
+            focus001_dialog_after(&window, None)
+        };
+        let manager = open();
+        assert!(manager.is_mapped());
+        native_x11_key("XF86Back");
+        assert!(
+            window.visible_dialog().is_none(),
+            "RED: physical remote Back did not dismiss source modal"
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("streams"),
+            "remote Back must return to My Channels, not navigate Home"
+        );
+        let owner = window
+            .focused_widget()
+            .expect("source-manager Back return owner");
+        assert!(
+            owner.is_mapped()
+                && TvWindow::is_within(&owner, window.imp().streams_view.upcast_ref()),
+            "RED: remote Back lost the mapped origin page focus"
+        );
+        let manager = open();
+        assert!(manager.is_mapped());
+        native_x11_key("XF86HomePage");
+        assert!(
+            window.visible_dialog().is_none(),
+            "RED: physical remote Home left source modal open"
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("mediathek"),
+            "remote Home must navigate to the documented home view"
+        );
+        let owner = window
+            .focused_widget()
+            .expect("source-manager Home return owner");
+        assert!(
+            owner.is_mapped()
+                && TvWindow::is_within(&owner, window.imp().mediathek_view.upcast_ref()),
+            "RED: Home left an unmapped/orphaned owner after dismissing modal"
+        );
+        eprintln!("FOCUS001 source_modal genuine_remote Back=return_to_sources Home=dismiss_to_mediathek mapped=1");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove synthetic source fixture");
+    }
+
+    #[test]
+    #[ignore = "genuine remote XF86 keys distinguish Guide Back, Home and keyboard Escape"]
+    fn gtk_focus001_xtest_guide_manager_actual_remote_back_home_escape() {
+        crate::epg::desktop::focus001_seed_disposable_guides(3);
+        let (_app, window) = mapped_window("streams");
+        assert_native_input_delivery(&window.imp().streams_view.toolbar_focus_targets()[0]);
+        let open = || {
+            crate::epg::desktop::show_guide_manager(window.upcast_ref::<gtk::Window>());
+            focus001_dialog_after(&window, None)
+        };
+        let manager = open();
+        assert!(manager.is_mapped());
+        native_x11_key("XF86Back");
+        assert!(
+            window.visible_dialog().is_none(),
+            "RED: real remote Back leaves guide manager open"
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("streams")
+        );
+        let owner = window.focused_widget().expect("remote guide Back focus");
+        assert!(
+            owner.is_mapped()
+                && TvWindow::is_within(&owner, window.imp().streams_view.upcast_ref()),
+            "RED: guide Back did not restore My Channels focus"
+        );
+        let manager = open();
+        assert!(manager.is_mapped());
+        native_x11_key("Escape");
+        assert!(
+            window.visible_dialog().is_none(),
+            "keyboard Escape did not close guide manager"
+        );
+        let manager = open();
+        assert!(manager.is_mapped());
+        native_x11_key("XF86HomePage");
+        assert!(
+            window.visible_dialog().is_none(),
+            "RED: physical remote Home left guide modal open"
+        );
+        assert_eq!(
+            window.imp().stack.visible_child_name().as_deref(),
+            Some("mediathek")
+        );
+        let owner = window.focused_widget().expect("guide Home owner");
+        assert!(
+            owner.is_mapped()
+                && TvWindow::is_within(&owner, window.imp().mediathek_view.upcast_ref()),
+            "RED: real guide Home lost the mapped home owner"
+        );
+        eprintln!("FOCUS001 guide_modal genuine_remote Back=return Escape=close Home=dismiss_home mapped=1");
         window.close();
     }
 }
