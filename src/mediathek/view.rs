@@ -946,6 +946,43 @@ impl TvMediathekView {
             }
         }
     }
+    #[cfg(test)]
+    pub(crate) fn focus001_result_list(&self) -> gtk::ListBox {
+        self.imp().results_list.get().clone()
+    }
+
+    /// Fully disposable real Mediathek ListBox/card fixture. No upstream
+    /// query, playback, download, icon fetch URL or owner profile is used.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_disposable_results(&self, count: usize, more: bool) {
+        use mediathekviewweb::models::Item;
+        assert!((1..=20).contains(&count));
+        let synthetic: Vec<ShowObject> = (0..count)
+            .map(|index| {
+                ShowObject::new(Item {
+                    channel: "FOCUS Synthetic".to_owned(),
+                    topic: "Remote navigation fixture".to_owned(),
+                    title: format!("FOCUS001 programme {index:02}"),
+                    description: Some("Synthetic local-only result".to_owned()),
+                    timestamp: 1_800_000_000 + index as i64,
+                    duration: Some(std::time::Duration::from_secs(1200)),
+                    size: None,
+                    url_website: "https://example.invalid/not-opened".to_owned(),
+                    url_subtitle: None,
+                    url_video: "https://example.invalid/not-played".to_owned(),
+                    url_video_low: None,
+                    url_video_hd: None,
+                    filmliste_timestamp: 1_800_000_000,
+                    id: format!("focus001-programme-{index}"),
+                })
+            })
+            .collect();
+        let store = self.imp().shows_model();
+        store.splice(0, store.n_items(), &synthetic);
+        self.set_total_results((count + usize::from(more)) as u64);
+        self.imp().show_results();
+    }
+
     pub fn reload(&self) {
         let slf = self.clone();
         spawn(async move { slf.load().await });

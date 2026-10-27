@@ -631,3 +631,65 @@ source-edit/replace, source-reorder, other rows and multi-view audit gaps
 remain separate and unclosed. Public CI/Flatpak and clean published-source
 validation for this new candidate must be recorded separately after
 publication. The blocking runner must remain nonzero for all REDs.
+
+
+### Additional cross-surface mapped native probes (post-979 candidate)
+
+The native runner includes source Defaults/Rename nested modal portals at
+640×480 and 1280×800, source lower-row Replace/Delete/reorder reachability,
+programme-guide default confirmation and removal cancellation with disposable
+SQLite, and distinct Home/Escape modal handling for source and guide manager.
+Actual individual results and original 91-row audit verdicts must remain
+separate; each source/guide case enters a mapped GTK window with verified XTest.
+Tests are deliberately blocking on unreachable actions or focus loss, not
+expected-fail skips. This candidate does not authorize runtime fixes.
+
+
+### Extended mapped app-wide coverage (post-979 test candidate)
+
+Seven further isolated cases verify native OSK horizontal traversal for every
+alphanumeric and symbol key row at two viewports, real My Channels card
+Play/Edit/Mapping action portals by OK versus Right, and source-qualified
+selector/Clear Filters behavior with a disposable three-source registry.
+The OSK graph deliberately seeds the first key of each row; it proves native
+horizontal row edges but does not by itself prove native inter-row entry,
+rendered pixels, or process-persistent QWERTZ. Missing contracts remain open.
+
+
+### Mediathek actual loaded-results native tests
+
+Three further cases install synthetic `mediathekviewweb::models::Item` rows
+through a test-only constructor into the *production* Mediathek ListBox and
+card template. The source uses only `example.invalid` URLs; no upstream search,
+file download or player action runs. Native XTest walks from Search through
+filters to five actual cards at both viewports, reverses the list, and probes
+OK → immediate Play focus on a middle card. Known REDs remain blocking.
+
+### Additional full native audit work (exact 979 baseline, unpublished candidate)
+
+The test-only continuation adds 22 genuine isolated mapped XTest cases across
+source-manager nested Defaults/Rename/Replace/Delete/reorder, guide default and
+remove/Keep, Home/Escape semantics, every letter/symbol OSK horizontal cell,
+My Channels expanded-card Play portal, a real populated source facet,
+Mediathek five synthetic loaded results at compact/TV size, and programme
+mapping entry without pre-seeding the Mapping button. All are isolated with
+synthetic disposable SQLite/ShowObject data and no live programme stream or
+source URL. **15 PASS / 7 RED** individually, with no native environment or
+case timeouts. Some early Mediathek attempts had an invalid asynchronous test
+fixture (a search reset the synthetic items); those attempts were corrected
+and retested and are not counted as application REDs.
+
+Specific reproduced REDs: three native source-manager lower-row actions
+unreachable; guide default persisted but no GTK focus owner after Confirm;
+My Channels card OK/Right does not place focus on Play; source card native
+Right x10 cannot reach Programme mapping without a focus seed. The source
+manager, guide manager, and OSK positive cases cover only the actually asserted
+routes, not all other actions of those widgets.
+
+A separate eight-case seeded middle/last-row virtualized-list experiment was
+removed rather than published: it failed **before native arrows started** on
+an already known virtualized-focus setup, duplicating the existing large-list
+REDs and providing no new boundary coverage. The original 91-ID inventory is
+retained, with only individually justified completed native routes counted.
+No full native 97-case matrix has been executed on this dirty candidate yet.
+Every prior blocking RED and negative-control test remains present and required.
