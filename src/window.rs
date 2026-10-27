@@ -5200,6 +5200,146 @@ mod focus001_mapped_regressions {
         window.close();
     }
 
+    // Real Search -> Manage Sources -> Switch journey. The route is an
+    // observed native path, never a direct GtkSwitch grab_focus shortcut.
+    fn focus001_connected_source_switch(count: u32) {
+        let (_app, window, scratch) = focus001_manager_fixture(count);
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        for key in ["Down", "Down", "Down", "Right"] {
+            native_x11_key(key);
+        }
+        let launcher = window.focused_widget().expect("native manager launcher");
+        assert!(launcher.is_mapped() && launcher.is_sensitive());
+        native_x11_key("Return");
+        let manager = focus001_dialog_after(&window, None);
+        let mut switches = Vec::<gtk::Switch>::new();
+        let mut queue = vec![manager.clone().upcast::<gtk::Widget>()];
+        while let Some(widget) = queue.pop() {
+            if let Some(button) = widget.downcast_ref::<gtk::Switch>() {
+                if button.is_mapped() && button.is_sensitive() {
+                    switches.push(button.clone());
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(w) = child {
+                child = w.next_sibling();
+                queue.push(w);
+            }
+        }
+        assert_eq!(switches.len(), count as usize);
+        let entry = window.focused_widget().expect("source dialog native focus");
+        assert!(entry.is_mapped() && TvWindow::is_within(&entry, manager.upcast_ref()));
+        let route = ["Down", "Right"];
+        for key in route {
+            native_x11_key(key);
+        }
+        let owner = window.focused_widget().expect("remote switch focus owner");
+        let switch = switches
+            .iter()
+            .find(|s| TvWindow::is_within(&owner, s.upcast_ref()))
+            .expect("RED: mapped source Switch inaccessible by native arrow route");
+        assert!(owner.is_mapped() && owner.is_sensitive());
+        let prior = switch.is_active();
+        assert!(prior, "all disposable sources start enabled");
+        let store = crate::streams::storage::Storage::at(scratch.join("manager.sqlite"));
+        let before = store.list_sources().expect("prior DB rows");
+        assert_eq!(before.len(), count as usize);
+        native_x11_key("space");
+        for _ in 0..70 {
+            settle();
+            if !switch.is_active() {
+                break;
+            }
+        }
+        assert!(
+            !switch.is_active(),
+            "RED: native Space did not toggle source switch"
+        );
+        for _ in 0..70 {
+            settle();
+            if store
+                .list_sources()
+                .expect("after toggle")
+                .iter()
+                .filter(|x| x.enabled)
+                .count()
+                == count as usize - 1
+            {
+                break;
+            }
+        }
+        let after = store
+            .list_sources()
+            .expect("persisted source switch toggle");
+        assert_eq!(after.len(), before.len(), "toggle must not delete a source");
+        let mutated: Vec<_> = before
+            .iter()
+            .filter(|original| {
+                after
+                    .iter()
+                    .find(|current| current.id == original.id)
+                    .is_some_and(|current| current.enabled != original.enabled)
+            })
+            .collect();
+        assert_eq!(
+            mutated.len(),
+            1,
+            "only the chosen source may change enabled state"
+        );
+        assert_eq!(
+            after.iter().filter(|x| x.enabled).count(),
+            count as usize - 1,
+            "RED: toggled source state not persisted to disposable SQLite"
+        );
+        let focus_after = window
+            .focused_widget()
+            .expect("RED: switch rebind lost focus owner");
+        assert!(
+            focus_after.is_mapped()
+                && focus_after.is_sensitive()
+                && TvWindow::is_within(&focus_after, manager.upcast_ref()),
+            "RED: source switch async reload lost manager focus"
+        );
+        if count == 1 {
+            assert!(
+                TvWindow::find_descendant(manager.upcast_ref(), &|w| {
+                    w.downcast_ref::<gtk::Switch>().is_some_and(|s| {
+                        s.is_mapped() && TvWindow::is_within(&focus_after, s.upcast_ref())
+                    })
+                })
+                .is_some(),
+                "RED: one-source toggle must restore focus to the same Switch"
+            );
+            native_x11_key("space");
+            for _ in 0..70 {
+                settle();
+                if store.list_sources().expect("reverse source toggle")[0].enabled {
+                    break;
+                }
+            }
+            assert!(
+                store.list_sources().expect("persisted reverse toggle")[0].enabled,
+                "RED: remote source Switch reverse toggle not persisted"
+            );
+        }
+        eprintln!("FOCUS001 source_switch_native count={count} keys=Down,Down,Down,Right,Return,Down,Right,space sqlite=ok focus=ok reverse={}",count==1);
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove synthetic DB fixture");
+    }
+
+    #[test]
+    #[ignore = "real XTest manager portal, source switch navigation and SQLite persistence"]
+    fn gtk_focus001_xtest_source_switch_one_native_persist() {
+        focus001_connected_source_switch(1);
+    }
+
+    #[test]
+    #[ignore = "real XTest three-source manager switch navigation and SQLite persistence"]
+    fn gtk_focus001_xtest_source_switch_three_native_persist() {
+        focus001_connected_source_switch(3);
+    }
+
     #[test]
     #[ignore = "native connected Live toolbar complete enabled graph 640x480"]
     fn gtk_focus001_xtest_live_connected_toolbar_compact() {

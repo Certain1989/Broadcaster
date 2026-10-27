@@ -589,3 +589,18 @@ cross-view Play/Copy/Download/Edit/Mapping/star icon/accessibility inventory
 remain in earlier sections of this README and the public route ledger.
 No code review, M1 acceptance, E5 activation, merge or release follows from
 these tests.
+
+### Additional source-switch coverage candidate (continuation-008)
+
+Two isolated native XTest cases traverse Search → Manage Sources → a source
+`GtkSwitch` using actual arrows/Return/Space and check disposable SQLite.
+The one-source reverse-action case is **RED**: the initial OFF write persists,
+but async manager rebind does not return focus to the same mapped switch, so
+remote-only reversal is not assured. The three-source case is **PASS** for one
+source-qualified OFF mutation, preservation of two other sources, and a mapped
+manager focus owner after async reload. These were tested locally on a
+`CANDIDATE_DIRTY` complete 10dc checkout, not yet CI or a published clean
+commit. Only baseline `AUDIT_GAP_AS04` (native RED evidence) and
+`AUDIT_GAP_AS05` (native PASS) have specific new executable closure evidence;
+all other `NOT_COVERED` ledger entries remain open. The known product RED is
+blocking and must not be suppressed or made an expected success.

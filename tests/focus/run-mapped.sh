@@ -180,6 +180,8 @@ tests=(
   gtk_focus001_xtest_mediathek_connected_toolbar_tv
   gtk_focus001_xtest_streams_connected_toolbar_compact
   gtk_focus001_xtest_streams_connected_toolbar_tv
+  gtk_focus001_xtest_source_switch_one_native_persist
+  gtk_focus001_xtest_source_switch_three_native_persist
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.
