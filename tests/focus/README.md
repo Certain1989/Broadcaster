@@ -604,3 +604,30 @@ commit. Only baseline `AUDIT_GAP_AS04` (native RED evidence) and
 `AUDIT_GAP_AS05` (native PASS) have specific new executable closure evidence;
 all other `NOT_COVERED` ledger entries remain open. The known product RED is
 blocking and must not be suppressed or made an expected success.
+
+## Synthetic source-manager native supplement (2026-10-27)
+
+Five further individually isolated GTK/XTest cases join the two switch tests in the
+blocking mapped runner (seven in the combined set). All use a temporary private SQLite fixture of one or
+three fabricated sources; no user playlists, network refresh or owner data are
+used. From page Search, native Down×3, Right, Return opens the mapped manager;
+Down, Right reaches its first Switch. **No manager action or Switch is
+programmatically focus-seeded for a claimed route.**
+
+Local candidate (`10dc342abc85a4fa99f63c9d9e327be09662817c` plus test-only
+diff) evidence: 4 PASS / 3 RED across these seven cases, with ordinary
+locked/offline tests 325 PASS, Clippy, fmt and metadata PASS. The first Switch
+can be toggled and reenabled through Escape and native manager reentry; SQLite
+records both writes. The three-source case verifies an exactly one-row SQLite
+change, three asynchronously refreshed mapped Switches and focus remaining in
+the manager. At both 640×480 and 1280×800, Right traverses the upper action
+row Switch → Refresh → Defaults → Rename with two verified Left reversals.
+
+**Do not interpret these PASSes as full manager coverage.** Distinct mapped REDs
+remain: after disabling the only source, focus does not return to that same
+Switch for immediate reversal; from first-source Refresh, native Down does
+not reach a lower-row source action at either viewport. Existing deletion,
+source-edit/replace, source-reorder, other rows and multi-view audit gaps
+remain separate and unclosed. Public CI/Flatpak and clean published-source
+validation for this new candidate must be recorded separately after
+publication. The blocking runner must remain nonzero for all REDs.

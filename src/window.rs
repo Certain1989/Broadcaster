@@ -5340,6 +5340,226 @@ mod focus001_mapped_regressions {
         focus001_connected_source_switch(3);
     }
 
+    // A separate real-key upper-row graph check, not a programmatic lower
+    // button focus seed. A failure is a directional navigation RED; unchanged
+    // runtime handlers are deliberately not corrected by this test worker.
+    fn focus001_source_manager_upper_graph(width: i32) {
+        let (_app, window, scratch) = focus001_manager_fixture(3);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        for key in ["Down", "Down", "Down", "Right", "Return"] {
+            native_x11_key(key);
+        }
+        let manager = focus001_dialog_after(&window, None);
+        for key in ["Down", "Right"] {
+            native_x11_key(key);
+        }
+        let owner = window.focused_widget().expect("native upper row start");
+        assert!(
+            TvWindow::find_descendant(manager.upcast_ref(), &|widget| {
+                widget
+                    .downcast_ref::<gtk::Switch>()
+                    .is_some_and(|s| s.is_mapped() && TvWindow::is_within(&owner, s.upcast_ref()))
+            })
+            .is_some(),
+            "RED: remote could not reach source upper-row first switch"
+        );
+        for label in ["Refresh", "Defaults", "Rename"] {
+            native_x11_key("Right");
+            let focus = window
+                .focused_widget()
+                .expect("native upper action destination");
+            let button = TvWindow::find_descendant(manager.upcast_ref(), &|widget| {
+                widget.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                    button.is_mapped()
+                        && button.label().as_deref() == Some(label)
+                        && TvWindow::is_within(&focus, button.upcast_ref())
+                })
+            });
+            assert!(
+                button.is_some(),
+                "RED: Right did not reach expected source upper action {label}"
+            );
+            assert!(TvWindow::is_within(&focus, manager.upcast_ref()));
+        }
+        for label in ["Defaults", "Refresh"] {
+            native_x11_key("Left");
+            let focus = window.focused_widget().expect("native upper reverse owner");
+            assert!(
+                TvWindow::find_descendant(manager.upcast_ref(), &|widget| {
+                    widget.downcast_ref::<gtk::Button>().is_some_and(|button| {
+                        button.is_mapped()
+                            && button.label().as_deref() == Some(label)
+                            && TvWindow::is_within(&focus, button.upcast_ref())
+                    })
+                })
+                .is_some(),
+                "RED: Left does not reverse to {label}"
+            );
+        }
+        eprintln!(
+            "FOCUS001 source_manager_upper_graph viewport={width} forward=3 reverse=2 native=1"
+        );
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable manager graph DB");
+    }
+
+    #[test]
+    #[ignore = "real XTest source manager upper action row forward/reverse at 640x480"]
+    fn gtk_focus001_xtest_source_manager_upper_graph_compact() {
+        focus001_source_manager_upper_graph(640);
+    }
+
+    #[test]
+    #[ignore = "real XTest source manager upper action row forward/reverse at 1280x800"]
+    fn gtk_focus001_xtest_source_manager_upper_graph_tv() {
+        focus001_source_manager_upper_graph(1280);
+    }
+
+    // Source-switch restoration is an independent scenario from the RED
+    // immediate-focus-reversal check: explicitly leave and reenter the manager
+    // using native keys; assert the disabled DB state is reflected in the
+    // newly mapped control, then reenable it via Space.
+    #[test]
+    #[ignore = "native one-source persisted reversal after Escape and manager reentry"]
+    fn gtk_focus001_xtest_source_switch_one_reopen_reversal() {
+        let (_app, window, scratch) = focus001_manager_fixture(1);
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        let store = crate::streams::storage::Storage::at(scratch.join("manager.sqlite"));
+        for expected_before in [true, false] {
+            assert!(search.grab_focus());
+            for key in ["Down", "Down", "Down", "Right", "Return"] {
+                native_x11_key(key);
+            }
+            let manager = focus001_dialog_after(&window, None);
+            for key in ["Down", "Right"] {
+                native_x11_key(key);
+            }
+            let owner = window
+                .focused_widget()
+                .expect("native reopened source switch owner");
+            let switch = TvWindow::find_descendant(manager.upcast_ref(), &|widget| {
+                widget
+                    .downcast_ref::<gtk::Switch>()
+                    .is_some_and(|candidate| {
+                        candidate.is_mapped()
+                            && candidate.is_sensitive()
+                            && TvWindow::is_within(&owner, candidate.upcast_ref())
+                    })
+            })
+            .expect("RED: manager-reopened switch not reachable using native arrows")
+            .downcast::<gtk::Switch>()
+            .expect("GtkSwitch");
+            assert_eq!(
+                switch.is_active(),
+                expected_before,
+                "RED: reopened native source switch must reflect persisted SQLite state"
+            );
+            native_x11_key("space");
+            for _ in 0..70 {
+                settle();
+                if store.list_sources().expect("toggle state query")[0].enabled != expected_before {
+                    break;
+                }
+            }
+            assert_ne!(
+                store.list_sources().expect("persisted native toggle")[0].enabled,
+                expected_before,
+                "RED: native source switch toggle not persisted"
+            );
+            native_x11_key("Escape");
+            assert!(
+                window.visible_dialog().is_none(),
+                "Escape did not close manager"
+            );
+        }
+        assert!(
+            store.list_sources().expect("reversed source state")[0].enabled,
+            "source must be reenabled after a second native Space"
+        );
+        eprintln!(
+            "FOCUS001 source_switch_reopen native_escapes=2 native_toggles=2 SQLite_restored=1"
+        );
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable source fixture");
+    }
+
+    fn focus001_source_manager_lower_graph(width: i32) {
+        let (_app, window, scratch) = focus001_manager_fixture(3);
+        window.set_default_size(width, if width == 640 { 480 } else { 800 });
+        let search = window.imp().streams_view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus());
+        for key in [
+            "Down", "Down", "Down", "Right", "Return", "Down", "Right", "Right",
+        ] {
+            native_x11_key(key);
+        }
+        let manager = focus001_dialog_after(&window, None);
+        let start = window
+            .focused_widget()
+            .expect("native Refresh upper-row owner");
+        assert!(
+            TvWindow::find_descendant(manager.upcast_ref(), &|w| {
+                w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                    b.is_mapped()
+                        && b.label().as_deref() == Some("Refresh")
+                        && TvWindow::is_within(&start, b.upcast_ref())
+                })
+            })
+            .is_some(),
+            "RED: first upper action Refresh not D-pad reachable"
+        );
+        native_x11_key("Down");
+        let lower = window.focused_widget().expect("native lower action owner");
+        let lower_button = TvWindow::find_descendant(manager.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| {
+                b.is_mapped()
+                    && b.is_sensitive()
+                    && b.label()
+                        .as_deref()
+                        .is_some_and(|s| matches!(s, "Replace" | "Delete" | "↑" | "↓"))
+                    && TvWindow::is_within(&lower, b.upcast_ref())
+            })
+        });
+        eprintln!("FOCUS001 lower_row_probe viewport={width} native_down_owner={} mapped={} in_manager={} label={:?}",
+            lower.type_().name(), lower.is_mapped(), TvWindow::is_within(&lower, manager.upcast_ref()),
+            lower.downcast_ref::<gtk::Button>().and_then(|button| button.label()));
+        assert!(
+            lower_button.is_some(),
+            "RED: Down from upper source action cannot reach lower action row"
+        );
+        native_x11_key("Right");
+        let right = window
+            .focused_widget()
+            .expect("lower-row Right destination");
+        assert!(right.is_mapped() && TvWindow::is_within(&right, manager.upcast_ref()));
+        assert!(
+            !TvWindow::is_within(&right, &lower),
+            "RED: lower-row Right failed to advance"
+        );
+        native_x11_key("Left");
+        let returned = window.focused_widget().expect("lower-row reverse owner");
+        assert!(
+            TvWindow::is_within(&returned, &lower),
+            "RED: lower-row Right/Left does not reverse"
+        );
+        eprintln!("FOCUS001 source_manager_lower_graph viewport={width} down_right_left_reverse=1");
+        window.close();
+        std::fs::remove_dir_all(scratch).expect("remove disposable manager source fixture");
+    }
+
+    #[test]
+    #[ignore = "native three-source manager lower actions and Right/Left reversal 640x480"]
+    fn gtk_focus001_xtest_source_manager_lower_graph_compact() {
+        focus001_source_manager_lower_graph(640);
+    }
+
+    #[test]
+    #[ignore = "native three-source manager lower actions and Right/Left reversal 1280x800"]
+    fn gtk_focus001_xtest_source_manager_lower_graph_tv() {
+        focus001_source_manager_lower_graph(1280);
+    }
     #[test]
     #[ignore = "native connected Live toolbar complete enabled graph 640x480"]
     fn gtk_focus001_xtest_live_connected_toolbar_compact() {
