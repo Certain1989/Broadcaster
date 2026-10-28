@@ -204,8 +204,12 @@ jobs:
               assert hashlib.sha256(log.read_bytes()).hexdigest()==a[6], 'log fingerprint mismatch'
               assert a[3] and len(a[3])==40 and len(a[4])==40 and len(a[5])==64, 'source/binary fingerprint missing'
               return a[1]
-          observed={p.stem: verified(p) for p in (root/'observed').glob('*.tsv')}
-          env={p.stem: verified(p) for p in (root/'environment').glob('*.tsv')}
+          def records(folder):
+              manifest=folder/'shard-manifest.tsv'
+              assert manifest.is_file(), 'cohort provenance manifest missing'
+              return {p.stem: verified(p) for p in folder.glob('*.tsv') if p != manifest}
+          observed=records(root/'observed')
+          env=records(root/'environment')
           expected={
               'gtk_focus001_xtest_mediathek_middle_card_ok_primary_play':'PASS',
               'gtk_focus001_xtest_mediathek_search_down_up':'RED',
