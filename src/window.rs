@@ -7030,6 +7030,9 @@ mod focus001_mapped_regressions {
             0,
             "RED: remote cannot select a populated source from native dropdown"
         );
+        // B07 component-only oracle: a selected native dropdown must keep a
+        // real mapped focus owner rather than only persisting its selection.
+        assert_owner(&window, dropdown.upcast_ref(), "B07 native source selected");
         let clear = controls[7]
             .clone()
             .downcast::<gtk::Button>()
@@ -7051,6 +7054,7 @@ mod focus001_mapped_regressions {
             0,
             "RED: Clear Filters did not restore all sources"
         );
+        assert_owner(&window, clear.upcast_ref(), "B07 native Clear focus return");
         eprintln!(
             "FOCUS001 populated_source_facet native_open_select=1 clear_filters=1 SQLite_sources=3"
         );
@@ -10752,6 +10756,23 @@ mod focus001_mapped_regressions {
                 assert_owner(&window, &controls[from], "native intersect edge origin");
                 native_x11_key(direction);
                 assert_owner(&window, &controls[to], "native intersect edge target");
+                // B10 inverse-route subclause: under unchanged toolbar state,
+                // a non-editor facet-to-facet edge must return to its origin.
+                // Search consumes caret keys, so it is excluded from this
+                // local-reversibility oracle rather than treated as a RED.
+                if from != 0 && to != 0 {
+                    let reverse = match direction {
+                        "Up" => "Down",
+                        "Down" => "Up",
+                        "Left" => "Right",
+                        "Right" => "Left",
+                        _ => unreachable!("D-pad direction"),
+                    };
+                    native_x11_key(reverse);
+                    assert_owner(&window, &controls[from], "B10 inverse native edge");
+                    native_x11_key(direction);
+                    assert_owner(&window, &controls[to], "B10 forward replay after inverse");
+                }
                 *current = to;
             }
         };

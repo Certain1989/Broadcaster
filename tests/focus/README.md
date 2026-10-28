@@ -1114,3 +1114,33 @@ SHA-256 fingerprints in the ledger, although the original original metadata
 incorrectly retained UNRUN. No repeated native guide graph traversal is
 necessary on unchanged production source, and reachability RED does not prove
 that unexecuted Apply/OSK/persistence subclauses passed.
+
+## Continuation-015: original-ID clause crosswalk (test-only, additive)
+
+This clause map links existing registered native cases to *parts* of the
+original FOCUS-001 acceptance IDs, not to a new acceptance verdict. It does
+not modify the immutable 91-ID registry or replace physical Wayland review.
+For the additional `src/window.rs` assertions below, the exact starting source
+is `48b539d71c6ba0a9c1b587545e1874b1626a5c3b`; outcomes must be measured
+on a subsequently published commit before being attributed to that commit.
+`PASS` at one assertion level never means a compound original ID is PASS.
+
+| Original ID / clause | Registered native case / viewport | Real fixture and test level | Observable assertion and expected outcome | Remaining blocker |
+| --- | --- | --- | --- | --- |
+| `AUDIT_GAP_B07`: populated Source selection and Clear focus ownership | `gtk_focus001_xtest_streams_source_selector_populated_native_clear`, existing default mapped viewport | Three disposable SQLite playlist sources, real GTK dropdown, XTest selection and Clear; **COMPONENT_ONLY** because test seeds focus on Source and Clear | Candidate adds `assert_owner` for selected Source and surviving Clear; **PASS** if both remain mapped, enabled and actual window focus owner, **RED** if not. Existing registered case remains blocking. | Native Search→Source route, searchable/scrollable popup, clear and complete origin restoration have not been established by this case. |
+| `AUDIT_GAP_B08`: Country selector full native keyboard/OSK/clear/return | `gtk_focus001_cont011_rich_country_facet_compact` / `_tv` (640×480, 1280×800) | Three synthetic SQLite sources with persisted country facets; real XTest dropdown selection from Search after surveyed direction route; **NATIVE_MAPPED_PARTIAL** | Existing assertions expect nonzero selected country and retained mapped focus; any failed native path is **RED**, never skipped. | Country keyboard search, OSK, clear and inverse origin route not fully joined; no full-ID PASS. |
+| `AUDIT_GAP_B09`: Language selector full native keyboard/OSK/clear/return | `gtk_focus001_cont011_rich_language_facet_compact` / `_tv` (640×480, 1280×800) | Same disposable data and actual XTest on Language dropdown; **NATIVE_MAPPED_PARTIAL** | Existing selected language and focused owner assertions may PASS individually; a blocked path remains **RED**. | Language keyboard search, OSK, clear and inverse origin route not fully joined; no full-ID PASS. |
+| `AUDIT_GAP_B10`: Source→Group→Language→Country intersection and Clear | `gtk_focus001_cont012_four_facet_intersection_clear_compact` / `_tv` (640×480, 1280×800); F05-sort/empty cases share the helper | Twelve synthetic persisted channels across three sources, four real XTest dropdowns; **NATIVE_MAPPED**, async SQLite query and Clear | Existing 12→4→2→2→2→12 query/count, source-partition and selected-state checks must PASS. Candidate additionally asserts that each non-editor intermediate physical edge reverses with opposite D-pad key and replays to the same focus owner; a wrong owner is **RED**. | Other post-reflow reverse edges, native OSK/search in facets, rendered focus-pixel evidence, and physical Wayland remain separate. |
+
+**Negative/exception handling:** `assert_owner` fails on an unexpected real
+focus owner, including when an inverse edge strands focus at its starting
+control; the separately registered
+`gtk_focus001_negative_control_detects_stolen_focus` exercises an intentional
+focus theft. This extension does **not** claim to add a new painted-ring
+negative control. Native text editors may legitimately consume caret arrows;
+the B10 inverse probe excludes Search and only asserts non-editor toolbar edges.
+The B10 dropdown graph is sampled for route discovery, then the asserted path
+is replayed from actual Search by native XTest; that survey is *not* counted
+as successful end-to-end traversal on its own. All cases retain the current
+fail-closed registration and their original names, so the **267-case sorted
+registry and original 141-case subset remain unchanged**.
