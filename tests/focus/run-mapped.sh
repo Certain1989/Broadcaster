@@ -317,8 +317,8 @@ if [[ -n "$case_binary" ]]; then
   [[ -f "$case_binary" && -x "$case_binary" ]] || { echo 'FOCUS001 missing executable test binary' >&2; exit 2; }
   binary_hash=$(sha256sum "$case_binary" | cut -d' ' -f1)
 fi
-source_sha=$(git rev-parse --verify HEAD)
-source_tree=$(git rev-parse --verify HEAD^{tree})
+source_sha=$(git -c safe.directory="$PWD" rev-parse --verify HEAD)
+source_tree=$(git -c safe.directory="$PWD" rev-parse --verify HEAD^{tree})
 results_dir=${FOCUS001_PILOT_RESULTS_DIR:-}
 if [[ -n "$results_dir" ]]; then mkdir -p -- "$results_dir"; fi
 printf 'FOCUS001 SOURCE_SHA=%s SOURCE_TREE=%s BINARY_SHA256=%s\n' "$source_sha" "$source_tree" "$binary_hash"

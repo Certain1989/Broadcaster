@@ -108,7 +108,7 @@ jobs:
           test ! -e src/config.rs
           test ! -e data/resources/shortcuts-dialog.ui
           test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
-          test -z "$(git status --porcelain --untracked-files=all)"
+          test -z "$(git -c safe.directory="$PWD" status --porcelain --untracked-files=all)"
 
 
   # Exploratory only: this job must never replace or soften rust's blocking
@@ -122,7 +122,13 @@ jobs:
       - name: Install existing GTK toolchain and XTest compiler headers
         run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth libxtst libx11 python
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Diagnostic artefacts must identify the actual PR head, never a
+          # synthetic pull_request merge SHA or another worker's build.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Configure, compile once, fingerprint exact published source binary
+        env:
+          PILOT_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -151,8 +157,12 @@ jobs:
           if len(matches)!=1: raise SystemExit(f'FOCUS001 ENVIRONMENT unable to resolve exactly one test binary (matches={len(matches)})')
           exe=matches[0]
           fingerprint=hashlib.sha256(pathlib.Path(exe).read_bytes()).hexdigest()
-          sha=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          git=['git','-c','safe.directory='+str(pathlib.Path.cwd()),'rev-parse']
+          sha=subprocess.check_output([*git,'HEAD'],text=True).strip()
+          tree=subprocess.check_output([*git,'HEAD^{tree}'],text=True).strip()
+          expected=os.environ['PILOT_EXPECTED_SHA']
+          if sha != expected:
+              raise SystemExit(f'FOCUS001 SOURCE_MISMATCH expected={expected} actual={sha}')
           pathlib.Path('focus-pilot-artifacts/test-binary-path.txt').write_text(exe+'\n')
           pathlib.Path('focus-pilot-artifacts/manifest.txt').write_text(f'source_sha={sha}\ntree={tree}\nbinary_sha256={fingerprint}\n')
           print('FOCUS001 PILOT source',sha,'tree',tree,'binary',fingerprint)
@@ -207,7 +217,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: focus001-diagnostic-pilot-${{ github.sha }}
+          name: focus001-diagnostic-pilot-${{ github.event.pull_request.head.sha || github.sha }}
           path: focus-pilot-artifacts/
           retention-days: 7
           if-no-files-found: warn
