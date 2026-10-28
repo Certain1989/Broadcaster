@@ -305,6 +305,50 @@ impl TvLiveView {
         (card.upcast(), play)
     }
 
+    /// Several unique real LiveCard/ListBox rows for long connected native
+    /// D-pad journeys. No stream is fetched or playback started during setup.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_disposable_live_rows(
+        &self,
+        count: u32,
+    ) -> Vec<(gtk::ListBoxRow, gtk::Button)> {
+        assert!((3..=12).contains(&count));
+        let mut rows = Vec::new();
+        for index in 0..count {
+            let channel = ChannelObject::new(
+                &format!("focus001.synthetic.live.{index}"),
+                &format!("FOCUS001 synthetic Live channel {index}"),
+                "https://example.invalid/live-fake-no-play",
+            );
+            let card: TvLiveCard = glib::Object::builder()
+                .property("channel", &channel)
+                .build();
+            let button = {
+                let mut found = None;
+                let mut stack = vec![card.clone().upcast::<gtk::Widget>()];
+                while let Some(widget) = stack.pop() {
+                    if let Some(candidate) = widget.downcast_ref::<gtk::Button>() {
+                        if candidate.action_name().as_deref() == Some("card.play") {
+                            found = Some(candidate.clone());
+                            break;
+                        }
+                    }
+                    let mut child = widget.first_child();
+                    while let Some(next) = child {
+                        child = next.next_sibling();
+                        stack.push(next);
+                    }
+                }
+                found.expect("real LiveCard Play exists")
+            };
+            self.imp().channels_list.append(&card);
+            rows.push((card.upcast::<gtk::ListBoxRow>(), button));
+        }
+        self.imp().stack.set_visible_child_name("channels");
+        self.imp().results_stack.set_visible_child_name("list");
+        rows
+    }
+
     pub fn focus_search(&self) {
         self.imp().focus_search();
     }

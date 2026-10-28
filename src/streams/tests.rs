@@ -964,3 +964,102 @@ fn d35_favourites_persist_across_reopen_and_filter_sql_before_paging_and_facets(
         .unwrap();
     assert_eq!(stars, 0);
 }
+
+// Component-only continuation-012: all source mutations are performed via
+// durable Storage APIs against synthetic disposable data; does NOT assert
+// that a TV remote can reach the corresponding manager controls.
+#[test]
+fn focus001_cont012_component_three_source_edit_reorder_delete_reopen() {
+    let fixture = Fixture::new();
+    let (a, _) = fixture.new_source("Synthetic A", 2);
+    let (b, _) = fixture.new_source("Synthetic B", 3);
+    let (c, _) = fixture.new_source("Synthetic C", 1);
+    fixture.store.reorder_source(&a.id, 0, NOW + 1).unwrap();
+    fixture.store.reorder_source(&b.id, 1, NOW + 1).unwrap();
+    fixture.store.reorder_source(&c.id, 2, NOW + 1).unwrap();
+    let ordered = || {
+        fixture
+            .store
+            .list_sources()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ordered(), vec![a.id.clone(), b.id.clone(), c.id.clone()]);
+
+    assert!(fixture.store.rename_source(&b.id, "", NOW + 2).is_err());
+    assert_eq!(fixture.store.get_source(&b.id).unwrap().name, "Synthetic B");
+    fixture
+        .store
+        .rename_source(&b.id, "Changed B", NOW + 3)
+        .unwrap();
+    let defaults = SourceDefaults {
+        languages: ["de".to_owned()].into_iter().collect(),
+        countries: ["DE".to_owned()].into_iter().collect(),
+        ..SourceDefaults::default()
+    };
+    fixture
+        .store
+        .set_source_defaults(&b.id, &defaults, NOW + 4)
+        .unwrap();
+    let reopened = Storage::at(fixture.path.clone());
+    reopened.initialize().unwrap();
+    let saved = reopened.get_source(&b.id).unwrap();
+    assert_eq!(saved.name, "Changed B");
+    assert_eq!(saved.defaults.languages, defaults.languages);
+    assert_eq!(saved.defaults.countries, defaults.countries);
+    assert!(reopened
+        .rename_source(&b.id, &"x".repeat(129), NOW + 5)
+        .is_err());
+    assert_eq!(reopened.get_source(&b.id).unwrap().name, "Changed B");
+
+    reopened.move_source(&c.id, -1, NOW + 6).unwrap();
+    assert_eq!(ordered(), vec![a.id.clone(), c.id.clone(), b.id.clone()]);
+    reopened.move_source(&c.id, 1, NOW + 7).unwrap();
+    assert_eq!(ordered(), vec![a.id.clone(), b.id.clone(), c.id.clone()]);
+    let reopened_again = Storage::at(fixture.path.clone());
+    reopened_again.initialize().unwrap();
+    assert_eq!(ordered(), vec![a.id.clone(), b.id.clone(), c.id.clone()]);
+    for (index, id) in [(0, a.id), (1, c.id), (0, b.id)] {
+        let actual = reopened_again.list_sources().unwrap();
+        assert_eq!(actual[index].id, id);
+        let confirmed = ConfirmedSourceDeletion::after_user_confirmation(&actual[index]);
+        reopened_again.delete_source_confirmed(&confirmed).unwrap();
+        assert!(matches!(
+            reopened_again.get_source(&id),
+            Err(StorageError::NotFound)
+        ));
+    }
+    assert!(reopened_again.list_sources().unwrap().is_empty());
+    assert_eq!(
+        reopened_again.query_channels(&query_all()).unwrap().total,
+        0
+    );
+}
+
+// Component-only F02/F03/F04: SQLite durability / empty-result / mode fallback
+// is a separate clause from remote focus/indicator/real process restart.
+#[test]
+fn focus001_cont012_component_last_favourite_removed_and_mode_reopen() {
+    let fixture = Fixture::new();
+    fixture.new_source("Synthetic favourite source", 3);
+    let full = fixture.store.query_channels(&query_all()).unwrap();
+    assert_eq!(full.total, 3);
+    let favourite = full.items[1].id.clone();
+    assert!(fixture.store.toggle_favourite(&favourite).unwrap());
+    fixture.store.set_favourites_only(true).unwrap();
+    let reopened = Storage::at(fixture.path.clone());
+    reopened.initialize().unwrap();
+    assert!(reopened.favourites_only().unwrap());
+    let mut filtered = query_all();
+    filtered.favourites_only = true;
+    let one = reopened.query_channels(&filtered).unwrap();
+    assert_eq!(one.total, 1);
+    assert_eq!(one.items[0].id, favourite);
+    assert!(!reopened.toggle_favourite(&favourite).unwrap());
+    assert_eq!(reopened.query_channels(&filtered).unwrap().total, 0);
+    reopened.set_favourites_only(false).unwrap();
+    assert!(!Storage::at(fixture.path.clone()).favourites_only().unwrap());
+    assert_eq!(reopened.query_channels(&query_all()).unwrap().total, 3);
+}

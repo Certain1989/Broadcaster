@@ -257,6 +257,132 @@ tests=(
   gtk_focus001_recovery_painted_streams_tv
   gtk_focus001_xtest_source_manager_actual_remote_back_and_home
   gtk_focus001_xtest_guide_manager_actual_remote_back_home_escape
+  gtk_focus001_cont012_mediathek_populated_back_vs_up_compact
+  gtk_focus001_cont012_mediathek_populated_back_vs_up_tv
+  gtk_focus001_cont012_menu_live_preferences
+  gtk_focus001_cont012_menu_live_add_playlist
+  gtk_focus001_cont012_menu_live_manage_sources
+  gtk_focus001_cont012_menu_live_fullscreen
+  gtk_focus001_cont012_menu_live_shortcuts
+  gtk_focus001_cont012_menu_live_about
+  gtk_focus001_cont012_menu_mediathek_preferences
+  gtk_focus001_cont012_menu_mediathek_add_playlist
+  gtk_focus001_cont012_menu_mediathek_manage_sources
+  gtk_focus001_cont012_menu_mediathek_fullscreen
+  gtk_focus001_cont012_menu_mediathek_shortcuts
+  gtk_focus001_cont012_menu_mediathek_about
+  gtk_focus001_cont012_menu_streams_preferences
+  gtk_focus001_cont012_menu_streams_add_playlist
+  gtk_focus001_cont012_menu_streams_manage_sources
+  gtk_focus001_cont012_menu_streams_fullscreen
+  gtk_focus001_cont012_menu_streams_shortcuts
+  gtk_focus001_cont012_menu_streams_about
+  gtk_focus001_cont008_virtual284_full_native_roundtrip
+  gtk_focus001_cont008_virtual1484_full_native_roundtrip
+  gtk_focus001_cont008_osk_remote_live_compact
+  gtk_focus001_cont008_osk_remote_live_tv
+  gtk_focus001_cont008_osk_remote_mediathek_compact
+  gtk_focus001_cont008_osk_remote_mediathek_tv
+  gtk_focus001_cont008_connected_guide_escape_compact
+  gtk_focus001_cont008_connected_guide_escape_tv
+  gtk_focus001_cont008_connected_guide_back_compact
+  gtk_focus001_cont008_connected_guide_back_tv
+  gtk_focus001_cont008_connected_guide_home_compact
+  gtk_focus001_cont008_connected_guide_home_tv
+  gtk_focus001_cont008_streams_osk_remote_compact
+  gtk_focus001_cont008_streams_osk_remote_tv
+  gtk_focus001_cont008_native_far_1484_page_end_home
+  gtk_focus001_cont008_native_far_10000_page_end_home
+  gtk_focus001_cont008_native_far_15000_page_end_home
+  gtk_focus001_cont008_painted_search_live_compact
+  gtk_focus001_cont008_painted_search_live_tv
+  gtk_focus001_cont008_painted_search_mediathek_compact
+  gtk_focus001_cont008_painted_search_mediathek_tv
+  gtk_focus001_cont008_painted_search_streams_compact
+  gtk_focus001_cont008_painted_search_streams_tv
+  gtk_focus001_cont008_painted_source_manager_compact
+  gtk_focus001_cont008_painted_source_manager_tv
+  gtk_focus001_cont008_painted_guide_manager_compact
+  gtk_focus001_cont008_painted_guide_manager_tv
+  gtk_focus001_cont008_source_card_ok_compact
+  gtk_focus001_cont008_source_card_ok_tv
+  gtk_focus001_cont008_source_card_right_compact
+  gtk_focus001_cont008_source_card_right_tv
+  gtk_focus001_cont008_live_five_rows_compact
+  gtk_focus001_cont008_live_five_rows_tv
+  gtk_focus001_cont008_live_middle_last_ok_compact
+  gtk_focus001_cont008_live_middle_last_ok_tv
+  gtk_focus001_cont008_live_middle_last_right_compact
+  gtk_focus001_cont008_live_middle_last_right_tv
+  gtk_focus001_cont008_app_menu_live_compact_back
+  gtk_focus001_cont008_app_menu_live_compact_escape
+  gtk_focus001_cont008_app_menu_live_compact_home
+  gtk_focus001_cont008_app_menu_live_tv_back
+  gtk_focus001_cont008_app_menu_live_tv_escape
+  gtk_focus001_cont008_app_menu_live_tv_home
+  gtk_focus001_cont008_app_menu_mediathek_compact_back
+  gtk_focus001_cont008_app_menu_mediathek_compact_escape
+  gtk_focus001_cont008_app_menu_mediathek_compact_home
+  gtk_focus001_cont008_app_menu_mediathek_tv_back
+  gtk_focus001_cont008_app_menu_mediathek_tv_escape
+  gtk_focus001_cont008_app_menu_mediathek_tv_home
+  gtk_focus001_cont008_app_menu_streams_compact_back
+  gtk_focus001_cont008_app_menu_streams_compact_escape
+  gtk_focus001_cont008_app_menu_streams_compact_home
+  gtk_focus001_cont008_app_menu_streams_tv_back
+  gtk_focus001_cont008_app_menu_streams_tv_escape
+  gtk_focus001_cont008_app_menu_streams_tv_home
+  gtk_focus001_cont008_menu_action_add_playlist_compact
+  gtk_focus001_cont008_menu_action_add_playlist_tv
+  gtk_focus001_cont008_menu_action_manage_sources_compact
+  gtk_focus001_cont008_menu_action_manage_sources_tv
+  gtk_focus001_cont009_menu_preferences_compact
+  gtk_focus001_cont009_menu_preferences_tv
+  gtk_focus001_cont009_menu_fullscreen_compact
+  gtk_focus001_cont009_menu_fullscreen_tv
+  gtk_focus001_cont009_menu_shortcuts_compact
+  gtk_focus001_cont009_menu_shortcuts_tv
+  gtk_focus001_cont009_menu_about_compact
+  gtk_focus001_cont009_menu_about_tv
+  gtk_focus001_cont008_dropdown_mediathek_compact_back
+  gtk_focus001_cont008_dropdown_mediathek_compact_escape
+  gtk_focus001_cont008_dropdown_mediathek_compact_home
+  gtk_focus001_cont008_dropdown_mediathek_tv_back
+  gtk_focus001_cont008_dropdown_mediathek_tv_escape
+  gtk_focus001_cont008_dropdown_mediathek_tv_home
+  gtk_focus001_cont008_dropdown_streams_compact_back
+  gtk_focus001_cont008_dropdown_streams_compact_escape
+  gtk_focus001_cont008_dropdown_streams_compact_home
+  gtk_focus001_cont008_dropdown_streams_tv_back
+  gtk_focus001_cont008_dropdown_streams_tv_escape
+  gtk_focus001_cont008_dropdown_streams_tv_home
+  gtk_focus001_cont010_source_move_up_compact
+  gtk_focus001_cont010_source_move_down_tv
+  gtk_focus001_cont010_guide_manager_nested_compact
+  gtk_focus001_cont010_guide_manager_nested_tv
+  gtk_focus001_cont010_global_switcher_boundaries_compact
+  gtk_focus001_cont011_guide_edit_compact
+  gtk_focus001_cont011_guide_remove_keep_tv
+  gtk_focus001_cont011_guide_remove_confirm_compact
+  gtk_focus001_cont012_guide_disable_apply_native_compact
+  gtk_focus001_cont012_guide_enable_apply_native_tv
+  gtk_focus001_cont012_guide_edit_osk_save_native_compact
+  gtk_focus001_cont011_source_facet_portal_compact
+  gtk_focus001_cont011_source_facet_portal_tv
+  gtk_focus001_cont011_rich_source_facet_compact
+  gtk_focus001_cont011_rich_source_facet_tv
+  gtk_focus001_cont011_rich_group_facet_compact
+  gtk_focus001_cont011_rich_group_facet_tv
+  gtk_focus001_cont011_rich_language_facet_compact
+  gtk_focus001_cont011_rich_language_facet_tv
+  gtk_focus001_cont011_rich_country_facet_compact
+  gtk_focus001_cont011_rich_country_facet_tv
+  gtk_focus001_cont012_four_facet_intersection_clear_compact
+  gtk_focus001_cont012_four_facet_intersection_clear_tv
+  gtk_focus001_cont012_four_facet_sort_async_empty_restore_compact
+  gtk_focus001_cont012_four_facet_sort_async_empty_restore_tv
+  gtk_focus001_cont011_manager_all_action_reachability_compact
+  gtk_focus001_cont011_manager_all_action_reachability_tv
 )
 # Fail closed when the public coverage ledger invents a test, omits a
 # required mapped case, or uses an unrecognized evidence/outcome class.
@@ -291,6 +417,31 @@ if ! awk -F '\t' '
   exit 2
 fi
 
+# Transition guard: keep the exact original 141-case blocking gate while
+# separately proving the expanded 267-case shard gate. This mode is permitted
+# only with the immutable original-141 and full-267 registry fingerprints.
+# It cannot silently drop or reorder baseline tests.
+if [[ -n "${FOCUS001_BASELINE_141_SHA256:-}" ]]; then
+  if [[ -n "${FOCUS001_ONLY_CASES:-}" || -n "${FOCUS001_SHARD_COUNT:-}" ||
+        -n "${FOCUS001_SHARD_INDEX:-}" || ${#tests[@]} -ne 267 ]]; then
+    echo 'FOCUS001 ENVIRONMENT incompatible or incomplete legacy transition gate' >&2
+    exit 2
+  fi
+  all_sha=$(printf '%s\n' "${tests[@]}" | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+  if [[ "$all_sha" != 56ff778fd9c3f97efc1b96da138c0186a8e370a7089eb1f8b02709576cd9f6c8 ]]; then
+    echo 'FOCUS001 ENVIRONMENT full 267-case registration changed unexpectedly' >&2
+    exit 2
+  fi
+  baseline_sha=$(printf '%s\n' "${tests[@]:0:141}" | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+  if [[ "$baseline_sha" != "$FOCUS001_BASELINE_141_SHA256" ||
+        "$baseline_sha" != de4499c97ea06c7f7ad03be9764195f05593bda925db43bfea27e03a5d84fba8 ]]; then
+    echo 'FOCUS001 ENVIRONMENT original 141-case gate fingerprint mismatch' >&2
+    exit 2
+  fi
+  tests=("${tests[@]:0:141}")
+  printf 'FOCUS001 BASELINE_GATE registered=267 immutable_original_cases=141 sha=%s\n' "$baseline_sha"
+fi
+
 # Diagnostic cohort mode is optional. The required existing CI invocation leaves
 # FOCUS001_ONLY_CASES unset, and continues to exercise EVERY registered case.
 if [[ -n "${FOCUS001_ONLY_CASES:-}" ]]; then
@@ -309,19 +460,88 @@ if [[ -n "${FOCUS001_ONLY_CASES:-}" ]]; then
   tests=("${selected[@]}")
 fi
 
+# Optional deterministic, bounded shard mode. The existing blocking CI
+# invocation never sets these variables and still runs all 267 registered cases.
+# Fail closed on partial configuration, overlap with explicit cohorts, an empty
+# shard or non-decimal/out-of-range values. Registry order is locale-independent.
+full_registry_count=${#tests[@]}
+full_registry_sha256=$(printf '%s\n' "${tests[@]}" | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+shard_count=${FOCUS001_SHARD_COUNT:-}
+shard_index=${FOCUS001_SHARD_INDEX:-}
+if [[ -n "$shard_count" || -n "$shard_index" ]]; then
+  if [[ -n "${FOCUS001_ONLY_CASES:-}" || ! "$shard_count" =~ ^[0-9]+$ ||
+        ! "$shard_index" =~ ^[0-9]+$ ]]; then
+    echo 'FOCUS001 ENVIRONMENT invalid/incompatible shard selector' >&2; exit 2
+  fi
+  # Avoid bash octal interpretation of leading zeroes.
+  shard_count=$((10#$shard_count))
+  shard_index=$((10#$shard_index))
+  if (( shard_count < 2 || shard_count > 32 || shard_index >= shard_count )); then
+    echo 'FOCUS001 ENVIRONMENT shard index/count outside permitted range' >&2; exit 2
+  fi
+  mapfile -t sorted_registered < <(printf '%s\n' "${tests[@]}" | LC_ALL=C sort)
+  selected=()
+  for i in "${!sorted_registered[@]}"; do
+    if (( i % shard_count == shard_index )); then
+      selected+=("${sorted_registered[$i]}")
+    fi
+  done
+  (( ${#selected[@]} > 0 )) || {
+    echo 'FOCUS001 ENVIRONMENT selected shard is empty' >&2; exit 2;
+  }
+  tests=("${selected[@]}")
+fi
 # A single published-commit test executable may be reused across isolated
 # Xvfb processes. No binary is inferred from a mutable Cargo target directory.
 case_binary=${FOCUS001_TEST_BINARY:-}
 binary_hash=UNSPECIFIED
+# Shards are deliberately invalid unless linked to one immutable compiled
+# binary and a durable per-case evidence directory; no Cargo-per-case fallback.
+if [[ -n "$shard_count" && ( -z "$case_binary" || -z "${FOCUS001_PILOT_RESULTS_DIR:-}" ) ]]; then
+  echo 'FOCUS001 ENVIRONMENT shard requires immutable test binary and result directory' >&2
+  exit 2
+fi
 if [[ -n "$case_binary" ]]; then
   [[ -f "$case_binary" && -x "$case_binary" ]] || { echo 'FOCUS001 missing executable test binary' >&2; exit 2; }
   binary_hash=$(sha256sum "$case_binary" | cut -d' ' -f1)
 fi
 source_sha=$(git -c safe.directory="$PWD" rev-parse --verify HEAD)
 source_tree=$(git -c safe.directory="$PWD" rev-parse --verify HEAD^{tree})
+if [[ -n "$shard_count" ]]; then
+  # Provenance is a required input, not a best-effort comment or mutable path.
+  if [[ -z "${FOCUS001_EXPECTED_SOURCE_SHA:-}" ||
+        -z "${FOCUS001_EXPECTED_SOURCE_TREE:-}" ||
+        -z "${FOCUS001_EXPECTED_BINARY_SHA256:-}" ||
+        -z "${FOCUS001_EXPECTED_REGISTRY_SHA256:-}" ||
+        "$source_sha" != "$FOCUS001_EXPECTED_SOURCE_SHA" ||
+        "$source_tree" != "$FOCUS001_EXPECTED_SOURCE_TREE" ||
+        "$binary_hash" != "$FOCUS001_EXPECTED_BINARY_SHA256" ||
+        "$full_registry_sha256" != "$FOCUS001_EXPECTED_REGISTRY_SHA256" ]]; then
+    echo 'FOCUS001 ENVIRONMENT shard source/tree/binary/registry provenance missing or mismatched' >&2
+    exit 2
+  fi
+fi
 results_dir=${FOCUS001_PILOT_RESULTS_DIR:-}
 if [[ -n "$results_dir" ]]; then mkdir -p -- "$results_dir"; fi
 printf 'FOCUS001 SOURCE_SHA=%s SOURCE_TREE=%s BINARY_SHA256=%s\n' "$source_sha" "$source_tree" "$binary_hash"
+printf 'FOCUS001 REGISTRY_SHA256=%s FULL_CASES=%d SELECTED_CASES=%d SHARD=%s/%s\n' \
+  "$full_registry_sha256" "$full_registry_count" "${#tests[@]}" \
+  "${shard_index:-ALL}" "${shard_count:-ALL}"
+# The file is written only to an explicitly supplied diagnostic output dir.
+# A sharded CI consumer must validate the registered set before interpreting
+# per-case verdicts; a missing file/case is UNRUN, never silently PASS.
+if [[ -n "$results_dir" ]]; then
+  {
+    printf 'format\tfocus001-shard-v1\n'
+    printf 'source_sha\t%s\nsource_tree\t%s\n' "$source_sha" "$source_tree"
+    printf 'binary_sha256\t%s\nregistry_sha256\t%s\n' "$binary_hash" "$full_registry_sha256"
+    printf 'registry_count\t%d\nselected_count\t%d\n' "$full_registry_count" "${#tests[@]}"
+    printf 'shard_index\t%s\nshard_count\t%s\n' "${shard_index:-ALL}" "${shard_count:-ALL}"
+  } > "$results_dir/shard-manifest.tsv.tmp"
+  mv -- "$results_dir/shard-manifest.tsv.tmp" "$results_dir/shard-manifest.tsv"
+  printf '%s\n' "${tests[@]}" > "$results_dir/selected-cases.txt.tmp"
+  mv -- "$results_dir/selected-cases.txt.tmp" "$results_dir/selected-cases.txt"
+fi
 
 record_pilot() {
   local name=$1 status=$2 code=$3 started=$4 log=$5
@@ -366,6 +586,8 @@ for test_name in "${tests[@]}"; do
   # ENVIRONMENT if compilation did not succeed. The recovery_* probes also
   # send XTest keys despite not containing `_xtest_` in their names.
   if [[ "$test_name" == *"_xtest_"* || "$test_name" == *"_recovery_"* ||
+        "$test_name" == *"_cont008_"* || "$test_name" == *"_cont009_"* ||
+        "$test_name" == *"_cont010_"* || "$test_name" == *"_cont011_"* || "$test_name" == *"_cont012_"* ||
         "$test_name" == *"_native_reachability" || "$test_name" == *"_two_key_reachability" ||
         "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ||
         "$test_name" == *"_rendered_indicator_negative_control_probe"* ]] && (( !xtest_ready )); then
@@ -380,7 +602,11 @@ for test_name in "${tests[@]}"; do
   if [[ -n "$case_binary" ]]; then
     test_command=("$case_binary" "$test_name" --ignored --test-threads=1 --nocapture)
   fi
-  if timeout --signal=TERM --kill-after=5s 120s \
+  case_timeout=120s
+  if [[ "$test_name" == gtk_focus001_cont008_virtual1484_full_native_roundtrip ]]; then
+    case_timeout=300s
+  fi
+  if timeout --signal=TERM --kill-after=5s "$case_timeout" \
     xvfb-run -a env \
     GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
     XDG_DATA_HOME="$case_root/data" XDG_CONFIG_HOME="$case_root/config" XDG_CACHE_HOME="$case_root/cache" \

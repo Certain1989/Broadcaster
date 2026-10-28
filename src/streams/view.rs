@@ -2365,6 +2365,21 @@ impl TvStreamsView {
         }
     }
 
+    /// Read-only evidence of actual async query results for a disposable test
+    /// fixture. This is not a way of changing the selection or invoking reload.
+    #[cfg(test)]
+    pub(crate) fn focus001_test_result_snapshot(&self) -> (u64, u32, Vec<(String, String)>) {
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("test must use mapped row model");
+        let mut identities = Vec::new();
+        for position in 0..rows.n_items().min(16) {
+            if let Some(channel) = rows.channel(position) {
+                identities.push((channel.source_id.clone(), channel.id.clone()));
+            }
+        }
+        (imp.generation.get(), rows.n_items(), identities)
+    }
+
     /// Map one persisted, disposable IPTV row into the real GtkListView. The
     /// storage identity must match the card action, so the production picker
     /// reads its genuine SQLite snapshot instead of a fabricated view-only ID.

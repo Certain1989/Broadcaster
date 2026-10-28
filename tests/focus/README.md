@@ -827,3 +827,290 @@ sandboxes but does not modify or replace required CI. This paragraph
 corrects prior *pending/unvalidated* notes and records the executed state;
 no runtime GUI/CSS/router code, production SQLite behavior, release, or
 CI gate was changed. **FOCUS-001 test/audit still PARTIAL.**
+
+## CONT-008 search-rendered focus native probes — candidate only
+
+Six additional source-pinned ignored XTest probes check Live, Mediathek and My Channels SearchEntry rendered focus at 640×480 and 1280×800. They must prove native Right→Left focus ownership, native X11 pixel change on the SearchEntry, an intentionally painted positive outline and a deliberately suppressed negative control. These are **unexecuted candidate tests** until run; they cannot close G01 or app-wide painted focus. No runtime CSS or GTK route changed.
+
+### CONT-008 local SearchEntry ring evidence — exact parent 21e71fd, CANDIDATE_DIRTY
+
+Six new separate Xvfb/XTest native Search Right→Left and SearchEntry outer-border pixel measurements completed **3 PASS, 3 product-route RED, 0 TIMEOUT/ENVIRONMENT/UNRUN** after correcting an invalid full-widget oracle that measured the GtkText caret as a focus ring. Measured four border strips, synthetic positive ring and deliberately suppressed-ring negative only where the native route reached the SearchEntry. Mediathek compact/TV and Live TV PASS. Live compact and My Channels compact/TV RED on native geometric focus return or entrance, *before* rendered-ring assertion; do not describe them as painted-ring failures. Audit G01 can be marked **NATIVE_MAPPED RED**, with production navigation correction still required. These are local **dirty candidate** results, not a new clean published commit, CI pass, or owner Wayland device acceptance.
+
+## CONT-008 manager painted-focus partial probe — candidate only
+
+Four extra mapped native XTest cases examine genuine source-manager and synthetic guide-manager initial upper button, local Right/Left reversal and actual X11 framebuffer focus cue at 640×480 and 1280×800, calibrated with visible/suppressed synthetic focus outlines. They are **NOT RUN** until isolated native checks complete. This is not G05/G06 closure: lower manager actions, nested confirmation and OSK cell focus still need native evidence.
+
+### CONT-008 actual manager painted-focus results — CANDIDATE_DIRTY 21e71fd
+
+Four additional native mapped Xvfb/XTest pixel-calibrated manager upper-toolbar probes completed **4 PASS, 0 RED/TIMEOUT/ENVIRONMENT/UNRUN**: source manager and programme-guide manager at 640×480 and 1280×800. True source-manager launcher traversed from mapped Search; guide modal opened with disposable test fixture then first-to-second action focus was native. Upper-row focus pixels change; deliberate positive ring changes and suppressed-ring control remains identical. This is **partial G05/G06 evidence only**, not coverage of lower-row manager, nested dialogs, file/guide chooser or OSK cells. No production changes, owner Wayland acceptance or published clean-source run implied.
+
+## CONT-008 source-card row portal tests — candidate only
+
+Four additional test-only native cases attempt genuine XTest launcher→source manager→first mapped ListBoxRow entry and distinct **OK** versus **Right/Left** card portals at compact/TV size. These deliberately reject a helper-only `grab_focus()` on the desired action. Synthetic SQLite data only; no real source replacement, deletion or remote retrieval. They are NOT_COVERED until executed; failures remain product RED, not skipped.
+
+### CONT-008 actual source-card portal REDs — dirty candidate 21e71fd
+
+Four genuine native mapped manager first-source ListBoxRow portal tests completed **0 PASS / 4 reproducible product RED / 0 TIMEOUT/ENVIRONMENT/UNRUN**. The manager's actual native first Add Playlist→Down path focuses the ListBoxRow at both 640×480 and 1280×800 (not an artificial focused button). A deliberate native Return leaves focus on that row instead of its enabled first GtkSwitch; native Right does not enter the lower Replace/Delete/order action row. These are D38 geometric/primary-action defects, recorded under **AS02/AS03 NATIVE_MAPPED RED** rather than mistaking unsupported focus seeding for coverage. No source data or real user playlists were touched; source fixtures are disposable SQLite.
+
+## CONT-008 real five-row Live ListBox — candidate only
+
+Six test-only probes add five uniquely identified synthetic `TvLiveCard` rows to the mapped production `GtkListBox` and attempt genuine native Search→first/middle/last Down and Up, plus separate middle/last first OK and Right portals into primary Play without a second media action. The setup never accesses a provider or user stream. E01/E02 remain NOT_COVERED pending actual isolated native results.
+
+### CONT-008 real five-card Live native results (CANDIDATE_DIRTY 21e71fd)
+
+Six isolated mapped Xvfb/XTest cases with five **unique real `TvLiveCard`/ListBox rows**, injected only synthetic channel objects, completed **1 PASS / 5 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**. Both viewports correctly enter the **first** mapped Live row directly from Search Down, but continuing native Down erroneously focuses an inner GtkButton instead of the next Live ListBoxRow. A native middle-row OK also leaves focus on TvLiveCard rather than primary Play. Only TV-sized Right entry passes the complete sampled journey. These are **E01/E02 NATIVE_MAPPED RED**, not finished implementation or a permission to alter production. E01 far-last and E02 remaining actions require retest after product correction. No actual stream/network/media playback occurred.
+
+## CONT-008 F06 full 284-row native traversal candidate
+
+New ignored isolated mapped-XTest test `gtk_focus001_cont008_virtual284_full_native_roundtrip` attempts 283 genuine D-pad Down keys and 283 genuine Up keys on an actual virtualized 284-row GtkListView. Fixture/page model creation occurs only once before native input; later helper jumps and `grab_focus()` are forbidden. At eight-key checkpoints assert mapped focus/real selected index; at the far last row assert bounded page cache; at return verify original source-qualified logical ID. **NOT YET EXECUTED** on the new candidate, so original gap F06 remains NOT_COVERED and no PASS or RED is inferred.
+
+### CONT-008 completed F06 native 284 far-boundary check (CANDIDATE_DIRTY 21e71fd)
+
+An isolated X11/XTest ignored GTK process **PASSED** on the real mapped 284-row GtkListView: actual 283 Down and 283 Up keys, with focus ownership and selected index checked after every <=8 input events. Real selection reached index 283, reversed to 0, kept its original source-qualified ID, and logged 1 cached page/284 slots and 40.72 s total; no subsequent fixture scroll or helper focus was used. `AUDIT_GAP_F06` is PASS for this exact **284-row native path**, not an inference about rendering contrast, async filter removal, 1484/10000/15000 far-last reachability, CI or N100 Wayland physical testing. Existing 132-key samplers remain separate. The native executable printed `1 passed; 0 failed` and exit verification uses that unambiguous test log; an outer tool orchestration timeout was not interpreted as a test failure.
+
+## CONT-008 OSK genuine remote special-key semantics candidate
+
+Four new isolated mapped XTest cases cover Live and Mediathek at compact/TV sizes. Each opens the real OSK through **Search Right + Return** (no direct launcher grab/click), checks native Down focus containment and separately applies XF86Back, Escape, and XF86HomePage. All three should dismiss the OSK and retain the original page without navigating behind the modal. **Not executed yet; C09 still NOT_COVERED across all nested editor/guide/My Channels contexts.**
+
+### CONT-008 OSK genuine Back/Escape/Home local XTest results
+
+Four new mapped-native cases executed twice after allowing normal AdwDialog focus restoration. Mediathek compact and TV: **2 PASS in both executions**; Live compact/TV each **FLAKY** across runs (one pass and one RED each). The two distinct Live failures were (1) after the modal closed, the focused owner was still unmapped; and (2) reopening from Search, real Right focused unmapped `GtkText` rather than mapped keyboard launcher. Real XTest input was confirmed; no run timed out or had environment faults. Native router and modal-asynchronous focus interaction need a later separately authorized production correction investigation. **C09 remains NOT_COVERED**, as My Channels and nested source/guide editors are not covered by these four tests. Do not smooth over the flip by longer sleeps/skipping tests.
+
+### Continued native far-list key characterization (candidate only)
+
+Three additional isolated tests use native X11 PageDown, End and Home on 1,484/10,000/15,000 synthetic mapped GtkListView rows. These **keyboard-only** shortcuts are not presumed present on the physical remote and do **not** close native D-pad far-last routes. Their outcome is a candidate until actually executed and entered in the ledger; existing RED tests remain blocking.
+
+The full 1,484-row remote D-pad first-to-last-to-first path is a separate new isolated candidate test, with every logical selection checked; neither its result nor passage time is assumed before the full process exits. The 284-row case is preserved through a shared identical native traversal helper.
+
+Two new My Channels native OSK remote-modal probes attempt to reach the keyboard from Search using actual Right keys, then test XF86Back, Escape, XF86HomePage, focus confinement and return. These are candidate-only until they run and do not cover editor OSK contexts.
+
+Six connected nested guide-manager return tests traverse Search→Manage Sources→Programme Guides using native GTK spatial paths, independently checking Escape, XF86Back and XF86HomePage at compact and TV sizes. Pending execution, not automatically credited.
+
+
+### Continuation-008 partial native findings — same verified 21e71fd parent, dirty candidate
+
+- F07 **NATIVE_MAPPED PASS**: 1,484 rows, actual XTest 1,483 Down and 1,483 Up, midpoint/final/return selected indices, source-qualified identity, ~193s. 284-row route also PASS after helper refactor. Observed 1,484 created slots and one cached page: bounded by the fixture count but **not proof of bounded memory/recycling** at 10k/15k; F08/F09/F10/F11 remain open.
+- Additional keyboard-only native PageDown/End/Up/Down/Home routes on 1,484, 10k, 15k PASS (3/3, zero environment/timeout). X11 physical keysyms were emitted, but ordinary keyboard End/PageDown are **not assumed remote control capabilities**, and this does not close far-last D-pad gaps.
+- AG08 connected Search -> source manager -> guide manager with native Escape and XF86Back returns PASS at both viewport sizes; native XF86HomePage **RED at both** because nested source/guide modal remains visible. Measured 4 PASS/2 RED, no environment/timeout. The production defect is preserved, not corrected by test code.
+- My Channels Search -> keyboard native route via Right/Return and actual XF86Back/Escape/XF86HomePage passes at both viewports (2/2); C09 remains NOT_COVERED for nested source/guide editor text lifecycle and Live OSK intermittent return.
+- All outcomes above are **CANDIDATE_DIRTY on exact published parent 21e71fd**, not published-commit or CI results. All other previous 141 native cases and their blocking REDs are preserved. X11 tests do not claim Fedora N100 Wayland physical acceptance.
+
+### CONT-008 native global application-menu Back/Escape/Home sampled graph (candidate)
+
+Eighteen isolated cases exercise real XTest Menu opening from the focused Live, Mediathek and My Channels SearchEntry at compact/TV sizes. Each verifies six menu-model actions, native Down focus confinement, and separate real XF86Back, Escape or XF86HomePage dismissal plus restored mapped page owner. No MenuButton direct grab/popover popup is permitted as entry evidence. Test cases are **NOT_COVERED until isolated execution**; this is a bounded partial D08/D09 graph, not a completed action-by-action activation inventory.
+
+### CONT-008 native app-menu action activation (candidate)
+
+Four additional isolated cases, at compact/TV size, use physical Menu and Down×1/2 then Return to activate Add Playlist/Manage Sources from real My Channels Search. They require the newly opened dialog to own mapped focus and physical Back to restore My Channels. They use only disposable private SQLite, no external URLs; evidence **NOT_COVERED until actually executed**. Remaining Preferences/Fullscreen/Shortcuts/About menu actions remain untested.
+
+### CONT-008 native channel/source dropdown popup dismissal (candidate)
+
+Twelve isolated cases for Mediathek broadcaster and My Channels source GtkDropDown, two viewports and physical XF86Back/Escape/XF86HomePage. They reach the actual dropdown from a SearchEntry via bounded real XTest arrows (no target grab), then Space, Down, and dismissal; check focus confinement, selected value and active page. **NOT_COVERED until executed**. Does not cover every facet dropdown or asynchronous refresh.
+
+### Continuation-009 menu-action test-oracle correction (unpublished candidate)
+
+The six-menu-item action path is native XTest `Menu` → 0–5 `Down` events →
+`Return`, with the actual focused `GtkModelButton` text verified before
+activation. A registered `TvApplication` with the same `app.window()` is
+required: an unregistered, separately allocated window can skip disabled
+application menu items and send app-owned dialogs to another window. The
+unregistered fixed-index menu oracle was invalid and must not be treated as a
+product failure. The registered 12-case Xvfb sample (six enabled actions at
+640×480 and 1280×800) returned 12 native RED: ten modal actions dismissed
+with native Back but left focus on the global switcher rather than the
+invoking My Channels view, while two fullscreen cases activated fullscreen
+but could not reopen the menu for the reverse action. These are candidate
+observations, not a complete app-wide D08 verdict or a published-CI result.
+
+### Continuation-009 complete local native test evidence (2026-10-28, unpublished)
+
+The same exact complete public parent `21e71fd7467b539f5e9ad597c2c9d61ec6d29d48`
+was used for every fresh, isolated Xvfb/XTest **CANDIDATE_DIRTY** case. The
+original 212-case sequential native suite ran all names and returned **145
+PASS / 67 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN**. A first 220-case
+scratch parallel run returned 119/101 but had **26 invalid fixture REDs**:
+its temporary `XDG_DATA_HOME` was not under `/tmp`. That diagnostic aggregate
+must never be used for application defect conclusions. After correcting
+per-case `/tmp` isolation the complete candidate2 220-case native suite ran
+**145 PASS / 75 RED / 0 TIMEOUT / 0 ENVIRONMENT / 0 UNRUN** with the
+required nonzero exit. These executions are not CI or clean published-SHA
+validation. GitHub published PR #46 remains at 21e; the existing CI focus
+gate is deliberately blocking.
+
+The six My Channels source dropdown cases previously RED were invalid
+fixed-step oracles. A bounded **native XTest** Search → Group → Source route
+now verifies the genuine GtkDropDown popup and distinct Back/Escape/Home
+close behavior, with all six independently passing. The initial app menu
+activation fixture was likewise invalid: an unregistered application did not
+present the same focusable menu actions. Twelve **separate registered
+application** tests (six named menu items at two viewport sizes) positively
+verify the exact focused GtkModelButton label before native Return. All 12
+returned RED: ten dialog actions activated but native Back restored focus
+to the global tab instead of the My Channels origin; fullscreen toggled on
+but the native Menu key failed to reopen the popover for two reverse cases.
+These 12 were **not part of the corrected candidate2 220-case integrated run**;
+they belong to the later candidate4 source with a registered fixture. Do not
+combine the cohorts into one falsely integrated claim.
+
+The TSV records one case row per one of the 220 unique runner names, with
+current observed local verdicts, **FLAKY** for contradictory runs and the
+original 91 `AUDIT_GAP_*` IDs preserved as an independent acceptance ledger.
+The original 91 gap ledger is still **8 PASS / 17 RED / 66 NOT_COVERED**;
+case-level PASS/RED alone never upgrades a gap. The full A–G connected
+paths, visual focus positive/negative controls and N100 physical Wayland
+evidence remain independent acceptance gates. Cross-host divergence remains
+unresolved. Do not weaken the blocking runner or alter production source to
+make it green. The latest private Coordination FOCUS-001 handoff contains
+per-case evidence and an explicit future production-correction matrix.
+
+All 18 three-view app-menu dismissal tests and all 12 Mediathek/My Channels
+dropdown dismissal tests now have actual isolated PASS evidence with XTest
+keys; their per-case TSV evidence level is `NATIVE_MAPPED`, not the pre-run
+`NONE`. These passing *dismissal-only* cases do not demonstrate native
+activation of every enabled menu action or cover all nested facet popovers,
+so original D08 and D09 remain separately `NOT_COVERED`.
+
+### Final same-source candidate4 220 native result (2026-10-28)
+
+A subsequent **complete integrated** 220-case run of the same registered-menu
+candidate4 source has now finished: **142 PASS / 78 RED / 0 TIMEOUT / 0
+ENVIRONMENT / 0 UNRUN**. Each case used its own mapped Xvfb process, real
+XTest key emitter and `/tmp` XDG/GSettings fixture; all names are accounted.
+The three candidate2→candidate4 changes from PASS to RED were Live OSK return
+at 640×480 and 1280×800, and compact Live five-row traversal. These remain
+cross-run variation, not evidence that production was changed. All twelve
+registered-menu action tests remain RED, while 18 cross-view app-menu
+dismissal and 12 native channel/source dropdown dismissal cases are PASS.
+The last long-run detached shell did not preserve its process exit-status file;
+the captured 220-case results and blocking-script logic independently prove
+78 RED, not a passing gate. No public CI run at candidate4 exists. This run
+supersedes any cross-candidate composite when reporting overall native totals.
+
+### Continuation-010 source reordering probes (candidate-only, 2026-10-28)
+
+Two isolated native XTest probes (AS12 and AS13) reached the real source manager
+through the observed Search → Manage Sources D-pad route and surveyed 25 mapped
+header/source controls. Neither the middle card Move Up (640×480) nor Move Down
+(1280×800) was reachable by real arrows from manager entry: both are **RED**.
+The same tests then **explicitly seeded** the otherwise unreachable button and
+sent a real XTest Return, proving synthetic SQLite ordering persisted and manager
+focus remained valid. Seeded action success is a *functional diagnostic*, not
+remote reachability and not complete closure of either original audit ID.
+
+A first Move Up run timed out with ~73 seconds of cold Cargo compilation before
+the native action completed; a warm rerun finished in 98.80 seconds with the
+actual RED above. Move Down completed in 86.63 seconds with RED. The test-only
+assertions intentionally retain the disconnected-path failure. The published
+PR #46 has not been modified; other 220 previously executed case outcomes
+retain their earlier candidate4 provenance.
+
+#### Continuation-010 candidate (unpublished, full 21e Git parent)
+
+The five added individual native cases have **not** been rerun together with all
+220 predecessor cases. The original same-source 220-case result remains
+**142 PASS / 78 RED** and must not be presented as the complete new 225-case
+result. Four of five new cases have been isolated in a verified genuine XTest
+mapped-GTK environment; their outcomes are as follows:
+
+- **AG09:** both `guide_manager_nested_compact` at 640×480 and
+  `guide_manager_nested_tv` at 1280×800 PASS. They traverse the actual
+  My Channels → Source Manager → Programme Guides native controls, the
+  Add URL dialog with real OK and Escape, then replay 14 control paths
+  from authentic guide-manager entry with physical arrow reversals. This
+  upgrades original AG09 to PASS only for this requirement, **not** painted
+  pixel contrast (G06), guide editing, persistence, or independent Wayland.
+- **AS12/AS13:** native manager entry and real arrow graph inspection find
+  no connected path to second-source Move Up/Move Down. The separate
+  explicitly **seeded-only** native Return diagnostics show working SQLite
+  reorder and retained manager focus. Both combined cases stay RED, while
+  complete original AS12/AS13 journeys remain NOT_COVERED; a seeded action
+  is not a reachable remote action.
+- **D06:** genuine Live Search Up at 640×480 focuses a mapped global
+  `AdwViewSwitcherButton`, but native Return selects **Mediathek** instead
+  of the active Live page. The new D06 test is RED before its later full
+  first/last tab navigation could run. The original full D06 remains
+  NOT_COVERED with this partial regression evidence. Earlier attempted
+  fixed-order and stationary end-stop oracles were invalid and do not count
+  as independent product regressions. No visual pixel-ring claim is made.
+
+Every new case uses a separate native Xvfb/XTest process and disposable
+`/tmp` XDG profile. The current source remains CANDIDATE_DIRTY; ordinary
+`cargo test` ignores all such display-dependent GTK cases. The future-only
+production correction register is retained in PRIVATE Coordination/Library;
+this test-only branch does not repair application handlers, source quotas, UI
+or CSS. A complete 225-case native run and separate CI/Wayland acceptance are
+still outstanding.
+
+Cont012 candidate adds a connected native guide settings Enabled/Apply disable persistence/focus probe. It is UNRUN until the verified candidate is compiled and executed; AG02 original full enable/disable coverage remains NOT_COVERED.
+
+- AG02 two-way Enabled tests (compact disable / TV enable) use only disposable SQLite guides and real D-pad replay from mapped manager and settings origin. Both are UNRUN until exact-source isolated native confirmation; initial disabled state is a synthetic fixture, not counted as a remote action.
+
+- AG04 prospective compact native guide Edit OSK test: XTest reach the guide Name keyboard launcher, type a key using actual mapped OSK and physical Return, Escape OSK, Apply from native editor route, check synthetic SQLite name and focus after repaint. UNRUN; do not promote audit until evidenced.
+
+### Additional mapped-facet and source-management canaries
+
+The new `gtk_focus001_cont011_*facet*` cases test physical XTest directional paths from the My Channels Search entry into a populated source, group, language or country drop-down at compact and TV viewports. They do not imply that a text OSK, multi-filter intersection, Clear Filters or cross-process persistence was tested. The `*manager_all_action_reachability*` cases measure enabled per-source row actions and replay arrows from the actual manager entry; missing action paths remain blocking RED rather than being bypassed by a seeded `grab_focus`. All fixtures use disposable synthetic SQLite.
+
+
+### Continuation-012: compound persisted facet navigation (test-only candidate, not yet PR-published)
+
+Two newly registered isolated GTK/XTest cases, `gtk_focus001_cont012_four_facet_intersection_clear_{compact,tv}`, start at the mapped My Channels Search entry, trace actual physical directional navigation to four real GtkDropDown controls, select each using native Space/Down/Return, and check three disposable SQLite playlist source identities through result changes `12 → 4 → 2 → 2 → 2`. They navigate to Clear Filters using XTest and verify a fresh async query restores all 12 rows from three source IDs, with per-step mapped/sensitive focus ownership. Both 640×480 and 1280×800 cases independently measured PASS against the same dirty test binary. A diagnostic-only graph survey seeds widgets **before** the claimed journey; **no intermediate seeded focus is counted as an executed remote route**. No production code, network source or real user playlist is used.
+
+This directly adds a true connected group/source/language/country intersection and clear route relevant to original B10, **not** the unrelated guide mapping picker Apply/Cancel. It does **not** finish original F05 (sort and overlapping async reload), test rendered ring pixels for every selected facet, or prove a real Wayland/N100 remote run. Predecessor 243-case evidence and this distinct 2-case candidate have different full dirty-diff hashes; do not sum them into a same-source 245-case result until the final integrated native run. Historical original audit 91=9 PASS/18 RED/64 NOT_COVERED remains the immutable pre-continuation baseline.
+
+### Continuation-012 F05 independent compounded filter/sort/async variants
+
+The compact and TV `four_facet_sort_async_empty_restore` variants extend the real native
+connected Search→four facets→Sort journey with XTest typing of a no-match string,
+a debounced SQLite reload to zero rows, native Backspace restoring the
+filtered geometry. Clear Filters after the changed Sort label reflows the
+toolbar is deliberately not credited; its changed directional graph needs
+separate measured connected traversal. The
+fixture contains only local synthetic playlists (`example.invalid`). The expected
+query sequence is 12→4→2→2→2→2→0→2, with real focus-owner checks after each
+async query. Results are *F05 partial evidence* until executed and do not test
+overlapping out-of-order in-flight replies, a painted pixel ring or full app scope.
+
+### Continuation-012 isolated downstream persistence clauses
+
+`streams::tests::focus001_cont012_component_three_source_edit_reorder_delete_reopen`
+and `...component_last_favourite_removed_and_mode_reopen` are deliberately
+**MODEL_ONLY / COMPONENT_ONLY**. They exercise disposable SQLite changes and
+store reopen behind already documented disconnected manager-card actions; they
+do not simulate remote access, a real app process restart or rendered focus.
+Keep original AS08/09/12/13/14 and F02/03/04 classifications open until
+full connected native acceptance or a proven product blocker is recorded.
+
+### Continuation-012 populated Mediathek D10 Back versus Up
+
+Two isolated mapped XTest cases enter five disposable programme rows from the
+real Mediathek Search field via physical Down, verify Up from the first result
+returns to Sort and Down reverses to that same card, then separately send
+**XF86Back** from the same result and check its distinct broadcaster browse
+portal and page containment. The tests do not conflate Back with Up or use a
+synthetic router call instead of the mapped GTK controller. They remain D10
+partial evidence until the complete duration/sort graph and painted cue are
+measured.
+
+Continuation-012 D08 expansion: 12 test-only native XTest cases independently activate all six enabled global menu actions from Live (compact 640x480) and Mediathek (TV 1280x800), including dialog focus/Back return and fullscreen restoration. Native results must be measured separately; existing My Channels menu cases do not certify other pages. Original D08 remains NOT_COVERED until the three-page action matrix is evaluated with original contract and rendered focus limitations.
+
+D08 test-harness correction before classification: the first native probe accidentally used an unshown Live loading toolbar, causing invalid XTest text-delivery failures; also corrected the intentional Add Playlist/Manage Sources switch to My Channels according to the actual window action handlers. First 12-case run INVALID_HARNESS for Live and overly strict destination for those actions; archive diagnostic separately, do not count as product RED. Other real focus jumps after Back remain RED canaries pending rerun against corrected candidate.
+
+### Continuation-012 D08 final third-page native action matrix (candidate)
+
+Six further isolated `gtk_focus001_cont012_menu_streams_*` cases exercise the
+same actual mapped global Menu→arrow selection→Return→XF86Back paths from the
+My Channels Search origin at 640×480, with an empty disposable local SQLite
+source fixture. They cover Preferences, Add Playlist, Manage Sources, Toggle
+Fullscreen, Keyboard Shortcuts, and About. Add/Manage intentionally navigate to
+My Channels, while other actions must restore focus to the invoking page.
+**These six cases are UNRUN until the exact candidate binary has been executed.**
+Do not promote the original D08 ID merely from activating each entry: the
+return, fullscreen, reversibility and painted-indicator clauses still apply.
+
+Corrected prior WIP23 AG02/AG04 ledger-only error: three already-executed
+native guide enable/disable/Edit tests are RED with their source-specific log
+SHA-256 fingerprints in the ledger, although the original original metadata
+incorrectly retained UNRUN. No repeated native guide graph traversal is
+necessary on unchanged production source, and reachability RED does not prove
+that unexecuted Apply/OSK/persistence subclauses passed.

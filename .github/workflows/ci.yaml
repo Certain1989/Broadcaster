@@ -80,7 +80,9 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_playback_window_origin_and_cold_start -- --ignored --test-threads=1
-      - name: Block PR on mapped GTK remote focus regression suite
+      - name: Block PR on original 141 mapped GTK remote focus regressions (transition gate)
+        env:
+          FOCUS001_BASELINE_141_SHA256: de4499c97ea06c7f7ad03be9764195f05593bda925db43bfea27e03a5d84fba8
         run: bash tests/focus/run-mapped.sh
       - name: Verify isolated first-launch fullscreen settings
         run: bash tests/first-launch-fullscreen.sh
@@ -139,7 +141,7 @@ jobs:
           import json, pathlib, subprocess, os, hashlib
           required={
               'gtk_focus001_xtest_mediathek_middle_card_ok_primary_play',
-              'gtk_focus001_xtest_live_search_down_native_propagation',
+              'gtk_focus001_xtest_mediathek_search_down_up',
               'gtk_focus001_negative_control_detects_stolen_focus',
           }
           binaries=set()
@@ -179,13 +181,13 @@ jobs:
           mkdir -p focus-pilot-artifacts/observed focus-pilot-artifacts/environment
           set +e
           FOCUS001_TEST_BINARY="$exe" \
-          FOCUS001_ONLY_CASES='gtk_focus001_xtest_mediathek_middle_card_ok_primary_play,gtk_focus001_xtest_live_search_down_native_propagation,gtk_focus001_negative_control_detects_stolen_focus' \
+          FOCUS001_ONLY_CASES='gtk_focus001_xtest_mediathek_middle_card_ok_primary_play,gtk_focus001_xtest_mediathek_search_down_up,gtk_focus001_negative_control_detects_stolen_focus' \
           FOCUS001_PILOT_RESULTS_DIR=focus-pilot-artifacts/observed \
             bash tests/focus/run-mapped.sh > focus-pilot-artifacts/observed-summary.txt 2>&1
           observed_rc=$?
           FOCUS001_CC=/intentionally-missing-compiler \
           FOCUS001_TEST_BINARY="$exe" \
-          FOCUS001_ONLY_CASES='gtk_focus001_xtest_live_search_down_native_propagation' \
+          FOCUS001_ONLY_CASES='gtk_focus001_xtest_mediathek_search_down_up' \
           FOCUS001_PILOT_RESULTS_DIR=focus-pilot-artifacts/environment \
             bash tests/focus/run-mapped.sh > focus-pilot-artifacts/environment-summary.txt 2>&1
           environment_rc=$?
@@ -206,12 +208,12 @@ jobs:
           env={p.stem: verified(p) for p in (root/'environment').glob('*.tsv')}
           expected={
               'gtk_focus001_xtest_mediathek_middle_card_ok_primary_play':'PASS',
-              'gtk_focus001_xtest_live_search_down_native_propagation':'RED',
+              'gtk_focus001_xtest_mediathek_search_down_up':'RED',
               'gtk_focus001_negative_control_detects_stolen_focus':'PASS',
           }
           print('FOCUS001 DIAGNOSTIC observed',observed,'environment',env)
           assert observed==expected, 'product RED, native PASS or focus-theft canary changed: investigate, no acceptance'
-          assert env=={'gtk_focus001_xtest_live_search_down_native_propagation':'ENVIRONMENT'}, 'missing-XTest control misclassified'
+          assert env=={'gtk_focus001_xtest_mediathek_search_down_up':'ENVIRONMENT'}, 'missing-XTest control misclassified'
           PY
       - name: Preserve bounded diagnostic artifacts even on nonzero
         if: always()
@@ -221,6 +223,236 @@ jobs:
           path: focus-pilot-artifacts/
           retention-days: 7
           if-no-files-found: warn
+
+
+  # A separate blocked-by-default extension: one exact published test binary is
+  # compiled, fingerprinted and reused across fourteen isolated XTest cohorts.
+  # Existing rust mapped-focus gate remains blocking until independent review.
+  focus_build:
+    name: "FOCUS-001 native build once (267-case registry)"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install GTK native build dependencies and XTest
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth libxtst libx11 python
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build one immutable published-source test executable
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p focus-build-artifacts
+          meson setup _build -Dprofile=development
+          cargo test --locked --no-run --message-format=json > focus-build-artifacts/compiler.jsonl
+          python - <<'PYBUILD'
+          import hashlib, json, os, pathlib, re, subprocess
+          root=pathlib.Path.cwd()
+          repo_git=['git','-c','safe.directory='+str(root),'rev-parse']
+          source_sha=subprocess.check_output([*repo_git,'HEAD'],text=True).strip()
+          source_tree=subprocess.check_output([*repo_git,'HEAD^{tree}'],text=True).strip()
+          assert source_sha==os.environ['EXPECTED_SHA'], 'SOURCE_MISMATCH: checked-out PR head differs'
+          script=(root/'tests/focus/run-mapped.sh').read_text()
+          match=re.search(r'^tests=\(\n(.*?)\n\)',script,re.M|re.S)
+          assert match, 'no native registry'
+          cases=[v.strip() for v in match.group(1).splitlines() if v.strip() and not v.lstrip().startswith('#')]
+          assert len(cases)==267 and len(set(cases))==267, 'native registry must contain 267 distinct cases'
+          registry_sha=hashlib.sha256(''.join(v+'\n' for v in sorted(cases)).encode()).hexdigest()
+          assert registry_sha=='56ff778fd9c3f97efc1b96da138c0186a8e370a7089eb1f8b02709576cd9f6c8', 'unexpected 267-case registry'
+          binaries=set()
+          for line in pathlib.Path('focus-build-artifacts/compiler.jsonl').read_text().splitlines():
+              try: item=json.loads(line)
+              except ValueError: continue
+              exe=item.get('executable')
+              if item.get('reason')=='compiler-artifact' and exe and pathlib.Path(exe).is_file():
+                  binaries.add(os.path.realpath(exe))
+          matches=[]
+          for exe in binaries:
+              result=subprocess.run([exe,'--list'],text=True,capture_output=True,timeout=25)
+              if result.returncode==0:
+                  test_names={x.rsplit(': test',1)[0].split('::')[-1] for x in result.stdout.splitlines() if x.endswith(': test')}
+                  if all(x in test_names for x in cases): matches.append(exe)
+          assert len(matches)==1, f'FOCUS001 ENVIRONMENT expected one full 267-case test binary got {len(matches)}'
+          exe=pathlib.Path(matches[0])
+          binary_hash=hashlib.sha256(exe.read_bytes()).hexdigest()
+          manifest={'format':'focus001-build-v1','source_sha':source_sha,'source_tree':source_tree,'binary_sha256':binary_hash,'binary_name':exe.name,'registry_sha256':registry_sha,'registry_count':267,'cargo_lock_sha256':hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest()}
+          dst=pathlib.Path('focus-build-artifacts')
+          (dst/'manifest.json').write_text(json.dumps(manifest,sort_keys=True,indent=2)+'\n')
+          (dst/'registered-cases.txt').write_text(''.join(x+'\n' for x in sorted(cases)))
+          (dst/'test-binary-path.txt').write_text(str(exe)+'\n')
+          print('FOCUS001 SOURCE',source_sha,source_tree,'BINARY_SHA256',binary_hash,'CASES',len(cases))
+          PYBUILD
+          exe=$(cat focus-build-artifacts/test-binary-path.txt)
+          tar -czf focus-build-artifacts/test-binary.tar.gz -C "$(dirname "$exe")" "$(basename "$exe")"
+          # No raw compiler output, cache contents or production/user data in public artifacts.
+          rm -f focus-build-artifacts/compiler.jsonl focus-build-artifacts/test-binary-path.txt
+      - name: Preserve source-bound build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: focus001-267-build-${{ github.event.pull_request.head.sha || github.sha }}
+          path: focus-build-artifacts/
+          retention-days: 7
+          if-no-files-found: error
+
+  focus_shards:
+    name: "FOCUS-001 native 267 shard ${{ matrix.shard }}"
+    needs: [focus_build]
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    steps:
+      - name: Install GTK runtime and XTest dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita xorg-server-xvfb xorg-xauth libxtst libx11 python
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: focus001-267-build-${{ github.event.pull_request.head.sha || github.sha }}
+          path: focus-build-in/
+      - name: Validate immutable binary and execute isolated native shard
+        shell: bash
+        env:
+          FOCUS001_EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FOCUS001_SHARD_INDEX: ${{ matrix.shard }}
+          FOCUS001_SHARD_COUNT: 14
+        run: |
+          set -euo pipefail
+          mkdir -p focus-shard-out
+          python - <<'PYSHARD'
+          import hashlib, json, os, pathlib, subprocess, tarfile
+          root=pathlib.Path.cwd(); artifact=root/'focus-build-in'
+          manifest=json.loads((artifact/'manifest.json').read_text())
+          assert manifest['format']=='focus001-build-v1' and manifest['registry_count']==267
+          assert manifest['source_sha']==os.environ['FOCUS001_EXPECTED_SOURCE_SHA'], 'SOURCE_MISMATCH'
+          commit=subprocess.check_output(['git','-c','safe.directory='+str(root),'rev-parse','HEAD'],text=True).strip()
+          tree=subprocess.check_output(['git','-c','safe.directory='+str(root),'rev-parse','HEAD^{tree}'],text=True).strip()
+          assert commit==manifest['source_sha'] and tree==manifest['source_tree'], 'SOURCE/TREE_MISMATCH'
+          assert hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest()==manifest['cargo_lock_sha256'], 'LOCK_MISMATCH'
+          pack=artifact/'test-binary.tar.gz'
+          with tarfile.open(pack,'r:gz') as tar:
+              members=tar.getmembers()
+              assert len(members)==1 and members[0].isfile() and members[0].name==manifest['binary_name'], 'binary archive unsafe'
+              dest=root/'focus-shard-bin'
+              dest.mkdir(exist_ok=True)
+              tar.extractall(dest,filter='data')
+          binary=dest/manifest['binary_name'];binary.chmod(0o700)
+          assert hashlib.sha256(binary.read_bytes()).hexdigest()==manifest['binary_sha256'], 'BINARY_MISMATCH'
+          lines=(artifact/'registered-cases.txt').read_text().splitlines()
+          assert len(lines)==267 and len(set(lines))==267
+          assert hashlib.sha256(''.join(x+'\n' for x in lines).encode()).hexdigest()==manifest['registry_sha256'], 'REGISTRY_MISMATCH'
+          env_file=root/'focus-shard-out/verified.env'
+          env_file.write_text(f"FOCUS001_TEST_BINARY={binary}\nFOCUS001_EXPECTED_SOURCE_TREE={tree}\nFOCUS001_EXPECTED_BINARY_SHA256={manifest['binary_sha256']}\nFOCUS001_EXPECTED_REGISTRY_SHA256={manifest['registry_sha256']}\n")
+          print('FOCUS001 VERIFIED',commit,tree,manifest['binary_sha256'],os.environ['FOCUS001_SHARD_INDEX'])
+          PYSHARD
+          set -a
+          source focus-shard-out/verified.env
+          set +a
+          set +e
+          FOCUS001_PILOT_RESULTS_DIR=focus-shard-out/results bash tests/focus/run-mapped.sh > focus-shard-out/summary.txt 2>&1
+          code=$?
+          set -e
+          printf '%s\n' "$code" > focus-shard-out/exit-code.txt
+          # The shard must preserve a nonzero outcome even after artifact upload.
+          cat focus-shard-out/summary.txt | tail -n 8
+          exit "$code"
+      - name: Preserve shard evidence even when cases are RED
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: focus001-shard-${{ matrix.shard }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: focus-shard-out/
+          retention-days: 7
+          if-no-files-found: error
+
+  focus_aggregate:
+    name: "FOCUS-001 complete 267-case integrity and blocking gate"
+    needs: [focus_build, focus_shards]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: focus001-267-build-${{ github.event.pull_request.head.sha || github.sha }}
+          path: focus-build-in/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: focus001-shard-*-${{ github.event.pull_request.head.sha || github.sha }}
+          path: focus-shard-in/
+      - name: Aggregate all exact-source case results and original 91-ID registry, fail closed
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BUILD_RESULT: ${{ needs.focus_build.result }}
+          SHARDS_RESULT: ${{ needs.focus_shards.result }}
+        run: |
+          python3 - <<'PYAGG'
+          import collections,hashlib,json,os,pathlib,re,subprocess,sys
+          root=pathlib.Path.cwd(); errors=[]; source=os.environ['EXPECTED_SHA']
+          build=json.loads((root/'focus-build-in/manifest.json').read_text())
+          assert build['source_sha']==source and build['format']=='focus001-build-v1', 'BUILD_SOURCE_MISMATCH'
+          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert head==source and tree==build['source_tree'], 'AGGREGATOR_SOURCE_MISMATCH'
+          assert os.environ['BUILD_RESULT']=='success', 'build unsuccessful'
+          cases=(root/'focus-build-in/registered-cases.txt').read_text().splitlines()
+          assert len(cases)==267 and len(set(cases))==267 and cases==sorted(cases), 'registry malformed'
+          assert hashlib.sha256(''.join(v+'\n' for v in cases).encode()).hexdigest()==build['registry_sha256'], 'registry digest differs'
+          assert hashlib.sha256((root/'Cargo.lock').read_bytes()).hexdigest()==build['cargo_lock_sha256'], 'Cargo.lock differs'
+          actual={}; totals=collections.Counter(); shard_root=root/'focus-shard-in'
+          for i in range(14):
+              name=f'focus001-shard-{i}-{source}'
+              part=shard_root/name
+              if not part.is_dir():
+                  errors.append(f'UNRUN missing shard {i}');continue
+              resultdir=part/'results'
+              try:
+                  info={k:v for k,v in (line.split('\t',1) for line in (resultdir/'shard-manifest.tsv').read_text().splitlines())}
+                  assert info['format']=='focus001-shard-v1' and info['source_sha']==source and info['source_tree']==tree
+                  assert info['registry_count']=='267' and info['binary_sha256']==build['binary_sha256'] and info['registry_sha256']==build['registry_sha256']
+                  assert int(info['selected_count'])==len(cases[i::14]) and info['shard_index']==str(i) and info['shard_count']=='14'
+                  selected=(resultdir/'selected-cases.txt').read_text().splitlines()
+                  assert selected==cases[i::14], f'shard {i} selected wrong cases'
+                  observed=list(resultdir.glob('gtk_focus001_*.tsv'))
+                  assert len(observed)==len(selected), f'shard {i} missing case evidence'
+                  for file in observed:
+                      line=file.read_text().strip().split('\t');assert len(line)==8, f'invalid TSV {file}'
+                      cname,status,rc,sha,t,exe,logsha,seconds=line
+                      assert file.stem==cname and cname in selected and cname not in actual, f'duplicate/orphan {cname}'
+                      assert sha==source and t==tree and exe==build['binary_sha256']
+                      assert status in {'PASS','RED','ENVIRONMENT','TIMEOUT','UNRUN','FLAKY'}
+                      assert hashlib.sha256(file.with_suffix('.log').read_bytes()).hexdigest()==logsha, f'log hash mismatch {cname}'
+                      assert int(seconds)>=0 and int(rc)>=0
+                      actual[cname]=status; totals[status]+=1
+                  assert (part/'exit-code.txt').is_file(), f'shard {i} exit code missing'
+                  rc=int((part/'exit-code.txt').read_text().strip())
+                  assert rc== (0 if all(actual[c]=='PASS' for c in selected) else 1), f'shard {i} failure not propagated'
+              except Exception as e:
+                  errors.append(f'shard {i}: {e}')
+          missing=sorted(set(cases)-set(actual));extra=sorted(set(actual)-set(cases))
+          if missing:errors.append(f'UNRUN {len(missing)} cases missing')
+          if extra:errors.append(f'{len(extra)} phantom cases')
+          # Separate original acceptance denominator from executable-case count.
+          raw=(root/'tests/focus/focus-coverage.tsv').read_text().splitlines()
+          originals=[line.split('\t')[1] for line in raw if line and not line.startswith('#') and len(line.split('\t'))==12 and re.fullmatch(r'AUDIT_GAP_[A-Z]{1,2}\d{2}',line.split('\t')[1])]
+          if len(originals)!=91 or len(set(originals))!=91: errors.append(f'original 91-ID registry inconsistent: {len(originals)} rows')
+          if len(actual)!=267:errors.append(f'measured {len(actual)} /267 cases')
+          if os.environ['SHARDS_RESULT']!='success':errors.append('one or more native shards failed; blocking RED preserved')
+          if any(x!='PASS' for x in actual.values()):errors.append('native case RED/ENVIRONMENT/TIMEOUT/UNRUN/FLAKY recorded: blocking')
+          print('FOCUS001 AGGREGATE',dict(totals),'of 267; original IDs',len(originals),'errors',len(errors))
+          for e in errors:print('FOCUS001 GATE ERROR',e,file=sys.stderr)
+          if errors:sys.exit(1)
+          PYAGG
 
   flatpak:
     name: "Flatpak"
