@@ -291,6 +291,51 @@ if ! awk -F '\t' '
   exit 2
 fi
 
+# Diagnostic cohort mode is optional. The required existing CI invocation leaves
+# FOCUS001_ONLY_CASES unset, and continues to exercise EVERY registered case.
+if [[ -n "${FOCUS001_ONLY_CASES:-}" ]]; then
+  read -r -a selected <<< "${FOCUS001_ONLY_CASES//,/ }"
+  (( ${#selected[@]} )) || { echo 'FOCUS001 invalid empty pilot cohort' >&2; exit 2; }
+  declare -A selected_once=()
+  for name in "${selected[@]}"; do
+    [[ -z "${selected_once[$name]:-}" ]] || { echo "FOCUS001 duplicate cohort case=$name" >&2; exit 2; }
+    selected_once[$name]=1
+    found=0
+    for registered in "${tests[@]}"; do
+      [[ "$registered" != "$name" ]] || { found=1; break; }
+    done
+    (( found )) || { echo "FOCUS001 unknown cohort case=$name" >&2; exit 2; }
+  done
+  tests=("${selected[@]}")
+fi
+
+# A single published-commit test executable may be reused across isolated
+# Xvfb processes. No binary is inferred from a mutable Cargo target directory.
+case_binary=${FOCUS001_TEST_BINARY:-}
+binary_hash=UNSPECIFIED
+if [[ -n "$case_binary" ]]; then
+  [[ -f "$case_binary" && -x "$case_binary" ]] || { echo 'FOCUS001 missing executable test binary' >&2; exit 2; }
+  binary_hash=$(sha256sum "$case_binary" | cut -d' ' -f1)
+fi
+source_sha=$(git rev-parse --verify HEAD)
+source_tree=$(git rev-parse --verify HEAD^{tree})
+results_dir=${FOCUS001_PILOT_RESULTS_DIR:-}
+if [[ -n "$results_dir" ]]; then mkdir -p -- "$results_dir"; fi
+printf 'FOCUS001 SOURCE_SHA=%s SOURCE_TREE=%s BINARY_SHA256=%s\n' "$source_sha" "$source_tree" "$binary_hash"
+
+record_pilot() {
+  local name=$1 status=$2 code=$3 started=$4 log=$5
+  [[ -n "$results_dir" ]] || return 0
+  local filtered="$results_dir/$name.log"
+  trace_excerpt "$log" > "$filtered"
+  local log_sha
+  log_sha=$(sha256sum "$filtered" | cut -d' ' -f1)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$name" "$status" "$code" "$source_sha" "$source_tree" \
+    "$binary_hash" "$log_sha" "$(( $(date +%s) - started ))" > "$results_dir/$name.tsv.tmp"
+  mv -- "$results_dir/$name.tsv.tmp" "$results_dir/$name.tsv"
+}
+
 pass=0
 fail=0
 timeout_count=0
@@ -312,6 +357,9 @@ trace_excerpt() {
 for test_name in "${tests[@]}"; do
   printf '\nFOCUS001 RUN %s\n' "$test_name"
   log="$scratch/$test_name.log"
+  case_start=$(date +%s)
+  case_status=UNRUN
+  case_code=0
   case_root="$scratch/cases/$test_name"
   mkdir -p "$case_root/data" "$case_root/config" "$case_root/cache"
   # Every test relying on the native XTest fixture must fail closed as
@@ -322,38 +370,52 @@ for test_name in "${tests[@]}"; do
         "$test_name" == *"_app_menu_escape"* || "$test_name" == *"_osk_modal_escape"* ||
         "$test_name" == *"_rendered_indicator_negative_control_probe"* ]] && (( !xtest_ready )); then
     environment=$((environment + 1))
-    echo "FOCUS001 ENVIRONMENT $test_name (XTest emitter unavailable)"
+    case_status=ENVIRONMENT
+    case_code=2
+    echo "FOCUS001 ENVIRONMENT $test_name (XTest emitter unavailable)" | tee "$log"
+    record_pilot "$test_name" "$case_status" "$case_code" "$case_start" "$log"
     continue
+  fi
+  test_command=(cargo test --locked "$test_name" -- --ignored --test-threads=1 --nocapture)
+  if [[ -n "$case_binary" ]]; then
+    test_command=("$case_binary" "$test_name" --ignored --test-threads=1 --nocapture)
   fi
   if timeout --signal=TERM --kill-after=5s 120s \
     xvfb-run -a env \
     GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
     XDG_DATA_HOME="$case_root/data" XDG_CONFIG_HOME="$case_root/config" XDG_CACHE_HOME="$case_root/cache" \
     FOCUS001_XTEST_BIN="$scratch/xtest-key" FOCUS001_PIXEL_BIN="$scratch/xtest-key" \
-    cargo test --locked "$test_name" -- --ignored --test-threads=1 --nocapture >"$log" 2>&1; then
+    "${test_command[@]}" >"$log" 2>&1; then
     if grep -Eq '^running 1 test$' "$log"; then
       pass=$((pass + 1))
+      case_status=PASS
       printf 'FOCUS001 PASS %s\n' "$test_name"
     else
       unrun=$((unrun + 1))
+      case_status=UNRUN
       printf 'FOCUS001 UNRUN %s (no unique test executed)\n' "$test_name"
       trace_excerpt "$log"
     fi
   else
     code=$?
+    case_code=$code
     if ((code == 124 || code == 137)); then
       timeout_count=$((timeout_count + 1))
+      case_status=TIMEOUT
       printf 'FOCUS001 TIMEOUT %s exit=%d\n' "$test_name" "$code"
     elif ((code == 125 || code == 126 || code == 127)) || \
          grep -Eqi '(FOCUS001 INPUT_UNVERIFIED|real X11 .* emission failed with Some\([3-9]\)|cannot open display|could not open display|gtk.*initializ.*fail|xvfb.*(failed|error)|failed to resolve dependencies offline)' "$log"; then
       environment=$((environment + 1))
+      case_status=ENVIRONMENT
       printf 'FOCUS001 ENVIRONMENT %s exit=%d\n' "$test_name" "$code"
     else
       fail=$((fail + 1))
+      case_status=RED
       printf 'FOCUS001 RED %s exit=%d\n' "$test_name" "$code"
     fi
     trace_excerpt "$log"
   fi
+  record_pilot "$test_name" "$case_status" "$case_code" "$case_start" "$log"
 done
 
 printf '\nFOCUS001 SUMMARY required=%d PASS=%d RED=%d TIMEOUT=%d ENVIRONMENT=%d UNRUN=%d\n' \

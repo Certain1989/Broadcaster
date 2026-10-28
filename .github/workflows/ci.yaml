@@ -110,6 +110,108 @@ jobs:
           test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
           test -z "$(git status --porcelain --untracked-files=all)"
 
+
+  # Exploratory only: this job must never replace or soften rust's blocking
+  # mapped-focus gate, security/reuse, or the required Flatpak jobs.
+  focus_pilot:
+    name: "Diagnostic FOCUS-001 reusable-binary pilot (NOT acceptance)"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install existing GTK toolchain and XTest compiler headers
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth libxtst libx11 python
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Configure, compile once, fingerprint exact published source binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p focus-pilot-artifacts
+          meson setup _build -Dprofile=development
+          cargo test --locked --no-run --message-format=json > focus-pilot-artifacts/compiler.jsonl
+          python - <<'PY'
+          import json, pathlib, subprocess, os, hashlib
+          required={
+              'gtk_focus001_xtest_mediathek_middle_card_ok_primary_play',
+              'gtk_focus001_xtest_live_search_down_native_propagation',
+              'gtk_focus001_negative_control_detects_stolen_focus',
+          }
+          binaries=set()
+          for line in pathlib.Path('focus-pilot-artifacts/compiler.jsonl').read_text().splitlines():
+              try: obj=json.loads(line)
+              except ValueError: continue
+              exe=obj.get('executable')
+              if obj.get('reason')=='compiler-artifact' and exe and pathlib.Path(exe).is_file():
+                  binaries.add(os.path.realpath(exe))
+          matches=[]
+          for exe in binaries:
+              probe=subprocess.run([exe,'--list'],text=True,capture_output=True,timeout=20)
+              if probe.returncode==0 and all(any(x.rsplit(': test',1)[0].split('::')[-1]==test for x in probe.stdout.splitlines() if x.endswith(': test')) for test in required):
+                  matches.append(exe)
+          if len(matches)!=1: raise SystemExit(f'FOCUS001 ENVIRONMENT unable to resolve exactly one test binary (matches={len(matches)})')
+          exe=matches[0]
+          fingerprint=hashlib.sha256(pathlib.Path(exe).read_bytes()).hexdigest()
+          sha=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          pathlib.Path('focus-pilot-artifacts/test-binary-path.txt').write_text(exe+'\n')
+          pathlib.Path('focus-pilot-artifacts/manifest.txt').write_text(f'source_sha={sha}\ntree={tree}\nbinary_sha256={fingerprint}\n')
+          print('FOCUS001 PILOT source',sha,'tree',tree,'binary',fingerprint)
+          PY
+          pacman -Q > focus-pilot-artifacts/arch-packages.txt
+          exe=$(cat focus-pilot-artifacts/test-binary-path.txt)
+          tar -czf focus-pilot-artifacts/published-commit-test-binary.tar.gz -C "$(dirname "$exe")" "$(basename "$exe")"
+          rm focus-pilot-artifacts/compiler.jsonl
+      - name: Execute bounded XTest PASS, known RED, and negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=$(cat focus-pilot-artifacts/test-binary-path.txt)
+          mkdir -p focus-pilot-artifacts/observed focus-pilot-artifacts/environment
+          set +e
+          FOCUS001_TEST_BINARY="$exe" \
+          FOCUS001_ONLY_CASES='gtk_focus001_xtest_mediathek_middle_card_ok_primary_play,gtk_focus001_xtest_live_search_down_native_propagation,gtk_focus001_negative_control_detects_stolen_focus' \
+          FOCUS001_PILOT_RESULTS_DIR=focus-pilot-artifacts/observed \
+            bash tests/focus/run-mapped.sh > focus-pilot-artifacts/observed-summary.txt 2>&1
+          observed_rc=$?
+          FOCUS001_CC=/intentionally-missing-compiler \
+          FOCUS001_TEST_BINARY="$exe" \
+          FOCUS001_ONLY_CASES='gtk_focus001_xtest_live_search_down_native_propagation' \
+          FOCUS001_PILOT_RESULTS_DIR=focus-pilot-artifacts/environment \
+            bash tests/focus/run-mapped.sh > focus-pilot-artifacts/environment-summary.txt 2>&1
+          environment_rc=$?
+          set -e
+          printf 'observed_rc=%s\nenvironment_rc=%s\n' "$observed_rc" "$environment_rc" > focus-pilot-artifacts/exit-codes.txt
+          python - "$observed_rc" "$environment_rc" <<'PY'
+          import sys, pathlib, hashlib
+          root=pathlib.Path('focus-pilot-artifacts')
+          assert int(sys.argv[1])!=0 and int(sys.argv[2])!=0, 'negative inputs incorrectly succeeded'
+          def verified(path):
+              a=path.read_text().strip().split('\t')
+              assert len(a)==8, (path,len(a))
+              log=path.with_suffix('.log')
+              assert hashlib.sha256(log.read_bytes()).hexdigest()==a[6], 'log fingerprint mismatch'
+              assert a[3] and len(a[3])==40 and len(a[4])==40 and len(a[5])==64, 'source/binary fingerprint missing'
+              return a[1]
+          observed={p.stem: verified(p) for p in (root/'observed').glob('*.tsv')}
+          env={p.stem: verified(p) for p in (root/'environment').glob('*.tsv')}
+          expected={
+              'gtk_focus001_xtest_mediathek_middle_card_ok_primary_play':'PASS',
+              'gtk_focus001_xtest_live_search_down_native_propagation':'RED',
+              'gtk_focus001_negative_control_detects_stolen_focus':'PASS',
+          }
+          print('FOCUS001 DIAGNOSTIC observed',observed,'environment',env)
+          assert observed==expected, 'product RED, native PASS or focus-theft canary changed: investigate, no acceptance'
+          assert env=={'gtk_focus001_xtest_live_search_down_native_propagation':'ENVIRONMENT'}, 'missing-XTest control misclassified'
+          PY
+      - name: Preserve bounded diagnostic artifacts even on nonzero
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: focus001-diagnostic-pilot-${{ github.sha }}
+          path: focus-pilot-artifacts/
+          retention-days: 7
+          if-no-files-found: warn
+
   flatpak:
     name: "Flatpak"
     container:
