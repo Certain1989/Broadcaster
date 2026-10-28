@@ -665,6 +665,10 @@ impl TvWindow {
                     .focus_vertical_navigation(&focused, key);
             }
 
+            if key == gtk::gdk::Key::Left && self.imp().live_view.focus_play_return(&focused) {
+                return true;
+            }
+
             // Live list's first row lies beneath Search, not Keyboard.
             // Search <-> Keyboard is a horizontal transition, handled by
             // mapped geometry above. Preserve the first-row child boundary.
@@ -795,6 +799,15 @@ impl TvWindow {
 
         match key {
             gtk::gdk::Key::Back => {
+                // Back inside the Live Play action returns to the same row.
+                // Only Back outside this card-level boundary exits Live.
+                if self.imp().stack.visible_child_name().as_deref() == Some("live")
+                    && self
+                        .focused_widget()
+                        .is_some_and(|focused| self.imp().live_view.focus_play_return(&focused))
+                {
+                    return glib::Propagation::Stop;
+                }
                 if self.dismiss_open_popover() {
                     return glib::Propagation::Stop;
                 }
