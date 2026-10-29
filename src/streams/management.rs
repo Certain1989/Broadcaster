@@ -1888,7 +1888,12 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             } else {
                 inject("Right");
             }
-            let play = c4_focused_button(&win).expect("Play action focus");
+            let play = c4_focused_button(&win).unwrap_or_else(|| {
+                panic!(
+                    "Play action focus missing on row {index}: {}",
+                    view.remote_action_test_state()
+                )
+            });
             assert_eq!(play.label().as_deref(), Some("Play"));
             assert!(play.is_mapped() && play.has_focus());
             assert_eq!(
