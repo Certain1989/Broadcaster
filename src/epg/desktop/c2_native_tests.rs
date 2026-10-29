@@ -281,11 +281,20 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         assert!(cancel.grab_focus());
         inject("Return");
         until("Cancel dismisses only OSK", || !osk.is_mapped());
-        assert_eq!(name.text().as_str(), "Guide 1", "cancelled OSK draft must not mutate editor");
-        assert!(editor.is_mapped() && guide.is_mapped(), "Cancel cannot act on background page");
+        assert_eq!(
+            name.text().as_str(),
+            "Guide 1",
+            "cancelled OSK draft must not mutate editor"
+        );
+        assert!(
+            editor.is_mapped() && guide.is_mapped(),
+            "Cancel cannot act on background page"
+        );
         assert!(launcher.grab_focus());
         inject("Return");
-        until("OSK reopens after cancel", || find_dialog(win.upcast_ref(), "osk-production").is_some());
+        until("OSK reopens after cancel", || {
+            find_dialog(win.upcast_ref(), "osk-production").is_some()
+        });
         let osk = find_dialog(win.upcast_ref(), "osk-production").unwrap();
         let draft = first_entry(&osk);
         draft.set_text("Updated Guide 1");
@@ -354,62 +363,97 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         let set_default = named_button(original.upcast_ref(), "Use as Shared Default").unwrap();
         assert!(set_default.grab_focus());
         inject("Return");
-        until("shared-default confirmation", || named_button(win.upcast_ref(), "Confirm Shared Default").is_some());
+        until("shared-default confirmation", || {
+            named_button(win.upcast_ref(), "Confirm Shared Default").is_some()
+        });
         let confirm = named_button(win.upcast_ref(), "Confirm Shared Default").unwrap();
         assert!(confirm.grab_focus());
         inject("Return");
         until("shared guide persisted", || {
             let conn = fixture.storage.connect().unwrap();
-            conn.query_row("SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1", [],
-                |row| row.get::<_, Option<String>>(0)).unwrap() == Some(fixture.ids[0].clone())
+            conn.query_row(
+                "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+                == Some(fixture.ids[0].clone())
         });
         let clear = named_button(guide.upcast_ref(), "Clear Shared Default").unwrap();
         assert!(clear.grab_focus());
         inject("Return");
         until("clear-default confirmation", || {
-            descendants(win.upcast_ref()).into_iter()
+            descendants(win.upcast_ref())
+                .into_iter()
                 .filter_map(|w| w.downcast::<adw::Dialog>().ok())
-                .any(|d| d.is_mapped() && named_button(d.upcast_ref(), "Clear Shared Default").is_some()
-                    && named_button(d.upcast_ref(), "Cancel").is_some())
+                .any(|d| {
+                    d.is_mapped()
+                        && named_button(d.upcast_ref(), "Clear Shared Default").is_some()
+                        && named_button(d.upcast_ref(), "Cancel").is_some()
+                })
         });
-        let confirmation = descendants(win.upcast_ref()).into_iter()
+        let confirmation = descendants(win.upcast_ref())
+            .into_iter()
             .filter_map(|w| w.downcast::<adw::Dialog>().ok())
-            .find(|d| d.is_mapped() && named_button(d.upcast_ref(), "Cancel").is_some()
-                && named_button(d.upcast_ref(), "Clear Shared Default").is_some())
+            .find(|d| {
+                d.is_mapped()
+                    && named_button(d.upcast_ref(), "Cancel").is_some()
+                    && named_button(d.upcast_ref(), "Clear Shared Default").is_some()
+            })
             .expect("real clear-default confirmation");
-        let confirm_clear = named_button(confirmation.upcast_ref(), "Clear Shared Default").unwrap();
+        let confirm_clear =
+            named_button(confirmation.upcast_ref(), "Clear Shared Default").unwrap();
         assert!(confirm_clear.grab_focus());
         inject("Return");
         until("shared default cleared", || {
             let conn = fixture.storage.connect().unwrap();
-            conn.query_row("SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1", [],
-                |row| row.get::<_, Option<String>>(0)).unwrap().is_none()
+            conn.query_row(
+                "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .is_none()
         });
         // Remove is protected by Keep/Remove confirmation; Keep is not destructive.
         let third = row(&guide, "Guide 2").unwrap();
         let remove = named_button(third.upcast_ref(), "Remove").unwrap();
         assert!(remove.grab_focus());
         inject("Return");
-        until("remove confirmation", || named_button(win.upcast_ref(), "Keep Guide").is_some());
+        until("remove confirmation", || {
+            named_button(win.upcast_ref(), "Keep Guide").is_some()
+        });
         let keep = named_button(win.upcast_ref(), "Keep Guide").unwrap();
         assert!(keep.grab_focus());
         inject("Return");
         until("Keep closes confirmation", || !keep.is_mapped());
-        assert!(GuideSourceRegistry::new(fixture.storage.clone()).get(&fixture.ids[2]).is_ok(),
-            "Keep must leave saved guide untouched");
+        assert!(
+            GuideSourceRegistry::new(fixture.storage.clone())
+                .get(&fixture.ids[2])
+                .is_ok(),
+            "Keep must leave saved guide untouched"
+        );
         let third = row(&guide, "Guide 2").unwrap();
-        assert!(named_button(third.upcast_ref(), "Remove").unwrap().grab_focus());
+        assert!(named_button(third.upcast_ref(), "Remove")
+            .unwrap()
+            .grab_focus());
         inject("Return");
-        until("destructive confirmation", || named_button(win.upcast_ref(), "Remove Permanently").is_some());
+        until("destructive confirmation", || {
+            named_button(win.upcast_ref(), "Remove Permanently").is_some()
+        });
         let permanently = named_button(win.upcast_ref(), "Remove Permanently").unwrap();
         assert!(permanently.grab_focus());
         inject("Return");
         until("third guide removed from SQLite and UI", || {
             row(&guide, "Guide 2").is_none()
-                && GuideSourceRegistry::new(fixture.storage.clone()).get(&fixture.ids[2]).is_err()
+                && GuideSourceRegistry::new(fixture.storage.clone())
+                    .get(&fixture.ids[2])
+                    .is_err()
         });
-        assert!(guide.is_mapped() && manager.is_mapped(),
-            "remove confirms inside guide manager, not behind it");
+        assert!(
+            guide.is_mapped() && manager.is_mapped(),
+            "remove confirms inside guide manager, not behind it"
+        );
         // Back at guide level should close only the active guide manager.
     }
     assert!(guide.is_mapped() && manager.is_mapped());

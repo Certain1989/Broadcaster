@@ -583,27 +583,36 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
                 1 => Some(controls[0].clone()),
                 3 => Some(controls[2].clone()),
                 _ => None,
-            }.map(|button| button.downgrade());
+            }
+            .map(|button| button.downgrade());
             let right = match slot {
                 0 => Some(controls[1].clone()),
                 2 => Some(controls[3].clone()),
                 _ => None,
-            }.map(|button| button.downgrade());
+            }
+            .map(|button| button.downgrade());
             let up = if slot >= 2 {
                 // If Refresh is disabled, Remove goes back to Shared Default.
-                Some(controls[if slot == 3 && !controls[1].is_sensitive() {
-                    0
-                } else { slot - 2 }].clone())
+                Some(
+                    controls[if slot == 3 && !controls[1].is_sensitive() {
+                        0
+                    } else {
+                        slot - 2
+                    }]
+                    .clone(),
+                )
             } else if index > 0 {
                 Some(rows[index - 1].1[slot + 2].clone())
             } else {
                 None
-            }.map(|button| button.downgrade());
+            }
+            .map(|button| button.downgrade());
             let down = if slot < 2 {
                 Some(controls[slot + 2].clone())
             } else {
                 rows.get(index + 1).map(|row| row.1[slot - 2].clone())
-            }.map(|button| button.downgrade());
+            }
+            .map(|button| button.downgrade());
             let key = gtk::EventControllerKey::new();
             key.set_propagation_phase(gtk::PropagationPhase::Capture);
             key.connect_key_pressed(move |_, pressed, _, modifiers| {
