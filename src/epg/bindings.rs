@@ -793,7 +793,19 @@ fn resolve_row_inner(
                     // Multiple feed-specific guide IDs for the same base veto
                     // a quality-only collapse even if the bare stem exists.
                     let ambiguous_feed = if kind == super::matching::AutoIdentityKind::Quality {
-                        let pattern = format!("{}@*", candidate_id);
+                        // GLOB interprets [, * and ? inside an XMLTV ID as
+                        // metacharacters. Escape literal identity bytes so an
+                        // exact feed sibling cannot evade the collision veto.
+                        let mut pattern = String::with_capacity(candidate_id.len() + 4);
+                        for ch in candidate_id.chars() {
+                            match ch {
+                                '[' => pattern.push_str("[[]"),
+                                '*' => pattern.push_str("[*]"),
+                                '?' => pattern.push_str("[?]"),
+                                _ => pattern.push(ch),
+                            }
+                        }
+                        pattern.push_str("@*");
                         let count: i64 = conn.query_row(
                             "SELECT count(*) FROM epg_channels WHERE source_id=?1 AND channel_id GLOB ?2",
                             params![selected_id, pattern], |r| r.get(0),
@@ -850,8 +862,14 @@ fn resolve_row_inner(
         }
         channels.push(item.map_err(|_| EpgError::Storage)?);
     }
+    // Literal and reconstructed identities have already been resolved using the
+    // complete selected-guide catalogue above. This bounded fallback is only
+    // for nonbinding name hints: never let its generic matcher reconstruct an
+    // identity a second time and bypass the indexed quality-collision veto.
+    let mut name_only_row = row;
+    name_only_row.tvg_id = None;
     Ok(match_in_source(
-        &row,
+        &name_only_row,
         chosen.as_ref(),
         availability,
         None,
