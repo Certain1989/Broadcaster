@@ -1896,6 +1896,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             });
             assert_eq!(play.label().as_deref(), Some("Play"));
             assert!(play.is_mapped() && play.has_focus());
+            view.assert_remote_action_focus_owner(play.upcast_ref(), id);
+            assert!(view.card_mapping_context(id).is_some(), "bound mapping context");
             assert_eq!(
                 view.remote_action_test_counts().0,
                 previous,
@@ -1915,9 +1917,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Return");
             assert_eq!(view.remote_action_test_counts().0, previous + 1);
             inject("Left");
-            assert!(
-                view.contains_results_focus(&gtk::prelude::GtkWindowExt::focus(&win).expect("row"))
-            );
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("row");
+            view.assert_remote_action_focus_owner(&focused, id);
             inject("XF86Back");
             assert!(view.remote_action_test_state().contains("expanded=None"));
             assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
@@ -1930,9 +1931,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 "collapsed star without expansion"
             );
             inject("Right");
-            assert!(view.contains_results_focus(
-                &gtk::prelude::GtkWindowExt::focus(&win).expect("row after star")
-            ));
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("row after star");
+            view.assert_remote_action_focus_owner(&focused, id);
             inject("Right");
             assert_eq!(
                 c4_focused_button(&win)
@@ -1955,12 +1955,11 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 Some("Programme mapping")
             );
             inject("Left");
-            assert_eq!(
-                view.remote_action_test_selected_id().as_deref(),
-                Some(id.as_str())
-            );
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("mapping return");
+            view.assert_remote_action_focus_owner(&focused, id);
             inject("XF86Back");
             assert!(view.remote_action_test_state().contains("expanded=None"));
+            assert!(view.card_mapping_context(id).is_none(), "collapsed picker context");
         }
     }
 
