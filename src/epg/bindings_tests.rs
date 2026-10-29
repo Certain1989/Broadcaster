@@ -1562,7 +1562,18 @@ fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() 
         }
         other => panic!("aligned synthetic control should project: {other:?}"),
     }
-    for display in ["ARTE 日本語", "日本語 ARTE", "ARTE 中文"] {
+    for display in [
+        "ARTE 日本語",
+        "日本語 ARTE",
+        "ARTE 中文",
+        "ARTE 🇯🇵",
+        "ARTE HD ✨",
+        "ARTE\u{0301}",
+        "ARTE\u{200d}",
+        "ARTE\u{0007}",
+        "ARTE HD\u{00a0}",
+        "ARTE HD 🇨🇳",
+    ] {
         c.execute(
             "UPDATE epg_channels SET display_name=?1 WHERE source_id='g' AND channel_id='ARTE.de'",
             [display],

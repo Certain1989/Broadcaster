@@ -465,6 +465,14 @@ fn r02_unicode_quality_qualifiers_abstain_but_explicit_identity_survives() {
         ("ARTE.de@HD", "ARTE 中文"),
         ("3sat.de@FHD", "3sat 日本"),
         ("ARTE.de@HD", "ARTE Édition"),
+        ("ARTE.de@HD", "ARTE 🇯🇵"),
+        ("ARTE.de@HD", "ARTE HD 🇨🇳"),
+        ("3sat.de@FHD", "3sat 🇯🇵"),
+        ("ARTE.de@HD", "ARTE HD ✨"),
+        ("ARTE.de@HD", "ARTE\u{0301}"),
+        ("ARTE.de@HD", "ARTE\u{200d}"),
+        ("ARTE.de@HD", "ARTE\u{0007}"),
+        ("ARTE.de@HD", "ARTE HD\u{00a0}"),
     ] {
         let result = decision(
             &row("r", "p", Some(original), "Unrelated IPTV card"),

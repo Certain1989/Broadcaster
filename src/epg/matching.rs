@@ -227,14 +227,16 @@ fn corroborates_quality_label(original: &str, display_name: &str) -> bool {
     if expected.len() < 3 {
         return false;
     }
+    // Inferred-quality evidence must not discard unknown qualifiers. Flags,
+    // symbols, combining marks, format characters and non-ASCII letters are
+    // meaningful metadata; ASCII controls are not identity evidence either.
+    // Check before trimming, country-prefix handling or punctuation filtering.
+    if display_name.chars().any(|c| !c.is_ascii() || c.is_ascii_control()) {
+        return false;
+    }
     let label = display_name.trim().to_ascii_lowercase();
     let country_prefix = format!("{} - ", country.to_ascii_lowercase());
     let label = label.strip_prefix(&country_prefix).unwrap_or(&label);
-    // Unknown Unicode letters/digits can encode a different language or
-    // service. Discarding them would falsely corroborate the bare quality ID.
-    if label.chars().any(|c| !c.is_ascii() && c.is_alphanumeric()) {
-        return false;
-    }
     let label_key: String = label
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
