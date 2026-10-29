@@ -1881,6 +1881,21 @@ impl TvStreamsView {
         }
     }
 
+
+    /// Only a currently bound, expanded, source-qualified row may receive
+    /// Play focus. Virtualized positions alone are not durable identities.
+    fn focus_row_play(&self, id: &str) -> bool {
+        let play = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|channel| channel.id == id)
+                && binding.ui.reveal.reveals_child()
+                && binding.ui.play.is_mapped()
+                && binding.ui.play.is_sensitive())
+                .then(|| binding.ui.play.clone())
+        });
+        play.is_some_and(|button| button.grab_focus())
+    }
+
     fn activate_position(&self, position: u32) {
         let Some(channel) = self
             .imp()
@@ -1900,12 +1915,27 @@ impl TvStreamsView {
         }) {
             return;
         }
-        if self.imp().expanded_id.borrow().as_deref() == Some(channel.id.as_str()) {
-            self.play_position(position);
-        } else {
-            self.imp().expanded_id.replace(Some(channel.id.clone()));
-            self.imp().selected_id.replace(Some(channel.id));
+        // A ListView activation is an entry portal, never a playback command.
+        // Only a separate activation of the focused Play button can start it.
+        let id = channel.id;
+        if self.imp().expanded_id.borrow().as_deref() != Some(id.as_str()) {
+            self.imp().expanded_id.replace(Some(id.clone()));
+            self.imp().selected_id.replace(Some(id.clone()));
             self.repaint_bound_rows();
+        }
+        if !self.focus_row_play(&id) {
+            // Revealer mapping and recycled-row binding can complete in the
+            // next main-context turn. Recheck the stable row ID before focus.
+            let weak = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = weak.upgrade() {
+                    if view.imp().expanded_id.borrow().as_deref() == Some(id.as_str())
+                        && view.imp().selected_id.borrow().as_deref() == Some(id.as_str())
+                    {
+                        view.focus_row_play(&id);
+                    }
+                }
+            });
         }
     }
 
@@ -2187,17 +2217,17 @@ impl TvStreamsView {
             .emit_by_name::<()>("activate", &[&0u32]);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            1,
-            "second Enter plays once"
+            0,
+            "a second list activation cannot bypass the Play button"
         );
         self.play_position(0); // The explicit Play button's single callback.
-        assert_eq!(self.imp().fake_player_calls.get(), 2);
+        assert_eq!(self.imp().fake_player_calls.get(), 1);
         assert!(self.collapse_expanded());
         assert!(!self.collapse_expanded());
         self.play_position(0);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            2,
+            1,
             "collapsed row cannot play"
         );
         assert_eq!(
@@ -2439,7 +2469,38 @@ impl TvStreamsView {
         let Some(channel) = imp.rows.get().and_then(|rows| rows.channel(position)) else {
             return false;
         };
+        // A collapsed channel's star is an explicit Left portal: Right/OK
+        // remains the primary Play entry. Left from the star returns to the
+        // same logical row without toggling its expanded state.
+        let star = imp.bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == channel.id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+                .then(|| binding.ui.star.clone())
+        });
+        if let Some(star) = star.as_ref() {
+            if focused == star.upcast_ref::<gtk::Widget>()
+                || focused.is_ancestor(star.upcast_ref::<gtk::Widget>())
+            {
+                return match key {
+                    gtk::gdk::Key::Left | gtk::gdk::Key::Right => {
+                        imp.results_list.grab_focus()
+                    }
+                    _ => false,
+                };
+            }
+        }
         if imp.expanded_id.borrow().as_deref() != Some(channel.id.as_str()) {
+            if !focused.is::<gtk::Button>() {
+                if key == gtk::gdk::Key::Left {
+                    return star.is_some_and(|button| button.grab_focus());
+                }
+                if key == gtk::gdk::Key::Right {
+                    self.activate_position(position);
+                    return true;
+                }
+            }
             return false;
         }
         // Only the current selection's actually bound widgets may be targeted.
