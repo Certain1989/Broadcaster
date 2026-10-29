@@ -2290,25 +2290,33 @@ impl TvStreamsView {
         use super::model::ChannelEffective;
         use std::collections::BTreeSet;
 
-        let channels: Vec<_> = ["First fabricated channel", "Middle fabricated channel", "Last fabricated channel"]
-            .into_iter()
-            .map(|name| ChannelEffective {
-                id: uuid::Uuid::new_v4().to_string(),
-                source_id: uuid::Uuid::new_v4().to_string(),
-                source_name: "Fabricated Source".into(),
-                visible_name: name.into(),
-                stream_url: "https://example.invalid/fake.m3u8".into(),
-                group: None,
-                languages: BTreeSet::new(),
-                countries: BTreeSet::new(),
-                region: None,
-                logo_url: None,
-                channel_number: None,
-                has_user_overrides: false,
-                is_favourite: false,
+        let channels: Vec<_> = [
+            "First fabricated channel",
+            "Middle fabricated channel",
+            "Last fabricated channel",
+        ]
+        .into_iter()
+        .map(|name| ChannelEffective {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_id: uuid::Uuid::new_v4().to_string(),
+            source_name: "Fabricated Source".into(),
+            visible_name: name.into(),
+            stream_url: "https://example.invalid/fake.m3u8".into(),
+            group: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            region: None,
+            logo_url: None,
+            channel_number: None,
+            has_user_overrides: false,
+            is_favourite: false,
             })
             .collect();
-        let ids = [channels[0].id.clone(), channels[1].id.clone(), channels[2].id.clone()];
+        let ids = [
+            channels[0].id.clone(),
+            channels[1].id.clone(),
+            channels[2].id.clone(),
+        ];
         let imp = self.imp();
         let rows = imp.rows.get().expect("rows");
         rows.reset(3);
@@ -2328,10 +2336,21 @@ impl TvStreamsView {
     #[cfg(test)]
     pub(crate) fn remote_action_test_select(&self, position: u32) {
         let imp = self.imp();
-        assert!(imp.rows.get().is_some_and(|rows| rows.channel(position).is_some()));
+        assert!(imp
+            .rows
+            .get()
+            .is_some_and(|rows| rows.channel(position).is_some()));
         self.collapse_expanded();
-        imp.selection.get().expect("selection").set_selected(position);
-        if let Some(id) = imp.rows.get().and_then(|rows| rows.channel(position)).map(|ch| ch.id) {
+        imp.selection
+            .get()
+            .expect("selection")
+            .set_selected(position);
+        if let Some(id) = imp
+            .rows
+            .get()
+            .and_then(|rows| rows.channel(position))
+            .map(|ch| ch.id)
+        {
             imp.selected_id.replace(Some(id));
         }
         imp.results_list
