@@ -2310,8 +2310,8 @@ impl TvStreamsView {
             channel_number: None,
             has_user_overrides: false,
             is_favourite: false,
-            })
-            .collect();
+        })
+        .collect();
         let ids = [
             channels[0].id.clone(),
             channels[1].id.clone(),
