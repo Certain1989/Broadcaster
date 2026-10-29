@@ -1202,7 +1202,7 @@ impl TvStreamsView {
             #[weak]
             item,
             move |revealer| {
-                if !revealer.child_revealed() {
+                if !revealer.is_child_revealed() {
                     return;
                 }
                 let Some(id) = item
