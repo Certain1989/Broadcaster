@@ -1193,6 +1193,43 @@ impl TvStreamsView {
         actions.append(&mapping);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
+        // Revealed action widgets are not necessarily mapped at the instant
+        // ListView activates a collapsed row. Move focus only after GTK has
+        // completed revealing this *same* bound, selected channel.
+        reveal.connect_child_revealed_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |revealer| {
+                if !revealer.child_revealed() {
+                    return;
+                }
+                let Some(id) = item
+                    .item()
+                    .and_downcast::<StreamSlot>()
+                    .and_then(|slot| slot.channel())
+                    .map(|channel| channel.id)
+                else {
+                    return;
+                };
+                let imp = view.imp();
+                if imp.expanded_id.borrow().as_deref() != Some(id.as_str())
+                    || imp.selected_id.borrow().as_deref() != Some(id.as_str())
+                {
+                    return;
+                }
+                let focused = view
+                    .root()
+                    .and_downcast::<gtk::Window>()
+                    .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
+                if focused.is_some_and(|focused| {
+                    view.contains_results_focus(&focused) && !focused.is::<gtk::Button>()
+                }) {
+                    view.focus_row_play(&id);
+                }
+            }
+        ));
         play.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -1972,20 +2009,9 @@ impl TvStreamsView {
             self.imp().selected_id.replace(Some(id.clone()));
             self.repaint_bound_rows();
         }
-        if !self.focus_row_play(&id) {
-            // Revealer mapping and recycled-row binding can complete in the
-            // next main-context turn. Recheck the stable row ID before focus.
-            let weak = self.downgrade();
-            glib::idle_add_local_once(move || {
-                if let Some(view) = weak.upgrade() {
-                    if view.imp().expanded_id.borrow().as_deref() == Some(id.as_str())
-                        && view.imp().selected_id.borrow().as_deref() == Some(id.as_str())
-                    {
-                        view.focus_row_play(&id);
-                    }
-                }
-            });
-        }
+        // If mapped already, focus immediately; otherwise the Revealer's
+        // child-revealed signal completes the same-ID focus transition.
+        self.focus_row_play(&id);
     }
 
     fn play_position(&self, position: u32) {
