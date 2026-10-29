@@ -1841,7 +1841,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     /// C4 keeps the existing physical XTest injector. Direct router calls
     /// cannot prove that a mapped list actually receives the remote key.
     fn c4_focused_button(win: &crate::window::TvWindow) -> Option<gtk::Button> {
-        gtk::prelude::GtkWindowExt::focus(win)?.downcast::<gtk::Button>().ok()
+        gtk::prelude::GtkWindowExt::focus(win)?
+            .downcast::<gtk::Button>()
+            .ok()
     }
 
     fn c4_native_cards(width: i32, height: i32, negative: bool) {
@@ -1889,8 +1891,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             let play = c4_focused_button(&win).expect("Play action focus");
             assert_eq!(play.label().as_deref(), Some("Play"));
             assert!(play.is_mapped() && play.has_focus());
-            assert_eq!(view.remote_action_test_counts().0, previous, "entry auto-played");
-            assert_eq!(view.remote_action_test_selected_id().as_deref(), Some(id.as_str()));
+            assert_eq!(
+                view.remote_action_test_counts().0,
+                previous,
+                "entry auto-played"
+            );
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str())
+            );
             if negative {
                 assert_eq!(
                     play.label().as_deref(),
@@ -1901,15 +1910,17 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Return");
             assert_eq!(view.remote_action_test_counts().0, previous + 1);
             inject("Left");
-            assert!(view.contains_results_focus(
-                &gtk::prelude::GtkWindowExt::focus(&win).expect("row")
-            ));
+            assert!(
+                view.contains_results_focus(&gtk::prelude::GtkWindowExt::focus(&win).expect("row"))
+            );
             inject("XF86Back");
             assert!(view.remote_action_test_state().contains("expanded=None"));
             assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
             inject("Left");
             assert_eq!(
-                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
                 Some("☆"),
                 "collapsed star without expansion"
             );
@@ -1919,21 +1930,30 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             ));
             inject("Right");
             assert_eq!(
-                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
                 Some("Play")
             );
             inject("Down");
             assert_eq!(
-                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
                 Some("Edit Metadata")
             );
             inject("Down");
             assert_eq!(
-                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
                 Some("Programme mapping")
             );
             inject("Left");
-            assert_eq!(view.remote_action_test_selected_id().as_deref(), Some(id.as_str()));
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str())
+            );
             inject("XF86Back");
             assert!(view.remote_action_test_state().contains("expanded=None"));
         }
