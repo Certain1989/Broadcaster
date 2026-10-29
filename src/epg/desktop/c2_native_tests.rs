@@ -116,6 +116,19 @@ fn first_entry(dialog: &adw::Dialog) -> gtk::Entry {
         .find_map(|w| w.downcast::<gtk::Entry>().ok())
         .expect("actual editor entry")
 }
+fn assert_remote_focus(win: &crate::window::TvWindow, button: &gtk::Button, route: &str) {
+    assert!(button.is_mapped(), "{route}: mapped destination");
+    assert!(button.has_focus(), "{route}: expected native focus owner");
+    let focused = gtk::prelude::GtkWindowExt::focus(win);
+    assert!(focused.is_some_and(|widget| widget == *button.upcast_ref::<gtk::Widget>()),
+        "{route}: GtkWindow focus owner differs from target");
+}
+
+fn guide_action(dialog: &adw::Dialog, name: &str, label: &str) -> gtk::Button {
+    named_button(row(dialog, name).expect("live guide UUID row").upcast_ref(), label)
+        .expect("named semantic action")
+}
+
 fn source_enabled(storage: &Storage, id: &str) -> bool {
     let conn = storage.connect().unwrap();
     conn.query_row("SELECT enabled FROM epg_sources WHERE id=?1", [id], |r| {
@@ -233,6 +246,37 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             "nested Back must not touch parent or page"
         );
     } else {
+        // Only the initial row focus is set directly. Every action-to-action
+        // transition below uses actual XTest arrows and asserts GtkWindow focus.
+        let first_default = guide_action(&guide, "Guide 0", "Use as Shared Default");
+        assert!(first_default.grab_focus(), "enter first source via real widget");
+        inject("Right");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 0", "Refresh"), "first default -> Refresh");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 0", "Remove"), "first Refresh -> Remove");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 1", "Use as Shared Default"), "first Remove -> second UUID");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 0", "Remove"), "second -> first reciprocal");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 1", "Use as Shared Default"), "first -> second again");
+        inject("Right");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 1", "Refresh"), "second default -> Refresh");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 1", "Remove"), "second Refresh -> Remove");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 2", "Use as Shared Default"), "second Remove -> third UUID");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 1", "Remove"), "third -> second reciprocal");
+        inject("Down");
+        inject("Right");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 2", "Remove"), "last guide Remove");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 2", "Remove"), "last row Down boundary stays within dialog");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 2", "Refresh"), "last Remove -> Refresh reciprocal");
+
         let source_id = fixture.ids[1].clone();
         let row1 = row(&guide, "Guide 1").unwrap();
         let edit = named_button(row1.upcast_ref(), "Edit").unwrap();
@@ -360,19 +404,38 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             !row1.is_mapped(),
             "repaint really destroyed the previous row"
         );
+        assert_remote_focus(&win, &edit, "same UUID semantic Edit restored by async repaint");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
+            "disabled Edit -> Shared Default");
+        inject("Right");
         if negative {
-            assert!(
-                named_button(new_row.upcast_ref(), "Refresh")
-                    .unwrap()
-                    .has_focus(),
-                "C2_EXPECTED_NEGATIVE_ORACLE: focus on Refresh instead of persisted Edit"
-            );
-            unreachable!("expected-RED oracle unexpectedly succeeded");
+            assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Refresh"),
+                "C2_EXPECTED_NEGATIVE_ORACLE: disabled Refresh would incorrectly own focus");
+            unreachable!("incorrect disabled-target oracle unexpectedly passed");
         }
-        assert!(
-            edit.has_focus(),
-            "same-guide UUID restored to semantic Edit"
-        );
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Edit"),
+            "disabled Default Right skips Refresh to Edit");
+        inject("Left");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
+            "disabled Edit Left reverses to Default");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Edit"),
+            "disabled Default Down -> Edit");
+        inject("Right");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Remove"),
+            "disabled Edit -> Remove");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
+            "disabled Remove Up skips Refresh");
+        assert!(guide_action(&guide, "Guide 0", "Remove").grab_focus(),
+            "source zero bootstrap before cross-UUID disabled route");
+        inject("Down");
+        assert_remote_focus(&win, &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
+            "prior Remove -> disabled middle Default, not Refresh");
+        inject("Up");
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 0", "Remove"),
+            "disabled middle Default -> previous Remove reciprocal");
         assert!(
             !named_button(new_row.upcast_ref(), "Refresh")
                 .unwrap()
@@ -475,18 +538,52 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             guide.is_mapped() && manager.is_mapped(),
             "remove confirms inside guide manager, not behind it"
         );
+        until("removed-row focus fallback", || {
+            guide_action(&guide, "Guide 0", "Use as Shared Default").has_focus()
+        });
+        assert_remote_focus(&win, &guide_action(&guide, "Guide 0", "Use as Shared Default"),
+            "removed guide UUID falls back to surviving source");
+        let first_default = guide_action(&guide, "Guide 0", "Use as Shared Default");
+        inject("Left");
+        assert_remote_focus(&win, &first_default, "first-row Left boundary stays in manager");
         // Back at guide level should close only the active guide manager.
     }
     assert!(guide.is_mapped() && manager.is_mapped());
-    assert!(named_button(guide.upcast_ref(), "Close")
-        .unwrap()
-        .grab_focus());
+    let manager_list = if count > 0 {
+        row(&guide, "Guide 0").expect("guide row").parent()
+            .and_then(|w| w.downcast::<gtk::Box>().ok()).expect("guide list")
+    } else {
+        descendants(guide.upcast_ref()).into_iter()
+            .filter_map(|w| w.downcast::<gtk::Label>().ok())
+            .find(|label| label.text() == "No programme guides configured")
+            .and_then(|w| w.parent())
+            .and_then(|w| w.downcast::<gtk::Box>().ok()).expect("empty guide list")
+    };
+    let weak_list = manager_list.downgrade();
+    assert!(named_button(guide.upcast_ref(), "Close").unwrap().grab_focus());
     inject("XF86Back");
     until("guide manager dismissed", || !guide.is_mapped());
-    assert!(
-        manager.is_mapped(),
-        "source manager must remain under guide modal"
-    );
+    assert!(manager.is_mapped(), "source manager must remain under guide modal");
+    drop(manager_list);
+    drop(guide);
+    until("closed guide list disposed, no callback reference cycle", || weak_list.upgrade().is_none());
+    // A new manager must be an independent fresh tree, not the prior retained list.
+    assert!(guides.grab_focus());
+    inject("Return");
+    until("fresh guide manager opens", || {
+        find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
+    });
+    let reopened = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+    assert!(reopened.is_mapped(), "reopened manager mapped");
+    if count > 0 {
+        until("reopened SQLite guide rows", || row(&reopened, "Guide 0").is_some());
+        assert!(guide_action(&reopened, "Guide 0", "Edit").is_mapped());
+    }
+    assert!(named_button(reopened.upcast_ref(), "Close").unwrap().grab_focus());
+    inject("XF86Back");
+    until("reopened manager closes without affecting source manager", || !reopened.is_mapped());
+    assert!(manager.is_mapped());
+    drop(reopened);
     win.destroy();
 }
 
