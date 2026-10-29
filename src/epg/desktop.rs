@@ -1018,3 +1018,7 @@ mod focus_tests {
         window.close();
     }
 }
+
+#[cfg(test)]
+#[path = "desktop/c2_native_tests.rs"]
+mod c2_native_tests;
