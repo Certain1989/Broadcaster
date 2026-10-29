@@ -1934,6 +1934,33 @@ impl TvStreamsView {
 
     /// Return focus to the origin card action after OK/Back/Home/cancel, if
     /// virtualization has not removed it; otherwise return to the list.
+    /// Snapshot the currently expanded, bound mapping action before an async
+    /// picker load. A recycled row, source switch or reload invalidates it.
+    pub(crate) fn card_mapping_context(&self, id: &str) -> Option<(u64, String)> {
+        let imp = self.imp();
+        if imp.expanded_id.borrow().as_deref() != Some(id)
+            || imp.selected_id.borrow().as_deref() != Some(id)
+        {
+            return None;
+        }
+        let selected = imp.selection.get()?.selected();
+        let channel = imp.rows.get()?.channel(selected)?;
+        if channel.id != id {
+            return None;
+        }
+        let bound = imp.bindings.borrow().values().any(|binding| {
+            binding.connection.as_ref().is_some_and(|(slot, _)| {
+                slot.position() == selected
+                    && slot.channel().is_some_and(|row| {
+                        row.id == channel.id && row.source_id == channel.source_id
+                    })
+                    && binding.ui.mapping.is_mapped()
+                    && binding.ui.reveal.reveals_child()
+            })
+        });
+        bound.then(|| (imp.generation.get(), channel.source_id))
+    }
+
     pub(crate) fn restore_card_mapping_focus(&self, id: &str) {
         let imp = self.imp();
         // A picker can outlive a row or a playlist/source swap. Never return
@@ -2437,6 +2464,35 @@ impl TvStreamsView {
                 .and_then(|rows| rows.channel(0))
                 .map(|channel| channel.id),
         )
+    }
+
+    /// Verify the GTK focus widget really belongs to the source-qualified
+    /// selected row, not merely to some other descendant of the ListView.
+    #[cfg(test)]
+    pub(crate) fn assert_remote_action_focus_owner(&self, focused: &gtk::Widget, id: &str) {
+        let imp = self.imp();
+        let selected = imp.selection.get().expect("selection").selected();
+        let row = imp.rows.get().expect("rows").channel(selected).expect("selected row");
+        assert_eq!(row.id, id, "selected GTK row has another identity");
+        assert_eq!(imp.selected_id.borrow().as_deref(), Some(id));
+        let binding = imp.bindings.borrow();
+        let owner = binding.values().find(|bound| {
+            bound.connection.as_ref().is_some_and(|(slot, _)| {
+                slot.position() == selected
+                    && slot.channel().is_some_and(|channel| {
+                        channel.id == id && channel.source_id == row.source_id
+                    })
+                    && bound.ui.star.is_mapped()
+            })
+        }).expect("source-qualified owner must be bound and mapped");
+        let row_root = owner.ui.star.parent().and_then(|header| header.parent())
+            .expect("bound card root");
+        assert!(
+            (focused == imp.results_list.upcast_ref::<gtk::Widget>()
+                && imp.results_list.has_focus())
+                || focused == &row_root || focused.is_ancestor(&row_root),
+            "focus belongs to another source-qualified GTK row"
+        );
     }
 
     #[cfg(test)]
