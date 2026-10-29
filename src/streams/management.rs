@@ -754,30 +754,31 @@ fn bind_manager_navigation(
     // Owned only by this row's controllers, never by an async service or a
     // reusable widget pointer. Rebinding drops the old row and its history.
     let vertical_hop: Rc<RefCell<Option<ManagerVerticalHop>>> = Rc::new(RefCell::new(None));
-    // Focus entry captures identity even for ordinary GTK Tab navigation,
-    // pointer clicks, and switch activation—not only handled D-pad keys.
+    // Track direct GTK focus, including Tab, pointer and programmatic moves.
+    // EventControllerFocus::enter may fire before Widget::has_focus becomes
+    // true; testing has_focus there misses both semantic identity updates and
+    // invalidation of stale reciprocal D-pad hops.
     for (slot, target) in std::iter::once((MANAGER_ROW, row.clone().upcast::<gtk::Widget>()))
         .chain(controls.iter().cloned().enumerate())
     {
-        let focus = gtk::EventControllerFocus::new();
         let id = source_id.to_owned();
         let focus_hop = vertical_hop.clone();
-        focus.connect_enter(glib::clone!(
-            #[weak]
-            view,
-            #[weak]
-            target,
-            move |_| {
-                if target.has_focus() {
-                    // A pointer/Tab/programmatic focus change invalidates the
-                    // previous hop. The key handler records its own hop only
-                    // *after* its destination has received focus.
-                    focus_hop.borrow_mut().take();
-                    view.set_manager_focus(&id, slot, index);
+        target.connect_notify_local(
+            Some("has-focus"),
+            glib::clone!(
+                #[weak]
+                view,
+                move |focused, _| {
+                    if focused.has_focus() {
+                        // An external move invalidates the old hop. For a
+                        // handled vertical key, the key handler records the
+                        // new hop after grab_focus has updated this property.
+                        focus_hop.borrow_mut().take();
+                        view.set_manager_focus(&id, slot, index);
+                    }
                 }
-            }
-        ));
-        target.add_controller(focus);
+            ),
+        );
 
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -1895,6 +1896,11 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             enabled.has_focus(),
             "row OK portal focuses Switch without toggling"
         );
+        assert_eq!(
+            view.manager_focus(),
+            Some(("fixture-source".to_owned(), 0, 0)),
+            "semantic Switch slot is remembered for same-source async rebind"
+        );
         assert!(
             !enabled.is_active(),
             "fixture Switch starts OFF and OK must not toggle it"
@@ -1923,6 +1929,32 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert!(
             buttons[2].has_focus(),
             "Up reverses to the same Rename action"
+        );
+        // External/programmatic focus movements must discard the previous
+        // vertical hop. Without this, Delete -> Up wrongly returns Defaults,
+        // even though Refresh is the nearest enabled upper action.
+        assert!(buttons[1].grab_focus(), "focus Defaults externally");
+        spin();
+        inject("Down");
+        assert!(buttons[4].has_focus(), "Down reaches Delete");
+        assert!(buttons[2].grab_focus(), "focus Rename externally");
+        spin();
+        assert_eq!(
+            view.manager_focus().as_ref().map(|(_, slot, _)| *slot),
+            Some(3),
+            "external Rename focus must update the semantic action"
+        );
+        assert!(buttons[4].grab_focus(), "focus Delete externally");
+        spin();
+        assert_eq!(
+            view.manager_focus().as_ref().map(|(_, slot, _)| *slot),
+            Some(5),
+            "external Delete focus must update the semantic action"
+        );
+        inject("Up");
+        assert!(
+            buttons[0].has_focus(),
+            "Up after external focus shifts follows fresh Delete -> Refresh"
         );
         inject("XF86Back");
         assert!(
