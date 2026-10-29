@@ -453,7 +453,9 @@ fn repaint_focused(
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
-                if !list.is_mapped() {
+                // First list may arrive before the dialog is mapped; root
+                // attachment is the lifecycle guard during startup.
+                if list.root().is_none() {
                     return;
                 }
                 while let Some(child) = list.first_child() {
@@ -495,7 +497,7 @@ fn repaint_focused(
                     }
                     if source.last_success_at.is_some() {
                         if let Some(counts) = service.truncation_counts(&source.id).await {
-                            if !list.is_mapped() {
+                            if list.root().is_none() {
                                 return;
                             }
                             for message in truncation_messages(&counts) {
