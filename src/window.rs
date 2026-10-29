@@ -1125,9 +1125,9 @@ mod playback_navigation_tests {
         assert!(star_focus.is::<gtk::Button>());
         assert!(streams.contains_results_focus(&star_focus));
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
-        assert!(streams.contains_results_focus(
-            &window.focused_widget().expect("same row after star")
-        ));
+        assert!(
+            streams.contains_results_focus(&window.focused_widget().expect("same row after star"))
+        );
         assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
@@ -1419,7 +1419,8 @@ mod playback_navigation_tests {
                 "GTK focus styling requires focus"
             );
         };
-        assert_action(0); // First entry focused Play without invoking the player.
+        // First entry focused Play without invoking the player.
+        assert_action(0);
         // Repeated Right must not make any of the expanded actions lose GTK focus.
         // This verifies the routed widget state, not compositor-rendered pixels.
         for (index, button) in buttons.iter().enumerate() {
