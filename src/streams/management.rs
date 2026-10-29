@@ -569,6 +569,9 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         return;
     };
     let (dialog, body, status) = sheet(&gettext("Manage Sources"));
+    // Marks the only modal whose Back key returns a focused source action
+    // to its owning row. Other dialogs keep their normal close behavior.
+    dialog.add_css_class("broadcaster-source-manager");
     dialog.set_content_height(650);
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
@@ -1655,5 +1658,136 @@ mod source_form_tests {
         assert!(region("", "").unwrap().is_none());
         assert!(region("DE-BY", "Bavaria").unwrap().is_some());
         assert!(region(" ", &"R".repeat(129)).is_err());
+    }
+}
+#[cfg(test)]
+mod c1_mapped_native_diagnostic {
+    use super::*;
+    use crate::{application::TvApplication, streams::view::TvStreamsView};
+    use std::{thread, time::Duration};
+
+    fn spin() {
+        for _ in 0..20 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    fn inject(key: &str) {
+        let script = r#"
+import ctypes as c, sys
+x,t = c.CDLL('libX11.so.6'),c.CDLL('libXtst.so.6')
+x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
+d=x.XOpenDisplay(None); assert d
+x.XDefaultRootWindow.argtypes=[c.c_void_p]; x.XDefaultRootWindow.restype=c.c_ulong
+x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)];x.XQueryTree.restype=c.c_int
+root=x.XDefaultRootWindow(d)
+a,b,n=c.c_ulong(),c.c_ulong(),c.c_uint();ch=c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(ch),c.byref(n))
+assert n.value
+x.XSetInputFocus.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_ulong]
+if sys.argv[2]=='initial': x.XSetInputFocus(d,ch[n.value-1],1,0)
+x.XFree.argtypes=[c.c_void_p];x.XFree(c.cast(ch,c.c_void_p))
+x.XStringToKeysym.argtypes=[c.c_char_p];x.XStringToKeysym.restype=c.c_ulong
+x.XKeysymToKeycode.argtypes=[c.c_void_p,c.c_ulong];x.XKeysymToKeycode.restype=c.c_uint
+sym=x.XStringToKeysym(sys.argv[1].encode());code=x.XKeysymToKeycode(d,sym);assert code,(sys.argv[1],sym)
+t.XTestFakeKeyEvent.argtypes=[c.c_void_p,c.c_uint,c.c_int,c.c_ulong]
+assert t.XTestFakeKeyEvent(d,code,1,0); assert t.XTestFakeKeyEvent(d,code,0,0)
+x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p];x.XCloseDisplay(d)
+"#;
+        let mode = if key == "Return" { "initial" } else { "keep" };
+        let r = std::process::Command::new("python3")
+            .args(["-c", script, key, mode])
+            .output()
+            .expect("XTest");
+        assert!(
+            r.status.success(),
+            "XTest {key}: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        spin();
+    }
+
+    fn find_view(widget: &gtk::Widget) -> Option<TvStreamsView> {
+        if let Ok(v) = widget.clone().downcast::<TvStreamsView>() {
+            return Some(v);
+        }
+        let mut child = widget.first_child();
+        while let Some(w) = child {
+            if let Some(v) = find_view(&w) {
+                return Some(v);
+            }
+            child = w.next_sibling();
+        }
+        None
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped synthetic manager; diagnostic only"]
+    fn c1_actual_remote_back_trace() {
+        adw::init().expect("display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(640, 480);
+        win.present();
+        spin();
+        let view = find_view(win.upcast_ref()).expect("stream view");
+        let (dialog, body, _status) = sheet("C1 mapped native diagnostic");
+        dialog.add_css_class("broadcaster-source-manager");
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        let row = gtk::ListBoxRow::new();
+        let upper = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let enabled = gtk::Switch::new();
+        upper.append(&enabled);
+        let mut buttons: Vec<gtk::Button> = Vec::new();
+        for i in 1..8 {
+            let b = gtk::Button::with_label(&format!("Action{i}"));
+            if i < 4 {
+                upper.append(&b)
+            };
+            buttons.push(b);
+        }
+        let lower = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        for b in buttons.iter().skip(3) {
+            lower.append(b)
+        }
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        panel.append(&upper);
+        panel.append(&lower);
+        row.set_child(Some(&panel));
+        list.append(&row);
+        body.append(&list);
+        let actions: [gtk::Widget; 8] = std::array::from_fn(|i| {
+            if i == 0 {
+                enabled.clone().upcast()
+            } else {
+                buttons[i - 1].clone().upcast()
+            }
+        });
+        bind_manager_navigation(&view, &list, &row, &actions, "fixture-source", 0);
+        dialog.present(Some(&win));
+        spin();
+        assert!(row.grab_focus(), "portal focus");
+        inject("Return");
+        assert!(
+            enabled.has_focus(),
+            "row OK portal must focus Switch without toggling"
+        );
+        inject("XF86Back");
+        assert!(
+            row.has_focus(),
+            "native XF86Back from switch returns to owning source row"
+        );
+        assert!(dialog.is_visible(), "first Back keeps manager open");
+        inject("XF86Back");
+        assert!(!row.has_focus(), "second Back on row dismisses manager");
     }
 }
