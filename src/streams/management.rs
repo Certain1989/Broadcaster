@@ -611,7 +611,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
             dialog.close();
         }
     ));
-    view.remember_source_manager(&list, &status);
+    view.remember_source_manager(&list, &status, &add);
     view.refresh_source_manager();
     dialog.connect_closed(glib::clone!(
         #[weak]
@@ -694,6 +694,133 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
     ));
 }
 
+// A row is the non-destructive portal; semantic slots are upper 0..4,
+// lower 4..8. Navigation is explicit because GTK's geometric fallback can
+// leave the two compact rows or land on a disabled edge move button.
+const MANAGER_ROW: usize = 8;
+
+fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 8], slot: usize) -> Option<gtk::Widget> {
+    controls
+        .get(slot)
+        .and_then(glib::WeakRef::upgrade)
+        .filter(|button| button.is_sensitive())
+}
+
+fn nearest_manager_target(
+    controls: &[glib::WeakRef<gtk::Widget>; 8],
+    slot: usize,
+    start: usize,
+    end: usize,
+) -> Option<gtk::Widget> {
+    (start..end)
+        .filter(|candidate| {
+            controls[*candidate]
+                .upgrade()
+                .is_some_and(|widget| widget.is_sensitive())
+        })
+        .min_by_key(|candidate| candidate.abs_diff(slot))
+        .and_then(|candidate| manager_target(controls, candidate))
+}
+
+fn bind_manager_navigation(
+    view: &TvStreamsView,
+    list: &gtk::ListBox,
+    row: &gtk::ListBoxRow,
+    controls: &[gtk::Widget; 8],
+    source_id: &str,
+    index: i32,
+) {
+    row.set_focusable(true);
+    // Focus entry captures identity even for ordinary GTK Tab navigation,
+    // pointer clicks, and switch activation—not only handled D-pad keys.
+    for (slot, target) in std::iter::once((MANAGER_ROW, row.clone().upcast::<gtk::Widget>()))
+        .chain(controls.iter().cloned().enumerate())
+    {
+        let focus = gtk::EventControllerFocus::new();
+        let id = source_id.to_owned();
+        focus.connect_enter(glib::clone!(
+            #[weak]
+            view,
+            #[weak]
+            target,
+            move |_| {
+                if target.has_focus() {
+                    view.set_manager_focus(&id, slot, index);
+                }
+            }
+        ));
+        target.add_controller(focus);
+
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        // Only weak references in controllers: rebuilding rows must not leak
+        // the old widgets through a controller -> button -> row cycle.
+        let actions = std::array::from_fn(|i| controls[i].downgrade());
+        let weak_list = list.downgrade();
+        let weak_row = row.downgrade();
+        key.connect_key_pressed(move |_, pressed, _, modifiers| {
+            let (Some(list), Some(row)) = (weak_list.upgrade(), weak_row.upgrade()) else {
+                return glib::Propagation::Proceed;
+            };
+            // A ListBoxRow's capture controller also sees events dispatched to
+            // its children; the portal is active only while the row itself
+            // actually owns focus, never while an action owns it.
+            if slot == MANAGER_ROW && !row.has_focus() {
+                return glib::Propagation::Proceed;
+            }
+            if !crate::keyboard::unmodified_remote(modifiers) {
+                return glib::Propagation::Proceed;
+            }
+            use gtk::gdk::Key;
+            let next = match pressed {
+                Key::BackSpace if slot != MANAGER_ROW => Some(row.clone().upcast()),
+                Key::Return | Key::KP_Enter | Key::space | Key::Right | Key::KP_Right
+                    if slot == MANAGER_ROW =>
+                {
+                    manager_target(&actions, 0)
+                }
+                Key::Left | Key::KP_Left if slot != MANAGER_ROW => {
+                    let first = if slot < 4 { 0 } else { 4 };
+                    if slot == first {
+                        Some(row.clone().upcast())
+                    } else {
+                        (first..slot)
+                            .rev()
+                            .find_map(|i| manager_target(&actions, i))
+                            .or_else(|| Some(row.clone().upcast()))
+                    }
+                }
+                Key::Right | Key::KP_Right if slot != MANAGER_ROW => {
+                    let end = if slot < 4 { 4 } else { 8 };
+                    ((slot + 1)..end).find_map(|i| manager_target(&actions, i))
+                }
+                Key::Down | Key::KP_Down if slot < 4 => {
+                    nearest_manager_target(&actions, slot + 4, 4, 8)
+                }
+                Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
+                    nearest_manager_target(&actions, slot - 4, 0, 4)
+                }
+                Key::Up | Key::KP_Up if slot < 4 => Some(row.clone().upcast()),
+                Key::Down | Key::KP_Down if slot == MANAGER_ROW || (4..8).contains(&slot) => {
+                    list.row_at_index(index + 1).map(|item| item.upcast())
+                }
+                Key::Up | Key::KP_Up if slot == MANAGER_ROW => {
+                    list.row_at_index(index - 1).map(|item| item.upcast())
+                }
+                _ => None,
+            };
+            if let Some(next) = next {
+                if next.grab_focus() {
+                    return glib::Propagation::Stop;
+                }
+            }
+            // Escape/Home remain under the existing modal/window router.
+            glib::Propagation::Proceed
+        });
+        target.add_controller(key);
+    }
+}
+
 pub(crate) fn load_manager(
     view: &TvStreamsView,
     service: &StreamsService,
@@ -726,6 +853,9 @@ pub(crate) fn load_manager(
             if view.manager_generation() != generation {
                 return;
             }
+            let restore = view.manager_focus();
+            view.manager_rebuilding(true);
+            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 8])> = Vec::new();
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -792,10 +922,25 @@ pub(crate) fn load_manager(
                 let down = button("↓", &lower_actions);
                 up.set_sensitive(index != 0);
                 down.set_sensitive(index + 1 < sources.len());
+                // Keep both action lines aligned in compact and TV layouts.
+                upper_actions.set_homogeneous(true);
+                lower_actions.set_homogeneous(true);
                 panel.append(&upper_actions);
                 panel.append(&lower_actions);
                 let row = gtk::ListBoxRow::new();
                 row.set_child(Some(&panel));
+                let controls: [gtk::Widget; 8] = [
+                    enabled.clone().upcast(),
+                    refresh.clone().upcast(),
+                    edit.clone().upcast(),
+                    rename.clone().upcast(),
+                    change.clone().upcast(),
+                    remove.clone().upcast(),
+                    up.clone().upcast(),
+                    down.clone().upcast(),
+                ];
+                bind_manager_navigation(&view, &list, &row, &controls, &source.id, index as i32);
+                focus_rows.push((source.id.clone(), row.clone(), controls));
                 list.append(&row);
                 let src = source.clone();
                 let svc = service.clone();
@@ -883,6 +1028,45 @@ pub(crate) fn load_manager(
                         }
                     ));
                 }
+            }
+            view.manager_rebuilding(false);
+            if focus_rows.is_empty() {
+                view.focus_empty_source_manager();
+            } else {
+                // Preserve the logical source across asynchronous switch, rename,
+                // replace and reorder. A deletion selects the adjacent surviving
+                // row at the previous position, or the previous last row.
+                let chosen = restore
+                    .as_ref()
+                    .and_then(|(id, _, _)| {
+                        focus_rows
+                            .iter()
+                            .position(|(source_id, _, _)| source_id == id)
+                    })
+                    .or_else(|| {
+                        restore
+                            .as_ref()
+                            .map(|(_, _, index)| (*index).max(0) as usize)
+                            .map(|index| index.min(focus_rows.len() - 1))
+                    })
+                    .unwrap_or(0);
+                let (id, row, controls) = &focus_rows[chosen];
+                let slot = restore
+                    .as_ref()
+                    .map_or(MANAGER_ROW, |(_, action, _)| *action);
+                let references = std::array::from_fn(|i| controls[i].downgrade());
+                let target = if slot == MANAGER_ROW {
+                    None
+                } else {
+                    manager_target(&references, slot)
+                };
+                let restored_slot = if target.is_some_and(|target| target.grab_focus()) {
+                    slot
+                } else {
+                    row.grab_focus();
+                    MANAGER_ROW
+                };
+                view.set_manager_focus(id, restored_slot, chosen as i32);
             }
         }
     ));
