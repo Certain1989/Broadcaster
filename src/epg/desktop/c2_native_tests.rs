@@ -509,21 +509,25 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
             "disabled Remove Up skips Refresh",
         );
-        assert!(
-            guide_action(&guide, "Guide 0", "Remove").grab_focus(),
-            "source zero bootstrap before cross-UUID disabled route"
+        // Rename reorders guides alphabetically: Updated Guide 1 is now the
+        // last UUID, after Guide 2. Traverse the live ordering, not old row indices.
+        inject("Up");
+        assert_remote_focus(
+            &win,
+            &guide_action(&guide, "Guide 2", "Remove"),
+            "disabled last Default -> prior sorted UUID Remove",
         );
         inject("Down");
         assert_remote_focus(
             &win,
             &guide_action(&guide, "Updated Guide 1", "Use as Shared Default"),
-            "prior Remove -> disabled middle Default, not Refresh",
+            "prior sorted Remove -> disabled last Default, not Refresh",
         );
         inject("Up");
         assert_remote_focus(
             &win,
-            &guide_action(&guide, "Guide 0", "Remove"),
-            "disabled middle Default -> previous Remove reciprocal",
+            &guide_action(&guide, "Guide 2", "Remove"),
+            "disabled last Default -> prior Remove reciprocal",
         );
         assert!(
             !named_button(new_row.upcast_ref(), "Refresh")
