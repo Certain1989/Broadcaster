@@ -366,7 +366,9 @@ fn confirm_shared_guide(
         }
     ));
     focus_when_present(&dialog, &cancel);
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
     confirm.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -379,8 +381,8 @@ fn confirm_shared_guide(
             let id = source.as_ref().map(|source| source.id.clone());
             let selected = id.clone();
             let manager = manager.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -390,7 +392,10 @@ fn confirm_shared_guide(
                 #[weak]
                 confirm,
                 async move {
-                    match save_default_guide(id).await {
+                    let result = save_default_guide(id).await;
+                    let Some((list, status, parent)) =
+                        live_guide_context(&list, &status, &parent) else { return };
+                    match result {
                         Ok(()) => {
                             dialog.close();
                             status.set_text(&gettext("Shared guide selection updated"));
@@ -742,13 +747,17 @@ fn show_source_settings(
     hours.set_hexpand(true);
     let less = gtk::Button::with_label(&gettext("− 1 hour"));
     let more = gtk::Button::with_label(&gettext("+ 1 hour"));
-    let down_hours = hours.clone();
+    let down_hours = hours.downgrade();
     less.connect_clicked(move |_| {
-        down_hours.set_value((down_hours.value() - 1.0).max(6.0));
+        if let Some(hours) = down_hours.upgrade() {
+            hours.set_value((hours.value() - 1.0).max(6.0));
+        }
     });
-    let up_hours = hours.clone();
+    let up_hours = hours.downgrade();
     more.connect_clicked(move |_| {
-        up_hours.set_value((up_hours.value() + 1.0).min(168.0));
+        if let Some(hours) = up_hours.upgrade() {
+            hours.set_value((hours.value() + 1.0).min(168.0));
+        }
     });
     horizontal_link(&hours, &less);
     horizontal_link(&less, &more);
@@ -776,7 +785,13 @@ fn show_source_settings(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
+    let weak_name = name.downgrade();
+    let weak_enabled = enabled.downgrade();
+    let weak_automatic = automatic.downgrade();
+    let weak_hours = hours.downgrade();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -787,12 +802,16 @@ fn show_source_settings(
             let id = source.id.clone();
             let id_for_focus = id.clone();
             let revision = source.updated_at;
+            let Some(name) = weak_name.upgrade() else { return };
+            let Some(enabled) = weak_enabled.upgrade() else { return };
+            let Some(automatic) = weak_automatic.upgrade() else { return };
+            let Some(hours) = weak_hours.upgrade() else { return };
             let new_name = name.text().to_string();
             let new_enabled = enabled.is_active();
             let auto = automatic.is_active();
             let interval = hours.value_as_int() as i64 * 3600;
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -803,10 +822,14 @@ fn show_source_settings(
                     let result = manager
                         .update_settings(id, revision, new_name, new_enabled, auto, interval)
                         .await;
+                    if !dialog.is_mapped() { return; }
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint_focused(manager, list, status, parent, Some((id_for_focus, 2)));
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent) {
+                                repaint_focused(manager, list, status, parent, Some((id_for_focus, 2)));
+                            }
                         }
                         Err(error) => message.set_text(&guide_problem(&error.to_string())),
                     }
@@ -849,7 +872,9 @@ fn show_delete_confirmation(
         }
     ));
     focus_when_present(&dialog, &cancel);
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
     remove.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -859,8 +884,8 @@ fn show_delete_confirmation(
             let manager = service.clone();
             let approval = approval.clone();
             let removed_id = source.id.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -869,10 +894,14 @@ fn show_delete_confirmation(
                 error,
                 async move {
                     let result = manager.delete_confirmed(approval).await;
+                    if !dialog.is_mapped() { return; }
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint_focused(manager, list, status, parent, Some((removed_id, 0)));
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent) {
+                                repaint_focused(manager, list, status, parent, Some((removed_id, 0)));
+                            }
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
@@ -940,24 +969,34 @@ fn show_add(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
+    let weak_name = name.downgrade();
+    let weak_url = url.as_ref().map(|entry| entry.downgrade());
+    let weak_lan = lan.downgrade();
+    let weak_automatic = automatic.downgrade();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
         #[weak]
         error,
         move |_| {
+            let Some(name) = weak_name.upgrade() else { return };
+            let Some(automatic) = weak_automatic.upgrade() else { return };
             let origin = if let Some(ref file) = local {
                 SourceOrigin::selected_local_file(file.uri().to_string())
             } else {
+                let Some(lan) = weak_lan.upgrade() else { return };
                 let chosen = if lan.is_active() {
                     TrustScope::ExplicitLan
                 } else {
                     TrustScope::Public
                 };
                 SourceOrigin::entered_remote_url(
-                    url.as_ref()
-                        .map(|field| field.text().to_string())
+                    weak_url.as_ref()
+                        .and_then(|entry| entry.upgrade())
+                        .map(|entry| entry.text().to_string())
                         .unwrap_or_default(),
                     chosen,
                 )
@@ -969,8 +1008,8 @@ fn show_add(
                 return;
             };
             let manager = service.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             let name = name.text().to_string();
             let update_automatically = automatic.is_active();
@@ -980,13 +1019,15 @@ fn show_add(
                 #[weak]
                 error,
                 async move {
-                    match manager
-                        .add_with_schedule(name, origin, update_automatically)
-                        .await
-                    {
+                    let result = manager.add_with_schedule(name, origin, update_automatically).await;
+                    if !dialog.is_mapped() { return; }
+                    match result {
                         Ok(added) => {
                             dialog.close();
-                            repaint_focused(manager, list, status, parent, Some((added.id, 2)));
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent) {
+                                repaint_focused(manager, list, status, parent, Some((added.id, 2)));
+                            }
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
@@ -1041,18 +1082,15 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         body.append(&status);
         dialog.add_css_class("broadcaster-guide-manager");
         focus_when_present(&dialog, &add_remote);
-        let clear_win = parent.clone();
+        let clear_win = parent.downgrade();
         let clear_manager = service.clone();
-        let clear_list = list.clone();
-        let clear_status = status.clone();
+        let clear_list = list.downgrade();
+        let clear_status = status.downgrade();
         clear_default.connect_clicked(move |_| {
-            confirm_shared_guide(
-                &clear_win,
-                None,
-                clear_manager.clone(),
-                clear_list.clone(),
-                clear_status.clone(),
-            );
+            if let Some((list, status, parent)) =
+                live_guide_context(&clear_list, &clear_status, &clear_win) {
+                confirm_shared_guide(&parent, None, clear_manager.clone(), list, status);
+            }
         });
         close.connect_clicked(glib::clone!(
             #[weak]
@@ -1062,23 +1100,32 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
             }
         ));
         let svc = service.clone();
-        let ls = list.clone();
-        let st = status.clone();
-        let win = parent.clone();
-        add_remote
-            .connect_clicked(move |_| show_add(&win, svc.clone(), ls.clone(), st.clone(), None));
+        let ls = list.downgrade();
+        let st = status.downgrade();
+        let win = parent.downgrade();
+        add_remote.connect_clicked(move |_| {
+            if let Some((list, status, parent)) = live_guide_context(&ls, &st, &win) {
+                show_add(&parent, svc.clone(), list, status, None);
+            }
+        });
         let svc = service.clone();
-        let ls = list.clone();
-        let st = status.clone();
-        let win = parent.clone();
+        let ls = list.downgrade();
+        let st = status.downgrade();
+        let win = parent.downgrade();
         add_local.connect_clicked(move |_| {
             let svc = svc.clone();
             let ls = ls.clone();
             let st = st.clone();
             let win = win.clone();
             spawn(async move {
-                if let Ok(file) = gtk::FileDialog::new().open_future(Some(&win)).await {
-                    show_add(&win, svc, ls, st, Some(file));
+                let Some((_, _, parent)) = live_guide_context(&ls, &st, &win)
+                    else { return };
+                let selection = gtk::FileDialog::new().open_future(Some(&parent)).await;
+                if let Ok(file) = selection {
+                    if let Some((list, status, parent)) =
+                        live_guide_context(&ls, &st, &win) {
+                        show_add(&parent, svc, list, status, Some(file));
+                    }
                 }
             });
         });
