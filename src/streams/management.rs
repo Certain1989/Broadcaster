@@ -1768,7 +1768,7 @@ mod c1_mapped_native_diagnostic {
     use crate::{application::TvApplication, streams::view::TvStreamsView};
     use std::{thread, time::Duration};
 
-    fn spin() {
+    pub(super) fn spin() {
         for _ in 0..20 {
             while glib::MainContext::default().pending() {
                 glib::MainContext::default().iteration(false);
@@ -1777,7 +1777,7 @@ mod c1_mapped_native_diagnostic {
         }
     }
 
-    fn inject(key: &str) {
+    pub(super) fn inject(key: &str) {
         let script = r#"
 import ctypes as c, sys
 x,t = c.CDLL('libX11.so.6'),c.CDLL('libXtst.so.6')
@@ -1812,7 +1812,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         spin();
     }
 
-    fn find_view(widget: &gtk::Widget) -> Option<TvStreamsView> {
+    pub(super) fn find_view(widget: &gtk::Widget) -> Option<TvStreamsView> {
         if let Ok(v) = widget.clone().downcast::<TvStreamsView>() {
             return Some(v);
         }
@@ -1980,3 +1980,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert!(!row.has_focus(), "dismissal must release the source row");
     }
 }
+
+#[cfg(test)]
+#[path = "management/c1_native_service_tests.rs"]
+mod c1_native_service_tests;

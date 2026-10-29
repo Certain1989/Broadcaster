@@ -40,7 +40,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Cache only Rust job compiler artifacts, not Flatpak build trees.
       # rust-cache includes rustc version and Cargo.lock in its cache keys.
@@ -91,6 +91,41 @@ jobs:
         run: |
           meson compile -C _build
           meson test -C _build --print-errorlogs
+      - name: C1 real source-manager native XTest and SQLite regressions
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in \
+            c1_native_manager_0_640_480 c1_native_manager_1_640_480 c1_native_manager_3_640_480 \
+            c1_native_manager_0_1280_800 c1_native_manager_1_1280_800 c1_native_manager_3_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            xvfb-run -a -s "-screen 0 "$geometry"x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+          done
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked c1_native_negative_oracle -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "C1 negative oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq C1_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "C1 negative oracle failed for the wrong reason" >&2
+            exit 1
+          fi
+          echo "Deliberately wrong focus expectation was correctly rejected"
+
       - name: Verify staged native installation
         run: |
           DESTDIR="$PWD/_build/install-root" meson install -C _build --no-rebuild
