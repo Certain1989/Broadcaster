@@ -383,10 +383,8 @@ fn m1_019_regional_language_and_multiple_suffixes_never_auto_bind() {
 }
 
 #[test]
-#[ignore = "M1-019 DE-NEG-01: expected abstention requires separate owner D35 policy decision"]
 fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
-    // Deliberately RED on the current D35 quality rule. Not an accepted
-    // production invariant until the owner explicitly resolves D35 policy.
+    // An uncorroborated quality-ID target must never attach its programme.
     let imported = row("R11", "synthetic", Some("3sat.de@HD"), "3sat");
     let contradictory = [ch("guide", "3sat.de", "ZDF - deliberately inconsistent")];
     assert!(
@@ -399,4 +397,30 @@ fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
         ),
         "unsafe automatic 3sat -> incorrectly labelled ZDF guide target"
     );
+}
+
+
+#[test]
+fn r02_quality_label_corroboration_is_conservative_and_guide_scoped() {
+    for label in ["3sat", "DE - 3sat", "3sat HD", "DE - 3sat FHD"] {
+        assert!(matches!(
+            decision(&row("r", "p", Some("3sat.de@HD"), "3sat"), None, None,
+                &[ch("guide", "3sat.de", label)]),
+            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }
+        ), "valid quality display label: {label}");
+    }
+    for label in ["ZDF - deliberately inconsistent", "DE - ZDF", "ZDF - 3sat",
+                  "3sat International", "DE - 3sat West", "3sat (another network)"] {
+        assert!(!matches!(
+            decision(&row("r", "p", Some("3sat.de@HD"), "irrelevant"), None, None,
+                &[ch("guide", "3sat.de", label)]),
+            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }
+        ), "ambiguous or contradictory label: {label}");
+    }
+    // A literal exact ID does not need inferential label corroboration.
+    assert!(matches!(
+        decision(&row("r", "p", Some("3sat.de"), "3sat"), None, None,
+            &[ch("guide", "3sat.de", "ZDF - contradictory feed")]),
+        MatchDecision::Matched { method: MatchMethod::ExactTvgId, .. }
+    ));
 }

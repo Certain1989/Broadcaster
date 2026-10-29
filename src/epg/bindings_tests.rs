@@ -1248,9 +1248,9 @@ fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
 }
 
 #[test]
-fn m1_019_de_neg_01_sqlite_current_policy_projects_wrong_schedule() {
-    // Characterization, not endorsement: demonstrates that structural
-    // auto-identity is used by the *real* SQLite Now/Next projection path.
+fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
+    // The guide's contradictory broadcaster label must not populate Now/Next.
+    // A separate deliberate one-row override may still select this exact ID.
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1270,29 +1270,25 @@ fn m1_019_de_neg_01_sqlite_current_policy_projects_wrong_schedule() {
         )
         .unwrap();
     }
-    assert!(matches!(resolve(&c, "a1"),
-        MatchDecision::Matched {
-            channel_id,
-            method: MatchMethod::AutomaticIdentity,
-            ..
-        } if channel_id == "3sat.de"
+    assert!(matches!(resolve(&c, "a1"), MatchDecision::Unmatched { .. }));
+    assert!(matches!(
+        read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap(),
+        SemanticProgrammeState::Unmatched
     ));
-    let state = read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap();
-    match state {
-        SemanticProgrammeState::Matched {
-            now_next: Some(pair),
-            ..
-        } => {
-            assert_eq!(
-                pair.current.as_ref().unwrap().title,
-                "WRONG ZDF NOW [synthetic]"
-            );
-            assert_eq!(
-                pair.next.as_ref().unwrap().title,
-                "WRONG ZDF NEXT [synthetic]"
-            );
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1", "g", "3sat.de", 5,
+    ).unwrap();
+    assert!(matches!(resolve(&c, "a1"),
+        MatchDecision::Matched { method: MatchMethod::RowOverride, .. }));
+    match read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap() {
+        SemanticProgrammeState::Matched { now_next: Some(pair), .. } => {
+            assert_eq!(pair.current.as_ref().unwrap().title, "WRONG ZDF NOW [synthetic]");
+            assert_eq!(pair.next.as_ref().unwrap().title, "WRONG ZDF NEXT [synthetic]");
         }
-        other => panic!("expected evidence of current-policy wrong-schedule projection: {other:?}"),
+        other => panic!("deliberate manual override must be usable: {other:?}"),
     }
 }
 
@@ -1405,25 +1401,13 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
         }
         other => panic!("synthetic good guide should project the real fixture titles: {other:?}"),
     }
-    // This is current-policy characterization, NOT approval of wrong attribution.
+    // A successful poisoned refresh cannot silently project another station.
     m1_019_import_inline(&mut c, M1_019_POISONED_XMLTV, now + 1).unwrap();
-    match read_semantic_now_next(&c, "a1", now + 1, &AtomicBool::new(false)).unwrap() {
-        SemanticProgrammeState::Matched {
-            method: MatchMethod::AutomaticIdentity,
-            now_next: Some(pair),
-            ..
-        } => {
-            assert_eq!(
-                pair.current.as_ref().unwrap().title,
-                "WRONG ZDF NOW [synthetic]"
-            );
-            assert_eq!(
-                pair.next.as_ref().unwrap().title,
-                "WRONG ZDF NEXT [synthetic]"
-            );
-        }
-        other => panic!("current D35 policy projection should remain observable: {other:?}"),
-    }
+    assert!(matches!(
+        read_semantic_now_next(&c, "a1", now + 1, &AtomicBool::new(false)).unwrap(),
+        SemanticProgrammeState::Unmatched
+    ));
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
 }
 
 #[test]
@@ -1470,4 +1454,27 @@ fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
         second,
         super::xmltv::parse_timestamp("20261025010000 +0000").unwrap()
     );
+}
+
+
+#[test]
+fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
+    for stem in ["ABC[1]", "ABC*1", "ABC?1"] {
+        let mut c = setup();
+        selected(&mut c, "g");
+        let guide_id = format!("{stem}.de");
+        c.execute("UPDATE iptv_channels SET tvg_id=?1, imported_name='unrelated' WHERE id='a1'",
+            [format!("{guide_id}@HD")]).unwrap();
+        add_channel(&c, "g", &guide_id, "ABC1");
+        assert!(matches!(resolve(&c, "a1"),
+            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }),
+            "a GLOB wildcard in a literal ID must not invent a sibling: {guide_id}");
+        add_channel(&c, "g", &format!("{guide_id}@SD"), "ABC1 SD");
+        assert!(!matches!(resolve(&c, "a1"),
+            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }),
+            "a literal sibling must always veto quality collapse: {guide_id}");
+        assert!(!matches!(read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap(),
+            SemanticProgrammeState::Matched { .. }),
+            "vetoed sibling must not project now/next");
+    }
 }

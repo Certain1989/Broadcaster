@@ -207,6 +207,42 @@ pub fn automatic_identity_candidates(original: &str) -> Vec<(String, AutoIdentit
     Vec::new()
 }
 
+/// Conservative quality-only corroboration. An XMLTV identifier cannot prove
+/// that a differently named broadcaster broadcasts the same schedule. Permit
+/// only the complete broadcaster stem, optional matching country decoration,
+/// and known presentation-only quality labels. Unknown naming is manual-only.
+fn corroborates_quality_label(original: &str, display_name: &str) -> bool {
+    let Some((full_id, _)) = original.split_once('@') else {
+        return false;
+    };
+    let Some((broadcaster, country)) = full_id.rsplit_once('.') else {
+        return false;
+    };
+    let expected: String = broadcaster
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    // Very short/generic IDs cannot establish station identity from a label.
+    if expected.len() < 3 {
+        return false;
+    }
+    let label = display_name.trim().to_ascii_lowercase();
+    let country_prefix = format!("{} - ", country.to_ascii_lowercase());
+    let label = label.strip_prefix(&country_prefix).unwrap_or(&label);
+    let label_key: String = label
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    matches!(
+        label_key.strip_prefix(&expected),
+        Some(
+            "" | "sd" | "hd" | "fhd" | "fullhd" | "uhd" | "4k" | "8k"
+                | "720p" | "1080p" | "2160p" | "hevc" | "h264" | "h265"
+        )
+    )
+}
+
 /// A guide label is corroboration, not a replacement for the structural ID.
 /// All checks use plain ASCII components found in exact candidate identities;
 /// provider prefixes and case-insensitive full-name similarity alone cannot
@@ -218,7 +254,7 @@ pub fn corroborated_auto_identity(
 ) -> bool {
     let lowered = channel.display_name.to_ascii_lowercase();
     match kind {
-        AutoIdentityKind::Quality => true,
+        AutoIdentityKind::Quality => corroborates_quality_label(original, &channel.display_name),
         AutoIdentityKind::Region => {
             let Some((_, region)) = original.split_once('@') else {
                 return false;
