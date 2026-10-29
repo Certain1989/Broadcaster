@@ -1855,3 +1855,72 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod c3_native_mediathek_tests {
+    use super::*;
+    use crate::window::c3_native as native;
+
+    #[test]
+    #[ignore = "real XTest/GDK Mediathek navigation, both required viewports"]
+    fn gtk_c3_xtest_mediathek_compact_tv_roundtrip() {
+        let (_app, win) = native::mapped_window("mediathek");
+        let view = win.c3_mediathek();
+        let imp = view.imp();
+        // The list is an offline disposable fixture, not catalogue data.
+        imp.results_list.bind_model(None::<&gio::ListStore>, |_| {
+            gtk::ListBoxRow::new().upcast::<gtk::Widget>()
+        });
+        let row = gtk::ListBoxRow::new();
+        row.set_child(Some(&gtk::Button::with_label("Synthetic programme")));
+        imp.results_list.append(&row);
+        imp.stack.set_visible_child(&*imp.results_view);
+        native::spin();
+        let search = imp.search_entry.get();
+        native::receiver_probe(&search);
+        let targets = view.toolbar_focus_targets();
+        assert!(
+            targets.iter().all(|w| w.is_mapped()),
+            "ENVIRONMENT: Mediathek controls unmapped"
+        );
+        assert!(search.grab_focus());
+        native::key("Down");
+        let first = native::focused(&win);
+        assert!(
+            first.is_mapped(),
+            "PRODUCT_RED: Mediathek Down lost mapped focus"
+        );
+        let destination = targets
+            .iter()
+            .position(|target| native::owns(&first, target));
+        eprintln!(
+            "C3_NATIVE mediathek_search_Down focus={} target_index={destination:?}",
+            first.type_().name()
+        );
+        assert!(
+            destination.is_some(),
+            "PRODUCT_RED: Down escaped Mediathek toolbar"
+        );
+        native::key("Up");
+        assert!(
+            native::owns(&native::focused(&win), search.upcast_ref()),
+            "PRODUCT_RED: Mediathek native Up must reverse to Search"
+        );
+        // Up is a spatial key; Back is a distinct semantic return. Never
+        // reproduce either route by directly invoking focus_vertical_navigation.
+        assert!(row.grab_focus());
+        native::key("Up");
+        assert!(
+            native::focused(&win).is_mapped(),
+            "PRODUCT_RED: native Up lost mapped focus"
+        );
+        assert!(row.grab_focus());
+        native::key("XF86Back");
+        assert!(
+            native::focused(&win).is_mapped(),
+            "PRODUCT_RED: native Back lost focus"
+        );
+        eprintln!("C3_NATIVE mediathek=connected Down,Up,XF86Back mapped=true paint=NOT_AUTOMATED owner_G09");
+        win.destroy();
+    }
+}

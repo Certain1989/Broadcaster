@@ -40,7 +40,7 @@ jobs:
       image: archlinux:latest
     steps:
       - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth libxtst libx11 python
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Cache only Rust job compiler artifacts, not Flatpak build trees.
       # rust-cache includes rustc version and Cargo.lock in its cache keys.
@@ -58,6 +58,97 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Unit tests
         run: cargo test --locked
+      # Connected native X11 acceptance: deliberately blocked on missing test IDs,
+      # failed XTest/GTK delivery, product assertions, or per-case timeout.
+      # Existing Rust compile/test artifacts are reused in the same job.
+      - name: Connected C3 remote-key XTest acceptance (640 and 1280)
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf -- "$scratch"' EXIT
+          mkdir -p "$scratch/schema"
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$scratch/schema/"
+          glib-compile-schemas "$scratch/schema"
+          # Container checkout may be owned by the host runner. Explicitly
+          # trust only this checked-out workspace for read-only Git provenance.
+          checked_head=$(git -c safe.directory="$PWD" rev-parse --verify HEAD)
+          checked_tree=$(git -c safe.directory="$PWD" rev-parse --verify 'HEAD^{tree}')
+          case "$checked_head:$checked_tree" in
+            *[!0-9a-f:]*|*:) echo 'ENVIRONMENT: invalid Git SHA/tree' >&2; exit 2 ;;
+          esac
+          test "${#checked_head}" -eq 40 && test "${#checked_tree}" -eq 40
+          echo "C3_NATIVE checkout_HEAD=$checked_head checkout_TREE=$checked_tree"
+          echo "C3_NATIVE job_ref=${GITHUB_REF} branch_head=${GITHUB_HEAD_REF:-main}"
+          cargo test --locked --no-run --message-format=json > "$scratch/cargo.jsonl"
+          python3 - "$scratch/cargo.jsonl" "$scratch/test-bin" <<'PY_EXE'
+          import json, os, sys
+          artifacts = []
+          for line in open(sys.argv[1], encoding='utf-8'):
+              try:
+                  obj = json.loads(line)
+              except ValueError:
+                  continue
+              if obj.get('reason') != 'compiler-artifact':
+                  continue
+              target = obj.get('target') or {}
+              if (target.get('name') == 'broadcaster'
+                  and 'bin' in target.get('kind', [])
+                  and (obj.get('profile') or {}).get('test')
+                  and obj.get('executable')):
+                  artifacts.append(obj['executable'])
+          paths = sorted(set(artifacts))
+          if len(paths) != 1 or not os.path.isfile(paths[0]) or not os.access(paths[0], os.X_OK):
+              sys.exit('ENVIRONMENT: expected exactly one compiled broadcaster test executable, found %r' % paths)
+          open(sys.argv[2], 'w', encoding='utf-8').write(paths[0] + '\n')
+          print('C3_NATIVE test_executable=validated count=1')
+          PY_EXE
+          test_bin=$(cat "$scratch/test-bin")
+          "$test_bin" --list --ignored > "$scratch/test-list"
+          case_ids=(
+            live::view::c3_native_live_tests::gtk_c3_xtest_live_first_middle_last
+            live::view::c3_native_live_tests::gtk_c3_xtest_live_first_ok_focus_no_play
+            live::view::c3_native_live_tests::gtk_c3_xtest_live_second_ok_exactly_once
+            live::view::c3_native_live_tests::gtk_c3_xtest_live_right_left_back_after_rebind
+            live::view::c3_native_live_tests::gtk_c3_xtest_negative_wrong_arrow_rejected
+            mediathek::view::c3_native_mediathek_tests::gtk_c3_xtest_mediathek_compact_tv_roundtrip
+          )
+          for id in "${case_ids[@]}"; do
+            count=$(grep -Fxc "$id: test" "$scratch/test-list" || true)
+            if [ "$count" != 1 ]; then
+              echo "ENVIRONMENT: missing/ambiguous C3 native case $id count=$count" >&2
+              exit 2
+            fi
+          done
+          c3_failed=0
+          c3_pass=0
+          for viewport in 640x480 1280x800; do
+            for id in "${case_ids[@]}"; do
+              mkdir -p "$scratch/$viewport/config" "$scratch/$viewport/data" "$scratch/$viewport/cache"
+              echo "C3_NATIVE START id=$id viewport=$viewport"
+              # A standalone process and display for every GTK test. No real
+              # playlist/guide, player, device, or screenshot artifact used.
+              if timeout -k 5s 120s dbus-run-session -- xvfb-run -a \
+                -s "-screen 0 ${viewport}x24 -ac +extension XTEST" \
+                env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
+                GSETTINGS_SCHEMA_DIR="$scratch/schema" \
+                XDG_CONFIG_HOME="$scratch/$viewport/config" \
+                XDG_DATA_HOME="$scratch/$viewport/data" \
+                XDG_CACHE_HOME="$scratch/$viewport/cache" \
+                BROADCASTER_C3_VIEWPORT="$viewport" \
+                "$test_bin" "$id" --exact --ignored --nocapture --test-threads=1; then
+                c3_pass=$((c3_pass+1))
+                echo "C3_NATIVE PASS id=$id viewport=$viewport"
+              else
+                status=$?
+                c3_failed=$((c3_failed+1))
+                echo "C3_NATIVE BLOCKING_FAILURE id=$id viewport=$viewport exit=$status" >&2
+              fi
+            done
+          done
+          echo "C3_NATIVE RESULT passed=$c3_pass failed=$c3_failed expected=12 painted_focus=NOT_AUTOMATED owner_G09=PENDING"
+          test "$((c3_pass+c3_failed))" -eq 12 || { echo 'ENVIRONMENT: native case count incomplete' >&2; exit 2; }
+          test "$c3_failed" -eq 0 || { echo 'PRODUCT_RED_OR_ENVIRONMENT: C3 native gate blocking on failed cases' >&2; exit 1; }
       - name: Exercise external-player D-Bus discovery on an isolated session bus
         run: dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
       # Tests icon-name lookup on a *live* GDK display; file existence or PNG

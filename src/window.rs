@@ -1602,3 +1602,152 @@ mod spatial_navigation_tests {
         );
     }
 }
+
+// Only the independently authorized C3 native test branch compiles this driver.
+// XTest sends real events to the X11 server; GTK's normal event propagation
+// must receive them. A direct call to handle_remote_key is never a test oracle.
+#[cfg(test)]
+pub(crate) mod c3_native {
+    use super::*;
+    use std::{cell::Cell, process::Command, thread, time::Duration};
+
+    thread_local! {
+        static FOCUSED_X11_SURFACE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn spin() {
+        for _ in 0..16 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            thread::sleep(Duration::from_millis(12));
+        }
+    }
+
+    pub(crate) fn key(key: &str) {
+        // Runtime ctypes resolves libX11/libXtst without a new Cargo dependency.
+        // The driver never invokes any GTK handler or manipulates GTK widgets.
+        let python = r#"
+import ctypes as c
+import sys
+x, t = c.CDLL('libX11.so.6'), c.CDLL('libXtst.so.6')
+x.XOpenDisplay.argtypes=[c.c_char_p]
+x.XOpenDisplay.restype=c.c_void_p
+d=x.XOpenDisplay(None)
+assert d, 'ENVIRONMENT: missing X11 display'
+x.XDefaultRootWindow.argtypes=[c.c_void_p]
+x.XDefaultRootWindow.restype=c.c_ulong
+x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)]
+x.XQueryTree.restype=c.c_int
+root=x.XDefaultRootWindow(d)
+root_out,parent,n=c.c_ulong(),c.c_ulong(),c.c_uint()
+children=c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d,root,c.byref(root_out),c.byref(parent),c.byref(children),c.byref(n)), 'ENVIRONMENT: XQueryTree'
+assert n.value, 'ENVIRONMENT: no X11 window'
+if sys.argv[2]=='initial':
+    x.XSetInputFocus.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_ulong]
+    x.XSetInputFocus(d,children[n.value-1],1,0)
+x.XFree.argtypes=[c.c_void_p]
+x.XFree(c.cast(children,c.c_void_p))
+x.XQueryExtension.argtypes=[c.c_void_p,c.c_char_p,c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_int)]
+major,event,error=c.c_int(),c.c_int(),c.c_int()
+assert x.XQueryExtension(d,b'XTEST',c.byref(major),c.byref(event),c.byref(error)), 'ENVIRONMENT: XTEST extension missing'
+x.XStringToKeysym.argtypes=[c.c_char_p]
+x.XStringToKeysym.restype=c.c_ulong
+x.XKeysymToKeycode.argtypes=[c.c_void_p,c.c_ulong]
+x.XKeysymToKeycode.restype=c.c_uint
+symbol=x.XStringToKeysym(sys.argv[1].encode('ascii'))
+assert symbol, 'ENVIRONMENT: unknown keysym'
+code=x.XKeysymToKeycode(d,symbol)
+assert code, 'ENVIRONMENT: keycode missing'
+t.XTestFakeKeyEvent.argtypes=[c.c_void_p,c.c_uint,c.c_int,c.c_ulong]
+t.XTestFakeKeyEvent.restype=c.c_int
+assert t.XTestFakeKeyEvent(d,code,1,0), 'ENVIRONMENT: keydown failed'
+assert t.XTestFakeKeyEvent(d,code,0,0), 'ENVIRONMENT: keyup failed'
+x.XSync.argtypes=[c.c_void_p,c.c_int]
+x.XSync(d,0)
+x.XCloseDisplay.argtypes=[c.c_void_p]
+x.XCloseDisplay(d)
+"#;
+        let mode = FOCUSED_X11_SURFACE.with(|focused| {
+            if focused.replace(true) {
+                "keep"
+            } else {
+                "initial"
+            }
+        });
+        let output = Command::new("python3")
+            .args(["-c", python, key, mode])
+            .output()
+            .expect("ENVIRONMENT: XTest Python driver unavailable");
+        assert!(
+            output.status.success(),
+            "ENVIRONMENT: native XTest key={key} exit={:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        spin();
+    }
+
+    pub(crate) fn mapped_window(page: &str) -> (TvApplication, TvWindow) {
+        adw::init().expect("ENVIRONMENT: GTK test display");
+        let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+            .expect("bundled GResource");
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("ENVIRONMENT: GTK app registration");
+        let window = TvWindow::new(&app);
+        let viewport =
+            std::env::var("BROADCASTER_C3_VIEWPORT").expect("ENVIRONMENT: viewport not specified");
+        let (w, h) = viewport.split_once('x').expect("widthxheight");
+        let (w, h) = (w.parse::<i32>().unwrap(), h.parse::<i32>().unwrap());
+        assert!(
+            matches!((w, h), (640, 480) | (1280, 800)),
+            "wrong test viewport"
+        );
+        window.set_default_size(w, h);
+        window.imp().stack.set_visible_child_name(page);
+        window.present();
+        spin();
+        assert!(window.is_mapped(), "ENVIRONMENT: native window not mapped");
+        eprintln!("C3_NATIVE viewport={w}x{h} page={page} source=P1-descended");
+        (app, window)
+    }
+
+    pub(crate) fn focused(window: &TvWindow) -> gtk::Widget {
+        gtk::prelude::GtkWindowExt::focus(window).expect("PRODUCT_RED: no focused GTK widget")
+    }
+
+    pub(crate) fn owns(widget: &gtk::Widget, root: &gtk::Widget) -> bool {
+        TvWindow::is_within(widget, root)
+    }
+
+    pub(crate) fn receiver_probe(entry: &gtk::SearchEntry) {
+        entry.set_text("");
+        assert!(
+            entry.is_mapped() && entry.grab_focus(),
+            "ENVIRONMENT: search unmapped"
+        );
+        spin();
+        key("a");
+        assert_eq!(
+            entry.text().as_str(),
+            "a",
+            "ENVIRONMENT: native XTest did not reach GDK search receiver"
+        );
+        eprintln!("C3_NATIVE XTEST_GDK_RECEIVER=SearchEntry received=a");
+        entry.set_text("");
+        spin();
+    }
+}
+
+#[cfg(test)]
+impl TvWindow {
+    pub(crate) fn c3_live(&self) -> TvLiveView {
+        self.imp().live_view.get()
+    }
+    pub(crate) fn c3_mediathek(&self) -> TvMediathekView {
+        self.imp().mediathek_view.get()
+    }
+}
