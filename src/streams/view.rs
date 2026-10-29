@@ -2078,7 +2078,6 @@ impl TvStreamsView {
         self.refresh_source_manager();
     }
 
-
     #[cfg(test)]
     pub(crate) fn c1_install_test_service(&self, service: StreamsService) {
         self.imp().service.replace(Some(service));
@@ -2091,7 +2090,11 @@ impl TvStreamsView {
 
     #[cfg(test)]
     pub(crate) fn c1_test_manager_list(&self) -> Option<gtk::ListBox> {
-        self.imp().manager_list.borrow().as_ref().and_then(glib::WeakRef::upgrade)
+        self.imp()
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
     }
 
     pub(crate) fn service(&self) -> Option<StreamsService> {
