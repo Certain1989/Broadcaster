@@ -2390,6 +2390,43 @@ impl TvStreamsView {
         ids
     }
 
+    /// Attach a disposable service-backed SQLite catalogue to this mapped
+    /// view, including the remembered favourites-only preference.
+    #[cfg(test)]
+    pub(crate) fn install_remote_action_test_service(
+        &self,
+        service: StreamsService,
+        favourites_only: bool,
+    ) {
+        self.imp().service.replace(Some(service));
+        self.imp().query.borrow_mut().favourites_only = favourites_only;
+        self.imp().fake_player_enabled.set(true);
+        self.update_favourites_mode_button();
+        self.reload();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_visible_count(&self) -> u32 {
+        self.imp().rows.get().expect("rows").n_items()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_row_star(&self, id: &str) -> Option<gtk::Button> {
+        self.imp().bindings.borrow().values().find_map(|bound| {
+            let (slot, _) = bound.connection.as_ref()?;
+            slot.channel().filter(|row| row.id == id)
+                .and_then(|_| bound.ui.star.is_mapped().then(|| bound.ui.star.clone()))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_favourite_buttons(&self) -> (gtk::Button, gtk::Button) {
+        (
+            self.imp().favourites_button.get().clone(),
+            self.imp().show_all_button.get().clone(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn remote_action_test_select(&self, position: u32) {
         let imp = self.imp();
