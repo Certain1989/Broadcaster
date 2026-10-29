@@ -198,10 +198,64 @@ fn edit_field(label: &str, initial: &str, body: &gtk::Box) -> gtk::Entry {
     );
     line.append(&keyboard);
     body.append(&line);
+    vertical_link(&entry, &keyboard);
     entry
 }
 
-async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
+fn vertical_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(above: &A, below: &B) {
+    let down = gtk::EventControllerKey::new();
+    down.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let next = below.clone().upcast::<gtk::Widget>().downgrade();
+    down.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && next.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus()) {
+            glib::Propagation::Stop
+        } else { glib::Propagation::Proceed }
+    });
+    above.add_controller(down);
+    let up = gtk::EventControllerKey::new();
+    up.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let previous = above.clone().upcast::<gtk::Widget>().downgrade();
+    up.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && previous.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus()) {
+            glib::Propagation::Stop
+        } else { glib::Propagation::Proceed }
+    });
+    below.add_controller(up);
+}
+
+// Fixed action footer remains reachable on 640x480; editable controls scroll.
+fn form_with_footer(dialog: &adw::Dialog, body: &gtk::Box, actions: &[gtk::Button]) {
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let scroll = guide_list_scroller();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_child(Some(body));
+    shell.append(&scroll);
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    footer.set_margin_start(16);
+    footer.set_margin_end(16);
+    footer.set_margin_bottom(12);
+    for action in actions { body.remove(action); footer.append(action); }
+    shell.append(&footer);
+    dialog.set_child(Some(&shell));
+}
+
+fn focus_when_present<T: IsA<gtk::Widget>>(dialog: &adw::Dialog, target: &T) {
+    let weak = target.clone().upcast::<gtk::Widget>().downgrade();
+    dialog.connect_map(move |_| {
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(widget) = weak.upgrade() {
+                if widget.is_mapped() && widget.is_sensitive() { widget.grab_focus(); }
+            }
+        });
+    });
+}
+
+async fn save_default_guide(source_id: Option<String>) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             let mut conn = crate::streams::storage::Storage::new()
@@ -210,7 +264,7 @@ async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
             super::bindings::set_shared_guide(
                 &mut conn,
                 super::bindings::ConfirmedGuideSelection::after_user_confirmation(),
-                Some(&source_id),
+                source_id.as_deref(),
             )
             .map_err(|_| "Programme guide changed or is unavailable")
         })
@@ -222,7 +276,7 @@ async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
 
 fn confirm_shared_guide(
     parent: &gtk::Window,
-    source: GuideSource,
+    source: Option<GuideSource>,
     manager: GlobalGuideManager,
     list: gtk::Box,
     status: gtk::Label,
@@ -230,17 +284,24 @@ fn confirm_shared_guide(
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Confirm Shared Programme Guide"));
     let body = box_column();
-    let caption = gtk::Label::new(Some(&format!(
-        "{}\n{}",
-        source.name,
-        gettext("Use this one guide as the application-wide default for all IPTV playlists without an explicit exception? Per-stream overrides still take priority.")
-    )));
+    let caption = gtk::Label::new(Some(&match &source {
+        Some(source) => format!(
+            "{}\n{}",
+            source.name,
+            gettext("Use this guide as the application-wide default? Per-stream overrides still take priority.")
+        ),
+        None => gettext("Clear the shared default guide? Explicit per-stream overrides remain unchanged."),
+    }));
     caption.set_wrap(true);
     body.append(&caption);
     let failure = status_label();
     body.append(&failure);
     let cancel = command(&gettext("Cancel"), &body);
-    let confirm = command(&gettext("Confirm Shared Default"), &body);
+    let confirm = command(&if source.is_some() {
+        gettext("Confirm Shared Default")
+    } else {
+        gettext("Clear Shared Default")
+    }, &body);
     confirm.add_css_class("suggested-action");
     cancel.connect_clicked(glib::clone!(
         #[weak]
@@ -249,6 +310,7 @@ fn confirm_shared_guide(
             dialog.close();
         }
     ));
+    focus_when_present(&dialog, &cancel);
     let callback_parent = parent.clone();
     confirm.connect_clicked(glib::clone!(
         #[weak]
@@ -259,7 +321,8 @@ fn confirm_shared_guide(
         confirm,
         move |_| {
             confirm.set_sensitive(false);
-            let id = source.id.clone();
+            let id = source.as_ref().map(|source| source.id.clone());
+            let selected = id.clone();
             let manager = manager.clone();
             let list = list.clone();
             let status = status.clone();
@@ -275,8 +338,12 @@ fn confirm_shared_guide(
                     match save_default_guide(id).await {
                         Ok(()) => {
                             dialog.close();
-                            status.set_text(&gettext("Shared guide selected"));
-                            repaint(manager, list, status, parent);
+                            status.set_text(&gettext("Shared guide selection updated"));
+                            if let Some(id) = selected {
+                                repaint_focused(manager, list, status, parent, Some((id, 0)));
+                            } else {
+                                repaint(manager, list, status, parent);
+                            }
                         }
                         Err(reason) => {
                             failure.set_text(&gettext(reason));
@@ -367,7 +434,7 @@ fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Lab
                     set_default.connect_clicked(move |_| {
                         confirm_shared_guide(
                             &default_parent,
-                            default_source.clone(),
+                            Some(default_source.clone()),
                             default_service.clone(),
                             default_list.clone(),
                             default_status.clone(),
@@ -523,6 +590,13 @@ fn show_source_settings(
     body.append(&message);
     let save = command(&gettext("Apply"), &body);
     let close = command(&gettext("Close"), &body);
+    if let Some(keyboard) = name.next_sibling() { vertical_link(&keyboard, &enabled); }
+    vertical_link(&enabled, &automatic);
+    vertical_link(&automatic, &hours);
+    vertical_link(&hours, &save);
+    vertical_link(&save, &close);
+    form_with_footer(&dialog, &body, &[save.clone(), close.clone()]);
+    focus_when_present(&dialog, &name);
     close.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -568,7 +642,6 @@ fn show_source_settings(
             ));
         }
     ));
-    dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
@@ -603,6 +676,7 @@ fn show_delete_confirmation(
             dialog.close();
         }
     ));
+    focus_when_present(&dialog, &cancel);
     let callback_parent = parent.clone();
     remove.connect_clicked(glib::clone!(
         #[weak]
@@ -672,6 +746,19 @@ fn show_add(
     body.append(&error);
     let save = command(&gettext("Save Guide"), &body);
     let cancel = command(&gettext("Cancel"), &body);
+    if let Some(keyboard) = name.next_sibling() {
+        if let Some(url) = url.as_ref() {
+            vertical_link(&keyboard, url);
+            if let Some(url_keyboard) = url.next_sibling() { vertical_link(&url_keyboard, &lan); }
+            vertical_link(&lan, &automatic);
+        } else {
+            vertical_link(&keyboard, &automatic);
+        }
+    }
+    vertical_link(&automatic, &save);
+    vertical_link(&save, &cancel);
+    form_with_footer(&dialog, &body, &[save.clone(), cancel.clone()]);
+    focus_when_present(&dialog, &name);
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -733,7 +820,6 @@ fn show_add(
             ));
         }
     ));
-    dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
@@ -768,20 +854,30 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let add_remote = command(&gettext("Add URL"), &actions);
         let add_local = command(&gettext("Choose Local XMLTV"), &actions);
-        let close = command(&gettext("Close"), &actions);
         body.append(&actions);
+        let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let clear_default = command(&gettext("Clear Shared Default"), &more_actions);
+        let close = command(&gettext("Close"), &more_actions);
+        body.append(&more_actions);
         let scroller = guide_list_scroller();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
         scroller.set_child(Some(&list));
         body.append(&scroller);
         let status = status_label();
         body.append(&status);
+        dialog.add_css_class("broadcaster-guide-manager");
+        focus_when_present(&dialog, &add_remote);
+        let clear_win = parent.clone();
+        let clear_manager = service.clone();
+        let clear_list = list.clone();
+        let clear_status = status.clone();
+        clear_default.connect_clicked(move |_| {
+            confirm_shared_guide(&clear_win, None, clear_manager.clone(), clear_list.clone(), clear_status.clone());
+        });
         close.connect_clicked(glib::clone!(
             #[weak]
             dialog,
-            move |_| {
-                dialog.close();
-            }
+            move |_| { dialog.close(); }
         ));
         let svc = service.clone();
         let ls = list.clone();
