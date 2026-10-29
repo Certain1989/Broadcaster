@@ -70,7 +70,15 @@ jobs:
           mkdir -p "$scratch/schema"
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$scratch/schema/"
           glib-compile-schemas "$scratch/schema"
-          echo "C3_NATIVE checkout_HEAD=$(git rev-parse HEAD) checkout_TREE=$(git rev-parse HEAD^{tree})"
+          # Container checkout may be owned by the host runner. Explicitly
+          # trust only this checked-out workspace for read-only Git provenance.
+          checked_head=$(git -c safe.directory="$PWD" rev-parse --verify HEAD)
+          checked_tree=$(git -c safe.directory="$PWD" rev-parse --verify 'HEAD^{tree}')
+          case "$checked_head:$checked_tree" in
+            *[!0-9a-f:]*|*:) echo 'ENVIRONMENT: invalid Git SHA/tree' >&2; exit 2 ;;
+          esac
+          test "${#checked_head}" -eq 40 && test "${#checked_tree}" -eq 40
+          echo "C3_NATIVE checkout_HEAD=$checked_head checkout_TREE=$checked_tree"
           echo "C3_NATIVE job_ref=${GITHUB_REF} branch_head=${GITHUB_HEAD_REF:-main}"
           cargo test --locked --no-run --message-format=json > "$scratch/cargo.jsonl"
           python3 - "$scratch/cargo.jsonl" "$scratch/test-bin" <<'PY_EXE'
@@ -112,13 +120,15 @@ jobs:
               exit 2
             fi
           done
+          c3_failed=0
+          c3_pass=0
           for viewport in 640x480 1280x800; do
             for id in "${case_ids[@]}"; do
               mkdir -p "$scratch/$viewport/config" "$scratch/$viewport/data" "$scratch/$viewport/cache"
               echo "C3_NATIVE START id=$id viewport=$viewport"
               # A standalone process and display for every GTK test. No real
               # playlist/guide, player, device, or screenshot artifact used.
-              timeout -k 5s 120s dbus-run-session -- xvfb-run -a \
+              if timeout -k 5s 120s dbus-run-session -- xvfb-run -a \
                 -s "-screen 0 ${viewport}x24 -ac +extension XTEST" \
                 env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory \
                 GSETTINGS_SCHEMA_DIR="$scratch/schema" \
@@ -126,11 +136,19 @@ jobs:
                 XDG_DATA_HOME="$scratch/$viewport/data" \
                 XDG_CACHE_HOME="$scratch/$viewport/cache" \
                 BROADCASTER_C3_VIEWPORT="$viewport" \
-                "$test_bin" "$id" --exact --ignored --nocapture --test-threads=1
-              echo "C3_NATIVE PASS id=$id viewport=$viewport"
+                "$test_bin" "$id" --exact --ignored --nocapture --test-threads=1; then
+                c3_pass=$((c3_pass+1))
+                echo "C3_NATIVE PASS id=$id viewport=$viewport"
+              else
+                status=$?
+                c3_failed=$((c3_failed+1))
+                echo "C3_NATIVE BLOCKING_FAILURE id=$id viewport=$viewport exit=$status" >&2
+              fi
             done
           done
-          echo 'C3_NATIVE RESULT all 12 connected viewport/case executions PASS; painted-focus ROI NOT_AUTOMATED (owner G09 pending)'
+          echo "C3_NATIVE RESULT passed=$c3_pass failed=$c3_failed expected=12 painted_focus=NOT_AUTOMATED owner_G09=PENDING"
+          test "$((c3_pass+c3_failed))" -eq 12 || { echo 'ENVIRONMENT: native case count incomplete' >&2; exit 2; }
+          test "$c3_failed" -eq 0 || { echo 'PRODUCT_RED_OR_ENVIRONMENT: C3 native gate blocking on failed cases' >&2; exit 1; }
       - name: Exercise external-player D-Bus discovery on an isolated session bus
         run: dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
       # Tests icon-name lookup on a *live* GDK display; file existence or PNG
