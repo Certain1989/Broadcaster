@@ -1246,3 +1246,228 @@ fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
     assert_eq!(count(&c, "epg_global_id_aliases"), 0);
     fk_ok(&c);
 }
+
+#[test]
+fn m1_019_de_neg_01_sqlite_current_policy_projects_wrong_schedule() {
+    // Characterization, not endorsement: demonstrates that structural
+    // auto-identity is used by the *real* SQLite Now/Next projection path.
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='3sat.de@HD', imported_name='3sat' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    add_channel(&c, "g", "3sat.de", "ZDF - deliberately inconsistent");
+    for (start, stop, title) in [
+        (900, 1100, "WRONG ZDF NOW [synthetic]"),
+        (1100, 1200, "WRONG ZDF NEXT [synthetic]"),
+    ] {
+        c.execute(
+            "INSERT INTO epg_programmes (source_id, channel_id, start_utc, stop_utc, title)
+             VALUES ('g', '3sat.de', ?1, ?2, ?3)",
+            params![start, stop, title],
+        )
+        .unwrap();
+    }
+    assert!(matches!(resolve(&c, "a1"),
+        MatchDecision::Matched {
+            channel_id,
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        } if channel_id == "3sat.de"
+    ));
+    let state = read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap();
+    match state {
+        SemanticProgrammeState::Matched {
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(
+                pair.current.as_ref().unwrap().title,
+                "WRONG ZDF NOW [synthetic]"
+            );
+            assert_eq!(
+                pair.next.as_ref().unwrap().title,
+                "WRONG ZDF NEXT [synthetic]"
+            );
+        }
+        other => panic!("expected evidence of current-policy wrong-schedule projection: {other:?}"),
+    }
+}
+
+#[test]
+fn m1_019_colliding_quality_target_can_only_be_suggested_by_name() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='3sat.de@HD', imported_name='3sat' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    add_channel(&c, "g", "3sat.de", "3sat");
+    add_channel(&c, "g", "3sat.de@SD", "3sat SD");
+    // An exact display-name hint must not convert a rejected automatic identity
+    // into an effective binding. The owner may still explicitly choose it.
+    let result = resolve(&c, "a1");
+    assert!(matches!(
+        result,
+        MatchDecision::Suggested {
+            source_id,
+            channel_id
+        } if source_id == "g" && channel_id == "3sat.de"
+    ));
+    assert!(matches!(
+        read_semantic_now_next(&c, "a1", 1_000, &AtomicBool::new(false)).unwrap(),
+        SemanticProgrammeState::Suggested {
+            source_id,
+            channel_id
+        } if source_id == "g" && channel_id == "3sat.de"
+    ));
+}
+
+#[test]
+fn m1_019_sqlite_quality_collision_vetoes_derived_target() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='3sat.de@HD' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    add_channel(&c, "g", "3sat.de", "3sat");
+    add_channel(&c, "g", "3sat.de@SD", "3sat SD");
+    assert!(!matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        }
+    ));
+}
+
+// Minimal public-safe inline reproductions derived from the fabricated
+// M1-019 archive (SHA-256 7330418b5cc55e2e404f8cb52cbf513ab80c4eba38b7985bb1db793bac99f666).
+// Production streaming importer -> SQLite -> actual Now/Next; no network inputs.
+const M1_019_VALID_XMLTV: &str = r#"<tv>
+  <channel id="3sat.de"><display-name>3sat</display-name></channel>
+  <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
+  <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>3SAT NEXT [synthetic]</title></programme>
+</tv>"#;
+const M1_019_POISONED_XMLTV: &str = r#"<tv>
+  <channel id="3sat.de"><display-name>ZDF - deliberately inconsistent</display-name></channel>
+  <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>WRONG ZDF NOW [synthetic]</title></programme>
+  <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>WRONG ZDF NEXT [synthetic]</title></programme>
+</tv>"#;
+const M1_019_DUPLICATE_XMLTV: &str = r#"<tv>
+  <channel id="3sat.de"><display-name>3sat</display-name></channel>
+  <channel id="3sat.de"><display-name>ZDF - contradictory duplicate</display-name></channel>
+  <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
+</tv>"#;
+
+fn m1_019_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), EpgError> {
+    let rev: i64 = c
+        .query_row("SELECT updated_at FROM epg_sources WHERE id='g'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    super::ingest::import_xmltv(
+        c,
+        std::io::Cursor::new(xml.as_bytes()),
+        "g",
+        at,
+        rev,
+        false,
+        &AtomicBool::new(false),
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='3sat.de@HD' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
+    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    match read_semantic_now_next(&c, "a1", now, &AtomicBool::new(false)).unwrap() {
+        SemanticProgrammeState::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(pair.current.as_ref().unwrap().title, "3SAT NOW [synthetic]");
+            assert_eq!(pair.next.as_ref().unwrap().title, "3SAT NEXT [synthetic]");
+        }
+        other => panic!("synthetic good guide should project the real fixture titles: {other:?}"),
+    }
+    // This is current-policy characterization, NOT approval of wrong attribution.
+    m1_019_import_inline(&mut c, M1_019_POISONED_XMLTV, now + 1).unwrap();
+    match read_semantic_now_next(&c, "a1", now + 1, &AtomicBool::new(false)).unwrap() {
+        SemanticProgrammeState::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(
+                pair.current.as_ref().unwrap().title,
+                "WRONG ZDF NOW [synthetic]"
+            );
+            assert_eq!(
+                pair.next.as_ref().unwrap().title,
+                "WRONG ZDF NEXT [synthetic]"
+            );
+        }
+        other => panic!("current D35 policy projection should remain observable: {other:?}"),
+    }
+}
+
+#[test]
+fn m1_019_duplicate_channel_import_refused_and_last_good_retained() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
+    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    assert_eq!(
+        m1_019_import_inline(&mut c, M1_019_DUPLICATE_XMLTV, now + 1),
+        Err(EpgError::DuplicateChannel)
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT display_name FROM epg_channels WHERE source_id='g' AND channel_id='3sat.de'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "3sat"
+    );
+    assert_eq!(c.query_row("SELECT title FROM epg_programmes WHERE source_id='g' AND channel_id='3sat.de' ORDER BY start_utc LIMIT 1", [], |r| r.get::<_, String>(0)).unwrap(), "3SAT NOW [synthetic]");
+    assert_eq!(
+        c.query_row(
+            "SELECT last_success_at FROM epg_sources WHERE id='g'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        now
+    );
+}
+
+#[test]
+fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
+    let first = super::xmltv::parse_timestamp("20261025020000 +0200").unwrap();
+    let second = super::xmltv::parse_timestamp("20261025020000 +0100").unwrap();
+    assert_eq!(second - first, 3600);
+    assert_eq!(
+        first,
+        super::xmltv::parse_timestamp("20261025000000 +0000").unwrap()
+    );
+    assert_eq!(
+        second,
+        super::xmltv::parse_timestamp("20261025010000 +0000").unwrap()
+    );
+}

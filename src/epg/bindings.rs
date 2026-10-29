@@ -850,8 +850,14 @@ fn resolve_row_inner(
         }
         channels.push(item.map_err(|_| EpgError::Storage)?);
     }
+    // Literal and reconstructed identities have already been resolved using the
+    // complete selected-guide catalogue above. This bounded fallback is only
+    // for nonbinding name hints: never let its generic matcher reconstruct an
+    // identity a second time and bypass the indexed quality-collision veto.
+    let mut name_only_row = row;
+    name_only_row.tvg_id = None;
     Ok(match_in_source(
-        &row,
+        &name_only_row,
         chosen.as_ref(),
         availability,
         None,

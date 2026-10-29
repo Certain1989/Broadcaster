@@ -312,3 +312,91 @@ fn d35_no_false_automatic_links_in_critical_negative_matrix() {
     )
     .is_none());
 }
+
+#[test]
+fn m1_019_de_ctrl_01_valid_quality_name_and_selected_guide() {
+    let imported = row("R12", "synthetic", Some("3sat.de@HD"), "3sat");
+    let guide_channels = [
+        ch("guide", "3sat.de", "DE - 3sat"),
+        ch("other", "3sat.de", "ZDF"),
+    ];
+    assert!(matches!(
+        decision(&imported, None, None, &guide_channels),
+        MatchDecision::Matched {
+            source_id,
+            channel_id,
+            method: MatchMethod::AutomaticIdentity,
+        } if source_id == "guide" && channel_id == "3sat.de"
+    ));
+}
+
+#[test]
+fn m1_019_name_01_exact_name_only_remains_nonbinding_suggestion() {
+    // Corrected NAME-01 oracle: the original guide lacks a matching name and
+    // therefore cannot test a genuine name-only suggestion.
+    let mut imported = row(
+        "R15",
+        "synthetic",
+        Some("OTHER.de"),
+        "Card label irrelevant",
+    );
+    imported.tvg_name = Some("Name-only without exact ID".into());
+    let guide_channels = [ch("guide", "name-only.test", "Name-only without exact ID")];
+    let result = decision(&imported, None, None, &guide_channels);
+    assert!(matches!(&result,
+        MatchDecision::Suggested { source_id, channel_id }
+        if source_id == "guide" && channel_id == "name-only.test"
+    ));
+    assert!(result.confirmed_target().is_none());
+}
+
+#[test]
+fn m1_019_regional_language_and_multiple_suffixes_never_auto_bind() {
+    let cases = [
+        (
+            "NDRFernsehen.de@Niedersachsen",
+            "NDRHamburg.de",
+            "NDR Hamburg",
+        ),
+        ("ARTE.de@FR", "ARTE.de", "ARTE"),
+        ("ARTE.de@HD@FR", "ARTE.de", "ARTE"),
+        ("ABC.us@KEROTV@HD", "ABCKERO.us", "ABC KERO"),
+        ("AMC.us@East", "AMC.us", "AMC"),
+    ];
+    for (original, guide_id, guide_label) in cases {
+        assert!(
+            !matches!(
+                decision(
+                    &row("R", "synthetic", Some(original), "unrelated"),
+                    None,
+                    None,
+                    &[ch("guide", guide_id, guide_label)]
+                ),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "unexpected automatic identity for {original} to {guide_id}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "M1-019 DE-NEG-01: expected abstention requires separate owner D35 policy decision"]
+fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
+    // Deliberately RED on the current D35 quality rule. Not an accepted
+    // production invariant until the owner explicitly resolves D35 policy.
+    let imported = row("R11", "synthetic", Some("3sat.de@HD"), "3sat");
+    let contradictory = [ch("guide", "3sat.de", "ZDF - deliberately inconsistent")];
+    assert!(
+        !matches!(
+            decision(&imported, None, None, &contradictory),
+            MatchDecision::Matched {
+                method: MatchMethod::AutomaticIdentity,
+                ..
+            }
+        ),
+        "unsafe automatic 3sat -> incorrectly labelled ZDF guide target"
+    );
+}
