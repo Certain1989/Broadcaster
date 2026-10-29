@@ -342,7 +342,7 @@ impl TvLiveView {
     /// A rebound model cannot reuse the stale row: ownership is resolved
     /// exclusively from the current focused widget's actual GTK ancestry.
     pub fn focus_play_return(&self, focused: &gtk::Widget) -> bool {
-        if !self.is_ancestor(focused) {
+        if !focused.is_ancestor(self.upcast_ref::<gtk::Widget>()) {
             return false;
         }
         let mut ancestor = focused.parent();
