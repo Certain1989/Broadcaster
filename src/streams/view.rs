@@ -2414,7 +2414,8 @@ impl TvStreamsView {
     pub(crate) fn remote_action_test_row_star(&self, id: &str) -> Option<gtk::Button> {
         self.imp().bindings.borrow().values().find_map(|bound| {
             let (slot, _) = bound.connection.as_ref()?;
-            slot.channel().filter(|row| row.id == id)
+            slot.channel()
+                .filter(|row| row.id == id)
                 .and_then(|_| bound.ui.star.is_mapped().then(|| bound.ui.star.clone()))
         })
     }
@@ -2509,25 +2510,38 @@ impl TvStreamsView {
     pub(crate) fn assert_remote_action_focus_owner(&self, focused: &gtk::Widget, id: &str) {
         let imp = self.imp();
         let selected = imp.selection.get().expect("selection").selected();
-        let row = imp.rows.get().expect("rows").channel(selected).expect("selected row");
+        let row = imp
+            .rows
+            .get()
+            .expect("rows")
+            .channel(selected)
+            .expect("selected row");
         assert_eq!(row.id, id, "selected GTK row has another identity");
         assert_eq!(imp.selected_id.borrow().as_deref(), Some(id));
         let binding = imp.bindings.borrow();
-        let owner = binding.values().find(|bound| {
-            bound.connection.as_ref().is_some_and(|(slot, _)| {
-                slot.position() == selected
-                    && slot.channel().is_some_and(|channel| {
-                        channel.id == id && channel.source_id == row.source_id
-                    })
-                    && bound.ui.star.is_mapped()
+        let owner = binding
+            .values()
+            .find(|bound| {
+                bound.connection.as_ref().is_some_and(|(slot, _)| {
+                    slot.position() == selected
+                        && slot.channel().is_some_and(|channel| {
+                            channel.id == id && channel.source_id == row.source_id
+                        })
+                        && bound.ui.star.is_mapped()
+                })
             })
-        }).expect("source-qualified owner must be bound and mapped");
-        let row_root = owner.ui.star.parent().and_then(|header| header.parent())
+            .expect("source-qualified owner must be bound and mapped");
+        let row_root = owner
+            .ui
+            .star
+            .parent()
+            .and_then(|header| header.parent())
             .expect("bound card root");
         assert!(
             (focused == imp.results_list.upcast_ref::<gtk::Widget>()
                 && imp.results_list.has_focus())
-                || focused == &row_root || focused.is_ancestor(&row_root),
+                || focused == &row_root
+                || focused.is_ancestor(&row_root),
             "focus belongs to another source-qualified GTK row"
         );
     }
