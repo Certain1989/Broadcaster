@@ -754,22 +754,23 @@ fn bind_manager_navigation(
     // Owned only by this row's controllers, never by an async service or a
     // reusable widget pointer. Rebinding drops the old row and its history.
     let vertical_hop: Rc<RefCell<Option<ManagerVerticalHop>>> = Rc::new(RefCell::new(None));
-    // Track direct GTK focus, including Tab, pointer and programmatic moves.
-    // EventControllerFocus::enter may fire before Widget::has_focus becomes
-    // true; testing has_focus there misses both semantic identity updates and
-    // invalidation of stale reciprocal D-pad hops.
+    // Observe direct focus even if the toplevel temporarily lacks global
+    // input focus. The focus controller's is-focus property changes for Tab,
+    // pointer and programmatic focus moves; enter/Widget::has_focus can miss
+    // them when the window is not globally focused or signal order differs.
     for (slot, target) in std::iter::once((MANAGER_ROW, row.clone().upcast::<gtk::Widget>()))
         .chain(controls.iter().cloned().enumerate())
     {
         let id = source_id.to_owned();
         let focus_hop = vertical_hop.clone();
-        target.connect_notify_local(
-            Some("has-focus"),
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_notify_local(
+            Some("is-focus"),
             glib::clone!(
                 #[weak]
                 view,
-                move |focused, _| {
-                    if focused.has_focus() {
+                move |controller, _| {
+                    if controller.is_focus() {
                         // An external move invalidates the old hop. For a
                         // handled vertical key, the key handler records the
                         // new hop after grab_focus has updated this property.
@@ -779,6 +780,7 @@ fn bind_manager_navigation(
                 }
             ),
         );
+        target.add_controller(focus);
 
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
