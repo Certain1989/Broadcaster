@@ -577,28 +577,33 @@ fn repaint_focused(
 fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
     for (index, (_, controls)) in rows.iter().enumerate() {
         for slot in 0..4 {
+            // Keep *weak* inter-row references: strong cycles between GTK
+            // controllers would keep every removed/repainted row alive.
             let left = match slot {
                 1 => Some(controls[0].clone()),
                 3 => Some(controls[2].clone()),
                 _ => None,
-            };
+            }.map(|button| button.downgrade());
             let right = match slot {
                 0 => Some(controls[1].clone()),
                 2 => Some(controls[3].clone()),
                 _ => None,
-            };
+            }.map(|button| button.downgrade());
             let up = if slot >= 2 {
-                Some(controls[slot - 2].clone())
+                // If Refresh is disabled, Remove goes back to Shared Default.
+                Some(controls[if slot == 3 && !controls[1].is_sensitive() {
+                    0
+                } else { slot - 2 }].clone())
             } else if index > 0 {
                 Some(rows[index - 1].1[slot + 2].clone())
             } else {
                 None
-            };
+            }.map(|button| button.downgrade());
             let down = if slot < 2 {
                 Some(controls[slot + 2].clone())
             } else {
                 rows.get(index + 1).map(|row| row.1[slot - 2].clone())
-            };
+            }.map(|button| button.downgrade());
             let key = gtk::EventControllerKey::new();
             key.set_propagation_phase(gtk::PropagationPhase::Capture);
             key.connect_key_pressed(move |_, pressed, _, modifiers| {
@@ -612,10 +617,15 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
                     gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => down.as_ref(),
                     _ => None,
                 };
-                if target.is_some_and(|button| {
-                    button.is_mapped() && button.is_sensitive() && button.grab_focus()
-                }) {
-                    glib::Propagation::Stop
+                if let Some(candidate) = target {
+                    if candidate.upgrade().is_some_and(|button| {
+                        button.is_mapped() && button.is_sensitive() && button.grab_focus()
+                    }) {
+                        glib::Propagation::Stop
+                    } else {
+                        // A disabled Refresh is not a native focus destination.
+                        glib::Propagation::Stop
+                    }
                 } else {
                     glib::Propagation::Proceed
                 }
