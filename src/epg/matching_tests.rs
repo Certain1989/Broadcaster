@@ -456,3 +456,114 @@ fn r02_quality_label_corroboration_is_conservative_and_guide_scoped() {
         }
     ));
 }
+
+#[test]
+fn r02_unicode_quality_qualifiers_abstain_but_explicit_identity_survives() {
+    for (original, display) in [
+        ("ARTE.de@HD", "ARTE 日本語"),
+        ("ARTE.de@HD", "日本語 ARTE"),
+        ("ARTE.de@HD", "ARTE 中文"),
+        ("3sat.de@FHD", "3sat 日本"),
+        ("ARTE.de@HD", "ARTE Édition"),
+    ] {
+        let result = decision(
+            &row("r", "p", Some(original), "Unrelated IPTV card"),
+            None,
+            None,
+            &[ch("guide", original.split_once('@').unwrap().0, display)],
+        );
+        assert!(
+            !matches!(
+                &result,
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "unsupported Unicode guide qualifier auto-matched: {original} / {display}: {result:?}"
+        );
+    }
+    for (original, display) in [
+        ("ARTE.de@HD", "ARTE HD"),
+        ("ARTE.de@HD", "DE - ARTE FHD"),
+        ("3sat.de@FHD", "DE - 3sat HD"),
+    ] {
+        assert!(
+            matches!(
+                decision(
+                    &row("r", "p", Some(original), "Unrelated IPTV card"),
+                    None,
+                    None,
+                    &[ch("guide", original.split_once('@').unwrap().0, display)],
+                ),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "legitimate quality label must still corroborate: {original} / {display}"
+        );
+    }
+    // Quality-only restrictions must not change the pre-existing regional rule.
+    assert!(matches!(
+        decision(
+            &row("r", "p", Some("NDRFernsehen.de@Niedersachsen"), "NDR"),
+            None,
+            None,
+            &[ch(
+                "guide",
+                "NDRFernsehenNiedersachsen.de",
+                "DE - NDR Fernsehen Niedersachsen",
+            )],
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        }
+    ));
+    assert!(!matches!(
+        decision(
+            &row("r", "p", Some("NDRFernsehen.de@Niedersachsen"), "NDR"),
+            None,
+            None,
+            &[ch("guide", "NDRHamburg.de", "DE - NDR Hamburg")],
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        }
+    ));
+    let imported = row("r", "p", Some("ARTE.de@HD"), "Unrelated IPTV card");
+    let unicode_guide = [ch("guide", "ARTE.de", "ARTE 日本語")];
+    // These choices are explicit or literal and deliberately bypass inference.
+    assert!(matches!(
+        decision(&imported, None, Some("ARTE.de"), &unicode_guide),
+        MatchDecision::Matched {
+            method: MatchMethod::ConfirmedGlobalAlias,
+            ..
+        }
+    ));
+    let manual = ManualTarget {
+        guide_source_id: "guide".into(),
+        guide_channel_id: "ARTE.de".into(),
+    };
+    assert!(matches!(
+        decision(&imported, Some(&manual), None, &unicode_guide),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    assert!(matches!(
+        decision(
+            &imported,
+            None,
+            None,
+            &[ch("guide", "ARTE.de@HD", "ARTE 日本語")],
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::ExactTvgId,
+            ..
+        }
+    ));
+}

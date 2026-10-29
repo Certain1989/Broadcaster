@@ -1516,3 +1516,105 @@ fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
         );
     }
 }
+
+#[test]
+fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    c.execute(
+        "UPDATE iptv_channels SET tvg_id='ARTE.de@HD', imported_name='Unrelated IPTV card' WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    add_channel(&c, "g", "ARTE.de", "ARTE HD");
+    for (start, stop, title) in [
+        (900, 1100, "UNVERIFIED ARTE NOW [synthetic]"),
+        (1100, 1200, "UNVERIFIED ARTE NEXT [synthetic]"),
+    ] {
+        c.execute(
+            "INSERT INTO epg_programmes (source_id, channel_id, start_utc, stop_utc, title)
+             VALUES ('g','ARTE.de',?1,?2,?3)",
+            params![start, stop, title],
+        )
+        .unwrap();
+    }
+    let zero = AtomicBool::new(false);
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::AutomaticIdentity,
+            ..
+        }
+    ));
+    match read_semantic_now_next(&c, "a1", 1000, &zero).unwrap() {
+        SemanticProgrammeState::Matched {
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(
+                pair.current.as_ref().unwrap().title,
+                "UNVERIFIED ARTE NOW [synthetic]"
+            );
+            assert_eq!(
+                pair.next.as_ref().unwrap().title,
+                "UNVERIFIED ARTE NEXT [synthetic]"
+            );
+        }
+        other => panic!("aligned synthetic control should project: {other:?}"),
+    }
+    for display in ["ARTE 日本語", "日本語 ARTE", "ARTE 中文"] {
+        c.execute(
+            "UPDATE epg_channels SET display_name=?1 WHERE source_id='g' AND channel_id='ARTE.de'",
+            [display],
+        )
+        .unwrap();
+        let result = resolve(&c, "a1");
+        assert!(
+            matches!(&result, MatchDecision::Unmatched { .. }),
+            "Unicode guide qualifier must abstain: {display}: {result:?}"
+        );
+        assert!(
+            matches!(
+                read_semantic_now_next(&c, "a1", 1000, &zero).unwrap(),
+                SemanticProgrammeState::Unmatched
+            ),
+            "unsupported Unicode variant must not project Now/Next: {display}"
+        );
+    }
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    // Deliberate one-row choice remains valid even for a label we cannot infer.
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1",
+        "g",
+        "ARTE.de",
+        5,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    match read_semantic_now_next(&c, "a1", 1000, &zero).unwrap() {
+        SemanticProgrammeState::Matched {
+            method: MatchMethod::RowOverride,
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(
+                pair.current.as_ref().unwrap().title,
+                "UNVERIFIED ARTE NOW [synthetic]"
+            );
+            assert_eq!(
+                pair.next.as_ref().unwrap().title,
+                "UNVERIFIED ARTE NEXT [synthetic]"
+            );
+        }
+        other => panic!("explicit one-row mapping must remain usable: {other:?}"),
+    }
+    fk_ok(&c);
+}
