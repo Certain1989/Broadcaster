@@ -237,6 +237,39 @@ fn vertical_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(above: &A, below: &B)
     below.add_controller(up);
 }
 
+// Horizontal buttons let a D-pad operate the interval without stealing the
+// Up/Down form-navigation controls from the SpinButton.
+fn horizontal_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(left: &A, right: &B) {
+    let to_right = gtk::EventControllerKey::new();
+    to_right.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let next = right.clone().upcast::<gtk::Widget>().downgrade();
+    to_right.connect_key_pressed(move |_, key, _, mods| {
+        if crate::keyboard::unmodified_remote(mods)
+            && matches!(key, gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right)
+            && next.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    left.add_controller(to_right);
+    let to_left = gtk::EventControllerKey::new();
+    to_left.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let previous = left.clone().upcast::<gtk::Widget>().downgrade();
+    to_left.connect_key_pressed(move |_, key, _, mods| {
+        if crate::keyboard::unmodified_remote(mods)
+            && matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left)
+            && previous.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    right.add_controller(to_left);
+}
+
 // Fixed action footer remains reachable on 640x480; editable controls scroll.
 fn form_with_footer(dialog: &adw::Dialog, body: &gtk::Box, actions: &[gtk::Button]) {
     let shell = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -666,7 +699,24 @@ fn show_source_settings(
     body.append(&gtk::Label::new(Some(&gettext(
         "Refresh when the guide is this old (hours, 6–168)",
     ))));
-    body.append(&hours);
+    let interval_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    hours.set_hexpand(true);
+    let less = gtk::Button::with_label(&gettext("− 1 hour"));
+    let more = gtk::Button::with_label(&gettext("+ 1 hour"));
+    let down_hours = hours.clone();
+    less.connect_clicked(move |_| {
+        down_hours.set_value((down_hours.value() - 1.0).max(6.0));
+    });
+    let up_hours = hours.clone();
+    more.connect_clicked(move |_| {
+        up_hours.set_value((up_hours.value() + 1.0).min(168.0));
+    });
+    horizontal_link(&hours, &less);
+    horizontal_link(&less, &more);
+    interval_controls.append(&hours);
+    interval_controls.append(&less);
+    interval_controls.append(&more);
+    body.append(&interval_controls);
     let message = status_label();
     body.append(&message);
     let save = command(&gettext("Apply"), &body);
