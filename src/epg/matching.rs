@@ -231,7 +231,10 @@ fn corroborates_quality_label(original: &str, display_name: &str) -> bool {
     // symbols, combining marks, format characters and non-ASCII letters are
     // meaningful metadata; ASCII controls are not identity evidence either.
     // Check before trimming, country-prefix handling or punctuation filtering.
-    if display_name.chars().any(|c| !c.is_ascii() || c.is_ascii_control()) {
+    if display_name
+        .chars()
+        .any(|c| !c.is_ascii() || c.is_ascii_control())
+    {
         return false;
     }
     let label = display_name.trim().to_ascii_lowercase();
