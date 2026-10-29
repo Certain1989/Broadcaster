@@ -393,8 +393,10 @@ fn confirm_shared_guide(
                 confirm,
                 async move {
                     let result = save_default_guide(id).await;
-                    let Some((list, status, parent)) =
-                        live_guide_context(&list, &status, &parent) else { return };
+                    let Some((list, status, parent)) = live_guide_context(&list, &status, &parent)
+                    else {
+                        return;
+                    };
                     match result {
                         Ok(()) => {
                             dialog.close();
@@ -426,10 +428,14 @@ fn live_guide_context(
     parent: &glib::WeakRef<gtk::Window>,
 ) -> Option<(gtk::Box, gtk::Label, gtk::Window)> {
     let list = list.upgrade()?;
-    if !list.is_mapped() { return None; }
+    if !list.is_mapped() {
+        return None;
+    }
     let status = status.upgrade()?;
     let parent = parent.upgrade()?;
-    if !parent.is_mapped() { return None; }
+    if !parent.is_mapped() {
+        return None;
+    }
     Some((list, status, parent))
 }
 
@@ -447,7 +453,9 @@ fn repaint_focused(
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
-                if !list.is_mapped() { return; }
+                if !list.is_mapped() {
+                    return;
+                }
                 while let Some(child) = list.first_child() {
                     list.remove(&child);
                 }
@@ -487,7 +495,9 @@ fn repaint_focused(
                     }
                     if source.last_success_at.is_some() {
                         if let Some(counts) = service.truncation_counts(&source.id).await {
-                            if !list.is_mapped() { return; }
+                            if !list.is_mapped() {
+                                return;
+                            }
                             for message in truncation_messages(&counts) {
                                 let warning = gtk::Label::new(Some(&message));
                                 warning.set_wrap(true);
@@ -543,7 +553,9 @@ fn repaint_focused(
                     refresh.connect_clicked(move |button| {
                         let Some((_, status, _)) =
                             live_guide_context(&fetch_list, &fetch_status, &fetch_parent)
-                        else { return };
+                        else {
+                            return;
+                        };
                         button.set_sensitive(false);
                         status.set_text(&gettext("Refreshing guide…"));
                         let manager = fetch_service.clone();
@@ -555,24 +567,35 @@ fn repaint_focused(
                             let result = manager.refresh(id.clone()).await;
                             let Some((list, status, parent)) =
                                 live_guide_context(&listing, &state, &window)
-                            else { return };
+                            else {
+                                return;
+                            };
                             let message = match result {
                                 Ok(()) => {
-                                    let details = manager.truncation_counts(&id).await
+                                    let details = manager
+                                        .truncation_counts(&id)
+                                        .await
                                         .map(|counts| truncation_messages(&counts))
                                         .unwrap_or_default();
                                     if details.is_empty() {
                                         gettext("Guide refreshed")
                                     } else {
-                                        format!("{} {}", gettext("Guide refreshed."), details.join(" "))
+                                        format!(
+                                            "{} {}",
+                                            gettext("Guide refreshed."),
+                                            details.join(" ")
+                                        )
                                     }
                                 }
                                 Err(error) => format!(
-                                    "{}: {}", gettext("Refresh failed"),
+                                    "{}: {}",
+                                    gettext("Refresh failed"),
                                     guide_problem(&error.to_string()),
                                 ),
                             };
-                            if !list.is_mapped() { return; }
+                            if !list.is_mapped() {
+                                return;
+                            }
                             status.set_text(&message);
                             repaint_focused(manager, list, status, parent, Some((id, 1)));
                         });
@@ -587,7 +610,11 @@ fn repaint_focused(
                             live_guide_context(&edit_list, &edit_status, &edit_parent)
                         {
                             show_source_settings(
-                                &parent, edit_service.clone(), settings_source.clone(), list, status,
+                                &parent,
+                                edit_service.clone(),
+                                settings_source.clone(),
+                                list,
+                                status,
                             );
                         }
                     });
@@ -601,7 +628,11 @@ fn repaint_focused(
                             live_guide_context(&delete_list, &delete_status, &delete_parent)
                         {
                             show_delete_confirmation(
-                                &parent, delete_service.clone(), deleted_source.clone(), list, status,
+                                &parent,
+                                delete_service.clone(),
+                                deleted_source.clone(),
+                                list,
+                                status,
                             );
                         }
                     });
@@ -696,10 +727,14 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
                 }
                 if !matches!(
                     pressed,
-                    gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left
-                        | gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right
-                        | gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up
-                        | gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down
+                    gtk::gdk::Key::Left
+                        | gtk::gdk::Key::KP_Left
+                        | gtk::gdk::Key::Right
+                        | gtk::gdk::Key::KP_Right
+                        | gtk::gdk::Key::Up
+                        | gtk::gdk::Key::KP_Up
+                        | gtk::gdk::Key::Down
+                        | gtk::gdk::Key::KP_Down
                 ) {
                     return glib::Propagation::Proceed;
                 }
@@ -802,10 +837,18 @@ fn show_source_settings(
             let id = source.id.clone();
             let id_for_focus = id.clone();
             let revision = source.updated_at;
-            let Some(name) = weak_name.upgrade() else { return };
-            let Some(enabled) = weak_enabled.upgrade() else { return };
-            let Some(automatic) = weak_automatic.upgrade() else { return };
-            let Some(hours) = weak_hours.upgrade() else { return };
+            let Some(name) = weak_name.upgrade() else {
+                return;
+            };
+            let Some(enabled) = weak_enabled.upgrade() else {
+                return;
+            };
+            let Some(automatic) = weak_automatic.upgrade() else {
+                return;
+            };
+            let Some(hours) = weak_hours.upgrade() else {
+                return;
+            };
             let new_name = name.text().to_string();
             let new_enabled = enabled.is_active();
             let auto = automatic.is_active();
@@ -822,13 +865,22 @@ fn show_source_settings(
                     let result = manager
                         .update_settings(id, revision, new_name, new_enabled, auto, interval)
                         .await;
-                    if !dialog.is_mapped() { return; }
+                    if !dialog.is_mapped() {
+                        return;
+                    }
                     match result {
                         Ok(()) => {
                             dialog.close();
                             if let Some((list, status, parent)) =
-                                live_guide_context(&list, &status, &parent) {
-                                repaint_focused(manager, list, status, parent, Some((id_for_focus, 2)));
+                                live_guide_context(&list, &status, &parent)
+                            {
+                                repaint_focused(
+                                    manager,
+                                    list,
+                                    status,
+                                    parent,
+                                    Some((id_for_focus, 2)),
+                                );
                             }
                         }
                         Err(error) => message.set_text(&guide_problem(&error.to_string())),
@@ -894,13 +946,22 @@ fn show_delete_confirmation(
                 error,
                 async move {
                     let result = manager.delete_confirmed(approval).await;
-                    if !dialog.is_mapped() { return; }
+                    if !dialog.is_mapped() {
+                        return;
+                    }
                     match result {
                         Ok(()) => {
                             dialog.close();
                             if let Some((list, status, parent)) =
-                                live_guide_context(&list, &status, &parent) {
-                                repaint_focused(manager, list, status, parent, Some((removed_id, 0)));
+                                live_guide_context(&list, &status, &parent)
+                            {
+                                repaint_focused(
+                                    manager,
+                                    list,
+                                    status,
+                                    parent,
+                                    Some((removed_id, 0)),
+                                );
                             }
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
@@ -982,19 +1043,26 @@ fn show_add(
         #[weak]
         error,
         move |_| {
-            let Some(name) = weak_name.upgrade() else { return };
-            let Some(automatic) = weak_automatic.upgrade() else { return };
+            let Some(name) = weak_name.upgrade() else {
+                return;
+            };
+            let Some(automatic) = weak_automatic.upgrade() else {
+                return;
+            };
             let origin = if let Some(ref file) = local {
                 SourceOrigin::selected_local_file(file.uri().to_string())
             } else {
-                let Some(lan) = weak_lan.upgrade() else { return };
+                let Some(lan) = weak_lan.upgrade() else {
+                    return;
+                };
                 let chosen = if lan.is_active() {
                     TrustScope::ExplicitLan
                 } else {
                     TrustScope::Public
                 };
                 SourceOrigin::entered_remote_url(
-                    weak_url.as_ref()
+                    weak_url
+                        .as_ref()
                         .and_then(|entry| entry.upgrade())
                         .map(|entry| entry.text().to_string())
                         .unwrap_or_default(),
@@ -1019,13 +1087,18 @@ fn show_add(
                 #[weak]
                 error,
                 async move {
-                    let result = manager.add_with_schedule(name, origin, update_automatically).await;
-                    if !dialog.is_mapped() { return; }
+                    let result = manager
+                        .add_with_schedule(name, origin, update_automatically)
+                        .await;
+                    if !dialog.is_mapped() {
+                        return;
+                    }
                     match result {
                         Ok(added) => {
                             dialog.close();
                             if let Some((list, status, parent)) =
-                                live_guide_context(&list, &status, &parent) {
+                                live_guide_context(&list, &status, &parent)
+                            {
                                 repaint_focused(manager, list, status, parent, Some((added.id, 2)));
                             }
                         }
@@ -1088,7 +1161,8 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         let clear_status = status.downgrade();
         clear_default.connect_clicked(move |_| {
             if let Some((list, status, parent)) =
-                live_guide_context(&clear_list, &clear_status, &clear_win) {
+                live_guide_context(&clear_list, &clear_status, &clear_win)
+            {
                 confirm_shared_guide(&parent, None, clear_manager.clone(), list, status);
             }
         });
@@ -1118,12 +1192,12 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
             let st = st.clone();
             let win = win.clone();
             spawn(async move {
-                let Some((_, _, parent)) = live_guide_context(&ls, &st, &win)
-                    else { return };
+                let Some((_, _, parent)) = live_guide_context(&ls, &st, &win) else {
+                    return;
+                };
                 let selection = gtk::FileDialog::new().open_future(Some(&parent)).await;
                 if let Ok(file) = selection {
-                    if let Some((list, status, parent)) =
-                        live_guide_context(&ls, &st, &win) {
+                    if let Some((list, status, parent)) = live_guide_context(&ls, &st, &win) {
                         show_add(&parent, svc, list, status, Some(file));
                     }
                 }
@@ -1139,6 +1213,20 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    #[test]
+    fn guide_graph_skips_disabled_and_keeps_first_last_boundaries() {
+        use gtk::gdk::Key;
+        assert_eq!(guide_neighbor(3, 1, 0, false, Key::Right), Some((1, 2)));
+        assert_eq!(guide_neighbor(3, 1, 2, false, Key::Left), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 1, 3, false, Key::Up), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 0, 3, true, Key::Down), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 1, 0, false, Key::Up), Some((0, 3)));
+        assert_eq!(guide_neighbor(3, 2, 3, true, Key::Down), None);
+        assert_eq!(guide_neighbor(3, 0, 0, true, Key::Up), None);
+        assert_eq!(guide_neighbor(3, 1, 0, true, Key::Right), Some((1, 1)));
+        assert_eq!(guide_neighbor(3, 1, 1, true, Key::Left), Some((1, 0)));
+    }
 
     // Opt-in: xvfb-run -a env GDK_BACKEND=x11 cargo test
     // --locked gtk_empty_guide_manager_directional_focus -- --ignored --test-threads=1
