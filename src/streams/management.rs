@@ -1981,6 +1981,197 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         c4_native_cards(640, 480, true);
     }
 
+    /// Test the real star click, persisted SQLite preference, filter and
+    /// zero-results focus return, not merely a fabricated glyph/focus route.
+    /// The CI wrapper must provide a fresh isolated XDG_DATA_HOME.
+    fn c4_native_favourites(width: i32, height: i32) {
+        use crate::streams::{
+            model::{ChannelQuery, IncomingChannel, SourceDraft, SourceOrigin, ValidatedSnapshot},
+            storage::Storage,
+        };
+        use std::collections::BTreeSet;
+
+        let data_home = std::env::var("XDG_DATA_HOME").expect("isolated C4 XDG_DATA_HOME");
+        assert!(
+            data_home.contains("broadcaster-c4-fixture-"),
+            "refusing to use a real user's My Channels database"
+        );
+        let store = Storage::new();
+        store.initialize().expect("disposable SQLite database");
+        let source_id = uuid::Uuid::new_v4().to_string();
+        let source = SourceDraft {
+            name: "C4 disposable source".into(),
+            origin: SourceOrigin {
+                kind: OriginKind::RemoteUrl,
+                locator: "https://example.invalid/c4.m3u".into(),
+            },
+            enabled: true,
+            order: 0,
+            defaults: SourceDefaults::default(),
+        };
+        let entries: Vec<IncomingChannel> = (0..3)
+            .map(|i| IncomingChannel {
+                order: i,
+                imported_name: format!("C4 channel {i}"),
+                stream_url: format!("https://example.invalid/c4/{i}.m3u8"),
+                tvg_id: Some(format!("c4-{i}")),
+                tvg_name: None,
+                group_title: None,
+                logo_url: None,
+                channel_number: None,
+                region: None,
+                languages: BTreeSet::new(),
+                countries: BTreeSet::new(),
+                user_agent: None,
+                referer: None,
+            })
+            .collect();
+        let snapshot = ValidatedSnapshot::new(source_id.clone(), entries).unwrap();
+        store
+            .create_source_with_initial_snapshot(&source_id, &source, &snapshot, 1_800_000_000)
+            .unwrap();
+        let all = store.query_channels(&ChannelQuery::default()).unwrap();
+        assert_eq!(all.total, 3);
+        let first_id = all.items[0].id.clone();
+        let service = glib::MainContext::default()
+            .block_on(StreamsService::with_storage(store.clone()))
+            .expect("service-backed test");
+        adw::init().expect("GTK display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application register");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        fn stack(w: &gtk::Widget) -> Option<adw::ViewStack> {
+            if let Ok(stack) = w.clone().downcast::<adw::ViewStack>() {
+                return Some(stack);
+            }
+            let mut child = w.first_child();
+            while let Some(widget) = child {
+                if let Some(stack) = stack(&widget) {
+                    return Some(stack);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        let pages = stack(win.upcast_ref()).expect("main navigation");
+        pages.set_visible_child_name("streams");
+        spin();
+        let view = find_view(win.upcast_ref()).expect("My Channels");
+        view.install_remote_action_test_service(service, false);
+        let wait_until = |predicate: &dyn Fn() -> bool, reason: &str| {
+            for _ in 0..40 {
+                spin();
+                if predicate() {
+                    return;
+                }
+            }
+            panic!("C4 timed out: {reason}");
+        };
+        wait_until(
+            &|| view.remote_action_test_visible_count() == 3
+                && view.remote_action_test_row_star(&first_id).is_some(),
+            "SQLite rows bound",
+        );
+        assert!(view.show_and_focus_test_results());
+        inject("Return");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("Play")
+        );
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &first_id,
+        );
+        inject("Left");
+        inject("XF86Back");
+        inject("Left");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("☆")
+        );
+        inject("Return");
+        wait_until(
+            &|| {
+                store
+                    .query_channels(&ChannelQuery::default())
+                    .is_ok_and(|page| page.items[0].is_favourite)
+                    && view.remote_action_test_row_star(&first_id)
+                        .is_some_and(|star| star.label().as_deref() == Some("★"))
+            },
+            "star toggle, reload and persisted favourite",
+        );
+        assert!(
+            view.remote_action_test_row_star(&first_id).is_some_and(|star| star.has_focus()),
+            "the toggled star must reclaim focus after SQLite reload"
+        );
+        let (favourites, show_all) = view.remote_action_test_favourite_buttons();
+        assert!(favourites.grab_focus());
+        inject("Return");
+        wait_until(
+            &|| store.favourites_only() == Ok(true)
+                && view.remote_action_test_visible_count() == 1,
+            "favourites-only toggle and SQL filter",
+        );
+        let reopened = glib::MainContext::default()
+            .block_on(StreamsService::with_storage(store.clone()))
+            .expect("reopen disposable SQLite");
+        assert_eq!(store.favourites_only(), Ok(true));
+        view.install_remote_action_test_service(reopened, true);
+        wait_until(
+            &|| view.remote_action_test_visible_count() == 1
+                && view.remote_action_test_row_star(&first_id).is_some(),
+            "favourite visible after database reopen",
+        );
+        view.remote_action_test_select(0);
+        spin();
+        inject("Left");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("★")
+        );
+        inject("Return");
+        let filtered = ChannelQuery {
+            favourites_only: true,
+            ..ChannelQuery::default()
+        };
+        wait_until(
+            &|| {
+                store.query_channels(&filtered).is_ok_and(|page| page.total == 0)
+                    && view.remote_action_test_visible_count() == 0
+                    && show_all.has_focus()
+            },
+            "last favourite removal restores Show All focus",
+        );
+        assert!(show_all.is_mapped() && show_all.has_focus());
+        inject("Return");
+        wait_until(
+            &|| store.favourites_only() == Ok(false)
+                && view.remote_action_test_visible_count() == 3,
+            "Show All exits empty favourites",
+        );
+        assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
+    fn c4_native_favourites_640_480() {
+        c4_native_favourites(640, 480);
+    }
+
+    #[test]
+    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
+    fn c4_native_favourites_1280_800() {
+        c4_native_favourites(1280, 800);
+    }
+
     fn run_mapped_manager(width: i32, height: i32) {
         adw::init().expect("display");
         let resource =
