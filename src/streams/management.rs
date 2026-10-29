@@ -1838,6 +1838,125 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         run_mapped_manager(1280, 800);
     }
 
+    /// C4 keeps the existing physical XTest injector. Direct router calls
+    /// cannot prove that a mapped list actually receives the remote key.
+    fn c4_focused_button(win: &crate::window::TvWindow) -> Option<gtk::Button> {
+        gtk::prelude::GtkWindowExt::focus(win)?.downcast::<gtk::Button>().ok()
+    }
+
+    fn c4_native_cards(width: i32, height: i32, negative: bool) {
+        adw::init().expect("GTK display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application register");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        fn stack(w: &gtk::Widget) -> Option<adw::ViewStack> {
+            if let Ok(stack) = w.clone().downcast::<adw::ViewStack>() {
+                return Some(stack);
+            }
+            let mut child = w.first_child();
+            while let Some(widget) = child {
+                if let Some(stack) = stack(&widget) {
+                    return Some(stack);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        let pages = stack(win.upcast_ref()).expect("main navigation stack");
+        pages.set_visible_child_name("streams");
+        spin();
+        let view = find_view(win.upcast_ref()).expect("My Channels");
+        let ids = view.install_remote_action_test_rows();
+        spin();
+        for (index, id) in ids.iter().enumerate() {
+            view.remote_action_test_select(index as u32);
+            spin();
+            let previous = view.remote_action_test_counts().0;
+            // First Return seeds X11 window focus; subsequent directions
+            // genuinely traverse the GTK action graph.
+            if index == 0 {
+                inject("Return");
+            } else {
+                inject("Right");
+            }
+            let play = c4_focused_button(&win).expect("Play action focus");
+            assert_eq!(play.label().as_deref(), Some("Play"));
+            assert!(play.is_mapped() && play.has_focus());
+            assert_eq!(view.remote_action_test_counts().0, previous, "entry auto-played");
+            assert_eq!(view.remote_action_test_selected_id().as_deref(), Some(id.as_str()));
+            if negative {
+                assert_eq!(
+                    play.label().as_deref(),
+                    Some("Edit Metadata"),
+                    "C4_EXPECTED_NEGATIVE_ORACLE: Right/OK entry cannot focus Edit"
+                );
+            }
+            inject("Return");
+            assert_eq!(view.remote_action_test_counts().0, previous + 1);
+            inject("Left");
+            assert!(view.contains_results_focus(
+                &gtk::prelude::GtkWindowExt::focus(&win).expect("row")
+            ));
+            inject("XF86Back");
+            assert!(view.remote_action_test_state().contains("expanded=None"));
+            assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
+            inject("Left");
+            assert_eq!(
+                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                Some("☆"),
+                "collapsed star without expansion"
+            );
+            inject("Right");
+            assert!(view.contains_results_focus(
+                &gtk::prelude::GtkWindowExt::focus(&win).expect("row after star")
+            ));
+            inject("Right");
+            assert_eq!(
+                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                Some("Play")
+            );
+            inject("Down");
+            assert_eq!(
+                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                Some("Edit Metadata")
+            );
+            inject("Down");
+            assert_eq!(
+                c4_focused_button(&win).and_then(|button| button.label()).as_deref(),
+                Some("Programme mapping")
+            );
+            inject("Left");
+            assert_eq!(view.remote_action_test_selected_id().as_deref(), Some(id.as_str()));
+            inject("XF86Back");
+            assert!(view.remote_action_test_state().contains("expanded=None"));
+        }
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped C4 cards"]
+    fn c4_native_cards_640_480() {
+        c4_native_cards(640, 480, false);
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped C4 cards"]
+    fn c4_native_cards_1280_800() {
+        c4_native_cards(1280, 800, false);
+    }
+
+    #[test]
+    #[ignore = "deliberately wrong physical focus oracle"]
+    fn c4_native_negative_oracle() {
+        c4_native_cards(640, 480, true);
+    }
+
     fn run_mapped_manager(width: i32, height: i32) {
         adw::init().expect("display");
         let resource =
