@@ -1229,6 +1229,11 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
     let Some(parent) = view.root().and_downcast::<gtk::Window>() else {
         return;
     };
+    // Never present data loaded for a card that has since been recycled,
+    // collapsed, filtered out or replaced by another playlist's selection.
+    let Some((generation, source_id)) = view.card_mapping_context(&row_id) else {
+        return;
+    };
     spawn(glib::clone!(
         #[weak]
         view,
@@ -1248,6 +1253,11 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                     return;
                 }
             };
+            if data.snapshot.playlist_id != source_id
+                || view.card_mapping_context(&row_id) != Some((generation, source_id))
+            {
+                return;
+            }
             let dialog = adw::Dialog::new();
             dialog.set_title(&gettext("Programme mapping"));
             dialog.set_content_width(520);
