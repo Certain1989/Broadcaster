@@ -196,6 +196,12 @@ mod imp {
             self.results_stack.set_visible_child_name(page);
         }
 
+        #[cfg(test)]
+        pub(super) fn c3_fence_pending_load(&self) {
+            self.generation
+                .set(self.generation.get().saturating_add(10));
+        }
+
         pub(super) fn focus_search(&self) {
             self.search_entry.grab_focus();
         }
@@ -496,5 +502,273 @@ mod programme_description_markup_tests {
         assert!(!rendered.contains("style="));
         assert!(!rendered.contains("javascript:"));
         assert!(!rendered.contains("animateMotion"));
+    }
+}
+
+#[cfg(test)]
+mod c3_native_live_tests {
+    use super::*;
+    use crate::window::{c3_native as native, TvWindow};
+    use std::{cell::Cell, rc::Rc};
+
+    fn fixture() -> (TvApplication, TvWindow, TvLiveView, Vec<TvLiveCard>) {
+        let (app, win) = native::mapped_window("live");
+        let view = win.c3_live();
+        let imp = view.imp();
+        // Fence any earlier network-backed load generation. Test-only data
+        // never comes from a playlist, guide, remote fetch or external media.
+        imp.c3_fence_pending_load();
+        imp.channels_list.bind_model(None::<&gio::ListStore>, |_| {
+            gtk::ListBoxRow::new().upcast::<gtk::Widget>()
+        });
+        while let Some(row) = imp.channels_list.row_at_index(0) {
+            imp.channels_list.remove(&row);
+        }
+        let mut cards = Vec::new();
+        for index in 0..5 {
+            let id = format!("c3-fixture-{index}");
+            let channel = ChannelObject::new(
+                &id,
+                &format!("Synthetic {index}"),
+                "https://example.invalid/no-play",
+            );
+            let card: TvLiveCard = glib::Object::builder()
+                .property("channel", &channel)
+                .build();
+            imp.channels_list.append(&card);
+            cards.push(card);
+        }
+        imp.results_stack.set_visible_child_name("list");
+        imp.stack.set_visible_child_name("channels");
+        native::spin();
+        assert!(
+            cards.iter().all(|c| c.is_mapped()),
+            "ENVIRONMENT: synthetic Live cards unmapped"
+        );
+        let search = imp.search_entry.get();
+        native::receiver_probe(&search);
+        (app, win, view, cards)
+    }
+
+    fn owns_card(win: &TvWindow, card: &TvLiveCard) -> bool {
+        native::owns(&native::focused(win), card.upcast_ref())
+    }
+
+    fn primary(card: &TvLiveCard) -> gtk::Button {
+        live_play_button(card.upcast_ref()).expect("PRODUCT_RED: real Play action absent")
+    }
+
+    #[test]
+    #[ignore = "connected XTest/GTK, isolated fake Live rows"]
+    fn gtk_c3_xtest_live_first_middle_last() {
+        let (_app, win, _view, cards) = fixture();
+        for &index in &[0usize, 2, 4] {
+            let card = &cards[index];
+            assert!(card.grab_focus()); // fixture positioning, not the input oracle
+            native::spin();
+            assert!(owns_card(&win, card));
+            // All actions are sent to the real mapped X11/GDK window.
+            native::key("Up");
+            let upper = native::focused(&win);
+            assert!(
+                upper.is_mapped(),
+                "PRODUCT_RED: Up lost mapped focus from row={index}"
+            );
+            eprintln!(
+                "C3_NATIVE row={index} key=Up focus_type={} mapped={}",
+                upper.type_().name(),
+                upper.is_mapped()
+            );
+            assert!(card.grab_focus());
+            native::spin();
+            native::key("Down");
+            let lower = native::focused(&win);
+            assert!(
+                lower.is_mapped(),
+                "PRODUCT_RED: Down lost mapped focus from row={index}"
+            );
+            eprintln!(
+                "C3_NATIVE row={index} key=Down focus_type={} mapped={}",
+                lower.type_().name(),
+                lower.is_mapped()
+            );
+            assert!(card.grab_focus());
+            native::key("Return");
+            assert!(
+                card.expanded(),
+                "PRODUCT_RED: first native OK did not expand row={index}"
+            );
+            assert!(
+                primary(card).has_focus(),
+                "PRODUCT_RED: first native OK missed Play row={index}"
+            );
+            let expected_id = format!("c3-fixture-{index}");
+            assert_eq!(
+                card.channel().expect("stable row channel").id(),
+                expected_id
+            );
+        }
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "connected XTest first OK must focus Play without playback"]
+    fn gtk_c3_xtest_live_first_ok_focus_no_play() {
+        let (_app, win, _view, cards) = fixture();
+        let card = &cards[2];
+        assert!(card.grab_focus());
+        native::key("Return");
+        assert!(
+            card.expanded(),
+            "PRODUCT_RED: first native OK did not expand row"
+        );
+        assert!(
+            primary(card).has_focus(),
+            "PRODUCT_RED: first OK failed to focus genuine Play"
+        );
+        eprintln!(
+            "C3_NATIVE row_id={} first_OK=Play focus={} play_count=0",
+            card.channel().unwrap().id(),
+            primary(card).has_focus()
+        );
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "second separate XTest OK, safe locally counted Play button"]
+    fn gtk_c3_xtest_live_second_ok_exactly_once() {
+        let (_app, win, _view, cards) = fixture();
+        let card = &cards[2];
+        assert!(card.grab_focus());
+        native::key("Return");
+        let play = primary(card);
+        assert!(play.has_focus(), "PRODUCT_RED: first OK must focus Play");
+        // Preserve the exact genuine Play button, but replace its action with
+        // a test-only clicked spy before the second physical key. Without
+        // this safety fence GTK would launch the real card.play/mpv path.
+        let count = Rc::new(Cell::new(0u32));
+        play.set_action_name(None);
+        play.set_sensitive(true);
+        assert!(
+            play.grab_focus() && play.is_sensitive() && play.has_focus(),
+            "ENVIRONMENT: safe Play spy must remain focused and sensitive"
+        );
+        play.connect_clicked({
+            let count = Rc::clone(&count);
+            move |_| count.set(count.get() + 1)
+        });
+        assert_eq!(count.get(), 0);
+        native::key("Return");
+        assert_eq!(
+            count.get(),
+            1,
+            "PRODUCT_RED: second native OK must activate Play exactly once"
+        );
+        eprintln!(
+            "C3_NATIVE second_OK_receiver=Play play_count={}",
+            count.get()
+        );
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "Right/Left/XF86Back with current row ownership and fixture rebind"]
+    fn gtk_c3_xtest_live_right_left_back_after_rebind() {
+        let (_app, win, view, cards) = fixture();
+        let card = &cards[2];
+        assert!(card.grab_focus());
+        native::key("Right");
+        assert!(
+            primary(card).has_focus(),
+            "PRODUCT_RED: Right entry did not focus Play"
+        );
+        native::key("Left");
+        assert!(
+            owns_card(&win, card),
+            "PRODUCT_RED: Left lost originating Live row"
+        );
+        assert!(primary(card).grab_focus());
+        eprintln!(
+            "C3_NATIVE Back_before focus={} mapped={} row_id={}",
+            native::focused(&win).type_().name(),
+            native::focused(&win).is_mapped(),
+            card.channel().unwrap().id()
+        );
+        native::key("XF86Back");
+        eprintln!(
+            "C3_NATIVE Back_after focus={} mapped={} within_row={}",
+            native::focused(&win).type_().name(),
+            native::focused(&win).is_mapped(),
+            owns_card(&win, card)
+        );
+        assert!(
+            owns_card(&win, card),
+            "PRODUCT_RED: native Back lost origin"
+        );
+        // Perform a real list-widget replacement; never reuse the detached
+        // predecessor as an owner after the fixture's model generation changes.
+        let old_id = card.channel().unwrap().id();
+        let replacement_channel = ChannelObject::new(
+            &old_id,
+            "Synthetic rebound",
+            "https://example.invalid/no-play",
+        );
+        let replacement: TvLiveCard = glib::Object::builder()
+            .property("channel", &replacement_channel)
+            .build();
+        let list = view.imp().channels_list.get();
+        // A model rebind enters via the GTK main-loop idle path.
+        let (old_widget, new_widget, list_for_idle) =
+            (card.clone(), replacement.clone(), list.clone());
+        glib::idle_add_local_once(move || {
+            list_for_idle.remove(&old_widget);
+            list_for_idle.insert(&new_widget, 2);
+        });
+        native::spin();
+        assert!(
+            replacement.is_mapped(),
+            "ENVIRONMENT: replacement row not mapped"
+        );
+        assert!(replacement.grab_focus());
+        native::key("Right");
+        assert!(
+            primary(&replacement).has_focus(),
+            "PRODUCT_RED: rebound row Right failed Play"
+        );
+        native::key("XF86Back");
+        assert!(
+            owns_card(&win, &replacement),
+            "PRODUCT_RED: Back targeted detached old owner"
+        );
+        assert_eq!(replacement.channel().unwrap().id(), old_id);
+        eprintln!(
+            "C3_NATIVE rebind=stable same_row_id={} old_row_detached={} native_back=owner",
+            old_id,
+            !card.is_mapped()
+        );
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "negative control must reject intentionally wrong native direction"]
+    fn gtk_c3_xtest_negative_wrong_arrow_rejected() {
+        let (_app, win, _view, cards) = fixture();
+        let card = &cards[1];
+        assert!(card.grab_focus());
+        native::key("Left");
+        // Intentionally supply the wrong physical arrow: this MUST NOT
+        // satisfy the Right->Play portal oracle.
+        assert!(
+            !primary(card).has_focus(),
+            "NEGATIVE_CONTROL_FAILED: wrong native Left masqueraded as Right"
+        );
+        assert!(card.grab_focus());
+        native::key("Right");
+        assert!(
+            primary(card).has_focus(),
+            "PRODUCT_RED: native Right must enter genuine Play"
+        );
+        eprintln!("C3_NATIVE NEGATIVE_CONTROL=PASS wrong_Left_rejected Right_to_Play=true");
+        win.destroy();
     }
 }
