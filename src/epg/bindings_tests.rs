@@ -1279,14 +1279,32 @@ fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
     set_row_mapping(
         &mut c,
         ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
-        "a1", "g", "3sat.de", 5,
-    ).unwrap();
-    assert!(matches!(resolve(&c, "a1"),
-        MatchDecision::Matched { method: MatchMethod::RowOverride, .. }));
+        "a1",
+        "g",
+        "3sat.de",
+        5,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
     match read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap() {
-        SemanticProgrammeState::Matched { now_next: Some(pair), .. } => {
-            assert_eq!(pair.current.as_ref().unwrap().title, "WRONG ZDF NOW [synthetic]");
-            assert_eq!(pair.next.as_ref().unwrap().title, "WRONG ZDF NEXT [synthetic]");
+        SemanticProgrammeState::Matched {
+            now_next: Some(pair),
+            ..
+        } => {
+            assert_eq!(
+                pair.current.as_ref().unwrap().title,
+                "WRONG ZDF NOW [synthetic]"
+            );
+            assert_eq!(
+                pair.next.as_ref().unwrap().title,
+                "WRONG ZDF NEXT [synthetic]"
+            );
         }
         other => panic!("deliberate manual override must be usable: {other:?}"),
     }
@@ -1456,25 +1474,45 @@ fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
     );
 }
 
-
 #[test]
 fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
     for stem in ["ABC[1]", "ABC*1", "ABC?1"] {
         let mut c = setup();
         selected(&mut c, "g");
         let guide_id = format!("{stem}.de");
-        c.execute("UPDATE iptv_channels SET tvg_id=?1, imported_name='unrelated' WHERE id='a1'",
-            [format!("{guide_id}@HD")]).unwrap();
+        c.execute(
+            "UPDATE iptv_channels SET tvg_id=?1, imported_name='unrelated' WHERE id='a1'",
+            [format!("{guide_id}@HD")],
+        )
+        .unwrap();
         add_channel(&c, "g", &guide_id, "ABC1");
-        assert!(matches!(resolve(&c, "a1"),
-            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }),
-            "a GLOB wildcard in a literal ID must not invent a sibling: {guide_id}");
+        assert!(
+            matches!(
+                resolve(&c, "a1"),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "a GLOB wildcard in a literal ID must not invent a sibling: {guide_id}"
+        );
         add_channel(&c, "g", &format!("{guide_id}@SD"), "ABC1 SD");
-        assert!(!matches!(resolve(&c, "a1"),
-            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }),
-            "a literal sibling must always veto quality collapse: {guide_id}");
-        assert!(!matches!(read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap(),
-            SemanticProgrammeState::Matched { .. }),
-            "vetoed sibling must not project now/next");
+        assert!(
+            !matches!(
+                resolve(&c, "a1"),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "a literal sibling must always veto quality collapse: {guide_id}"
+        );
+        assert!(
+            !matches!(
+                read_semantic_now_next(&c, "a1", 1000, &AtomicBool::new(false)).unwrap(),
+                SemanticProgrammeState::Matched { .. }
+            ),
+            "vetoed sibling must not project now/next"
+        );
     }
 }

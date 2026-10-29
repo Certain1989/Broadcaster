@@ -237,8 +237,19 @@ fn corroborates_quality_label(original: &str, display_name: &str) -> bool {
     matches!(
         label_key.strip_prefix(&expected),
         Some(
-            "" | "sd" | "hd" | "fhd" | "fullhd" | "uhd" | "4k" | "8k"
-                | "720p" | "1080p" | "2160p" | "hevc" | "h264" | "h265"
+            "" | "sd"
+                | "hd"
+                | "fhd"
+                | "fullhd"
+                | "uhd"
+                | "4k"
+                | "8k"
+                | "720p"
+                | "1080p"
+                | "2160p"
+                | "hevc"
+                | "h264"
+                | "h265"
         )
     )
 }

@@ -399,28 +399,60 @@ fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
     );
 }
 
-
 #[test]
 fn r02_quality_label_corroboration_is_conservative_and_guide_scoped() {
     for label in ["3sat", "DE - 3sat", "3sat HD", "DE - 3sat FHD"] {
-        assert!(matches!(
-            decision(&row("r", "p", Some("3sat.de@HD"), "3sat"), None, None,
-                &[ch("guide", "3sat.de", label)]),
-            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }
-        ), "valid quality display label: {label}");
+        assert!(
+            matches!(
+                decision(
+                    &row("r", "p", Some("3sat.de@HD"), "3sat"),
+                    None,
+                    None,
+                    &[ch("guide", "3sat.de", label)]
+                ),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "valid quality display label: {label}"
+        );
     }
-    for label in ["ZDF - deliberately inconsistent", "DE - ZDF", "ZDF - 3sat",
-                  "3sat International", "DE - 3sat West", "3sat (another network)"] {
-        assert!(!matches!(
-            decision(&row("r", "p", Some("3sat.de@HD"), "irrelevant"), None, None,
-                &[ch("guide", "3sat.de", label)]),
-            MatchDecision::Matched { method: MatchMethod::AutomaticIdentity, .. }
-        ), "ambiguous or contradictory label: {label}");
+    for label in [
+        "ZDF - deliberately inconsistent",
+        "DE - ZDF",
+        "ZDF - 3sat",
+        "3sat International",
+        "DE - 3sat West",
+        "3sat (another network)",
+    ] {
+        assert!(
+            !matches!(
+                decision(
+                    &row("r", "p", Some("3sat.de@HD"), "irrelevant"),
+                    None,
+                    None,
+                    &[ch("guide", "3sat.de", label)]
+                ),
+                MatchDecision::Matched {
+                    method: MatchMethod::AutomaticIdentity,
+                    ..
+                }
+            ),
+            "ambiguous or contradictory label: {label}"
+        );
     }
     // A literal exact ID does not need inferential label corroboration.
     assert!(matches!(
-        decision(&row("r", "p", Some("3sat.de"), "3sat"), None, None,
-            &[ch("guide", "3sat.de", "ZDF - contradictory feed")]),
-        MatchDecision::Matched { method: MatchMethod::ExactTvgId, .. }
+        decision(
+            &row("r", "p", Some("3sat.de"), "3sat"),
+            None,
+            None,
+            &[ch("guide", "3sat.de", "ZDF - contradictory feed")]
+        ),
+        MatchDecision::Matched {
+            method: MatchMethod::ExactTvgId,
+            ..
+        }
     ));
 }
