@@ -1915,10 +1915,10 @@ impl TvStreamsView {
                 return;
             }
         }
-        if !imp.results_list.grab_focus() {
-            if !imp.query.borrow().favourites_only || !imp.show_all_button.grab_focus() {
-                self.focus_search();
-            }
+        if !imp.results_list.grab_focus()
+            && (!imp.query.borrow().favourites_only || !imp.show_all_button.grab_focus())
+        {
+            self.focus_search();
         }
     }
 
