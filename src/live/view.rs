@@ -337,6 +337,26 @@ impl TvLiveView {
         }
     }
 
+    /// D-pad Left and remote Back from the real Play control return to its
+    /// owning row, without activating playback or changing the selected page.
+    /// A rebound model cannot reuse the stale row: ownership is resolved
+    /// exclusively from the current focused widget's actual GTK ancestry.
+    pub fn focus_play_return(&self, focused: &gtk::Widget) -> bool {
+        if !focused.is_ancestor(self.upcast_ref::<gtk::Widget>()) {
+            return false;
+        }
+        let mut ancestor = focused.parent();
+        while let Some(widget) = ancestor {
+            if let Some(row) = widget.downcast_ref::<TvLiveCard>() {
+                return live_play_button(row.upcast_ref())
+                    .is_some_and(|button| focused == button.upcast_ref::<gtk::Widget>())
+                    && row.grab_focus();
+            }
+            ancestor = widget.parent();
+        }
+        false
+    }
+
     /// Only mapped upper controls belong to spatial arrow navigation.
     /// Returning the actual field instance preserves K1's ON/OFF launcher.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
@@ -360,6 +380,24 @@ impl TvLiveView {
     }
 }
 
+/// Locate the actual Play control without exposing the card template's
+/// private implementation or guessing an action from child order.
+fn live_play_button(widget: &gtk::Widget) -> Option<gtk::Button> {
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        if button.action_name().as_deref() == Some("card.play") {
+            return Some(button.clone());
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if let Some(button) = live_play_button(&current) {
+            return Some(button);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
 /// Connect GTK's normal row-activation signal (keyboard/remote OK or mouse)
 /// without intercepting Return globally or interfering with child buttons.
 fn connect_live_row_activation(list: &gtk::ListBox, play: impl Fn(&TvLiveCard) + 'static) {
@@ -371,6 +409,11 @@ fn connect_live_row_activation(list: &gtk::ListBox, play: impl Fn(&TvLiveCard) +
             play(row);
         } else {
             row.set_expanded(true);
+            // Remote OK enters the primary action without starting playback.
+            // It is a real button rather than a synthetic card focus target.
+            if let Some(button) = live_play_button(row.upcast_ref()) {
+                button.grab_focus();
+            }
         }
     });
 }

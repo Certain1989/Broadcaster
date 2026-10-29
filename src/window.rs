@@ -44,7 +44,7 @@ fn normalize_remote_arrow(key: gtk::gdk::Key) -> gtk::gdk::Key {
 
 /// Measured in the same mapped page coordinates. No synthetic tab order:
 /// each remote direction selects an actually visible geometric neighbor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ToolbarRect {
     left: f32,
     top: f32,
@@ -120,6 +120,50 @@ fn spatial_neighbor(rects: &[ToolbarRect], from: usize, key: gtk::gdk::Key) -> O
     best.map(|(index, _, _)| index)
 }
 
+/// A single spatial transition may be reversed while the same mapped widgets,
+/// geometry, page and navigation generation still exist. Weak references avoid
+/// holding detached toolbar controls alive across a UI rebuild.
+#[derive(Debug)]
+struct ToolbarHop {
+    page: String,
+    generation: u64,
+    key: gtk::gdk::Key,
+    from: glib::WeakRef<gtk::Widget>,
+    to: glib::WeakRef<gtk::Widget>,
+    from_bounds: ToolbarRect,
+    to_bounds: ToolbarRect,
+}
+
+impl ToolbarHop {
+    fn new(
+        page: &str,
+        generation: u64,
+        key: gtk::gdk::Key,
+        from: &(gtk::Widget, ToolbarRect),
+        to: &(gtk::Widget, ToolbarRect),
+    ) -> Self {
+        Self {
+            page: page.to_owned(),
+            generation,
+            key,
+            from: glib::clone::Downgrade::downgrade(&from.0),
+            to: glib::clone::Downgrade::downgrade(&to.0),
+            from_bounds: from.1,
+            to_bounds: to.1,
+        }
+    }
+
+    fn is_reverse_of(&self, key: gtk::gdk::Key) -> bool {
+        matches!(
+            (self.key, key),
+            (gtk::gdk::Key::Up, gtk::gdk::Key::Down)
+                | (gtk::gdk::Key::Down, gtk::gdk::Key::Up)
+                | (gtk::gdk::Key::Left, gtk::gdk::Key::Right)
+                | (gtk::gdk::Key::Right, gtk::gdk::Key::Left)
+        )
+    }
+}
+
 mod imp {
     use super::*;
 
@@ -144,6 +188,7 @@ mod imp {
         pub(super) playback_token: Cell<u64>,
         pub(super) navigation_generation: Cell<u64>,
         pub(super) playback_return: RefCell<Option<PlaybackReturn>>,
+        pub(super) toolbar_hop: RefCell<Option<ToolbarHop>>,
     }
 
     #[glib::object_subclass]
@@ -544,6 +589,7 @@ impl TvWindow {
         if matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right) {
             if let Some(entry) = mapped[current].0.downcast_ref::<gtk::SearchEntry>() {
                 if entry.selection_bounds().is_some() {
+                    self.imp().toolbar_hop.borrow_mut().take();
                     return Some(false);
                 }
                 let last = entry.text().chars().count() as i32;
@@ -553,14 +599,53 @@ impl TvWindow {
                 if (key == gtk::gdk::Key::Left && position > 0)
                     || (key == gtk::gdk::Key::Right && position < last)
                 {
+                    self.imp().toolbar_hop.borrow_mut().take();
                     return Some(false);
+                }
+            }
+        }
+
+        let generation = self.imp().navigation_generation.get();
+        // Nearest-neighbor navigation is not mathematically symmetric when
+        // adjacent rows contain differently sized controls. Preserve the last
+        // actual edge for one inverse arrow, without hardcoded toolbar indices.
+        let previous = self.imp().toolbar_hop.borrow_mut().take();
+        if let Some(hop) = previous {
+            if hop.page == page_name && hop.generation == generation && hop.is_reverse_of(key) {
+                if let (Some(from), Some(to)) = (hop.from.upgrade(), hop.to.upgrade()) {
+                    if mapped[current] == (to, hop.to_bounds)
+                        && mapped
+                            .iter()
+                            .any(|(widget, bounds)| widget == &from && *bounds == hop.from_bounds)
+                        && from.grab_focus()
+                    {
+                        let source = (from, hop.from_bounds);
+                        self.imp().toolbar_hop.replace(Some(ToolbarHop::new(
+                            page_name,
+                            generation,
+                            key,
+                            &mapped[current],
+                            &source,
+                        )));
+                        return Some(true);
+                    }
                 }
             }
         }
 
         let geometry: Vec<_> = mapped.iter().map(|(_, rect)| *rect).collect();
         if let Some(index) = spatial_neighbor(&geometry, current, key) {
-            return Some(mapped[index].0.grab_focus());
+            let moved = mapped[index].0.grab_focus();
+            if moved {
+                self.imp().toolbar_hop.replace(Some(ToolbarHop::new(
+                    page_name,
+                    generation,
+                    key,
+                    &mapped[current],
+                    &mapped[index],
+                )));
+            }
+            return Some(moved);
         }
         // Upper and lower boundaries deliberately remain navigable without
         // introducing diagonal/historical Up-Down toolbar chains.
@@ -663,6 +748,10 @@ impl TvWindow {
                     .imp()
                     .mediathek_view
                     .focus_vertical_navigation(&focused, key);
+            }
+
+            if key == gtk::gdk::Key::Left && self.imp().live_view.focus_play_return(&focused) {
+                return true;
             }
 
             // Live list's first row lies beneath Search, not Keyboard.
@@ -780,6 +869,12 @@ impl TvWindow {
             return glib::Propagation::Proceed;
         }
         let key = normalize_remote_arrow(key);
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
+        ) {
+            self.imp().toolbar_hop.borrow_mut().take();
+        }
 
         // A key still held as mpv relinquishes Wayland focus is not a
         // main-application Back/Home command while playback is active.
@@ -795,6 +890,15 @@ impl TvWindow {
 
         match key {
             gtk::gdk::Key::Back => {
+                // Back inside the Live Play action returns to the same row.
+                // Only Back outside this card-level boundary exits Live.
+                if self.imp().stack.visible_child_name().as_deref() == Some("live")
+                    && self
+                        .focused_widget()
+                        .is_some_and(|focused| self.imp().live_view.focus_play_return(&focused))
+                {
+                    return glib::Propagation::Stop;
+                }
                 if self.dismiss_open_popover() {
                     return glib::Propagation::Stop;
                 }
