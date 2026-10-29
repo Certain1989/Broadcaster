@@ -168,8 +168,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     spin();
     let stack = descendants(win.upcast_ref())
         .into_iter()
-        .filter_map(|w| w.downcast::<gtk::Stack>().ok())
-        .find(|s| s.child_by_name("streams").is_some())
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
         .expect("real window page stack");
     stack.set_visible_child_name("streams");
     spin();
