@@ -1897,7 +1897,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(play.label().as_deref(), Some("Play"));
             assert!(play.is_mapped() && play.has_focus());
             view.assert_remote_action_focus_owner(play.upcast_ref(), id);
-            assert!(view.card_mapping_context(id).is_some(), "bound mapping context");
+            assert!(
+                view.card_mapping_context(id).is_some(),
+                "bound mapping context"
+            );
             assert_eq!(
                 view.remote_action_test_counts().0,
                 previous,
@@ -1959,7 +1962,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             view.assert_remote_action_focus_owner(&focused, id);
             inject("XF86Back");
             assert!(view.remote_action_test_state().contains("expanded=None"));
-            assert!(view.card_mapping_context(id).is_none(), "collapsed picker context");
+            assert!(
+                view.card_mapping_context(id).is_none(),
+                "collapsed picker context"
+            );
         }
     }
 
@@ -2075,8 +2081,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             panic!("C4 timed out: {reason}");
         };
         wait_until(
-            &|| view.remote_action_test_visible_count() == 3
-                && view.remote_action_test_row_star(&first_id).is_some(),
+            &|| {
+                view.remote_action_test_visible_count() == 3
+                    && view.remote_action_test_row_star(&first_id).is_some()
+            },
             "SQLite rows bound",
         );
         assert!(view.show_and_focus_test_results());
@@ -2102,21 +2110,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 store
                     .query_channels(&ChannelQuery::default())
                     .is_ok_and(|page| page.items[0].is_favourite)
-                    && view.remote_action_test_row_star(&first_id)
+                    && view
+                        .remote_action_test_row_star(&first_id)
                         .is_some_and(|star| star.label().as_deref() == Some("★"))
             },
             "star toggle, reload and persisted favourite",
         );
         assert!(
-            view.remote_action_test_row_star(&first_id).is_some_and(|star| star.has_focus()),
+            view.remote_action_test_row_star(&first_id)
+                .is_some_and(|star| star.has_focus()),
             "the toggled star must reclaim focus after SQLite reload"
         );
         let (favourites, show_all) = view.remote_action_test_favourite_buttons();
         assert!(favourites.grab_focus());
         inject("Return");
         wait_until(
-            &|| store.favourites_only() == Ok(true)
-                && view.remote_action_test_visible_count() == 1,
+            &|| store.favourites_only() == Ok(true) && view.remote_action_test_visible_count() == 1,
             "favourites-only toggle and SQL filter",
         );
         let reopened = glib::MainContext::default()
@@ -2125,8 +2134,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert_eq!(store.favourites_only(), Ok(true));
         view.install_remote_action_test_service(reopened, true);
         wait_until(
-            &|| view.remote_action_test_visible_count() == 1
-                && view.remote_action_test_row_star(&first_id).is_some(),
+            &|| {
+                view.remote_action_test_visible_count() == 1
+                    && view.remote_action_test_row_star(&first_id).is_some()
+            },
             "favourite visible after database reopen",
         );
         view.remote_action_test_select(0);
@@ -2143,7 +2154,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         };
         wait_until(
             &|| {
-                store.query_channels(&filtered).is_ok_and(|page| page.total == 0)
+                store
+                    .query_channels(&filtered)
+                    .is_ok_and(|page| page.total == 0)
                     && view.remote_action_test_visible_count() == 0
                     && show_all.has_focus()
             },
@@ -2152,8 +2165,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert!(show_all.is_mapped() && show_all.has_focus());
         inject("Return");
         wait_until(
-            &|| store.favourites_only() == Ok(false)
-                && view.remote_action_test_visible_count() == 3,
+            &|| {
+                store.favourites_only() == Ok(false) && view.remote_action_test_visible_count() == 3
+            },
             "Show All exits empty favourites",
         );
         assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
