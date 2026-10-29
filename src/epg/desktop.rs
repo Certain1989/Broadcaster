@@ -209,9 +209,14 @@ fn vertical_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(above: &A, below: &B)
     down.connect_key_pressed(move |_, key, _, modifiers| {
         if crate::keyboard::unmodified_remote(modifiers)
             && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-            && next.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus()) {
+            && next
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
             glib::Propagation::Stop
-        } else { glib::Propagation::Proceed }
+        } else {
+            glib::Propagation::Proceed
+        }
     });
     above.add_controller(down);
     let up = gtk::EventControllerKey::new();
@@ -220,9 +225,14 @@ fn vertical_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(above: &A, below: &B)
     up.connect_key_pressed(move |_, key, _, modifiers| {
         if crate::keyboard::unmodified_remote(modifiers)
             && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
-            && previous.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus()) {
+            && previous
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
             glib::Propagation::Stop
-        } else { glib::Propagation::Proceed }
+        } else {
+            glib::Propagation::Proceed
+        }
     });
     below.add_controller(up);
 }
@@ -238,7 +248,10 @@ fn form_with_footer(dialog: &adw::Dialog, body: &gtk::Box, actions: &[gtk::Butto
     footer.set_margin_start(16);
     footer.set_margin_end(16);
     footer.set_margin_bottom(12);
-    for action in actions { body.remove(action); footer.append(action); }
+    for action in actions {
+        body.remove(action);
+        footer.append(action);
+    }
     shell.append(&footer);
     dialog.set_child(Some(&shell));
 }
@@ -249,7 +262,9 @@ fn focus_when_present<T: IsA<gtk::Widget>>(dialog: &adw::Dialog, target: &T) {
         let weak = weak.clone();
         glib::idle_add_local_once(move || {
             if let Some(widget) = weak.upgrade() {
-                if widget.is_mapped() && widget.is_sensitive() { widget.grab_focus(); }
+                if widget.is_mapped() && widget.is_sensitive() {
+                    widget.grab_focus();
+                }
             }
         });
     });
@@ -297,11 +312,14 @@ fn confirm_shared_guide(
     let failure = status_label();
     body.append(&failure);
     let cancel = command(&gettext("Cancel"), &body);
-    let confirm = command(&if source.is_some() {
-        gettext("Confirm Shared Default")
-    } else {
-        gettext("Clear Shared Default")
-    }, &body);
+    let confirm = command(
+        &if source.is_some() {
+            gettext("Confirm Shared Default")
+        } else {
+            gettext("Clear Shared Default")
+        },
+        &body,
+    );
     confirm.add_css_class("suggested-action");
     cancel.connect_clicked(glib::clone!(
         #[weak]
@@ -362,7 +380,13 @@ fn confirm_shared_guide(
 fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window) {
     repaint_focused(service, list, status, parent, None);
 }
-fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window, focus: Option<(String, usize)>) {
+fn repaint_focused(
+    service: GlobalGuideManager,
+    list: gtk::Box,
+    status: gtk::Label,
+    parent: gtk::Window,
+    focus: Option<(String, usize)>,
+) {
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
@@ -425,7 +449,15 @@ fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Lab
                     row.append(&first);
                     row.append(&second);
                     list.append(&row);
-                    focus_rows.push((source.id.clone(), [set_default.clone(), refresh.clone(), configure.clone(), remove.clone()]));
+                    focus_rows.push((
+                        source.id.clone(),
+                        [
+                            set_default.clone(),
+                            refresh.clone(),
+                            configure.clone(),
+                            remove.clone(),
+                        ],
+                    ));
                     let default_service = service.clone();
                     let default_list = list.clone();
                     let default_status = status.clone();
@@ -513,16 +545,24 @@ fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Lab
                 }
                 wire_guide_rows(&focus_rows);
                 if let Some((id, slot)) = focus {
-                    let target = focus_rows.iter().find(|row| row.0 == id)
+                    let target = focus_rows
+                        .iter()
+                        .find(|row| row.0 == id)
                         .or_else(|| focus_rows.first())
-                        .and_then(|row| row.1.get(slot).filter(|button| button.is_sensitive())
-                            .or_else(|| row.1.iter().find(|button| button.is_sensitive())))
+                        .and_then(|row| {
+                            row.1
+                                .get(slot)
+                                .filter(|button| button.is_sensitive())
+                                .or_else(|| row.1.iter().find(|button| button.is_sensitive()))
+                        })
                         .cloned();
                     let weak_list = list.downgrade();
                     glib::idle_add_local_once(move || {
                         if weak_list.upgrade().is_some_and(|list| list.is_mapped()) {
                             if let Some(button) = target {
-                                if button.is_mapped() && button.is_sensitive() { button.grab_focus(); }
+                                if button.is_mapped() && button.is_sensitive() {
+                                    button.grab_focus();
+                                }
                             }
                         }
                     });
@@ -537,16 +577,34 @@ fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Lab
 fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
     for (index, (_, controls)) in rows.iter().enumerate() {
         for slot in 0..4 {
-            let left = match slot { 1 => Some(controls[0].clone()), 3 => Some(controls[2].clone()), _ => None };
-            let right = match slot { 0 => Some(controls[1].clone()), 2 => Some(controls[3].clone()), _ => None };
-            let up = if slot >= 2 { Some(controls[slot - 2].clone()) }
-                else if index > 0 { Some(rows[index-1].1[slot+2].clone()) } else { None };
-            let down = if slot < 2 { Some(controls[slot+2].clone()) }
-                else { rows.get(index+1).map(|row| row.1[slot-2].clone()) };
+            let left = match slot {
+                1 => Some(controls[0].clone()),
+                3 => Some(controls[2].clone()),
+                _ => None,
+            };
+            let right = match slot {
+                0 => Some(controls[1].clone()),
+                2 => Some(controls[3].clone()),
+                _ => None,
+            };
+            let up = if slot >= 2 {
+                Some(controls[slot - 2].clone())
+            } else if index > 0 {
+                Some(rows[index - 1].1[slot + 2].clone())
+            } else {
+                None
+            };
+            let down = if slot < 2 {
+                Some(controls[slot + 2].clone())
+            } else {
+                rows.get(index + 1).map(|row| row.1[slot - 2].clone())
+            };
             let key = gtk::EventControllerKey::new();
             key.set_propagation_phase(gtk::PropagationPhase::Capture);
             key.connect_key_pressed(move |_, pressed, _, modifiers| {
-                if !crate::keyboard::unmodified_remote(modifiers) { return glib::Propagation::Proceed; }
+                if !crate::keyboard::unmodified_remote(modifiers) {
+                    return glib::Propagation::Proceed;
+                }
                 let target = match pressed {
                     gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => left.as_ref(),
                     gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => right.as_ref(),
@@ -554,9 +612,13 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
                     gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => down.as_ref(),
                     _ => None,
                 };
-                if target.is_some_and(|button| button.is_mapped() && button.is_sensitive() && button.grab_focus()) {
+                if target.is_some_and(|button| {
+                    button.is_mapped() && button.is_sensitive() && button.grab_focus()
+                }) {
                     glib::Propagation::Stop
-                } else { glib::Propagation::Proceed }
+                } else {
+                    glib::Propagation::Proceed
+                }
             });
             controls[slot].add_controller(key);
         }
@@ -590,7 +652,9 @@ fn show_source_settings(
     body.append(&message);
     let save = command(&gettext("Apply"), &body);
     let close = command(&gettext("Close"), &body);
-    if let Some(keyboard) = name.next_sibling() { vertical_link(&keyboard, &enabled); }
+    if let Some(keyboard) = name.next_sibling() {
+        vertical_link(&keyboard, &enabled);
+    }
     vertical_link(&enabled, &automatic);
     vertical_link(&automatic, &hours);
     vertical_link(&hours, &save);
@@ -749,7 +813,9 @@ fn show_add(
     if let Some(keyboard) = name.next_sibling() {
         if let Some(url) = url.as_ref() {
             vertical_link(&keyboard, url);
-            if let Some(url_keyboard) = url.next_sibling() { vertical_link(&url_keyboard, &lan); }
+            if let Some(url_keyboard) = url.next_sibling() {
+                vertical_link(&url_keyboard, &lan);
+            }
             vertical_link(&lan, &automatic);
         } else {
             vertical_link(&keyboard, &automatic);
@@ -872,12 +938,20 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         let clear_list = list.clone();
         let clear_status = status.clone();
         clear_default.connect_clicked(move |_| {
-            confirm_shared_guide(&clear_win, None, clear_manager.clone(), clear_list.clone(), clear_status.clone());
+            confirm_shared_guide(
+                &clear_win,
+                None,
+                clear_manager.clone(),
+                clear_list.clone(),
+                clear_status.clone(),
+            );
         });
         close.connect_clicked(glib::clone!(
             #[weak]
             dialog,
-            move |_| { dialog.close(); }
+            move |_| {
+                dialog.close();
+            }
         ));
         let svc = service.clone();
         let ls = list.clone();
