@@ -843,6 +843,7 @@ impl TvStreamsView {
             .set_label(&format!("{total} {}", gettext("channels")));
         if total == 0 {
             imp.expanded_id.replace(None);
+            imp.pending_star_focus.replace(None);
             imp.show_all_button.set_visible(query.favourites_only);
             let active_filters = query.search.is_some()
                 || query.source_id.is_some()
@@ -880,7 +881,6 @@ impl TvStreamsView {
                 if !query.favourites_only || !imp.show_all_button.grab_focus() {
                     self.focus_search();
                 }
-                imp.pending_star_focus.replace(None);
             } else {
                 imp.results_list.grab_focus();
             }
@@ -1915,7 +1915,11 @@ impl TvStreamsView {
                 return;
             }
         }
-        imp.results_list.grab_focus();
+        if !imp.results_list.grab_focus() {
+            if !imp.query.borrow().favourites_only || !imp.show_all_button.grab_focus() {
+                self.focus_search();
+            }
+        }
     }
 
     fn repaint_bound_rows(&self) {
@@ -2205,7 +2209,7 @@ impl TvStreamsView {
         // lazy data model detached from that GTK size-request artifact;
         // real mapped viewport/TV performance still needs device validation.
         let model = StreamRows::new();
-        for count in [100, 1_000, 10_000] {
+        for count in [100, 1_000, 10_000, 15_000] {
             let start = Instant::now();
             model.reset(count);
             assert_eq!(model.n_items(), count);
