@@ -831,6 +831,28 @@ impl TvWindow {
         // navigation. Without this check Back/Home can change the main view
         // while Preferences, Shortcuts or About stays on screen.
         if let Some(dialog) = self.visible_dialog() {
+            // A source-manager Back key is first a focus-boundary command:
+            // from a concrete row action it returns to the *same* source row.
+            // Once the row itself owns focus, Back retains its existing
+            // modal-dismiss semantics. Restrict this to the tagged manager,
+            // never a nested editor, OSK, guide or unrelated dialog.
+            if dialog.has_css_class("broadcaster-source-manager")
+                && key == gtk::gdk::Key::Back
+                && crate::keyboard::unmodified_remote(modifiers)
+            {
+                if let Some(focused) = self.focused_widget() {
+                    if Self::is_within(&focused, dialog.upcast_ref()) {
+                        if let Some(row) = focused
+                            .ancestor(gtk::ListBoxRow::static_type())
+                            .and_downcast::<gtk::ListBoxRow>()
+                        {
+                            if !row.has_focus() && row.grab_focus() {
+                                return glib::Propagation::Stop;
+                            }
+                        }
+                    }
+                }
+            }
             // A nested keyboard cancels its own draft; Home cannot navigate
             // behind the active modal or dismiss the source editor.
             if dialog.has_css_class("osk-feasibility")

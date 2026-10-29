@@ -569,6 +569,9 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         return;
     };
     let (dialog, body, status) = sheet(&gettext("Manage Sources"));
+    // Marks the only modal whose Back key returns a focused source action
+    // to its owning row. Other dialogs keep their normal close behavior.
+    dialog.add_css_class("broadcaster-source-manager");
     dialog.set_content_height(650);
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
@@ -611,7 +614,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
             dialog.close();
         }
     ));
-    view.remember_source_manager(&list, &status);
+    view.remember_source_manager(&list, &status, &add);
     view.refresh_source_manager();
     dialog.connect_closed(glib::clone!(
         #[weak]
@@ -694,6 +697,186 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
     ));
 }
 
+// A row is the non-destructive portal; semantic slots are upper 0..4,
+// lower 4..8. Navigation is explicit because GTK's geometric fallback can
+// leave the two compact rows or land on a disabled edge move button.
+const MANAGER_ROW: usize = 8;
+
+fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 8], slot: usize) -> Option<gtk::Widget> {
+    controls
+        .get(slot)
+        .and_then(glib::WeakRef::upgrade)
+        .filter(|button| button.is_sensitive())
+}
+
+// A directional hop can converge on the same enabled lower control when the
+// corresponding Move button is disabled. Keep the immediate inverse locally:
+// independent nearest-neighbour searches are not reversible at those edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ManagerVerticalHop {
+    from: usize,
+    to: usize,
+    reverse_up: bool,
+}
+
+impl ManagerVerticalHop {
+    fn return_slot(self, slot: usize, pressed: gtk::gdk::Key) -> Option<usize> {
+        use gtk::gdk::Key;
+        let opposite = if self.reverse_up {
+            matches!(pressed, Key::Up | Key::KP_Up)
+        } else {
+            matches!(pressed, Key::Down | Key::KP_Down)
+        };
+        (self.to == slot && opposite).then_some(self.from)
+    }
+}
+
+fn nearest_manager_slot(
+    slot: usize,
+    start: usize,
+    end: usize,
+    mut enabled: impl FnMut(usize) -> bool,
+) -> Option<usize> {
+    (start..end)
+        .filter(|candidate| enabled(*candidate))
+        .min_by_key(|candidate| candidate.abs_diff(slot))
+}
+
+fn bind_manager_navigation(
+    view: &TvStreamsView,
+    list: &gtk::ListBox,
+    row: &gtk::ListBoxRow,
+    controls: &[gtk::Widget; 8],
+    source_id: &str,
+    index: i32,
+) {
+    row.set_focusable(true);
+    // Owned only by this row's controllers, never by an async service or a
+    // reusable widget pointer. Rebinding drops the old row and its history.
+    let vertical_hop: Rc<RefCell<Option<ManagerVerticalHop>>> = Rc::new(RefCell::new(None));
+    // Observe direct focus even if the toplevel temporarily lacks global
+    // input focus. The focus controller's is-focus property changes for Tab,
+    // pointer and programmatic focus moves; enter/Widget::has_focus can miss
+    // them when the window is not globally focused or signal order differs.
+    for (slot, target) in std::iter::once((MANAGER_ROW, row.clone().upcast::<gtk::Widget>()))
+        .chain(controls.iter().cloned().enumerate())
+    {
+        let id = source_id.to_owned();
+        let focus_hop = vertical_hop.clone();
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_notify_local(
+            Some("is-focus"),
+            glib::clone!(
+                #[weak]
+                view,
+                move |controller, _| {
+                    if controller.is_focus() {
+                        // An external move invalidates the old hop. For a
+                        // handled vertical key, the key handler records the
+                        // new hop after grab_focus has updated this property.
+                        focus_hop.borrow_mut().take();
+                        view.set_manager_focus(&id, slot, index);
+                    }
+                }
+            ),
+        );
+        target.add_controller(focus);
+
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        // Only weak widget references in controllers: rebuilding rows must
+        // not leak old widgets through a controller -> row cycle.
+        let actions = std::array::from_fn(|i| controls[i].downgrade());
+        let weak_list = list.downgrade();
+        let weak_row = row.downgrade();
+        let key_hop = vertical_hop.clone();
+        key.connect_key_pressed(move |_, pressed, _, modifiers| {
+            let (Some(list), Some(row)) = (weak_list.upgrade(), weak_row.upgrade()) else {
+                key_hop.borrow_mut().take();
+                return glib::Propagation::Proceed;
+            };
+            // A ListBoxRow capture controller also sees keys on its children.
+            // Let the actual focused action own these events.
+            if slot == MANAGER_ROW && !row.has_focus() {
+                return glib::Propagation::Proceed;
+            }
+            let previous = key_hop.borrow_mut().take();
+            if !crate::keyboard::unmodified_remote(modifiers) {
+                return glib::Propagation::Proceed;
+            }
+            use gtk::gdk::Key;
+            // A single immediate reverse key goes to the *actual* previous
+            // control, even when two upper actions share one lower fallback.
+            if let Some(from) = previous.and_then(|hop| hop.return_slot(slot, pressed)) {
+                if manager_target(&actions, from).is_some_and(|target| target.grab_focus()) {
+                    return glib::Propagation::Stop;
+                }
+            }
+            let vertical_slot = match pressed {
+                Key::Down | Key::KP_Down if slot < 4 => {
+                    nearest_manager_slot(slot + 4, 4, 8, |i| manager_target(&actions, i).is_some())
+                }
+                Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
+                    nearest_manager_slot(slot - 4, 0, 4, |i| manager_target(&actions, i).is_some())
+                }
+                _ => None,
+            };
+            let next = match pressed {
+                Key::BackSpace if slot != MANAGER_ROW => Some(row.clone().upcast()),
+                Key::Return | Key::KP_Enter | Key::space | Key::Right | Key::KP_Right
+                    if slot == MANAGER_ROW =>
+                {
+                    manager_target(&actions, 0)
+                }
+                Key::Left | Key::KP_Left if slot != MANAGER_ROW => {
+                    let first = if slot < 4 { 0 } else { 4 };
+                    if slot == first {
+                        Some(row.clone().upcast())
+                    } else {
+                        (first..slot)
+                            .rev()
+                            .find_map(|i| manager_target(&actions, i))
+                            .or_else(|| Some(row.clone().upcast()))
+                    }
+                }
+                Key::Right | Key::KP_Right if slot != MANAGER_ROW => {
+                    let end = if slot < 4 { 4 } else { 8 };
+                    ((slot + 1)..end).find_map(|i| manager_target(&actions, i))
+                }
+                Key::Down | Key::KP_Down if slot < 4 => {
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
+                }
+                Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
+                }
+                Key::Up | Key::KP_Up if slot < 4 => Some(row.clone().upcast()),
+                Key::Down | Key::KP_Down if slot == MANAGER_ROW || (4..8).contains(&slot) => {
+                    list.row_at_index(index + 1).map(|item| item.upcast())
+                }
+                Key::Up | Key::KP_Up if slot == MANAGER_ROW => {
+                    list.row_at_index(index - 1).map(|item| item.upcast())
+                }
+                _ => None,
+            };
+            if let Some(next) = next {
+                if next.grab_focus() {
+                    if let Some(to) = vertical_slot {
+                        key_hop.replace(Some(ManagerVerticalHop {
+                            from: slot,
+                            to,
+                            reverse_up: matches!(pressed, Key::Down | Key::KP_Down),
+                        }));
+                    }
+                    return glib::Propagation::Stop;
+                }
+            }
+            // Escape/Home and unhandled keys stay with the modal/window.
+            glib::Propagation::Proceed
+        });
+        target.add_controller(key);
+    }
+}
+
 pub(crate) fn load_manager(
     view: &TvStreamsView,
     service: &StreamsService,
@@ -726,6 +909,9 @@ pub(crate) fn load_manager(
             if view.manager_generation() != generation {
                 return;
             }
+            let restore = view.manager_focus();
+            view.manager_rebuilding(true);
+            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 8])> = Vec::new();
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -792,10 +978,25 @@ pub(crate) fn load_manager(
                 let down = button("↓", &lower_actions);
                 up.set_sensitive(index != 0);
                 down.set_sensitive(index + 1 < sources.len());
+                // Keep both action lines aligned in compact and TV layouts.
+                upper_actions.set_homogeneous(true);
+                lower_actions.set_homogeneous(true);
                 panel.append(&upper_actions);
                 panel.append(&lower_actions);
                 let row = gtk::ListBoxRow::new();
                 row.set_child(Some(&panel));
+                let controls: [gtk::Widget; 8] = [
+                    enabled.clone().upcast(),
+                    refresh.clone().upcast(),
+                    edit.clone().upcast(),
+                    rename.clone().upcast(),
+                    change.clone().upcast(),
+                    remove.clone().upcast(),
+                    up.clone().upcast(),
+                    down.clone().upcast(),
+                ];
+                bind_manager_navigation(&view, &list, &row, &controls, &source.id, index as i32);
+                focus_rows.push((source.id.clone(), row.clone(), controls));
                 list.append(&row);
                 let src = source.clone();
                 let svc = service.clone();
@@ -883,6 +1084,45 @@ pub(crate) fn load_manager(
                         }
                     ));
                 }
+            }
+            view.manager_rebuilding(false);
+            if focus_rows.is_empty() {
+                view.focus_empty_source_manager();
+            } else {
+                // Preserve the logical source across asynchronous switch, rename,
+                // replace and reorder. A deletion selects the adjacent surviving
+                // row at the previous position, or the previous last row.
+                let chosen = restore
+                    .as_ref()
+                    .and_then(|(id, _, _)| {
+                        focus_rows
+                            .iter()
+                            .position(|(source_id, _, _)| source_id == id)
+                    })
+                    .or_else(|| {
+                        restore
+                            .as_ref()
+                            .map(|(_, _, index)| (*index).max(0) as usize)
+                            .map(|index| index.min(focus_rows.len() - 1))
+                    })
+                    .unwrap_or(0);
+                let (id, row, controls) = &focus_rows[chosen];
+                let slot = restore
+                    .as_ref()
+                    .map_or(MANAGER_ROW, |(_, action, _)| *action);
+                let references = std::array::from_fn(|i| controls[i].downgrade());
+                let target = if slot == MANAGER_ROW {
+                    None
+                } else {
+                    manager_target(&references, slot)
+                };
+                let restored_slot = if target.is_some_and(|target| target.grab_focus()) {
+                    slot
+                } else {
+                    row.grab_focus();
+                    MANAGER_ROW
+                };
+                view.set_manager_focus(id, restored_slot, chosen as i32);
             }
         }
     ));
@@ -1473,3 +1713,274 @@ mod source_form_tests {
         assert!(region(" ", &"R".repeat(129)).is_err());
     }
 }
+#[cfg(test)]
+mod c1_vertical_reversibility_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_edge_fallbacks_are_immediately_reversible() {
+        use gtk::gdk::Key;
+        let mut checked = 0;
+        for count in [1_usize, 3] {
+            for position in 0..count {
+                let mut enabled = [true; 8];
+                enabled[6] = position > 0;
+                enabled[7] = position + 1 < count;
+                for origin in 0..4 {
+                    let dest = nearest_manager_slot(origin + 4, 4, 8, |i| enabled[i])
+                        .expect("lower action exists");
+                    let hop = ManagerVerticalHop {
+                        from: origin,
+                        to: dest,
+                        reverse_up: true,
+                    };
+                    assert_eq!(hop.return_slot(dest, Key::Up), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::KP_Up), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::Down), None);
+                    assert_eq!(hop.return_slot(origin, Key::Up), None);
+                    checked += 1;
+                }
+                for origin in 4..8 {
+                    if !enabled[origin] {
+                        continue;
+                    }
+                    let dest = nearest_manager_slot(origin - 4, 0, 4, |i| enabled[i])
+                        .expect("upper action exists");
+                    let hop = ManagerVerticalHop {
+                        from: origin,
+                        to: dest,
+                        reverse_up: false,
+                    };
+                    assert_eq!(hop.return_slot(dest, Key::Down), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::KP_Down), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::Up), None);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 28, "all one-/three-source enabled vertical edges");
+    }
+}
+
+#[cfg(test)]
+mod c1_mapped_native_diagnostic {
+    use super::*;
+    use crate::{application::TvApplication, streams::view::TvStreamsView};
+    use std::{thread, time::Duration};
+
+    pub(super) fn spin() {
+        for _ in 0..20 {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            thread::sleep(Duration::from_millis(16));
+        }
+    }
+
+    pub(super) fn inject(key: &str) {
+        let script = r#"
+import ctypes as c, sys
+x,t = c.CDLL('libX11.so.6'),c.CDLL('libXtst.so.6')
+x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
+d=x.XOpenDisplay(None); assert d
+x.XDefaultRootWindow.argtypes=[c.c_void_p]; x.XDefaultRootWindow.restype=c.c_ulong
+x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)];x.XQueryTree.restype=c.c_int
+root=x.XDefaultRootWindow(d)
+a,b,n=c.c_ulong(),c.c_ulong(),c.c_uint();ch=c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(ch),c.byref(n))
+assert n.value
+x.XSetInputFocus.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_ulong]
+if sys.argv[2]=='initial': x.XSetInputFocus(d,ch[n.value-1],1,0)
+x.XFree.argtypes=[c.c_void_p];x.XFree(c.cast(ch,c.c_void_p))
+x.XStringToKeysym.argtypes=[c.c_char_p];x.XStringToKeysym.restype=c.c_ulong
+x.XKeysymToKeycode.argtypes=[c.c_void_p,c.c_ulong];x.XKeysymToKeycode.restype=c.c_uint
+sym=x.XStringToKeysym(sys.argv[1].encode());code=x.XKeysymToKeycode(d,sym);assert code,(sys.argv[1],sym)
+t.XTestFakeKeyEvent.argtypes=[c.c_void_p,c.c_uint,c.c_int,c.c_ulong]
+assert t.XTestFakeKeyEvent(d,code,1,0); assert t.XTestFakeKeyEvent(d,code,0,0)
+x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p];x.XCloseDisplay(d)
+"#;
+        let mode = if key == "Return" { "initial" } else { "keep" };
+        let r = std::process::Command::new("python3")
+            .args(["-c", script, key, mode])
+            .output()
+            .expect("XTest");
+        assert!(
+            r.status.success(),
+            "XTest {key}: {}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        spin();
+    }
+
+    pub(super) fn find_view(widget: &gtk::Widget) -> Option<TvStreamsView> {
+        if let Ok(v) = widget.clone().downcast::<TvStreamsView>() {
+            return Some(v);
+        }
+        let mut child = widget.first_child();
+        while let Some(w) = child {
+            if let Some(v) = find_view(&w) {
+                return Some(v);
+            }
+            child = w.next_sibling();
+        }
+        None
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped synthetic manager; diagnostic only"]
+    fn c1_actual_remote_back_trace() {
+        run_mapped_manager(640, 480);
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped synthetic manager, TV viewport; diagnostic only"]
+    fn c1_actual_remote_back_trace_tv() {
+        run_mapped_manager(1280, 800);
+    }
+
+    fn run_mapped_manager(width: i32, height: i32) {
+        adw::init().expect("display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application startup");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        let view = find_view(win.upcast_ref()).expect("stream view");
+        let (dialog, body, _status) = sheet("C1 mapped native diagnostic");
+        dialog.add_css_class("broadcaster-source-manager");
+        let list = gtk::ListBox::new();
+        list.set_selection_mode(gtk::SelectionMode::None);
+        let row = gtk::ListBoxRow::new();
+        let upper = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let enabled = gtk::Switch::new();
+        upper.append(&enabled);
+        let mut buttons: Vec<gtk::Button> = Vec::new();
+        for i in 1..8 {
+            let b = gtk::Button::with_label(&format!("Action{i}"));
+            if i < 4 {
+                upper.append(&b)
+            };
+            buttons.push(b);
+        }
+        let lower = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        for b in buttons.iter().skip(3) {
+            lower.append(b)
+        }
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        panel.append(&upper);
+        panel.append(&lower);
+        row.set_child(Some(&panel));
+        list.append(&row);
+        body.append(&list);
+        let actions: [gtk::Widget; 8] = std::array::from_fn(|i| {
+            if i == 0 {
+                enabled.clone().upcast()
+            } else {
+                buttons[i - 1].clone().upcast()
+            }
+        });
+        // A single source must not expose either movement edge. These
+        // disabled controls make the ordinary nearest-neighbour rule lose
+        // the upper action when Down is immediately reversed by Up.
+        buttons[5].set_sensitive(false); // Move Up
+        buttons[6].set_sensitive(false); // Move Down
+        bind_manager_navigation(&view, &list, &row, &actions, "fixture-source", 0);
+        dialog.present(Some(&win));
+        spin();
+        assert!(row.grab_focus(), "portal focus");
+        inject("Return");
+        assert!(
+            enabled.has_focus(),
+            "row OK portal focuses Switch without toggling"
+        );
+        assert_eq!(
+            view.manager_focus(),
+            Some(("fixture-source".to_owned(), 0, 0)),
+            "semantic Switch slot is remembered for same-source async rebind"
+        );
+        assert!(
+            !enabled.is_active(),
+            "fixture Switch starts OFF and OK must not toggle it"
+        );
+        inject("Right");
+        inject("Right");
+        assert!(buttons[1].has_focus(), "Right reaches Defaults");
+        inject("Down");
+        assert!(
+            buttons[4].has_focus(),
+            "Defaults falls back to enabled Delete"
+        );
+        inject("Up");
+        assert!(
+            buttons[1].has_focus(),
+            "Up reverses to the same Defaults action"
+        );
+        inject("Right");
+        assert!(buttons[2].has_focus(), "Right reaches Rename");
+        inject("Down");
+        assert!(
+            buttons[4].has_focus(),
+            "Rename falls back to enabled Delete"
+        );
+        inject("Up");
+        assert!(
+            buttons[2].has_focus(),
+            "Up reverses to the same Rename action"
+        );
+        // External/programmatic focus movements must discard the previous
+        // vertical hop. Without this, Delete -> Up wrongly returns Defaults,
+        // even though Refresh is the nearest enabled upper action.
+        assert!(buttons[1].grab_focus(), "focus Defaults externally");
+        spin();
+        inject("Down");
+        assert!(buttons[4].has_focus(), "Down reaches Delete");
+        assert!(buttons[2].grab_focus(), "focus Rename externally");
+        spin();
+        assert_eq!(
+            view.manager_focus().as_ref().map(|(_, slot, _)| *slot),
+            Some(3),
+            "external Rename focus must update the semantic action"
+        );
+        assert!(buttons[4].grab_focus(), "focus Delete externally");
+        spin();
+        assert_eq!(
+            view.manager_focus().as_ref().map(|(_, slot, _)| *slot),
+            Some(5),
+            "external Delete focus must update the semantic action"
+        );
+        inject("Up");
+        assert!(
+            buttons[0].has_focus(),
+            "Up after external focus shifts follows fresh Delete -> Refresh"
+        );
+        inject("XF86Back");
+        assert!(
+            row.has_focus(),
+            "physical Back returns to the same source row"
+        );
+        assert!(dialog.is_visible(), "first Back keeps manager open");
+        inject("XF86Back");
+        // adw::Dialog leaves GTK's visible flag set after it is closed; the
+        // meaningful dismissal oracle is whether it remains *mapped*.
+        // The prior one-row test checked only focus loss (too weak), while a
+        // visible-flag assertion incorrectly REDs a genuinely closed dialog.
+        assert!(
+            !dialog.is_mapped(),
+            "second physical Back must unmap the source manager"
+        );
+        assert!(
+            dialog.parent().is_none(),
+            "dismissed source manager must be removed from the dialog host"
+        );
+        assert!(!row.has_focus(), "dismissal must release the source row");
+    }
+}
+
+#[cfg(test)]
+#[path = "management/c1_native_service_tests.rs"]
+mod c1_native_service_tests;

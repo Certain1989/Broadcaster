@@ -317,8 +317,11 @@ mod imp {
         pub(super) epg_poll_busy: Cell<bool>,
         pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
+        pub(super) manager_add: RefCell<Option<glib::WeakRef<gtk::Button>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
         pub(super) manager_generation: Cell<u64>,
+        pub(super) manager_focus: RefCell<Option<(String, usize, i32)>>,
+        pub(super) manager_rebuilding: Cell<bool>,
         #[cfg(test)]
         pub(super) fake_player_enabled: Cell<bool>,
         #[cfg(test)]
@@ -1989,16 +1992,56 @@ impl TvStreamsView {
         super::management::show_manager(self);
     }
 
-    pub(crate) fn remember_source_manager(&self, list: &gtk::ListBox, status: &gtk::Label) {
+    pub(crate) fn remember_source_manager(
+        &self,
+        list: &gtk::ListBox,
+        status: &gtk::Label,
+        add: &gtk::Button,
+    ) {
         let imp = self.imp();
         imp.manager_list.replace(Some(list.downgrade()));
+        imp.manager_add.replace(Some(add.downgrade()));
         imp.manager_status.replace(Some(status.downgrade()));
+        imp.manager_focus.replace(None);
+    }
+
+    // An action's GTK widget is destroyed on every manager reload. Retain only
+    // its stable source ID, semantic action slot and previous row position.
+    pub(crate) fn set_manager_focus(&self, id: &str, action: usize, index: i32) {
+        if !self.imp().manager_rebuilding.get() {
+            self.imp()
+                .manager_focus
+                .replace(Some((id.to_owned(), action, index)));
+        }
+    }
+
+    pub(crate) fn manager_focus(&self) -> Option<(String, usize, i32)> {
+        self.imp().manager_focus.borrow().clone()
+    }
+
+    pub(crate) fn manager_rebuilding(&self, rebuilding: bool) {
+        self.imp().manager_rebuilding.set(rebuilding);
+    }
+
+    pub(crate) fn focus_empty_source_manager(&self) {
+        if let Some(add) = self
+            .imp()
+            .manager_add
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+        {
+            add.grab_focus();
+        }
     }
 
     pub(crate) fn forget_source_manager(&self) {
         let imp = self.imp();
         imp.manager_list.replace(None);
+        imp.manager_add.replace(None);
         imp.manager_status.replace(None);
+        imp.manager_focus.replace(None);
+        imp.manager_rebuilding.set(false);
         self.next_manager_generation();
     }
 
@@ -2033,6 +2076,25 @@ impl TvStreamsView {
     pub(crate) fn source_mutated(&self) {
         self.reload();
         self.refresh_source_manager();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn c1_install_test_service(&self, service: StreamsService) {
+        self.imp().service.replace(Some(service));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn c1_test_manage_button(&self) -> gtk::Button {
+        self.imp().manage_button.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn c1_test_manager_list(&self) -> Option<gtk::ListBox> {
+        self.imp()
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
     }
 
     pub(crate) fn service(&self) -> Option<StreamsService> {

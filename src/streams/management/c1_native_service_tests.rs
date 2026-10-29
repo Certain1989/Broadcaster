@@ -1,0 +1,306 @@
+// SPDX-FileCopyrightText: 2026 Broadcaster contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Real manager, private SQLite service, and physical XTest keys (not signal emission).
+use super::c1_mapped_native_diagnostic::{find_view, inject, spin};
+use super::*;
+use crate::{application::TvApplication, streams::storage::Storage};
+use rusqlite::params;
+use std::{
+    fs,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
+
+struct Fixture {
+    dir: PathBuf,
+    storage: Storage,
+    ids: Vec<String>,
+}
+impl Fixture {
+    fn new(count: usize) -> Self {
+        let dir = std::env::temp_dir().join(format!("broadcaster-c1-{}", uuid::Uuid::new_v4()));
+        let storage = Storage::at(dir.join("test.sqlite3"));
+        storage.initialize().expect("private SQLite schema");
+        let mut ids = Vec::new();
+        {
+            let conn = storage.connect().expect("validated schema");
+            for i in 0..count {
+                let id = uuid::Uuid::new_v4().to_string();
+                let path = dir.join(format!("playlist-{i}.m3u"));
+                fs::write(
+                    &path,
+                    "#EXTM3U\n#EXTINF:-1,Fixture\nhttps://example.invalid/stream\n",
+                )
+                .expect("fabricated local M3U");
+                conn.execute(
+                    "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,enabled,source_order,created_at,updated_at) \
+                     VALUES (?1,?2,'local_file',?3,1,?4,12345,12345)",
+                    params![id, format!("Fixture {i}"), path.to_string_lossy().as_ref(), i as i64],
+                ).expect("real database source");
+                ids.push(id);
+            }
+        }
+        Self { dir, storage, ids }
+    }
+    fn enabled(&self, id: &str) -> bool {
+        self.storage
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT enabled FROM iptv_sources WHERE id=?1",
+                [id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn until(label: &str, mut predicate: impl FnMut() -> bool) {
+    let limit = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < limit {
+        spin();
+        if predicate() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("native C1 deadline: {label}");
+}
+fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
+    fn visit(w: &gtk::Widget, out: &mut Vec<gtk::Widget>) {
+        out.push(w.clone());
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            visit(&c, out);
+            child = c.next_sibling();
+        }
+    }
+    let mut all = Vec::new();
+    visit(root, &mut all);
+    all
+}
+fn manager_dialog(win: &crate::window::TvWindow) -> Option<adw::Dialog> {
+    descendants(win.upcast_ref())
+        .into_iter()
+        .filter_map(|w| w.downcast::<adw::Dialog>().ok())
+        .find(|d| d.has_css_class("broadcaster-source-manager"))
+}
+struct Controls {
+    row: gtk::ListBoxRow,
+    enabled: gtk::Switch,
+    buttons: Vec<gtk::Button>,
+}
+fn controls(list: &gtk::ListBox, index: i32) -> Option<Controls> {
+    let row = list.row_at_index(index)?;
+    let items = descendants(row.upcast_ref());
+    let enabled = items
+        .iter()
+        .find_map(|w| w.clone().downcast::<gtk::Switch>().ok())?;
+    let buttons = items
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Button>().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(buttons.len(), 7, "seven real row actions");
+    Some(Controls {
+        row,
+        enabled,
+        buttons,
+    })
+}
+fn open(
+    view: &TvStreamsView,
+    win: &crate::window::TvWindow,
+    count: usize,
+) -> (adw::Dialog, gtk::ListBox) {
+    assert!(
+        view.c1_test_manage_button().grab_focus(),
+        "real toolbar manager entry"
+    );
+    inject("Return");
+    until("real manager rows loaded", || {
+        manager_dialog(win).is_some_and(|d| d.is_mapped())
+            && view.c1_test_manager_list().is_some_and(|l| {
+                (0..count).all(|i| l.row_at_index(i as i32).is_some())
+                    && l.row_at_index(count as i32).is_none()
+            })
+    });
+    (
+        manager_dialog(win).unwrap(),
+        view.c1_test_manager_list().unwrap(),
+    )
+}
+fn back(dialog: &adw::Dialog, row: Option<&gtk::ListBoxRow>) {
+    if let Some(row) = row {
+        inject("XF86Back");
+        assert!(row.has_focus(), "first physical Back -> owning row");
+        assert!(dialog.is_mapped(), "first Back keeps manager open");
+    }
+    inject("XF86Back");
+    until("second physical Back closes manager", || {
+        !dialog.is_mapped()
+    });
+    assert!(dialog.parent().is_none(), "modal removed after Back");
+}
+
+fn run(count: usize, width: i32, height: i32, negative: bool) {
+    adw::init().expect("native display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let fixture = Fixture::new(count);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("real SQLite service");
+
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("application register");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
+        .expect("real window page stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("real My Channels view");
+    view.c1_install_test_service(service);
+
+    let (dialog, list) = open(&view, &win, count);
+    if count == 0 {
+        assert!(list.row_at_index(0).is_none(), "real empty manager");
+        back(&dialog, None);
+        win.destroy();
+        return;
+    }
+    let first = controls(&list, 0).unwrap();
+    let last = controls(&list, count as i32 - 1).unwrap();
+    assert!(!first.buttons[5].is_sensitive(), "first Move Up disabled");
+    assert!(!last.buttons[6].is_sensitive(), "last Move Down disabled");
+    assert!(first.row.grab_focus(), "row portal");
+    inject("Return");
+    assert!(
+        first.enabled.has_focus(),
+        "physical OK enters Switch, not activation"
+    );
+    assert!(first.enabled.is_active(), "portal did not mutate source");
+    assert_eq!(view.manager_focus(), Some((fixture.ids[0].clone(), 0, 0)));
+    if negative {
+        assert_eq!(
+            view.manager_focus().map(|(_, slot, _)| slot),
+            Some(MANAGER_ROW),
+            "C1_EXPECTED_NEGATIVE_ORACLE: a real Switch focus cannot be portal slot 8"
+        );
+        unreachable!("test oracle did not reject incorrect expectation");
+    }
+    // Real source row: immediate inverse, then stale-hop invalidation after
+    // unrelated external focus on Rename and Delete.
+    assert!(first.buttons[1].grab_focus(), "Defaults");
+    spin();
+    inject("Down");
+    assert!(first.buttons[4].has_focus(), "Defaults -> Delete");
+    inject("Up");
+    assert!(first.buttons[1].has_focus(), "Down/Up is reciprocal");
+    assert!(first.buttons[1].grab_focus(), "prime stale Defaults hop");
+    spin();
+    inject("Down");
+    assert!(first.buttons[4].has_focus());
+    assert!(first.buttons[2].grab_focus(), "external Rename focus");
+    spin();
+    assert!(first.buttons[4].grab_focus(), "external Delete focus");
+    spin();
+    inject("Up");
+    assert!(
+        first.buttons[0].has_focus(),
+        "R01-F01: fresh Delete -> Refresh, not stale Defaults"
+    );
+    back(&dialog, Some(&first.row));
+
+    let (dialog, list) = open(&view, &win, count);
+    let index = if count == 3 { 1 } else { 0 };
+    let target = controls(&list, index).unwrap();
+    assert!(target.row.grab_focus());
+    inject("Return");
+    assert!(target.enabled.has_focus());
+    assert!(target.enabled.is_active());
+    inject("space");
+    let id = fixture.ids[index as usize].clone();
+    until(
+        "Switch persisted with restored same-UUID semantic slot",
+        || {
+            if fixture.enabled(&id) {
+                return false;
+            }
+            controls(&list, index).is_some_and(|c| {
+                !c.enabled.is_active()
+                    && c.enabled.has_focus()
+                    && view.manager_focus() == Some((id.clone(), 0, index))
+            })
+        },
+    );
+    assert!(
+        !target.enabled.is_mapped(),
+        "old GTK row destroyed on service rebuild"
+    );
+    for other in fixture.ids.iter().filter(|other| *other != &id) {
+        assert!(fixture.enabled(other), "wrong-row source was mutated");
+    }
+    let reopened = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("fresh SQLite service reopen");
+    assert!(
+        !glib::MainContext::default()
+            .block_on(reopened.source(&id))
+            .unwrap()
+            .enabled,
+        "R01-F02 persisted Switch must stay disabled after service reopen"
+    );
+    let current = controls(&list, index).unwrap();
+    back(&dialog, Some(&current.row));
+    win.destroy();
+}
+
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_0_640_480() {
+    run(0, 640, 480, false);
+}
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_1_640_480() {
+    run(1, 640, 480, false);
+}
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_3_640_480() {
+    run(3, 640, 480, false);
+}
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_0_1280_800() {
+    run(0, 1280, 800, false);
+}
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_1_1280_800() {
+    run(1, 1280, 800, false);
+}
+#[test]
+#[ignore = "real GTK/XTest and SQLite service"]
+fn c1_native_manager_3_1280_800() {
+    run(3, 1280, 800, false);
+}
+#[test]
+#[ignore = "intentionally broken real GTK oracle; CI must see RED"]
+fn c1_native_negative_oracle() {
+    run(1, 640, 480, true);
+}
