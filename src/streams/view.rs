@@ -308,6 +308,7 @@ mod imp {
         pub(super) selected_id: RefCell<Option<ChannelId>>,
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) restore_results_focus: Cell<bool>,
+        pub(super) pending_star_focus: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
         pub(super) projection: OnceCell<ProjectionService>,
@@ -690,6 +691,25 @@ impl TvStreamsView {
         ));
     }
 
+    fn restore_pending_star_focus(&self) {
+        let Some(id) = self.imp().pending_star_focus.borrow().clone() else {
+            return;
+        };
+        if self.imp().selected_id.borrow().as_deref() != Some(id.as_str()) {
+            return;
+        }
+        let star = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+                .then(|| binding.ui.star.clone())
+        });
+        if star.is_some_and(|button| button.grab_focus()) {
+            self.imp().pending_star_focus.replace(None);
+        }
+    }
+
     fn toggle_row_star(&self, id: ChannelId) {
         let Some(service) = self.imp().service.borrow().clone() else {
             return;
@@ -704,6 +724,7 @@ impl TvStreamsView {
                 let result = service.toggle_favourite(&id).await;
                 view.imp().starred_busy.borrow_mut().remove(&id);
                 if result.is_ok() {
+                    view.imp().pending_star_focus.replace(Some(id));
                     view.reload();
                 }
             }
@@ -854,7 +875,12 @@ impl TvStreamsView {
         imp.suppress_controls.set(false);
         if imp.restore_results_focus.replace(false) {
             if total == 0 {
-                self.focus_search();
+                // Removing the last visible favourite must leave a usable
+                // one-key exit rather than focus on a vanished virtual row.
+                if !query.favourites_only || !imp.show_all_button.grab_focus() {
+                    self.focus_search();
+                }
+                imp.pending_star_focus.replace(None);
             } else {
                 imp.results_list.grab_focus();
             }
@@ -1007,7 +1033,10 @@ impl TvStreamsView {
                 }
                 let target = match position {
                     Ok(Some(position)) if position < total as u64 => position as u32,
-                    Ok(None) => fallback.min(total - 1),
+                    Ok(None) => {
+                        view.imp().pending_star_focus.replace(None);
+                        fallback.min(total - 1)
+                    }
                     _ => return,
                 };
                 view.imp()
@@ -1019,6 +1048,7 @@ impl TvStreamsView {
                 view.imp()
                     .results_list
                     .scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                view.restore_pending_star_focus();
             }
         ));
     }
@@ -1285,6 +1315,16 @@ impl TvStreamsView {
         self.request_logo(&slot);
         self.request_page(slot.position());
         self.request_epg_for_slot(key, &slot);
+        // The same recycled slot may now hold a different playlist's row.
+        // Restore by persistent channel identity only, after binding settles.
+        if self.imp().pending_star_focus.borrow().is_some() {
+            let weak = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = weak.upgrade() {
+                    view.restore_pending_star_focus();
+                }
+            });
+        }
     }
 
     fn unbind_row(&self, item: &glib::Object) {
@@ -1858,18 +1898,24 @@ impl TvStreamsView {
     /// Return focus to the origin card action after OK/Back/Home/cancel, if
     /// virtualization has not removed it; otherwise return to the list.
     pub(crate) fn restore_card_mapping_focus(&self, id: &str) {
-        for bound in self.imp().bindings.borrow().values() {
-            if bound
-                .connection
-                .as_ref()
-                .and_then(|(slot, _)| slot.channel())
-                .is_some_and(|channel| channel.id == id)
-                && bound.ui.mapping.grab_focus()
-            {
+        let imp = self.imp();
+        // A picker can outlive a row or a playlist/source swap. Never return
+        // keyboard focus to a recycled widget with an unrelated current owner.
+        if imp.expanded_id.borrow().as_deref() == Some(id)
+            && imp.selected_id.borrow().as_deref() == Some(id)
+        {
+            let action = imp.bindings.borrow().values().find_map(|bound| {
+                let (slot, _) = bound.connection.as_ref()?;
+                (slot.channel().is_some_and(|channel| channel.id == id)
+                    && bound.ui.reveal.reveals_child()
+                    && bound.ui.mapping.is_mapped())
+                    .then(|| bound.ui.mapping.clone())
+            });
+            if action.is_some_and(|button| button.grab_focus()) {
                 return;
             }
         }
-        self.imp().results_list.grab_focus();
+        imp.results_list.grab_focus();
     }
 
     fn repaint_bound_rows(&self) {
