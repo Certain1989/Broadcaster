@@ -291,7 +291,11 @@ fn confirm_shared_guide(
     dialog.present(Some(parent));
 }
 
+// Every repaint destroys its previous row widgets. Restore by saved guide UUID.
 fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window) {
+    repaint_focused(service, list, status, parent, None);
+}
+fn repaint_focused(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window, focus: Option<(String, usize)>) {
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
@@ -303,6 +307,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         "No programme guides configured",
                     ))));
                 }
+                let mut focus_rows: Vec<(String, [gtk::Button; 4])> = Vec::new();
                 for source in sources {
                     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
                     row.set_margin_top(8);
@@ -342,14 +347,18 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                             }
                         }
                     }
-                    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    let set_default = command(&gettext("Use as Shared Default"), &buttons);
-                    let refresh = command(&gettext("Refresh"), &buttons);
+                    // Two action lines fit narrow TV viewports without clipping.
+                    let first = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let set_default = command(&gettext("Use as Shared Default"), &first);
+                    let refresh = command(&gettext("Refresh"), &first);
                     refresh.set_sensitive(source.enabled);
-                    let configure = command(&gettext("Edit"), &buttons);
-                    let remove = command(&gettext("Remove"), &buttons);
-                    row.append(&buttons);
+                    let second = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let configure = command(&gettext("Edit"), &second);
+                    let remove = command(&gettext("Remove"), &second);
+                    row.append(&first);
+                    row.append(&second);
                     list.append(&row);
+                    focus_rows.push((source.id.clone(), [set_default.clone(), refresh.clone(), configure.clone(), remove.clone()]));
                     let default_service = service.clone();
                     let default_list = list.clone();
                     let default_status = status.clone();
@@ -403,7 +412,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                 ),
                             };
                             state.set_text(&message);
-                            repaint(manager, listing, state, window);
+                            repaint_focused(manager, listing, state, window, Some((id, 1)));
                         });
                     });
                     let edit_service = service.clone();
@@ -435,12 +444,56 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         );
                     });
                 }
+                wire_guide_rows(&focus_rows);
+                if let Some((id, slot)) = focus {
+                    let target = focus_rows.iter().find(|row| row.0 == id)
+                        .or_else(|| focus_rows.first())
+                        .and_then(|row| row.1.get(slot).filter(|button| button.is_sensitive())
+                            .or_else(|| row.1.iter().find(|button| button.is_sensitive())))
+                        .cloned();
+                    let weak_list = list.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if weak_list.upgrade().is_some_and(|list| list.is_mapped()) {
+                            if let Some(button) = target {
+                                if button.is_mapped() && button.is_sensitive() { button.grab_focus(); }
+                            }
+                        }
+                    });
+                }
             }
-            Err(error) => {
-                status.set_text(&format!("{}: {error}", gettext("Unable to load guides")))
-            }
+            Err(_) => status.set_text(&gettext("Unable to load programme guides")),
         }
     });
+}
+
+// D-pad links identify real controls rather than a synthetic Tab chain.
+fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
+    for (index, (_, controls)) in rows.iter().enumerate() {
+        for slot in 0..4 {
+            let left = match slot { 1 => Some(controls[0].clone()), 3 => Some(controls[2].clone()), _ => None };
+            let right = match slot { 0 => Some(controls[1].clone()), 2 => Some(controls[3].clone()), _ => None };
+            let up = if slot >= 2 { Some(controls[slot - 2].clone()) }
+                else if index > 0 { Some(rows[index-1].1[slot+2].clone()) } else { None };
+            let down = if slot < 2 { Some(controls[slot+2].clone()) }
+                else { rows.get(index+1).map(|row| row.1[slot-2].clone()) };
+            let key = gtk::EventControllerKey::new();
+            key.set_propagation_phase(gtk::PropagationPhase::Capture);
+            key.connect_key_pressed(move |_, pressed, _, modifiers| {
+                if !crate::keyboard::unmodified_remote(modifiers) { return glib::Propagation::Proceed; }
+                let target = match pressed {
+                    gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => left.as_ref(),
+                    gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => right.as_ref(),
+                    gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => up.as_ref(),
+                    gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => down.as_ref(),
+                    _ => None,
+                };
+                if target.is_some_and(|button| button.is_mapped() && button.is_sensitive() && button.grab_focus()) {
+                    glib::Propagation::Stop
+                } else { glib::Propagation::Proceed }
+            });
+            controls[slot].add_controller(key);
+        }
+    }
 }
 
 fn show_source_settings(
@@ -486,6 +539,7 @@ fn show_source_settings(
         move |_| {
             let manager = service.clone();
             let id = source.id.clone();
+            let id_for_focus = id.clone();
             let revision = source.updated_at;
             let new_name = name.text().to_string();
             let new_enabled = enabled.is_active();
@@ -506,7 +560,7 @@ fn show_source_settings(
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            repaint_focused(manager, list, status, parent, Some((id_for_focus, 2)));
                         }
                         Err(error) => message.set_text(&guide_problem(&error.to_string())),
                     }
@@ -558,6 +612,7 @@ fn show_delete_confirmation(
         move |_| {
             let manager = service.clone();
             let approval = approval.clone();
+            let removed_id = source.id.clone();
             let list = list.clone();
             let status = status.clone();
             let parent = callback_parent.clone();
@@ -571,7 +626,7 @@ fn show_delete_confirmation(
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            repaint_focused(manager, list, status, parent, Some((removed_id, 0)));
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
@@ -668,9 +723,9 @@ fn show_add(
                         .add_with_schedule(name, origin, update_automatically)
                         .await
                     {
-                        Ok(_) => {
+                        Ok(added) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            repaint_focused(manager, list, status, parent, Some((added.id, 2)));
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
