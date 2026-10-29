@@ -238,6 +238,7 @@ pub struct HintMappingSnapshot<'a> {
     pub guide_source_id: &'a str,
     pub channel_id: &'a str,
     pub last_success_at: i64,
+    pub guide_revision: i64,
 }
 
 pub fn set_row_mapping_from_hint_if_unchanged(
@@ -254,6 +255,7 @@ pub fn set_row_mapping_from_hint_if_unchanged(
         guide_source_id,
         channel_id: guide_channel_id,
         last_success_at: expected_last_success_at,
+        guide_revision: expected_guide_revision,
     } = expected;
     fk(conn)?;
     id(iptv_channel_id, 64)?;
@@ -299,16 +301,18 @@ pub fn set_row_mapping_from_hint_if_unchanged(
     if changed_binding != 0 {
         return Err(BindingError::InvalidInput);
     }
-    let imported_at: Option<i64> = tx
+    // The successful-import timestamp is seconds resolution. A same-second
+    // replacement can preserve it and the chosen ID, but still advance the
+    // durable selected-guide source revision.
+    let imported: Option<(Option<i64>, i64)> = tx
         .query_row(
-            "SELECT last_success_at FROM epg_sources WHERE id=?1 AND enabled=1",
+            "SELECT last_success_at,updated_at FROM epg_sources WHERE id=?1 AND enabled=1",
             [guide_source_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(db)?
-        .flatten();
-    if imported_at != Some(expected_last_success_at) {
+        .map_err(db)?;
+    if imported != Some((Some(expected_last_success_at), expected_guide_revision)) {
         return Err(BindingError::InvalidInput);
     }
     guide_channel_exists(&tx, guide_source_id, guide_channel_id)?;
@@ -335,6 +339,7 @@ pub struct PickerMappingSnapshot {
     pub playlist_revision: i64,
     pub guide_source_id: String,
     pub guide_last_success_at: i64,
+    pub guide_revision: i64,
     pub prior_row_target: Option<String>,
     pub prior_alias_target: Option<String>,
 }
@@ -394,16 +399,22 @@ pub fn set_row_mapping_from_picker_if_unchanged(
     if row_target != expected.prior_row_target || alias_target != expected.prior_alias_target {
         return Err(BindingError::InvalidInput);
     }
-    let imported: Option<i64> = tx
+    // Both fields must match under the same IMMEDIATE transaction as the
+    // row, effective guide and exact guide-channel existence checks.
+    let imported: Option<(Option<i64>, i64)> = tx
         .query_row(
-            "SELECT last_success_at FROM epg_sources WHERE id=?1 AND enabled=1",
+            "SELECT last_success_at,updated_at FROM epg_sources WHERE id=?1 AND enabled=1",
             [&expected.guide_source_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
-        .map_err(db)?
-        .flatten();
-    if imported != Some(expected.guide_last_success_at) {
+        .map_err(db)?;
+    if imported
+        != Some((
+            Some(expected.guide_last_success_at),
+            expected.guide_revision,
+        ))
+    {
         return Err(BindingError::InvalidInput);
     }
     guide_channel_exists(&tx, &expected.guide_source_id, exact_target)?;

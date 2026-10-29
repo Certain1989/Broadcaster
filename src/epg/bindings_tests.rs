@@ -748,6 +748,7 @@ fn name_hint_confirms_only_one_row_and_never_creates_implicit_alias() {
             guide_source_id: "g",
             channel_id: "exact.Target@HD",
             last_success_at: 1000,
+            guide_revision: 1,
         },
         55,
     )
@@ -776,6 +777,7 @@ fn name_hint_confirms_only_one_row_and_never_creates_implicit_alias() {
             guide_source_id: "g",
             channel_id: "exact.Target@HD",
             last_success_at: 1000,
+            guide_revision: 1,
         },
         56,
     )
@@ -803,6 +805,7 @@ fn name_hint_revalidates_snapshot_and_fails_closed_on_changes() {
                 guide_source_id: "g",
                 channel_id: "Target@HD",
                 last_success_at: 1000,
+                guide_revision: 1,
             },
             70,
         )
@@ -915,6 +918,7 @@ fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
                 guide_source_id: "g",
                 channel_id: "Target",
                 last_success_at: 1000,
+                guide_revision: 1,
             },
             21,
         ),
@@ -943,6 +947,7 @@ fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
                 guide_source_id: "g",
                 channel_id: "Target",
                 last_success_at: 1000,
+                guide_revision: 1,
             },
             23,
         ),
@@ -1029,6 +1034,7 @@ fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
         playlist_revision: revision,
         guide_source_id: "g".into(),
         guide_last_success_at: 1000,
+        guide_revision: 1,
         prior_row_target: None,
         prior_alias_target: None,
     };
@@ -1057,5 +1063,186 @@ fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
         set_row_mapping_from_picker_if_unchanged(&mut c, confirmed(), &snapshot, "first", 113),
         Err(BindingError::InvalidInput)
     );
+    fk_ok(&c);
+}
+
+// Actual SQLite CAS entrypoints, not just a synthetic SQL comparison. A
+// successful full-import transaction can replace same-ID metadata and
+// programme rows within a single second while increasing the source revision.
+#[test]
+fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    add_channel(&c, "g", "target", "Old station display");
+    let revision: i64 = c
+        .query_row(
+            "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let snapshot = PickerMappingSnapshot {
+        row_id: "a1".into(),
+        playlist_id: "playlist-a".into(),
+        tvg_id: Some("TVG.EXACT".into()),
+        effective_name: "Station".into(),
+        playlist_revision: revision,
+        guide_source_id: "g".into(),
+        guide_last_success_at: 1000,
+        guide_revision: 1,
+        prior_row_target: None,
+        prior_alias_target: None,
+    };
+    // Rollback must not consume the original successful revision/catalogue.
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    c.execute("UPDATE epg_sources SET updated_at=2 WHERE id='g'", [])
+        .unwrap();
+    c.execute(
+        "UPDATE epg_channels SET display_name='Discarded' WHERE source_id='g'",
+        [],
+    )
+    .unwrap();
+    c.execute_batch("ROLLBACK").unwrap();
+    set_row_mapping_from_picker_if_unchanged(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        &snapshot,
+        "target",
+        10,
+    )
+    .unwrap();
+    c.execute(
+        "DELETE FROM epg_channel_overrides WHERE iptv_channel_id='a1'",
+        [],
+    )
+    .unwrap();
+    // Simulate the published full-snapshot mutation transaction: the ID and
+    // last-success second do NOT change, but the catalogue/programme does.
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    c.execute("UPDATE epg_channels SET display_name='New station display' WHERE source_id='g' AND channel_id='target'", []).unwrap();
+    c.execute("INSERT INTO epg_programmes(source_id,channel_id,start_utc,stop_utc,title) VALUES('g','target',10,20,'New schedule')", []).unwrap();
+    c.execute(
+        "UPDATE epg_sources SET updated_at=MAX(updated_at+1,1000) WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    c.execute_batch("COMMIT").unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT last_success_at FROM epg_sources WHERE id='g'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1000
+    );
+    assert!(
+        c.query_row("SELECT updated_at FROM epg_sources WHERE id='g'", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap()
+            > 1
+    );
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(
+            &mut c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            &snapshot,
+            "target",
+            11,
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
+    fk_ok(&c);
+}
+
+#[test]
+fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    add_channel(&c, "g", "target", "Old station display");
+    let confirm = |conn: &mut Connection| {
+        set_row_mapping_from_hint_if_unchanged(
+            conn,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            HintMappingSnapshot {
+                row_id: "a1",
+                playlist_id: "playlist-a",
+                tvg_id: Some("TVG.EXACT"),
+                effective_name: "Station",
+                guide_source_id: "g",
+                channel_id: "target",
+                last_success_at: 1000,
+                guide_revision: 1,
+            },
+            11,
+        )
+    };
+    c.execute_batch("BEGIN IMMEDIATE").unwrap();
+    c.execute("UPDATE epg_channels SET display_name='Different metadata' WHERE source_id='g' AND channel_id='target'", []).unwrap();
+    c.execute(
+        "UPDATE epg_sources SET updated_at=MAX(updated_at+1,1000) WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    c.execute_batch("COMMIT").unwrap();
+    assert_eq!(confirm(&mut c), Err(BindingError::InvalidInput));
+    assert_eq!(count(&c, "epg_channel_overrides"), 0);
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
+    fk_ok(&c);
+}
+
+#[test]
+fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
+    let mut c = setup();
+    selected(&mut c, "g");
+    add_channel(&c, "g", "target", "Station");
+    let revision: i64 = c
+        .query_row(
+            "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut snap = PickerMappingSnapshot {
+        row_id: "a1".into(),
+        playlist_id: "playlist-a".into(),
+        tvg_id: Some("TVG.EXACT".into()),
+        effective_name: "Station".into(),
+        playlist_revision: revision,
+        guide_source_id: "g".into(),
+        guide_last_success_at: 1000,
+        guide_revision: 1,
+        prior_row_target: None,
+        prior_alias_target: None,
+    };
+    c.execute(
+        "UPDATE epg_sources SET name='Renamed',updated_at=2 WHERE id='g'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(
+            &mut c,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            &snap,
+            "target",
+            20
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    // New, deliberately reviewed state still permits one row-only save.
+    snap.guide_revision = 2;
+    set_row_mapping_from_picker_if_unchanged(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        &snap,
+        "target",
+        21,
+    )
+    .unwrap();
+    assert_eq!(count(&c, "epg_channel_overrides"), 1);
+    assert_eq!(count(&c, "epg_global_id_aliases"), 0);
     fk_ok(&c);
 }

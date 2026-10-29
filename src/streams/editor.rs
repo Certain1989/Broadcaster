@@ -613,6 +613,7 @@ struct HintPrefill {
     guide_id: String,
     full_xmltv_id: String,
     guide_last_success_at: i64,
+    guide_revision: i64,
 }
 
 async fn effective_row_guide(row_id: String) -> Result<Option<String>, &'static str> {
@@ -702,6 +703,7 @@ async fn save_epg_mapping(
                                 guide_source_id: &source,
                                 channel_id: &target,
                                 last_success_at: h.guide_last_success_at,
+                                guide_revision: h.guide_revision,
                             },
                             at,
                         )
@@ -925,8 +927,11 @@ async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'sta
         tokio::task::spawn_blocking(move || {
             use crate::epg::{bindings::selected_guide_for_row, matching};
             use rusqlite::{params, OptionalExtension};
-            let conn = super::storage::Storage::new().connect().map_err(|_| "Cannot open programme data")?;
-            let row: Option<(String, Option<String>, String, i64)> = conn.query_row(
+            let mut conn = super::storage::Storage::new().connect().map_err(|_| "Cannot open programme data")?;
+            // Hold a single consistent SQLite read snapshot across row,
+            // effective guide, source revision, overrides and catalogue.
+            let tx = conn.transaction().map_err(|_| "Cannot read programme data")?;
+            let row: Option<(String, Option<String>, String, i64)> = tx.query_row(
                 "SELECT c.source_id,c.tvg_id,COALESCE(o.display_name_override,c.imported_name),s.revision
                  FROM iptv_channels c JOIN iptv_sources s ON s.id=c.source_id
                  LEFT JOIN iptv_channel_overrides o ON o.channel_id=c.id
@@ -936,25 +941,25 @@ async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'sta
             let Some((playlist_id, tvg_id, effective_name, playlist_revision)) = row else {
                 return Err("Channel no longer exists");
             };
-            let guide_id = selected_guide_for_row(&conn, &row_id)
+            let guide_id = selected_guide_for_row(&tx, &row_id)
                 .map_err(|_| "Cannot read selected guide")?
                 .ok_or("No programme guide selected; configure a guide in Programme Guides")?;
-            let source: Option<(String, i64, Option<i64>)> = conn.query_row(
-                "SELECT name,enabled,last_success_at FROM epg_sources WHERE id=?1",
-                [&guide_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+            let source: Option<(String, i64, Option<i64>, i64)> = tx.query_row(
+                "SELECT name,enabled,last_success_at,updated_at FROM epg_sources WHERE id=?1",
+                [&guide_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
             ).optional().map_err(|_| "Cannot read selected guide")?;
-            let Some((guide_name, enabled, imported)) = source else {
+            let Some((guide_name, enabled, imported, guide_revision)) = source else {
                 return Err("Selected guide is missing");
             };
             if enabled != 1 || imported.is_none() {
                 return Err("Selected guide is disabled or not yet imported");
             }
             let imported = imported.expect("checked imported");
-            let prior_row_target: Option<String> = conn.query_row(
+            let prior_row_target: Option<String> = tx.query_row(
                 "SELECT guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
                 [&row_id], |r| r.get(0),
             ).optional().map_err(|_| "Cannot read existing mapping")?;
-            let prior_alias_target: Option<String> = conn.query_row(
+            let prior_alias_target: Option<String> = tx.query_row(
                 "SELECT guide_channel_id FROM epg_global_id_aliases
                  WHERE guide_source_id=?1 AND iptv_tvg_id=?2",
                 params![guide_id, tvg_id], |r| r.get(0),
@@ -964,7 +969,7 @@ async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'sta
             // bodies, provider endpoints, streaming URLs or credentials.
             const MAX_ROWS: usize = 100_000;
             const MAX_META_BYTES: usize = 48 * 1024 * 1024;
-            let mut stmt = conn.prepare(
+            let mut stmt = tx.prepare(
                 "SELECT channel_id,display_name FROM epg_channels
                  WHERE source_id=?1 ORDER BY channel_id LIMIT 100001",
             ).map_err(|_| "Programme catalogue unavailable")?;
@@ -981,6 +986,9 @@ async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'sta
                     source_id: guide_id.clone(), channel_id: id, display_name: name,
                 });
             }
+            drop(rows);
+            drop(stmt);
+            tx.commit().map_err(|_| "Cannot finish programme snapshot")?;
             let existing = if let Some(target) = prior_row_target.as_ref() {
                 format!("Manual target for this stream: {target}")
             } else if let Some(target) = prior_alias_target.as_ref() {
@@ -1028,7 +1036,7 @@ async fn load_card_mapping_data(row_id: String) -> Result<CardMappingData, &'sta
             Ok(CardMappingData {
                 snapshot: crate::epg::bindings::PickerMappingSnapshot {
                     row_id, playlist_id, tvg_id, effective_name, playlist_revision,
-                    guide_source_id: guide_id, guide_last_success_at: imported,
+                    guide_source_id: guide_id, guide_last_success_at: imported, guide_revision,
                     prior_row_target, prior_alias_target,
                 },
                 guide_name, existing, suggestions,
@@ -1920,6 +1928,7 @@ fn populate_guide_review_page(
 /// an explanation to inspect, not evidence of an identical broadcast schedule.
 fn populate_read_only_name_hints_page(
     review: &crate::epg::candidates::GuideReview,
+    guide_revision: i64,
     page: usize,
     rows: &gtk::Box,
     navigation: &gtk::Label,
@@ -1972,6 +1981,7 @@ fn populate_read_only_name_hints_page(
             guide_id: review.guide_source_id.clone(),
             full_xmltv_id: hint.full_xmltv_id.clone(),
             guide_last_success_at: review.last_success_at,
+            guide_revision,
         };
         button.connect_clicked(glib::clone!(
             #[weak]
@@ -1991,7 +2001,7 @@ fn populate_read_only_name_hints_page(
 async fn compute_guide_review(
     guide: String,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<crate::epg::candidates::GuideReview, &'static str> {
+) -> Result<(crate::epg::candidates::GuideReview, i64), &'static str> {
     let permit = guide_work_permit()?;
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
@@ -1999,15 +2009,31 @@ async fn compute_guide_review(
             let mut conn = super::storage::Storage::new()
                 .connect()
                 .map_err(|_| "Programme data unavailable")?;
-            crate::epg::candidates::load_guide_review(&mut conn, &guide, &cancel).map_err(|error| {
-                use crate::epg::candidates::ReviewLoadError;
-                match error {
-                    ReviewLoadError::Unavailable => "Guide disabled or not imported yet",
-                    ReviewLoadError::Cancelled => "Review cancelled",
-                    ReviewLoadError::TooLarge => "Review memory or row budget exceeded",
-                    ReviewLoadError::Storage => "Unable to read programme data",
-                }
-            })
+            // Reuse the existing candidate review's coherent transaction;
+            // capture selected-guide revision BEFORE ending the same read
+            // snapshot. Never read a later revision for older suggestions.
+            let tx = conn
+                .transaction()
+                .map_err(|_| "Unable to read programme data")?;
+            let review = crate::epg::candidates::review_in_transaction(&tx, &guide, &cancel)
+                .map_err(|error| {
+                    use crate::epg::candidates::ReviewLoadError;
+                    match error {
+                        ReviewLoadError::Unavailable => "Guide disabled or not imported yet",
+                        ReviewLoadError::Cancelled => "Review cancelled",
+                        ReviewLoadError::TooLarge => "Review memory or row budget exceeded",
+                        ReviewLoadError::Storage => "Unable to read programme data",
+                    }
+                })?;
+            let revision: i64 = tx
+                .query_row(
+                    "SELECT updated_at FROM epg_sources WHERE id=?1 AND enabled=1",
+                    [&guide],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "Unable to read guide revision")?;
+            tx.commit().map_err(|_| "Unable to finish guide review")?;
+            Ok((review, revision))
         })
         .await
         .map_err(|_| "Programme mapping worker unavailable")?
@@ -2352,7 +2378,9 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
         cancelled,
         async move {
             match compute_guide_review(guide.clone(), cancelled.clone()).await {
-                Ok(review) if !cancelled.load(std::sync::atomic::Ordering::Acquire) => {
+                Ok((review, guide_revision))
+                    if !cancelled.load(std::sync::atomic::Ordering::Acquire) =>
+                {
                     let c = &review.counts;
                     let timestamp = crate::utils::format_timestamp_full(review.last_success_at)
                         .map(|value| value.to_string())
@@ -2423,7 +2451,12 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                             current.set(0);
                             if hints {
                                 populate_read_only_name_hints_page(
-                                    &review, 0, &list, &position, &view,
+                                    &review,
+                                    guide_revision,
+                                    0,
+                                    &list,
+                                    &position,
+                                    &view,
                                 );
                             } else {
                                 populate_guide_review_page(&review, 0, &list, &position, &selected);
@@ -2467,7 +2500,12 @@ fn show_epg_bulk_review(view: &TvStreamsView, parent: &gtk::Window, guide: Strin
                             current.set(new_page);
                             if hints {
                                 populate_read_only_name_hints_page(
-                                    &review, new_page, &list, &position, &view,
+                                    &review,
+                                    guide_revision,
+                                    new_page,
+                                    &list,
+                                    &position,
+                                    &view,
                                 );
                             } else {
                                 populate_guide_review_page(
