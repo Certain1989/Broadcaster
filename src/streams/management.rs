@@ -709,20 +709,37 @@ fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 8], slot: usize) -> Op
         .filter(|button| button.is_sensitive())
 }
 
-fn nearest_manager_target(
-    controls: &[glib::WeakRef<gtk::Widget>; 8],
+// A directional hop can converge on the same enabled lower control when the
+// corresponding Move button is disabled. Keep the immediate inverse locally:
+// independent nearest-neighbour searches are not reversible at those edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ManagerVerticalHop {
+    from: usize,
+    to: usize,
+    reverse_up: bool,
+}
+
+impl ManagerVerticalHop {
+    fn return_slot(self, slot: usize, pressed: gtk::gdk::Key) -> Option<usize> {
+        use gtk::gdk::Key;
+        let opposite = if self.reverse_up {
+            matches!(pressed, Key::Up | Key::KP_Up)
+        } else {
+            matches!(pressed, Key::Down | Key::KP_Down)
+        };
+        (self.to == slot && opposite).then_some(self.from)
+    }
+}
+
+fn nearest_manager_slot(
     slot: usize,
     start: usize,
     end: usize,
-) -> Option<gtk::Widget> {
+    mut enabled: impl FnMut(usize) -> bool,
+) -> Option<usize> {
     (start..end)
-        .filter(|candidate| {
-            controls[*candidate]
-                .upgrade()
-                .is_some_and(|widget| widget.is_sensitive())
-        })
+        .filter(|candidate| enabled(*candidate))
         .min_by_key(|candidate| candidate.abs_diff(slot))
-        .and_then(|candidate| manager_target(controls, candidate))
 }
 
 fn bind_manager_navigation(
@@ -734,6 +751,9 @@ fn bind_manager_navigation(
     index: i32,
 ) {
     row.set_focusable(true);
+    // Owned only by this row's controllers, never by an async service or a
+    // reusable widget pointer. Rebinding drops the old row and its history.
+    let vertical_hop: Rc<RefCell<Option<ManagerVerticalHop>>> = Rc::new(RefCell::new(None));
     // Focus entry captures identity even for ordinary GTK Tab navigation,
     // pointer clicks, and switch activation—not only handled D-pad keys.
     for (slot, target) in std::iter::once((MANAGER_ROW, row.clone().upcast::<gtk::Widget>()))
@@ -741,6 +761,7 @@ fn bind_manager_navigation(
     {
         let focus = gtk::EventControllerFocus::new();
         let id = source_id.to_owned();
+        let focus_hop = vertical_hop.clone();
         focus.connect_enter(glib::clone!(
             #[weak]
             view,
@@ -748,6 +769,10 @@ fn bind_manager_navigation(
             target,
             move |_| {
                 if target.has_focus() {
+                    // A pointer/Tab/programmatic focus change invalidates the
+                    // previous hop. The key handler records its own hop only
+                    // *after* its destination has received focus.
+                    focus_hop.borrow_mut().take();
                     view.set_manager_focus(&id, slot, index);
                 }
             }
@@ -756,25 +781,43 @@ fn bind_manager_navigation(
 
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
-        // Only weak references in controllers: rebuilding rows must not leak
-        // the old widgets through a controller -> button -> row cycle.
+        // Only weak widget references in controllers: rebuilding rows must
+        // not leak old widgets through a controller -> row cycle.
         let actions = std::array::from_fn(|i| controls[i].downgrade());
         let weak_list = list.downgrade();
         let weak_row = row.downgrade();
+        let key_hop = vertical_hop.clone();
         key.connect_key_pressed(move |_, pressed, _, modifiers| {
             let (Some(list), Some(row)) = (weak_list.upgrade(), weak_row.upgrade()) else {
+                key_hop.borrow_mut().take();
                 return glib::Propagation::Proceed;
             };
-            // A ListBoxRow's capture controller also sees events dispatched to
-            // its children; the portal is active only while the row itself
-            // actually owns focus, never while an action owns it.
+            // A ListBoxRow capture controller also sees keys on its children.
+            // Let the actual focused action own these events.
             if slot == MANAGER_ROW && !row.has_focus() {
                 return glib::Propagation::Proceed;
             }
+            let previous = key_hop.borrow_mut().take();
             if !crate::keyboard::unmodified_remote(modifiers) {
                 return glib::Propagation::Proceed;
             }
             use gtk::gdk::Key;
+            // A single immediate reverse key goes to the *actual* previous
+            // control, even when two upper actions share one lower fallback.
+            if let Some(from) = previous.and_then(|hop| hop.return_slot(slot, pressed)) {
+                if manager_target(&actions, from).is_some_and(|target| target.grab_focus()) {
+                    return glib::Propagation::Stop;
+                }
+            }
+            let vertical_slot = match pressed {
+                Key::Down | Key::KP_Down if slot < 4 => {
+                    nearest_manager_slot(slot + 4, 4, 8, |i| manager_target(&actions, i).is_some())
+                }
+                Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
+                    nearest_manager_slot(slot - 4, 0, 4, |i| manager_target(&actions, i).is_some())
+                }
+                _ => None,
+            };
             let next = match pressed {
                 Key::BackSpace if slot != MANAGER_ROW => Some(row.clone().upcast()),
                 Key::Return | Key::KP_Enter | Key::space | Key::Right | Key::KP_Right
@@ -798,10 +841,10 @@ fn bind_manager_navigation(
                     ((slot + 1)..end).find_map(|i| manager_target(&actions, i))
                 }
                 Key::Down | Key::KP_Down if slot < 4 => {
-                    nearest_manager_target(&actions, slot + 4, 4, 8)
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
                 }
                 Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
-                    nearest_manager_target(&actions, slot - 4, 0, 4)
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
                 }
                 Key::Up | Key::KP_Up if slot < 4 => Some(row.clone().upcast()),
                 Key::Down | Key::KP_Down if slot == MANAGER_ROW || (4..8).contains(&slot) => {
@@ -814,10 +857,17 @@ fn bind_manager_navigation(
             };
             if let Some(next) = next {
                 if next.grab_focus() {
+                    if let Some(to) = vertical_slot {
+                        key_hop.replace(Some(ManagerVerticalHop {
+                            from: slot,
+                            to,
+                            reverse_up: matches!(pressed, Key::Down | Key::KP_Down),
+                        }));
+                    }
                     return glib::Propagation::Stop;
                 }
             }
-            // Escape/Home remain under the existing modal/window router.
+            // Escape/Home and unhandled keys stay with the modal/window.
             glib::Propagation::Proceed
         });
         target.add_controller(key);
@@ -1661,6 +1711,55 @@ mod source_form_tests {
     }
 }
 #[cfg(test)]
+mod c1_vertical_reversibility_tests {
+    use super::*;
+
+    #[test]
+    fn disabled_edge_fallbacks_are_immediately_reversible() {
+        use gtk::gdk::Key;
+        let mut checked = 0;
+        for count in [1_usize, 3] {
+            for position in 0..count {
+                let mut enabled = [true; 8];
+                enabled[6] = position > 0;
+                enabled[7] = position + 1 < count;
+                for origin in 0..4 {
+                    let dest = nearest_manager_slot(origin + 4, 4, 8, |i| enabled[i])
+                        .expect("lower action exists");
+                    let hop = ManagerVerticalHop {
+                        from: origin,
+                        to: dest,
+                        reverse_up: true,
+                    };
+                    assert_eq!(hop.return_slot(dest, Key::Up), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::KP_Up), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::Down), None);
+                    assert_eq!(hop.return_slot(origin, Key::Up), None);
+                    checked += 1;
+                }
+                for origin in 4..8 {
+                    if !enabled[origin] {
+                        continue;
+                    }
+                    let dest = nearest_manager_slot(origin - 4, 0, 4, |i| enabled[i])
+                        .expect("upper action exists");
+                    let hop = ManagerVerticalHop {
+                        from: origin,
+                        to: dest,
+                        reverse_up: false,
+                    };
+                    assert_eq!(hop.return_slot(dest, Key::Down), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::KP_Down), Some(origin));
+                    assert_eq!(hop.return_slot(dest, Key::Up), None);
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 28, "all one-/three-source enabled vertical edges");
+    }
+}
+
+#[cfg(test)]
 mod c1_mapped_native_diagnostic {
     use super::*;
     use crate::{application::TvApplication, streams::view::TvStreamsView};
@@ -1727,6 +1826,16 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     #[test]
     #[ignore = "native XTest mapped synthetic manager; diagnostic only"]
     fn c1_actual_remote_back_trace() {
+        run_mapped_manager(640, 480);
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped synthetic manager, TV viewport; diagnostic only"]
+    fn c1_actual_remote_back_trace_tv() {
+        run_mapped_manager(1280, 800);
+    }
+
+    fn run_mapped_manager(width: i32, height: i32) {
         adw::init().expect("display");
         let resource =
             gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
@@ -1735,7 +1844,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         app.register(None::<&gio::Cancellable>)
             .expect("application startup");
         let win = crate::window::TvWindow::new(&app);
-        win.set_default_size(640, 480);
+        win.set_default_size(width, height);
         win.present();
         spin();
         let view = find_view(win.upcast_ref()).expect("stream view");
@@ -1772,6 +1881,11 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 buttons[i - 1].clone().upcast()
             }
         });
+        // A single source must not expose either movement edge. These
+        // disabled controls make the ordinary nearest-neighbour rule lose
+        // the upper action when Down is immediately reversed by Up.
+        buttons[5].set_sensitive(false); // Move Up
+        buttons[6].set_sensitive(false); // Move Down
         bind_manager_navigation(&view, &list, &row, &actions, "fixture-source", 0);
         dialog.present(Some(&win));
         spin();
@@ -1779,15 +1893,56 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         inject("Return");
         assert!(
             enabled.has_focus(),
-            "row OK portal must focus Switch without toggling"
+            "row OK portal focuses Switch without toggling"
+        );
+        assert!(
+            !enabled.is_active(),
+            "fixture Switch starts OFF and OK must not toggle it"
+        );
+        inject("Right");
+        inject("Right");
+        assert!(buttons[1].has_focus(), "Right reaches Defaults");
+        inject("Down");
+        assert!(
+            buttons[4].has_focus(),
+            "Defaults falls back to enabled Delete"
+        );
+        inject("Up");
+        assert!(
+            buttons[1].has_focus(),
+            "Up reverses to the same Defaults action"
+        );
+        inject("Right");
+        assert!(buttons[2].has_focus(), "Right reaches Rename");
+        inject("Down");
+        assert!(
+            buttons[4].has_focus(),
+            "Rename falls back to enabled Delete"
+        );
+        inject("Up");
+        assert!(
+            buttons[2].has_focus(),
+            "Up reverses to the same Rename action"
         );
         inject("XF86Back");
         assert!(
             row.has_focus(),
-            "native XF86Back from switch returns to owning source row"
+            "physical Back returns to the same source row"
         );
         assert!(dialog.is_visible(), "first Back keeps manager open");
         inject("XF86Back");
-        assert!(!row.has_focus(), "second Back on row dismisses manager");
+        // adw::Dialog leaves GTK's visible flag set after it is closed; the
+        // meaningful dismissal oracle is whether it remains *mapped*.
+        // The prior one-row test checked only focus loss (too weak), while a
+        // visible-flag assertion incorrectly REDs a genuinely closed dialog.
+        assert!(
+            !dialog.is_mapped(),
+            "second physical Back must unmap the source manager"
+        );
+        assert!(
+            dialog.parent().is_none(),
+            "dismissed source manager must be removed from the dialog host"
+        );
+        assert!(!row.has_focus(), "dismissal must release the source row");
     }
 }
