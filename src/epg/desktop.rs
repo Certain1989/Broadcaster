@@ -198,10 +198,116 @@ fn edit_field(label: &str, initial: &str, body: &gtk::Box) -> gtk::Entry {
     );
     line.append(&keyboard);
     body.append(&line);
+    vertical_link(&entry, &keyboard);
     entry
 }
 
-async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
+fn vertical_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(above: &A, below: &B) {
+    let down = gtk::EventControllerKey::new();
+    down.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let next = below.clone().upcast::<gtk::Widget>().downgrade();
+    down.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && next
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    above.add_controller(down);
+    let up = gtk::EventControllerKey::new();
+    up.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let previous = above.clone().upcast::<gtk::Widget>().downgrade();
+    up.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && previous
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    below.add_controller(up);
+}
+
+// Horizontal buttons let a D-pad operate the interval without stealing the
+// Up/Down form-navigation controls from the SpinButton.
+fn horizontal_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(left: &A, right: &B) {
+    let to_right = gtk::EventControllerKey::new();
+    to_right.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let next = right.clone().upcast::<gtk::Widget>().downgrade();
+    to_right.connect_key_pressed(move |_, key, _, mods| {
+        if crate::keyboard::unmodified_remote(mods)
+            && matches!(key, gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right)
+            && next
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    left.add_controller(to_right);
+    let to_left = gtk::EventControllerKey::new();
+    to_left.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let previous = left.clone().upcast::<gtk::Widget>().downgrade();
+    to_left.connect_key_pressed(move |_, key, _, mods| {
+        if crate::keyboard::unmodified_remote(mods)
+            && matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left)
+            && previous
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+        {
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    right.add_controller(to_left);
+}
+
+// Fixed action footer remains reachable on 640x480; editable controls scroll.
+fn form_with_footer(dialog: &adw::Dialog, body: &gtk::Box, actions: &[gtk::Button]) {
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let scroll = guide_list_scroller();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_child(Some(body));
+    shell.append(&scroll);
+    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    footer.set_margin_start(16);
+    footer.set_margin_end(16);
+    footer.set_margin_bottom(12);
+    for action in actions {
+        body.remove(action);
+        footer.append(action);
+    }
+    shell.append(&footer);
+    dialog.set_child(Some(&shell));
+}
+
+fn focus_when_present<T: IsA<gtk::Widget>>(dialog: &adw::Dialog, target: &T) {
+    let weak = target.clone().upcast::<gtk::Widget>().downgrade();
+    dialog.connect_map(move |_| {
+        let weak = weak.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(widget) = weak.upgrade() {
+                if widget.is_mapped() && widget.is_sensitive() {
+                    widget.grab_focus();
+                }
+            }
+        });
+    });
+}
+
+async fn save_default_guide(source_id: Option<String>) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
             let mut conn = crate::streams::storage::Storage::new()
@@ -210,7 +316,7 @@ async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
             super::bindings::set_shared_guide(
                 &mut conn,
                 super::bindings::ConfirmedGuideSelection::after_user_confirmation(),
-                Some(&source_id),
+                source_id.as_deref(),
             )
             .map_err(|_| "Programme guide changed or is unavailable")
         })
@@ -222,7 +328,7 @@ async fn save_default_guide(source_id: String) -> Result<(), &'static str> {
 
 fn confirm_shared_guide(
     parent: &gtk::Window,
-    source: GuideSource,
+    source: Option<GuideSource>,
     manager: GlobalGuideManager,
     list: gtk::Box,
     status: gtk::Label,
@@ -230,17 +336,27 @@ fn confirm_shared_guide(
     let dialog = adw::Dialog::new();
     title(&dialog, &gettext("Confirm Shared Programme Guide"));
     let body = box_column();
-    let caption = gtk::Label::new(Some(&format!(
-        "{}\n{}",
-        source.name,
-        gettext("Use this one guide as the application-wide default for all IPTV playlists without an explicit exception? Per-stream overrides still take priority.")
-    )));
+    let caption = gtk::Label::new(Some(&match &source {
+        Some(source) => format!(
+            "{}\n{}",
+            source.name,
+            gettext("Use this guide as the application-wide default? Per-stream overrides still take priority.")
+        ),
+        None => gettext("Clear the shared default guide? Explicit per-stream overrides remain unchanged."),
+    }));
     caption.set_wrap(true);
     body.append(&caption);
     let failure = status_label();
     body.append(&failure);
     let cancel = command(&gettext("Cancel"), &body);
-    let confirm = command(&gettext("Confirm Shared Default"), &body);
+    let confirm = command(
+        &if source.is_some() {
+            gettext("Confirm Shared Default")
+        } else {
+            gettext("Clear Shared Default")
+        },
+        &body,
+    );
     confirm.add_css_class("suggested-action");
     cancel.connect_clicked(glib::clone!(
         #[weak]
@@ -249,7 +365,10 @@ fn confirm_shared_guide(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    focus_when_present(&dialog, &cancel);
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
     confirm.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -259,10 +378,11 @@ fn confirm_shared_guide(
         confirm,
         move |_| {
             confirm.set_sensitive(false);
-            let id = source.id.clone();
+            let id = source.as_ref().map(|source| source.id.clone());
+            let selected = id.clone();
             let manager = manager.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -272,11 +392,20 @@ fn confirm_shared_guide(
                 #[weak]
                 confirm,
                 async move {
-                    match save_default_guide(id).await {
+                    let result = save_default_guide(id).await;
+                    let Some((list, status, parent)) = live_guide_context(&list, &status, &parent)
+                    else {
+                        return;
+                    };
+                    match result {
                         Ok(()) => {
                             dialog.close();
-                            status.set_text(&gettext("Shared guide selected"));
-                            repaint(manager, list, status, parent);
+                            status.set_text(&gettext("Shared guide selection updated"));
+                            if let Some(id) = selected {
+                                repaint_focused(manager, list, status, parent, Some((id, 0)));
+                            } else {
+                                repaint(manager, list, status, parent);
+                            }
                         }
                         Err(reason) => {
                             failure.set_text(&gettext(reason));
@@ -291,10 +420,44 @@ fn confirm_shared_guide(
     dialog.present(Some(parent));
 }
 
+// Cross-modal callbacks use weak widget references. Closed guide managers
+// must be collectible even while asynchronous service calls settle.
+fn live_guide_context(
+    list: &glib::WeakRef<gtk::Box>,
+    status: &glib::WeakRef<gtk::Label>,
+    parent: &glib::WeakRef<gtk::Window>,
+) -> Option<(gtk::Box, gtk::Label, gtk::Window)> {
+    let list = list.upgrade()?;
+    if !list.is_mapped() {
+        return None;
+    }
+    let status = status.upgrade()?;
+    let parent = parent.upgrade()?;
+    if !parent.is_mapped() {
+        return None;
+    }
+    Some((list, status, parent))
+}
+
+// Every repaint destroys its previous row widgets. Restore by saved guide UUID.
 fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, parent: gtk::Window) {
+    repaint_focused(service, list, status, parent, None);
+}
+fn repaint_focused(
+    service: GlobalGuideManager,
+    list: gtk::Box,
+    status: gtk::Label,
+    parent: gtk::Window,
+    focus: Option<(String, usize)>,
+) {
     spawn(async move {
         match service.list().await {
             Ok(sources) => {
+                // First list may arrive before the dialog is mapped; root
+                // attachment is the lifecycle guard during startup.
+                if list.root().is_none() {
+                    return;
+                }
                 while let Some(child) = list.first_child() {
                     list.remove(&child);
                 }
@@ -303,6 +466,7 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         "No programme guides configured",
                     ))));
                 }
+                let mut focus_rows: Vec<(String, [gtk::Button; 4])> = Vec::new();
                 for source in sources {
                     let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
                     row.set_margin_top(8);
@@ -333,6 +497,9 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                     }
                     if source.last_success_at.is_some() {
                         if let Some(counts) = service.truncation_counts(&source.id).await {
+                            if list.root().is_none() {
+                                return;
+                            }
                             for message in truncation_messages(&counts) {
                                 let warning = gtk::Label::new(Some(&message));
                                 warning.set_wrap(true);
@@ -342,36 +509,57 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                             }
                         }
                     }
-                    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                    let set_default = command(&gettext("Use as Shared Default"), &buttons);
-                    let refresh = command(&gettext("Refresh"), &buttons);
+                    // Two action lines fit narrow TV viewports without clipping.
+                    let first = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let set_default = command(&gettext("Use as Shared Default"), &first);
+                    let refresh = command(&gettext("Refresh"), &first);
                     refresh.set_sensitive(source.enabled);
-                    let configure = command(&gettext("Edit"), &buttons);
-                    let remove = command(&gettext("Remove"), &buttons);
-                    row.append(&buttons);
+                    let second = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    let configure = command(&gettext("Edit"), &second);
+                    let remove = command(&gettext("Remove"), &second);
+                    row.append(&first);
+                    row.append(&second);
                     list.append(&row);
+                    focus_rows.push((
+                        source.id.clone(),
+                        [
+                            set_default.clone(),
+                            refresh.clone(),
+                            configure.clone(),
+                            remove.clone(),
+                        ],
+                    ));
                     let default_service = service.clone();
-                    let default_list = list.clone();
-                    let default_status = status.clone();
-                    let default_parent = parent.clone();
+                    let default_list = list.downgrade();
+                    let default_status = status.downgrade();
+                    let default_parent = parent.downgrade();
                     let default_source = source.clone();
                     set_default.connect_clicked(move |_| {
-                        confirm_shared_guide(
-                            &default_parent,
-                            default_source.clone(),
-                            default_service.clone(),
-                            default_list.clone(),
-                            default_status.clone(),
-                        );
+                        if let Some((list, status, parent)) =
+                            live_guide_context(&default_list, &default_status, &default_parent)
+                        {
+                            confirm_shared_guide(
+                                &parent,
+                                Some(default_source.clone()),
+                                default_service.clone(),
+                                list,
+                                status,
+                            );
+                        }
                     });
                     let id = source.id.clone();
                     let fetch_service = service.clone();
-                    let fetch_list = list.clone();
-                    let fetch_status = status.clone();
-                    let fetch_parent = parent.clone();
+                    let fetch_list = list.downgrade();
+                    let fetch_status = status.downgrade();
+                    let fetch_parent = parent.downgrade();
                     refresh.connect_clicked(move |button| {
+                        let Some((_, status, _)) =
+                            live_guide_context(&fetch_list, &fetch_status, &fetch_parent)
+                        else {
+                            return;
+                        };
                         button.set_sensitive(false);
-                        fetch_status.set_text(&gettext("Refreshing guide…"));
+                        status.set_text(&gettext("Refreshing guide…"));
                         let manager = fetch_service.clone();
                         let id = id.clone();
                         let listing = fetch_list.clone();
@@ -379,6 +567,11 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                         let window = fetch_parent.clone();
                         spawn(async move {
                             let result = manager.refresh(id.clone()).await;
+                            let Some((list, status, parent)) =
+                                live_guide_context(&listing, &state, &window)
+                            else {
+                                return;
+                            };
                             let message = match result {
                                 Ok(()) => {
                                     let details = manager
@@ -402,45 +595,167 @@ fn repaint(service: GlobalGuideManager, list: gtk::Box, status: gtk::Label, pare
                                     guide_problem(&error.to_string()),
                                 ),
                             };
-                            state.set_text(&message);
-                            repaint(manager, listing, state, window);
+                            if !list.is_mapped() {
+                                return;
+                            }
+                            status.set_text(&message);
+                            repaint_focused(manager, list, status, parent, Some((id, 1)));
                         });
                     });
                     let edit_service = service.clone();
-                    let edit_list = list.clone();
-                    let edit_status = status.clone();
-                    let edit_parent = parent.clone();
+                    let edit_list = list.downgrade();
+                    let edit_status = status.downgrade();
+                    let edit_parent = parent.downgrade();
                     let settings_source = source.clone();
                     configure.connect_clicked(move |_| {
-                        show_source_settings(
-                            &edit_parent,
-                            edit_service.clone(),
-                            settings_source.clone(),
-                            edit_list.clone(),
-                            edit_status.clone(),
-                        );
+                        if let Some((list, status, parent)) =
+                            live_guide_context(&edit_list, &edit_status, &edit_parent)
+                        {
+                            show_source_settings(
+                                &parent,
+                                edit_service.clone(),
+                                settings_source.clone(),
+                                list,
+                                status,
+                            );
+                        }
                     });
                     let delete_service = service.clone();
-                    let delete_list = list.clone();
-                    let delete_status = status.clone();
-                    let delete_parent = parent.clone();
+                    let delete_list = list.downgrade();
+                    let delete_status = status.downgrade();
+                    let delete_parent = parent.downgrade();
                     let deleted_source = source.clone();
                     remove.connect_clicked(move |_| {
-                        show_delete_confirmation(
-                            &delete_parent,
-                            delete_service.clone(),
-                            deleted_source.clone(),
-                            delete_list.clone(),
-                            delete_status.clone(),
-                        );
+                        if let Some((list, status, parent)) =
+                            live_guide_context(&delete_list, &delete_status, &delete_parent)
+                        {
+                            show_delete_confirmation(
+                                &parent,
+                                delete_service.clone(),
+                                deleted_source.clone(),
+                                list,
+                                status,
+                            );
+                        }
+                    });
+                }
+                wire_guide_rows(&focus_rows);
+                if let Some((id, slot)) = focus {
+                    let target = focus_rows
+                        .iter()
+                        .find(|row| row.0 == id)
+                        .or_else(|| focus_rows.first())
+                        .and_then(|row| {
+                            row.1
+                                .get(slot)
+                                .filter(|button| button.is_sensitive())
+                                .or_else(|| row.1.iter().find(|button| button.is_sensitive()))
+                        })
+                        .cloned();
+                    let weak_list = list.downgrade();
+                    glib::idle_add_local_once(move || {
+                        if weak_list.upgrade().is_some_and(|list| list.is_mapped()) {
+                            if let Some(button) = target {
+                                if button.is_mapped() && button.is_sensitive() {
+                                    button.grab_focus();
+                                }
+                            }
+                        }
                     });
                 }
             }
-            Err(error) => {
-                status.set_text(&format!("{}: {error}", gettext("Unable to load guides")))
-            }
+            Err(_) => status.set_text(&gettext("Unable to load programme guides")),
         }
     });
+}
+
+// Guide action graph: 0 Shared Default, 1 Refresh, 2 Edit, 3 Remove.
+// Disabled Refresh is SKIPPED, not treated as a consumed no-op. The sole
+// inter-guide connection is Remove -> next Shared Default, with inverse Up.
+// At the first/last boundary arrows remain inside the manager.
+fn guide_neighbor(
+    row_count: usize,
+    row: usize,
+    slot: usize,
+    enabled: bool,
+    key: gtk::gdk::Key,
+) -> Option<(usize, usize)> {
+    use gtk::gdk::Key;
+    match key {
+        Key::Left | Key::KP_Left => match slot {
+            1 => Some((row, 0)),
+            3 => Some((row, 2)),
+            2 if !enabled => Some((row, 0)),
+            _ => None,
+        },
+        Key::Right | Key::KP_Right => match slot {
+            0 => Some((row, if enabled { 1 } else { 2 })),
+            2 => Some((row, 3)),
+            _ => None,
+        },
+        Key::Up | Key::KP_Up => match slot {
+            2 => Some((row, 0)),
+            3 => Some((row, if enabled { 1 } else { 0 })),
+            0 if row > 0 => Some((row - 1, 3)),
+            _ => None,
+        },
+        Key::Down | Key::KP_Down => match slot {
+            0 => Some((row, 2)),
+            1 => Some((row, 3)),
+            2 => Some((row, 3)),
+            3 if row + 1 < row_count => Some((row + 1, 0)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
+    // All destinations are weak. No button handler can own the list or peer
+    // buttons through a captured strong reference.
+    let targets: Vec<[glib::WeakRef<gtk::Button>; 4]> = rows
+        .iter()
+        .map(|(_, actions)| std::array::from_fn(|slot| actions[slot].downgrade()))
+        .collect();
+    for (index, (_, controls)) in rows.iter().enumerate() {
+        for slot in 0..4 {
+            let targets = targets.clone();
+            let enabled = controls[1].is_sensitive();
+            let key = gtk::EventControllerKey::new();
+            key.set_propagation_phase(gtk::PropagationPhase::Capture);
+            key.connect_key_pressed(move |_, pressed, _, modifiers| {
+                if !crate::keyboard::unmodified_remote(modifiers) {
+                    return glib::Propagation::Proceed;
+                }
+                if !matches!(
+                    pressed,
+                    gtk::gdk::Key::Left
+                        | gtk::gdk::Key::KP_Left
+                        | gtk::gdk::Key::Right
+                        | gtk::gdk::Key::KP_Right
+                        | gtk::gdk::Key::Up
+                        | gtk::gdk::Key::KP_Up
+                        | gtk::gdk::Key::Down
+                        | gtk::gdk::Key::KP_Down
+                ) {
+                    return glib::Propagation::Proceed;
+                }
+                if let Some((row, action)) =
+                    guide_neighbor(targets.len(), index, slot, enabled, pressed)
+                {
+                    if let Some(destination) = targets[row][action].upgrade() {
+                        if destination.is_mapped() && destination.is_sensitive() {
+                            destination.grab_focus();
+                        }
+                    }
+                }
+                // Boundary and removed-widget edges never escape to a hidden
+                // ancestor/page; Back remains the explicit modal escape.
+                glib::Propagation::Stop
+            });
+            controls[slot].add_controller(key);
+        }
+    }
 }
 
 fn show_source_settings(
@@ -465,11 +780,41 @@ fn show_source_settings(
     body.append(&gtk::Label::new(Some(&gettext(
         "Refresh when the guide is this old (hours, 6–168)",
     ))));
-    body.append(&hours);
+    let interval_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    hours.set_hexpand(true);
+    let less = gtk::Button::with_label(&gettext("− 1 hour"));
+    let more = gtk::Button::with_label(&gettext("+ 1 hour"));
+    let down_hours = hours.downgrade();
+    less.connect_clicked(move |_| {
+        if let Some(hours) = down_hours.upgrade() {
+            hours.set_value((hours.value() - 1.0).max(6.0));
+        }
+    });
+    let up_hours = hours.downgrade();
+    more.connect_clicked(move |_| {
+        if let Some(hours) = up_hours.upgrade() {
+            hours.set_value((hours.value() + 1.0).min(168.0));
+        }
+    });
+    horizontal_link(&hours, &less);
+    horizontal_link(&less, &more);
+    interval_controls.append(&hours);
+    interval_controls.append(&less);
+    interval_controls.append(&more);
+    body.append(&interval_controls);
     let message = status_label();
     body.append(&message);
     let save = command(&gettext("Apply"), &body);
     let close = command(&gettext("Close"), &body);
+    if let Some(keyboard) = name.next_sibling() {
+        vertical_link(&keyboard, &enabled);
+    }
+    vertical_link(&enabled, &automatic);
+    vertical_link(&automatic, &hours);
+    vertical_link(&hours, &save);
+    vertical_link(&save, &close);
+    form_with_footer(&dialog, &body, &[save.clone(), close.clone()]);
+    focus_when_present(&dialog, &name);
     close.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -477,7 +822,13 @@ fn show_source_settings(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
+    let weak_name = name.downgrade();
+    let weak_enabled = enabled.downgrade();
+    let weak_automatic = automatic.downgrade();
+    let weak_hours = hours.downgrade();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -486,13 +837,26 @@ fn show_source_settings(
         move |_| {
             let manager = service.clone();
             let id = source.id.clone();
+            let id_for_focus = id.clone();
             let revision = source.updated_at;
+            let Some(name) = weak_name.upgrade() else {
+                return;
+            };
+            let Some(enabled) = weak_enabled.upgrade() else {
+                return;
+            };
+            let Some(automatic) = weak_automatic.upgrade() else {
+                return;
+            };
+            let Some(hours) = weak_hours.upgrade() else {
+                return;
+            };
             let new_name = name.text().to_string();
             let new_enabled = enabled.is_active();
             let auto = automatic.is_active();
             let interval = hours.value_as_int() as i64 * 3600;
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -503,10 +867,23 @@ fn show_source_settings(
                     let result = manager
                         .update_settings(id, revision, new_name, new_enabled, auto, interval)
                         .await;
+                    if !dialog.is_mapped() {
+                        return;
+                    }
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent)
+                            {
+                                repaint_focused(
+                                    manager,
+                                    list,
+                                    status,
+                                    parent,
+                                    Some((id_for_focus, 2)),
+                                );
+                            }
                         }
                         Err(error) => message.set_text(&guide_problem(&error.to_string())),
                     }
@@ -514,7 +891,6 @@ fn show_source_settings(
             ));
         }
     ));
-    dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
@@ -549,7 +925,10 @@ fn show_delete_confirmation(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    focus_when_present(&dialog, &cancel);
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
     remove.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -558,8 +937,9 @@ fn show_delete_confirmation(
         move |_| {
             let manager = service.clone();
             let approval = approval.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let removed_id = source.id.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             spawn(glib::clone!(
                 #[weak]
@@ -568,10 +948,23 @@ fn show_delete_confirmation(
                 error,
                 async move {
                     let result = manager.delete_confirmed(approval).await;
+                    if !dialog.is_mapped() {
+                        return;
+                    }
                     match result {
                         Ok(()) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent)
+                            {
+                                repaint_focused(
+                                    manager,
+                                    list,
+                                    status,
+                                    parent,
+                                    Some((removed_id, 0)),
+                                );
+                            }
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
@@ -617,6 +1010,21 @@ fn show_add(
     body.append(&error);
     let save = command(&gettext("Save Guide"), &body);
     let cancel = command(&gettext("Cancel"), &body);
+    if let Some(keyboard) = name.next_sibling() {
+        if let Some(url) = url.as_ref() {
+            vertical_link(&keyboard, url);
+            if let Some(url_keyboard) = url.next_sibling() {
+                vertical_link(&url_keyboard, &lan);
+            }
+            vertical_link(&lan, &automatic);
+        } else {
+            vertical_link(&keyboard, &automatic);
+        }
+    }
+    vertical_link(&automatic, &save);
+    vertical_link(&save, &cancel);
+    form_with_footer(&dialog, &body, &[save.clone(), cancel.clone()]);
+    focus_when_present(&dialog, &name);
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
@@ -624,24 +1032,41 @@ fn show_add(
             dialog.close();
         }
     ));
-    let callback_parent = parent.clone();
+    let callback_parent = parent.downgrade();
+    let callback_list = list.downgrade();
+    let callback_status = status.downgrade();
+    let weak_name = name.downgrade();
+    let weak_url = url.as_ref().map(|entry| entry.downgrade());
+    let weak_lan = lan.downgrade();
+    let weak_automatic = automatic.downgrade();
     save.connect_clicked(glib::clone!(
         #[weak]
         dialog,
         #[weak]
         error,
         move |_| {
+            let Some(name) = weak_name.upgrade() else {
+                return;
+            };
+            let Some(automatic) = weak_automatic.upgrade() else {
+                return;
+            };
             let origin = if let Some(ref file) = local {
                 SourceOrigin::selected_local_file(file.uri().to_string())
             } else {
+                let Some(lan) = weak_lan.upgrade() else {
+                    return;
+                };
                 let chosen = if lan.is_active() {
                     TrustScope::ExplicitLan
                 } else {
                     TrustScope::Public
                 };
                 SourceOrigin::entered_remote_url(
-                    url.as_ref()
-                        .map(|field| field.text().to_string())
+                    weak_url
+                        .as_ref()
+                        .and_then(|entry| entry.upgrade())
+                        .map(|entry| entry.text().to_string())
                         .unwrap_or_default(),
                     chosen,
                 )
@@ -653,8 +1078,8 @@ fn show_add(
                 return;
             };
             let manager = service.clone();
-            let list = list.clone();
-            let status = status.clone();
+            let list = callback_list.clone();
+            let status = callback_status.clone();
             let parent = callback_parent.clone();
             let name = name.text().to_string();
             let update_automatically = automatic.is_active();
@@ -664,13 +1089,20 @@ fn show_add(
                 #[weak]
                 error,
                 async move {
-                    match manager
+                    let result = manager
                         .add_with_schedule(name, origin, update_automatically)
-                        .await
-                    {
-                        Ok(_) => {
+                        .await;
+                    if !dialog.is_mapped() {
+                        return;
+                    }
+                    match result {
+                        Ok(added) => {
                             dialog.close();
-                            repaint(manager, list, status, parent);
+                            if let Some((list, status, parent)) =
+                                live_guide_context(&list, &status, &parent)
+                            {
+                                repaint_focused(manager, list, status, parent, Some((added.id, 2)));
+                            }
                         }
                         Err(reason) => error.set_text(&guide_problem(&reason.to_string())),
                     }
@@ -678,7 +1110,6 @@ fn show_add(
             ));
         }
     ));
-    dialog.set_child(Some(&body));
     dialog.present(Some(parent));
 }
 
@@ -713,14 +1144,30 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let add_remote = command(&gettext("Add URL"), &actions);
         let add_local = command(&gettext("Choose Local XMLTV"), &actions);
-        let close = command(&gettext("Close"), &actions);
         body.append(&actions);
+        let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let clear_default = command(&gettext("Clear Shared Default"), &more_actions);
+        let close = command(&gettext("Close"), &more_actions);
+        body.append(&more_actions);
         let scroller = guide_list_scroller();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
         scroller.set_child(Some(&list));
         body.append(&scroller);
         let status = status_label();
         body.append(&status);
+        dialog.add_css_class("broadcaster-guide-manager");
+        focus_when_present(&dialog, &add_remote);
+        let clear_win = parent.downgrade();
+        let clear_manager = service.clone();
+        let clear_list = list.downgrade();
+        let clear_status = status.downgrade();
+        clear_default.connect_clicked(move |_| {
+            if let Some((list, status, parent)) =
+                live_guide_context(&clear_list, &clear_status, &clear_win)
+            {
+                confirm_shared_guide(&parent, None, clear_manager.clone(), list, status);
+            }
+        });
         close.connect_clicked(glib::clone!(
             #[weak]
             dialog,
@@ -729,23 +1176,32 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
             }
         ));
         let svc = service.clone();
-        let ls = list.clone();
-        let st = status.clone();
-        let win = parent.clone();
-        add_remote
-            .connect_clicked(move |_| show_add(&win, svc.clone(), ls.clone(), st.clone(), None));
+        let ls = list.downgrade();
+        let st = status.downgrade();
+        let win = parent.downgrade();
+        add_remote.connect_clicked(move |_| {
+            if let Some((list, status, parent)) = live_guide_context(&ls, &st, &win) {
+                show_add(&parent, svc.clone(), list, status, None);
+            }
+        });
         let svc = service.clone();
-        let ls = list.clone();
-        let st = status.clone();
-        let win = parent.clone();
+        let ls = list.downgrade();
+        let st = status.downgrade();
+        let win = parent.downgrade();
         add_local.connect_clicked(move |_| {
             let svc = svc.clone();
             let ls = ls.clone();
             let st = st.clone();
             let win = win.clone();
             spawn(async move {
-                if let Ok(file) = gtk::FileDialog::new().open_future(Some(&win)).await {
-                    show_add(&win, svc, ls, st, Some(file));
+                let Some((_, _, parent)) = live_guide_context(&ls, &st, &win) else {
+                    return;
+                };
+                let selection = gtk::FileDialog::new().open_future(Some(&parent)).await;
+                if let Ok(file) = selection {
+                    if let Some((list, status, parent)) = live_guide_context(&ls, &st, &win) {
+                        show_add(&parent, svc, list, status, Some(file));
+                    }
                 }
             });
         });
@@ -759,6 +1215,20 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    #[test]
+    fn guide_graph_skips_disabled_and_keeps_first_last_boundaries() {
+        use gtk::gdk::Key;
+        assert_eq!(guide_neighbor(3, 1, 0, false, Key::Right), Some((1, 2)));
+        assert_eq!(guide_neighbor(3, 1, 2, false, Key::Left), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 1, 3, false, Key::Up), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 0, 3, true, Key::Down), Some((1, 0)));
+        assert_eq!(guide_neighbor(3, 1, 0, false, Key::Up), Some((0, 3)));
+        assert_eq!(guide_neighbor(3, 2, 3, true, Key::Down), None);
+        assert_eq!(guide_neighbor(3, 0, 0, true, Key::Up), None);
+        assert_eq!(guide_neighbor(3, 1, 0, true, Key::Right), Some((1, 1)));
+        assert_eq!(guide_neighbor(3, 1, 1, true, Key::Left), Some((1, 0)));
+    }
 
     // Opt-in: xvfb-run -a env GDK_BACKEND=x11 cargo test
     // --locked gtk_empty_guide_manager_directional_focus -- --ignored --test-threads=1
@@ -793,3 +1263,7 @@ mod focus_tests {
         window.close();
     }
 }
+
+#[cfg(test)]
+#[path = "desktop/c2_native_tests.rs"]
+mod c2_native_tests;
