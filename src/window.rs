@@ -1203,9 +1203,56 @@ mod playback_navigation_tests {
         );
         spin();
         eprintln!("E4 after animation: {}", streams.remote_action_test_state());
-        let buttons = streams
-            .remote_action_test_buttons()
-            .expect("expanded selected row must be bound");
+        // GtkListView may still retain an unbound/recycled ListItem with the
+        // same *position* as the selected row. Its detached buttons are
+        // correctly unmapped, but are not the actions rendered on screen.
+        // Inspect the actual mapped, expanded row instead of picking the first
+        // cached binding at position zero (HashMap iteration is unordered).
+        let list = TvWindow::find_descendant(streams.upcast_ref(), &|w| w.is::<gtk::ListView>())
+            .expect("mapped My Channels ListView");
+        let mut expanded_rows = Vec::new();
+        fn find_expanded_rows(node: &gtk::Widget, rows: &mut Vec<gtk::Revealer>) {
+            if let Some(revealer) = node.downcast_ref::<gtk::Revealer>() {
+                if revealer.reveals_child() && revealer.is_mapped() {
+                    rows.push(revealer.clone());
+                }
+            }
+            let mut child = node.first_child();
+            while let Some(widget) = child {
+                find_expanded_rows(&widget, rows);
+                child = widget.next_sibling();
+            }
+        }
+        find_expanded_rows(&list, &mut expanded_rows);
+        assert_eq!(
+            expanded_rows.len(),
+            1,
+            "exactly one on-screen selected row must be expanded"
+        );
+        let expanded = &expanded_rows[0];
+        let row = expanded.parent().expect("expanded row container");
+        assert!(
+            TvWindow::find_descendant(&row, &|w| {
+                w.downcast_ref::<gtk::Label>()
+                    .is_some_and(|label| label.label() == "First fabricated channel")
+            })
+            .is_some(),
+            "the expanded actions must belong to the selected fabricated channel"
+        );
+        let mut visible_buttons = Vec::new();
+        fn collect_buttons(node: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
+            if let Some(button) = node.downcast_ref::<gtk::Button>() {
+                buttons.push(button.clone());
+            }
+            let mut child = node.first_child();
+            while let Some(widget) = child {
+                collect_buttons(&widget, buttons);
+                child = widget.next_sibling();
+            }
+        }
+        collect_buttons(expanded.upcast_ref(), &mut visible_buttons);
+        assert_eq!(visible_buttons.len(), 3, "Play, Edit, Mapping must exist");
+        let buttons: [gtk::Button; 3] = visible_buttons.try_into().unwrap();
         let button_states: Vec<_> = buttons
             .iter()
             .map(|button| {

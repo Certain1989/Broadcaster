@@ -3,7 +3,7 @@
 
 //! Separate guarded transport for *user-approved* XMLTV sources.
 //! Deliberately does not accept IPTV playback headers or implicit playlist hints.
-use super::headroom;
+use super::{headroom, limits};
 use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
     header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, LOCATION},
@@ -505,10 +505,8 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
     Err(GuideFetchError::RedirectDenied)
 }
 
-// Separate compressed/plain bounds for streaming transport. Production reads must
-// never buffer a multi-gigabyte XMLTV payload in a Vec.
-const CANDIDATE_COMPRESSED: u64 = 256 * 1024 * 1024;
-const CANDIDATE_PLAIN: u64 = 2 * 1024 * 1024 * 1024;
+// Streaming transport uses the same bytes policy as the row parser; the
+// older 16 MiB Vec-based fetch_guide API is test/legacy-only, not refresh.
 
 /// The caller owns a private staging path and removes it on every outcome.
 /// Reuses the exact peer pinning, redirect and explicit-LAN consent rules.
@@ -526,7 +524,7 @@ pub async fn fetch_guide_spooled(
         biased;
         _ = cancellation.cancelled() => Err(GuideFetchError::Cancelled),
         r = tokio::time::timeout(
-            Duration::from_secs(90 * 60),
+            limits::IMPORT_DEADLINE,
             fetch_spooled_hops(url, scope, &SystemGuideResolver, &ReqwestGuideTransport, path),
         ) => r.map_err(|_| GuideFetchError::Timeout)?,
     }
@@ -578,11 +576,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             .get(CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
-        let preliminary_cap = if encoding == "gzip" {
-            CANDIDATE_COMPRESSED
-        } else {
-            CANDIDATE_PLAIN
-        };
+        let preliminary_cap = limits::spool_cap(encoding == "gzip");
         if declared.is_some_and(|n| n > preliminary_cap) {
             return Err(GuideFetchError::WireLimit);
         }
@@ -617,11 +611,7 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
             if header_bytes == 2 && header == [0x1f, 0x8b] {
                 gzip = true;
             }
-            let cap = if gzip {
-                CANDIDATE_COMPRESSED
-            } else {
-                CANDIDATE_PLAIN
-            };
+            let cap = limits::spool_cap(gzip);
             total = total
                 .checked_add(chunk.len() as u64)
                 .ok_or(GuideFetchError::WireLimit)?;

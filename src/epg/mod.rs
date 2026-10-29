@@ -6,12 +6,19 @@
 pub mod bindings;
 #[cfg(test)]
 mod bindings_tests;
+pub mod bulk;
+#[cfg(test)]
+mod bulk_tests;
 pub mod cache;
+pub mod candidates;
+#[cfg(test)]
+mod candidates_tests;
 #[cfg(test)]
 mod capacity_bench;
 pub mod desktop;
 mod headroom;
 pub mod ingest;
+mod limits;
 pub mod matching;
 #[cfg(test)]
 mod matching_tests;

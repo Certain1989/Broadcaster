@@ -71,6 +71,7 @@ matched AS (
           SELECT 1 FROM facets x WHERE x.channel_id=b.id AND x.facet='country' AND x.value=?8
         )))
     AND (?9=0 OR (?9=2 AND b.eff_region IS NULL) OR (?9=1 AND b.eff_region=?10))
+    AND (?13=0 OR EXISTS (SELECT 1 FROM iptv_channel_favourites f WHERE f.channel_id=b.id))
 )
 "#;
 fn selection(s: &FacetSelection) -> (i32, Option<&str>) {
@@ -137,8 +138,19 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
         .query_row(
             &count_sql,
             params![
-                search, source, group.0, group.1, language.0, language.1, country.0, country.1,
-                region.0, region.1,
+                search,
+                source,
+                group.0,
+                group.1,
+                language.0,
+                language.1,
+                country.0,
+                country.1,
+                region.0,
+                region.1,
+                rusqlite::types::Null,
+                rusqlite::types::Null,
+                q.favourites_only as i32,
             ],
             |r| r.get(0),
         )
@@ -149,8 +161,19 @@ fn query_ids(conn: &Connection, q: &ChannelQuery) -> StorageResult<(Vec<String>,
     let ids = stmt
         .query_map(
             params![
-                search, source, group.0, group.1, language.0, language.1, country.0, country.1,
-                region.0, region.1, q.limit, q.offset,
+                search,
+                source,
+                group.0,
+                group.1,
+                language.0,
+                language.1,
+                country.0,
+                country.1,
+                region.0,
+                region.1,
+                q.limit,
+                q.offset,
+                q.favourites_only as i32,
             ],
             |r| r.get::<_, String>(0),
         )
@@ -194,8 +217,19 @@ impl Storage {
             .query_row(
                 &sql,
                 params![
-                    search, source, group.0, group.1, language.0, language.1, country.0, country.1,
-                    region.0, region.1, id,
+                    search,
+                    source,
+                    group.0,
+                    group.1,
+                    language.0,
+                    language.1,
+                    country.0,
+                    country.1,
+                    region.0,
+                    region.1,
+                    id,
+                    rusqlite::types::Null,
+                    query.favourites_only as i32,
                 ],
                 |row| row.get(0),
             )
@@ -258,8 +292,19 @@ impl Storage {
         let choices = stmt
             .query_map(
                 params![
-                    search, source, group.0, group.1, language.0, language.1, country.0, country.1,
-                    region.0, region.1
+                    search,
+                    source,
+                    group.0,
+                    group.1,
+                    language.0,
+                    language.1,
+                    country.0,
+                    country.1,
+                    region.0,
+                    region.1,
+                    rusqlite::types::Null,
+                    rusqlite::types::Null,
+                    q.favourites_only as i32
                 ],
                 |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?)),
             )

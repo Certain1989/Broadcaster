@@ -16,9 +16,10 @@ use rusqlite::{
 };
 
 pub const APPLICATION_ID: i64 = 0x42524354;
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 pub const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 pub const MIGRATION_002: &str = include_str!("migrations/002_epg.sql");
+pub const MIGRATION_003: &str = include_str!("migrations/003_favourites.sql");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -134,7 +135,71 @@ impl Storage {
         }
         validate_v1_schema_shape(&conn)?;
         validate_v2_schema_shape(&conn)?;
+        validate_v3_schema_shape(&conn)?;
         Ok(conn)
+    }
+
+    /// Remembered global My Channels viewing mode, independent of transient filters.
+    pub fn favourites_only(&self) -> StorageResult<bool> {
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT favourites_only FROM iptv_view_preferences WHERE id=1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(map_sql)
+    }
+
+    pub fn set_favourites_only(&self, enabled: bool) -> StorageResult<()> {
+        let conn = self.connect()?;
+        if conn
+            .execute(
+                "UPDATE iptv_view_preferences SET favourites_only=?1 WHERE id=1",
+                [enabled],
+            )
+            .map_err(map_sql)?
+            != 1
+        {
+            return Err(StorageError::CorruptDatabase);
+        }
+        Ok(())
+    }
+
+    /// One SQLite transaction per channel star, with no cross-source inference.
+    pub fn toggle_favourite(&self, id: &str) -> StorageResult<bool> {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Err(StorageError::InvalidInput);
+        }
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sql)?;
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM iptv_channels WHERE id=?1 AND is_present=1)",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(map_sql)?;
+        if !exists {
+            return Err(StorageError::NotFound);
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM iptv_channel_favourites WHERE channel_id=?1",
+                [id],
+            )
+            .map_err(map_sql)?;
+        let starred = deleted == 0;
+        if starred {
+            tx.execute(
+                "INSERT INTO iptv_channel_favourites(channel_id) VALUES(?1)",
+                [id],
+            )
+            .map_err(map_sql)?;
+        }
+        tx.commit().map_err(map_sql)?;
+        Ok(starred)
     }
 
     pub fn list_sources(&self) -> StorageResult<Vec<Source>> {
@@ -409,7 +474,8 @@ impl Storage {
             "DELETE FROM iptv_channels WHERE is_present=0 AND missing_since <= ?1
                 AND NOT EXISTS (SELECT 1 FROM iptv_channel_overrides o WHERE o.channel_id=iptv_channels.id)
                 AND NOT EXISTS (SELECT 1 FROM iptv_channel_override_facets f WHERE f.channel_id=iptv_channels.id)
-                AND NOT EXISTS (SELECT 1 FROM epg_channel_overrides e WHERE e.iptv_channel_id=iptv_channels.id)",
+                AND NOT EXISTS (SELECT 1 FROM epg_channel_overrides e WHERE e.iptv_channel_id=iptv_channels.id)
+                AND NOT EXISTS (SELECT 1 FROM iptv_channel_favourites f WHERE f.channel_id=iptv_channels.id)",
             [now.saturating_sub(90 * 24 * 3600)],
         ).map_err(map_sql)
     }
@@ -497,23 +563,27 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
     let version: i64 = probe
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| StorageError::CorruptDatabase)?;
-    if id != APPLICATION_ID || !(version == 1 || version == SCHEMA_VERSION) {
+    if id != APPLICATION_ID || !(1..=SCHEMA_VERSION).contains(&version) {
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&probe)?;
-    if version == SCHEMA_VERSION {
+    if version >= 2 {
         validate_v2_schema_shape(&probe)?;
+    }
+    if version == SCHEMA_VERSION {
+        validate_v3_schema_shape(&probe)?;
     }
     validate_integrity(&probe)?;
     drop(probe);
-    if version == 1 {
-        // The original remains v1 on any failed migration. A durable, independent
+    if version < SCHEMA_VERSION {
+        // The original remains at its old version on any failed migration. A durable, independent
         // SQLite-consistent v1 recovery snapshot is required before the write.
-        upgrade_existing_v1(path)?;
+        upgrade_existing(path, version)?;
         let reopened = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|_| StorageError::StorageFailure)?;
         validate_v1_schema_shape(&reopened)?;
         validate_v2_schema_shape(&reopened)?;
+        validate_v3_schema_shape(&reopened)?;
         validate_integrity(&reopened)?;
         let version: i64 = reopened
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -528,20 +598,37 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
 /// Upgrade a verified v1 database without replacing its inode or rewriting its
 /// published v1 migration. Preserve an independently reopenable recovery copy.
 /// This function must only run on a blocking worker, never the GTK thread.
-fn upgrade_existing_v1(path: &Path) -> StorageResult<()> {
-    upgrade_existing_v1_with(path, MIGRATION_002, false)
+fn upgrade_existing(path: &Path, from_version: i64) -> StorageResult<()> {
+    match from_version {
+        1 => {
+            // Both migrations share ONE transaction. A v3 failure rolls back to v1.
+            let second = MIGRATION_002
+                .trim_end()
+                .strip_suffix("COMMIT;")
+                .ok_or(StorageError::IncompatibleDatabase)?;
+            let third = MIGRATION_003
+                .split_once("BEGIN IMMEDIATE;")
+                .map(|(_, body)| body)
+                .ok_or(StorageError::IncompatibleDatabase)?;
+            upgrade_existing_with(path, 1, &format!("{second}\n{third}"), false)
+        }
+        2 => upgrade_existing_with(path, 2, MIGRATION_003, false),
+        _ => Err(StorageError::IncompatibleDatabase),
+    }
 }
 
-fn upgrade_existing_v1_with(
+fn upgrade_existing_with(
     path: &Path,
+    from_version: i64,
     migration_sql: &str,
     inject_backup_failure: bool,
 ) -> StorageResult<()> {
     let parent = path.parent().ok_or(StorageError::InvalidInput)?;
     let name = path.file_name().ok_or(StorageError::InvalidInput)?;
     let backup_path = parent.join(format!(
-        ".{}-v1-recovery-{}.sqlite3",
+        ".{}-v{}-recovery-{}.sqlite3",
         name.to_string_lossy(),
+        from_version,
         uuid::Uuid::new_v4()
     ));
     let mut opts = fs::OpenOptions::new();
@@ -577,10 +664,13 @@ fn upgrade_existing_v1_with(
         let version: i64 = dest
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(map_sql)?;
-        if application_id != APPLICATION_ID || version != 1 {
+        if application_id != APPLICATION_ID || version != from_version {
             return Err(StorageError::IncompatibleDatabase);
         }
         validate_v1_schema_shape(&dest)?;
+        if from_version == 2 {
+            validate_v2_schema_shape(&dest)?;
+        }
         validate_integrity(&dest)?;
         dest.close().map_err(|_| StorageError::StorageFailure)?;
         fs::File::open(&backup_path)
@@ -604,16 +694,20 @@ fn upgrade_existing_v1_with(
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(map_sql)?;
-    if id != APPLICATION_ID || version != 1 {
+    if id != APPLICATION_ID || version != from_version {
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&conn)?;
+    if from_version == 2 {
+        validate_v2_schema_shape(&conn)?;
+    }
     validate_integrity(&conn)?;
     conn.execute_batch(migration_sql).map_err(|_| {
         let _ = conn.execute_batch("ROLLBACK");
         StorageError::StorageFailure
     })?;
     validate_v2_schema_shape(&conn)?;
+    validate_v3_schema_shape(&conn)?;
     validate_integrity(&conn)?;
     // The recovery copy is intentionally retained, never silently deleted.
     // A failure after commit leaves the copy available for operator recovery.
@@ -704,7 +798,14 @@ fn initialize_new_with(
             })?;
         }
         validate_v1_schema_shape(&connection)?;
+        if initial_version <= 2 {
+            connection.execute_batch(MIGRATION_003).map_err(|_| {
+                let _ = connection.execute_batch("ROLLBACK");
+                StorageError::StorageFailure
+            })?;
+        }
         validate_v2_schema_shape(&connection)?;
+        validate_v3_schema_shape(&connection)?;
         validate_integrity(&connection)?;
         let id: i64 = connection
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -797,7 +898,9 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
         let mut stmt = conn
             .prepare(
                 "SELECT name FROM sqlite_master
-                 WHERE type=?1 AND name LIKE ?2 ORDER BY name",
+                 WHERE type=?1 AND name LIKE ?2
+                 AND name NOT IN ('iptv_channel_favourites','iptv_view_preferences')
+                 ORDER BY name",
             )
             .map_err(|_| StorageError::IncompatibleDatabase)?;
         let actual = stmt
@@ -814,6 +917,42 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
         }
     }
     validate_reference_schema(conn, TABLES, false)
+}
+
+fn validate_v3_schema_shape(conn: &Connection) -> StorageResult<()> {
+    const TABLES: &[&str] = &["iptv_channel_favourites", "iptv_view_preferences"];
+    for name in TABLES {
+        let present: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        if present != 1 {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_001).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_002).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_003).map_err(map_sql)?;
+    for name in TABLES {
+        if table_shape(conn, name)? != table_shape(&reference, name)? {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+    }
+    let present: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM iptv_view_preferences WHERE id=1 AND favourites_only IN (0,1)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(map_sql)?;
+    if present != 1 {
+        return Err(StorageError::CorruptDatabase);
+    }
+    Ok(())
 }
 
 fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
@@ -1488,6 +1627,13 @@ pub(crate) fn load_channel_detail(conn: &Connection, id: &str) -> StorageResult<
         logo_url,
         channel_number,
         has_user_overrides: overrides.has_values(),
+        is_favourite: conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM iptv_channel_favourites WHERE channel_id=?1)",
+                [id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(map_sql)?,
     };
     Ok(ChannelDetail {
         effective,
@@ -1769,7 +1915,7 @@ mod staged_database_tests {
 
         // Refuse before the recoverable backup is complete, without touching v1.
         assert_eq!(
-            upgrade_existing_v1_with(&path, MIGRATION_002, true),
+            upgrade_existing_with(&path, 1, MIGRATION_002, true),
             Err(StorageError::StorageFailure),
         );
         assert_eq!(fs::read(&path).unwrap(), original);
@@ -1781,7 +1927,7 @@ mod staged_database_tests {
             "INSERT INTO nonexistent_epg_failure_point VALUES(7);\nPRAGMA user_version = 2;",
         );
         assert_eq!(
-            upgrade_existing_v1_with(&path, &injected, false),
+            upgrade_existing_with(&path, 1, &injected, false),
             Err(StorageError::StorageFailure),
         );
         let reopened = Connection::open(&path).unwrap();

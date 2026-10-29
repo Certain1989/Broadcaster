@@ -800,6 +800,20 @@ impl StreamsService {
         self.db(move |s| s.query_channels(&query).map_err(Into::into))
             .await
     }
+    pub(crate) async fn favourites_only(&self) -> Result<bool, ServiceError> {
+        self.db(|store| store.favourites_only().map_err(Into::into))
+            .await
+    }
+    pub(crate) async fn set_favourites_only(&self, enabled: bool) -> Result<(), ServiceError> {
+        self.db(move |store| store.set_favourites_only(enabled).map_err(Into::into))
+            .await
+    }
+    pub(crate) async fn toggle_favourite(&self, id: &str) -> Result<bool, ServiceError> {
+        let id = id.to_string();
+        self.db(move |store| store.toggle_favourite(&id).map_err(Into::into))
+            .await
+    }
+
     pub(crate) async fn channel_position(
         &self,
         query: ChannelQuery,

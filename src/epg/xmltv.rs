@@ -3,6 +3,8 @@
 
 //! Portable, bounded XMLTV parsing. Input streams and trust decisions are
 //! supplied by separate platform/network/file adapters. XML never performs I/O.
+use super::limits;
+pub use super::limits::StreamingLimits;
 use super::model::{bounded_text, EpgError, GuideChannel, GuideSnapshot, LimitKind, Programme};
 use flate2::read::MultiGzDecoder;
 use quick_xml::{
@@ -716,26 +718,6 @@ pub fn parse_timestamp(raw: &str) -> Result<i64, EpgError> {
     Ok(epoch)
 }
 
-/// Bounded row-streaming limits, with independent input and expanded XML caps.
-#[derive(Clone, Copy, Debug)]
-pub struct StreamingLimits {
-    pub compressed_bytes: usize,
-    pub expanded_bytes: usize,
-    pub ratio: usize,
-    pub channels: usize,
-    pub programmes: usize,
-}
-impl StreamingLimits {
-    pub fn candidate() -> Self {
-        Self {
-            compressed_bytes: 256 * 1024 * 1024,
-            expanded_bytes: 2 * 1024 * 1024 * 1024,
-            ratio: 200,
-            channels: 100_000,
-            programmes: 5_000_000,
-        }
-    }
-}
 /// Parser counts validated rows; the SQLite importer reconciles deduplication
 /// before returning these statistics to the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -873,17 +855,18 @@ fn decode_xmltv_rows_internal<R: BufRead>(
     allow_c1_omission: bool,
 ) -> Result<StreamedRows, EpgError> {
     use std::{cell::Cell, rc::Rc};
+    let ceiling = limits::PRODUCTION;
     if !bounded_text(source_id, 64)
         || limits.compressed_bytes == 0
-        || limits.compressed_bytes > 256 * 1024 * 1024
+        || limits.compressed_bytes > ceiling.compressed_bytes
         || limits.expanded_bytes == 0
-        || limits.expanded_bytes > 2 * 1024 * 1024 * 1024
+        || limits.expanded_bytes > ceiling.expanded_bytes
         || limits.ratio == 0
-        || limits.ratio > 200
+        || limits.ratio > ceiling.ratio
         || limits.channels == 0
-        || limits.channels > 100_000
+        || limits.channels > ceiling.channels
         || limits.programmes == 0
-        || limits.programmes > 5_000_000
+        || limits.programmes > ceiling.programmes
     {
         return Err(EpgError::InvalidInput);
     }

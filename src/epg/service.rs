@@ -6,6 +6,7 @@
 use super::{
     headroom::ImportHeadroom,
     ingest::{import_xmltv_guarded, ImportChecks},
+    limits,
     model::{EpgError, LimitKind},
     network::{self, GuideCancellation, GuideFetchError},
     sources::{
@@ -595,7 +596,7 @@ async fn read_local_spooled(
     local_deadline(
         read_local_spooled_inner(uri, cancellation, target),
         cancellation,
-        90 * 60,
+        limits::IMPORT_DEADLINE_SECONDS,
     )
     .await
 }
@@ -655,11 +656,7 @@ async fn read_local_spooled_inner(
         total = total
             .checked_add(part.len() as u64)
             .ok_or(GuideServiceError::Capacity(LimitKind::Wire))?;
-        let limit = if gzip {
-            256_u64 * 1024 * 1024
-        } else {
-            2_u64 * 1024 * 1024 * 1024
-        };
+        let limit = limits::spool_cap(gzip);
         if total > limit {
             return Err(GuideServiceError::Capacity(LimitKind::Wire));
         }
