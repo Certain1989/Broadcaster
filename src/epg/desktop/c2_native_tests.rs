@@ -321,13 +321,19 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         assert!(hours.grab_focus());
         let before_hours = hours.value_as_int();
         inject("Right");
-        let decrease = named_button(editor.upcast_ref(), "− 1 hour").expect("accessible decrease action");
+        let decrease =
+            named_button(editor.upcast_ref(), "− 1 hour").expect("accessible decrease action");
         assert!(decrease.has_focus(), "Right enters interval adjustment");
         inject("Right");
-        let increase = named_button(editor.upcast_ref(), "+ 1 hour").expect("accessible increase action");
+        let increase =
+            named_button(editor.upcast_ref(), "+ 1 hour").expect("accessible increase action");
         assert!(increase.has_focus(), "Right reaches interval increase");
         inject("Return");
-        assert_eq!(hours.value_as_int(), before_hours + 1, "OK adjusts interval via D-pad");
+        assert_eq!(
+            hours.value_as_int(),
+            before_hours + 1,
+            "OK adjusts interval via D-pad"
+        );
         assert!(hours.grab_focus());
         inject("Down"); // reachable Apply, not scroller
         assert!(apply.has_focus(), "D-pad down from interval reaches Apply");
@@ -339,8 +345,11 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .get(&source_id)
             .unwrap();
         assert!(!persisted.enabled && persisted.name == "Updated Guide 1");
-        assert_eq!(persisted.refresh_interval_seconds, i64::from(before_hours + 1) * 3600,
-            "explicit D-pad interval change persisted with same source UUID");
+        assert_eq!(
+            persisted.refresh_interval_seconds,
+            i64::from(before_hours + 1) * 3600,
+            "explicit D-pad interval change persisted with same source UUID"
+        );
         assert!(
             !source_enabled(&fixture.storage, &source_id),
             "persisted after reopened SQLite"

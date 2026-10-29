@@ -246,7 +246,9 @@ fn horizontal_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(left: &A, right: &B
     to_right.connect_key_pressed(move |_, key, _, mods| {
         if crate::keyboard::unmodified_remote(mods)
             && matches!(key, gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right)
-            && next.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+            && next
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
         {
             glib::Propagation::Stop
         } else {
@@ -260,7 +262,9 @@ fn horizontal_link<A: IsA<gtk::Widget>, B: IsA<gtk::Widget>>(left: &A, right: &B
     to_left.connect_key_pressed(move |_, key, _, mods| {
         if crate::keyboard::unmodified_remote(mods)
             && matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left)
-            && previous.upgrade().is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
+            && previous
+                .upgrade()
+                .is_some_and(|w| w.is_mapped() && w.is_sensitive() && w.grab_focus())
         {
             glib::Propagation::Stop
         } else {
