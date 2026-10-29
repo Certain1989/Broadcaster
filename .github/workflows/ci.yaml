@@ -142,6 +142,20 @@ jobs:
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               cargo test --locked "$case_name" -- --ignored --test-threads=1
           done
+          # Each service-backed GTK case uses a fresh, private real SQLite
+          # database. Never touch the developer's XDG data directory.
+          for case_name in c4_native_favourites_640_480 c4_native_favourites_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 "$geometry"x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+            rm -rf "$data_dir"
+          done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             cargo test --locked c4_native_negative_oracle -- --ignored --test-threads=1 \
