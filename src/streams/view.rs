@@ -703,7 +703,7 @@ impl TvStreamsView {
             (slot.channel().is_some_and(|row| row.id == id)
                 && binding.ui.star.is_mapped()
                 && binding.ui.star.is_sensitive())
-                .then(|| binding.ui.star.clone())
+            .then(|| binding.ui.star.clone())
         });
         if star.is_some_and(|button| button.grab_focus()) {
             self.imp().pending_star_focus.replace(None);
@@ -1909,7 +1909,7 @@ impl TvStreamsView {
                 (slot.channel().is_some_and(|channel| channel.id == id)
                     && bound.ui.reveal.reveals_child()
                     && bound.ui.mapping.is_mapped())
-                    .then(|| bound.ui.mapping.clone())
+                .then(|| bound.ui.mapping.clone())
             });
             if action.is_some_and(|button| button.grab_focus()) {
                 return;
@@ -1927,7 +1927,6 @@ impl TvStreamsView {
         }
     }
 
-
     /// Only a currently bound, expanded, source-qualified row may receive
     /// Play focus. Virtualized positions alone are not durable identities.
     fn focus_row_play(&self, id: &str) -> bool {
@@ -1937,7 +1936,7 @@ impl TvStreamsView {
                 && binding.ui.reveal.reveals_child()
                 && binding.ui.play.is_mapped()
                 && binding.ui.play.is_sensitive())
-                .then(|| binding.ui.play.clone())
+            .then(|| binding.ui.play.clone())
         });
         play.is_some_and(|button| button.grab_focus())
     }
@@ -2284,14 +2283,14 @@ impl TvStreamsView {
         assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
     }
 
-    /// Two fabricated rows in the real virtualized ListView, with no provider
+    /// Three fabricated rows in the real virtualized ListView, with no provider
     /// fetch or media process. Window tests must present/map the parent first.
     #[cfg(test)]
-    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 2] {
+    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 3] {
         use super::model::ChannelEffective;
         use std::collections::BTreeSet;
 
-        let channels: Vec<_> = ["First fabricated channel", "Second fabricated channel"]
+        let channels: Vec<_> = ["First fabricated channel", "Middle fabricated channel", "Last fabricated channel"]
             .into_iter()
             .map(|name| ChannelEffective {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -2309,10 +2308,10 @@ impl TvStreamsView {
                 is_favourite: false,
             })
             .collect();
-        let ids = [channels[0].id.clone(), channels[1].id.clone()];
+        let ids = [channels[0].id.clone(), channels[1].id.clone(), channels[2].id.clone()];
         let imp = self.imp();
         let rows = imp.rows.get().expect("rows");
-        rows.reset(2);
+        rows.reset(3);
         rows.insert_page(0, channels);
         imp.results_stack.set_visible_child_name("results");
         imp.selection.get().expect("selection").set_selected(0);
@@ -2324,6 +2323,20 @@ impl TvStreamsView {
         imp.fake_mapping_calls.set(0);
         self.repaint_bound_rows();
         ids
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_select(&self, position: u32) {
+        let imp = self.imp();
+        assert!(imp.rows.get().is_some_and(|rows| rows.channel(position).is_some()));
+        self.collapse_expanded();
+        imp.selection.get().expect("selection").set_selected(position);
+        if let Some(id) = imp.rows.get().and_then(|rows| rows.channel(position)).map(|ch| ch.id) {
+            imp.selected_id.replace(Some(id));
+        }
+        imp.results_list
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        imp.results_list.grab_focus();
     }
 
     #[cfg(test)]
@@ -2410,9 +2423,9 @@ impl TvStreamsView {
     pub(crate) fn remote_action_test_rebind(&self) {
         let imp = self.imp();
         let rows = imp.rows.get().expect("rows");
-        let channels: Vec<_> = (0..2).filter_map(|n| rows.channel(n)).collect();
-        assert_eq!(channels.len(), 2);
-        rows.reset(2);
+        let channels: Vec<_> = (0..3).filter_map(|n| rows.channel(n)).collect();
+        assert_eq!(channels.len(), 3);
+        rows.reset(3);
         rows.insert_page(0, channels);
     }
 
@@ -2523,16 +2536,14 @@ impl TvStreamsView {
             (slot.channel().is_some_and(|row| row.id == channel.id)
                 && binding.ui.star.is_mapped()
                 && binding.ui.star.is_sensitive())
-                .then(|| binding.ui.star.clone())
+            .then(|| binding.ui.star.clone())
         });
         if let Some(star) = star.as_ref() {
             if focused == star.upcast_ref::<gtk::Widget>()
                 || focused.is_ancestor(star.upcast_ref::<gtk::Widget>())
             {
                 return match key {
-                    gtk::gdk::Key::Left | gtk::gdk::Key::Right => {
-                        imp.results_list.grab_focus()
-                    }
+                    gtk::gdk::Key::Left | gtk::gdk::Key::Right => imp.results_list.grab_focus(),
                     _ => false,
                 };
             }
