@@ -713,3 +713,97 @@ fn c1_native_manager_3_1280_800() {
 fn c1_native_negative_oracle() {
     run(1, 640, 480, true);
 }
+
+// R07 AS16: differentiate real remote Back, native Escape, and remote Home
+// across three fresh manager modal sessions, with no source mutation.
+fn r07_native_source_modal_semantics(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let fixture = Fixture::new(3);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("source-backed SQLite service");
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered app");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
+        .expect("real application stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("actual My Channels view");
+    view.c1_install_test_service(service);
+
+    // Back from the action moves to the owning source row; a second Back
+    // dismisses the dialog but leaves the original Streams page selected.
+    let (back_dialog, back_list) = open(&view, &win, 3);
+    let row = controls(&back_list, 1).expect("middle source");
+    assert!(row.row.grab_focus());
+    spin();
+    inject("Return");
+    assert!(row.enabled.has_focus(), "real middle source Switch");
+    inject("XF86Back");
+    r07_assert_source_row(&view, &win, &row.row, &fixture.ids[1], 1);
+    assert!(back_dialog.is_mapped(), "first Back cannot close manager");
+    inject("XF86Back");
+    until("second Back dismisses source manager", || {
+        !back_dialog.is_mapped()
+    });
+    assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+
+    // Escape is a GTK modal dismiss, not a global remote Home command.
+    let (escape_dialog, escape_list) = open(&view, &win, 3);
+    assert!(controls(&escape_list, 0).unwrap().row.grab_focus());
+    spin();
+    inject("Escape");
+    until("Escape dismisses only manager modal", || {
+        !escape_dialog.is_mapped()
+    });
+    assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+
+    // The actual remote Home key dismisses the modal and navigates to the
+    // home Mediathek page. Distinguish it from Back and Escape explicitly.
+    let (home_dialog, home_list) = open(&view, &win, 3);
+    assert!(controls(&home_list, 2).unwrap().row.grab_focus());
+    spin();
+    inject("XF86HomePage");
+    until("remote Home closes source modal", || {
+        !home_dialog.is_mapped()
+    });
+    assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
+    if negative {
+        assert_eq!(
+            stack.visible_child_name().as_deref(),
+            Some("streams"),
+            "R07_AS16_EXPECTED_NEGATIVE_ORACLE: Home must not behave like Back"
+        );
+        unreachable!("R07 AS16 deliberate wrong Home oracle unexpectedly survived");
+    }
+    assert!(fixture.ids.iter().all(|id| fixture.enabled(id)));
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 AS16 real source modal Back Escape Home 640x480"]
+fn r07_native_source_modal_640_480() {
+    r07_native_source_modal_semantics(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 AS16 real source modal Back Escape Home 1280x800"]
+fn r07_native_source_modal_1280_800() {
+    r07_native_source_modal_semantics(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 AS16 deliberately false Home equals Back oracle"]
+fn r07_native_source_modal_negative_home() {
+    r07_native_source_modal_semantics(640, 480, true);
+}

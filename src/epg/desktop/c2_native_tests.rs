@@ -836,6 +836,46 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     );
     assert!(manager.is_mapped());
     drop(reopened);
+
+    // R07 AG08: a real GTK Escape dismisses just the nested guide modal;
+    // remote Home closes the guide and selects the Mediathek home page.
+    // Keep real SQLite-backed source manager as the modal's origin.
+    assert!(guides.grab_focus(), "guide launcher after native Back");
+    inject("Return");
+    until("AG08 guide modal for Escape", || {
+        find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
+    });
+    let escape_guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+    assert!(named_button(escape_guide.upcast_ref(), "Close")
+        .expect("real guide Close")
+        .grab_focus());
+    inject("Escape");
+    until("AG08 Escape dismisses nested guide", || {
+        !escape_guide.is_mapped()
+    });
+    assert!(manager.is_mapped(), "Escape cannot dismiss source origin");
+    assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+
+    assert!(guides.grab_focus(), "guide launcher after Escape");
+    inject("Return");
+    until("AG08 guide modal for remote Home", || {
+        find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
+    });
+    let home_guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+    assert!(named_button(home_guide.upcast_ref(), "Close")
+        .expect("real guide Close")
+        .grab_focus());
+    inject("XF86HomePage");
+    until("AG08 Home dismisses active guide modal", || {
+        !home_guide.is_mapped()
+    });
+    assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
+    // The underlying source manager remains a separate modal and should not
+    // be mistaken for a closed picker, nor can a hidden guide action fire.
+    assert!(
+        manager.is_mapped(),
+        "nested Home must not destructively close source manager"
+    );
     win.destroy();
 }
 

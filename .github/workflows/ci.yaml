@@ -196,6 +196,38 @@ jobs:
           fi
           echo "R07 disabled source-manager edge rejected as expected"
 
+      - name: R07 batched Source Manager Back Escape Home and negative oracle
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_source_modal_640_480 r07_native_source_modal_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_source_modal_negative_home -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 wrong Home-vs-Back modal oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_AS16_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 wrong Home-vs-Back modal failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 AS16 deliberately false Home-vs-Back rejected"
+
       - name: R07 native Live and Mediathek search focus reversal
         run: |
           set -eu
