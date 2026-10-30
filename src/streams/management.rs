@@ -2462,6 +2462,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         None
     }
 
+    fn c4_picker_has_label(widget: &gtk::Widget, expected: &str) -> bool {
+        if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+            if label.text().contains(expected) {
+                return true;
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if c4_picker_has_label(&next, expected) {
+                return true;
+            }
+            child = next.next_sibling();
+        }
+        false
+    }
+
     /// Real selected-guide SQLite, async snapshot, GTK modal, XTest and
     /// transaction CAS. Never use an owner's playlist or non-disposable guide.
     fn c4_native_mapping_picker(width: i32, height: i32) {
@@ -3105,6 +3121,77 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 )
                 .unwrap();
             assert_eq!(retained, "one.001", "B05 unrelated mapping retained");
+        }
+
+        // B06 diagnostic: a disabled guide selected as playlist exception
+        // remains identifiable in the real picker, but must surface an
+        // explicit disabled warning rather than presenting it as healthy.
+        // This is evidence only: do not change the disabled-guide policy.
+        {
+            let mut db = store.connect().unwrap();
+            set_playlist_exception(
+                &mut db,
+                ConfirmedGuideSelection::after_user_confirmation(),
+                &playlist_id,
+                Some(&other_guide),
+                1236,
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE epg_sources SET enabled=0 WHERE id=?1",
+                [&other_guide],
+            )
+            .unwrap();
+        }
+        inject("Return");
+        wait(
+            &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+            "B06 disabled selected playlist guide picker",
+        );
+        let disabled = editor::c4_test_picker_dialog().unwrap();
+        assert_eq!(
+            c4_picker_selected_guide(disabled.upcast_ref()).as_deref(),
+            Some("C4 other guide (disabled)"),
+            "B06 disabled playlist exception must remain visible and labelled",
+        );
+        assert!(
+            c4_picker_has_label(disabled.upcast_ref(), "Guide disabled"),
+            "B06 mapped picker must warn about disabled guide",
+        );
+        let cancel = c4_picker_button(disabled.upcast_ref(), "Cancel");
+        assert!(cancel.grab_focus());
+        inject("Return");
+        wait(&|| editor::c4_test_picker_dialog().is_none(), "B06 Cancel");
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &ids[2],
+        );
+        {
+            let mut db = store.connect().unwrap();
+            let count: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                    [&ids[2]],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                count, 0,
+                "B06 disabled warning cannot silently write mapping"
+            );
+            db.execute(
+                "UPDATE epg_sources SET enabled=1 WHERE id=?1",
+                [&other_guide],
+            )
+            .unwrap();
+            set_playlist_exception(
+                &mut db,
+                ConfirmedGuideSelection::after_user_confirmation(),
+                &playlist_id,
+                None,
+                1237,
+            )
+            .unwrap();
         }
 
         // Suspend a completed background snapshot just before presentation,
