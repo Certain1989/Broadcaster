@@ -228,9 +228,9 @@ fn run_actual_three_category_switcher(width: i32, height: i32, negative: bool) {
             TvWindow::is_within(&focused, &switcher),
             "D07 {title}: native Up must enter actual page switcher"
         );
-        for _ in 0..index {
-            inject("Right", false);
-        }
+        // The switcher initially focuses its currently selected page, not
+        // the first tab. Move to the adjacent requested category physically.
+        inject(if index == 0 { "Left" } else { "Right" }, false);
         let focused = win.focused_widget().expect("D07 active switcher tab");
         assert!(focused.is_mapped() && TvWindow::is_within(&focused, &switcher));
         inject("Return", false);
