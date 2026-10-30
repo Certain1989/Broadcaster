@@ -2442,26 +2442,6 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         None
     }
 
-    // Read the selected guide from the actual mapped GTK DropDown, not a
-    // backend-only resolution or a fabricated view-model selector.
-    fn c4_picker_selected_guide(widget: &gtk::Widget) -> Option<String> {
-        if let Ok(picker) = widget.clone().downcast::<gtk::DropDown>() {
-            if let Some(selected) = picker.selected_item() {
-                if let Ok(item) = selected.downcast::<gtk::StringObject>() {
-                    return Some(item.string().to_string());
-                }
-            }
-        }
-        let mut child = widget.first_child();
-        while let Some(next) = child {
-            if let Some(selected) = c4_picker_selected_guide(&next) {
-                return Some(selected);
-            }
-            child = next.next_sibling();
-        }
-        None
-    }
-
     fn c4_picker_has_label(widget: &gtk::Widget, expected: &str) -> bool {
         if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
             if label.text().contains(expected) {
@@ -3087,10 +3067,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 "B05 real guide-precedence modal",
             );
             let picker = editor::c4_test_picker_dialog().unwrap();
-            assert_eq!(
-                c4_picker_selected_guide(picker.upcast_ref()).as_deref(),
-                Some(selected_name),
-                "B05 selected DropDown must reflect {tier}",
+            // The card action intentionally opens the compact D35 picker,
+            // which displays its effective guide as a read-only label.
+            // A DropDown exists in the separate full mapping editor only.
+            assert!(
+                c4_picker_has_label(
+                    picker.upcast_ref(),
+                    &format!("Selected programme guide: {selected_name}"),
+                ),
+                "B05 actual compact picker guide label for {tier}",
             );
             let cancel = c4_picker_button(picker.upcast_ref(), "Cancel");
             assert!(cancel.grab_focus());
@@ -3143,25 +3128,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             )
             .unwrap();
         }
+        // The real compact picker must refuse disabled / non-imported
+        // guides before presenting a modal; it reports a toast instead.
+        // Preserve the original source's real focused Mapping action.
         inject("Return");
-        wait(
-            &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
-            "B06 disabled selected playlist guide picker",
-        );
-        let disabled = editor::c4_test_picker_dialog().unwrap();
-        assert_eq!(
-            c4_picker_selected_guide(disabled.upcast_ref()).as_deref(),
-            Some("C4 other guide (disabled)"),
-            "B06 disabled playlist exception must remain visible and labelled",
-        );
+        let mut saw_warning = false;
+        for _ in 0..16 {
+            spin();
+            assert!(
+                editor::c4_test_picker_dialog().is_none(),
+                "B06 disabled guide must not open stale picker",
+            );
+            saw_warning |= c4_picker_has_label(win.upcast_ref(), "Selected guide is disabled");
+        }
         assert!(
-            c4_picker_has_label(disabled.upcast_ref(), "Guide disabled"),
-            "B06 mapped picker must warn about disabled guide",
+            saw_warning,
+            "B06 disabled-guide warning toast was never painted"
         );
-        let cancel = c4_picker_button(disabled.upcast_ref(), "Cancel");
-        assert!(cancel.grab_focus());
-        inject("Return");
-        wait(&|| editor::c4_test_picker_dialog().is_none(), "B06 Cancel");
         view.assert_remote_action_focus_owner(
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &ids[2],
@@ -3378,3 +3361,6 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 #[cfg(test)]
 #[path = "management/c1_native_service_tests.rs"]
 mod c1_native_service_tests;
+
+#[cfg(test)]
+mod r07_facets_tests;

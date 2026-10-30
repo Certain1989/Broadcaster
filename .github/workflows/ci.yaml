@@ -472,7 +472,8 @@ jobs:
           # database. Never touch the developer's XDG data directory.
           for case_name in \
             c4_native_favourites_640_480 c4_native_favourites_1280_800 \
-            c4_native_mapping_640_480 c4_native_mapping_1280_800; do
+            c4_native_mapping_640_480 c4_native_mapping_1280_800 \
+            r07_native_facets_640_480 r07_native_facets_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -498,6 +499,23 @@ jobs:
             exit 1
           fi
           echo "C4 deliberately incorrect Play-entry expectation rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_facets_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 foreign source focus oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_FACETS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 facet negative oracle failed for unrelated reason" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "R07 source-qualified facet focus negative oracle rejected"
 
       - name: Exercise external-player D-Bus discovery on an isolated session bus
         run: dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
