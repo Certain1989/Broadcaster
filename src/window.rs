@@ -816,7 +816,10 @@ impl TvWindow {
                 .as_ref()
                 .is_some_and(|bar| Self::is_within(&focused, bar))
             {
-                return search.as_ref().is_some_and(|entry| entry.grab_focus());
+                return search
+                    .as_ref()
+                    .filter(|entry| entry.is_mapped() && entry.is_sensitive())
+                    .is_none_or(|entry| entry.grab_focus());
             }
         }
         false

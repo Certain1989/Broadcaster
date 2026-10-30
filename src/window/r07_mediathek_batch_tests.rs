@@ -202,6 +202,13 @@ fn run_actual_three_category_switcher(width: i32, height: i32, negative: bool) {
     win.set_default_size(width, height);
     win.present();
     settle();
+    // The required D07 gate covers spinner→loaded as well as loaded page
+    // switching, so the previous timing-dependent hidden-focus assertion
+    // cannot silently pass only when the external Live feed happens to load.
+    check_switcher_loading_boundary(&win);
+    // Return to the starting page for the independent three-tab route.
+    win.imp().stack.set_visible_child_name("mediathek");
+    settle();
 
     let med = &win.imp().mediathek_view;
     let search = med.toolbar_focus_targets()[0].clone();
@@ -288,6 +295,88 @@ fn r07_native_category_switcher_1280_800() {
 #[ignore = "R07 D07 intentionally wrong category after physical switch"]
 fn r07_native_category_switcher_negative_page() {
     run_actual_three_category_switcher(640, 480, true);
+}
+
+// Bounded native spinner→populated transition. Both the separate loading
+// test and the required three-category CI gate call this same physical route.
+fn check_switcher_loading_boundary(win: &TvWindow) {
+    let med_search = win.imp().mediathek_view.toolbar_focus_targets()[0].clone();
+    assert!(med_search.grab_focus(), "D07 loading starts on mapped Mediathek Search");
+    settle();
+    inject("Up", true);
+    let switcher = TvWindow::find_descendant(win.upcast_ref(), &|w| {
+        (w.is::<adw::ViewSwitcher>() || w.is::<adw::ViewSwitcherBar>()) && w.is_mapped()
+    })
+    .expect("mapped responsive view switcher");
+    assert!(
+        TvWindow::is_within(&win.focused_widget().unwrap(), &switcher),
+        "D07 loading route reaches actual switcher"
+    );
+    inject("Left", false);
+    inject("Return", false);
+    assert_eq!(win.imp().stack.visible_child_name().as_deref(), Some("live"));
+    let live_search = win.imp().live_view.toolbar_focus_targets()[0].clone();
+    assert!(
+        !live_search.is_mapped(),
+        "D07 spinner fixture must not silently become a populated Live page"
+    );
+    inject("Down", false);
+    let owner = win.focused_widget().expect("D07 focus during loading");
+    assert!(
+        owner.is_mapped() && !TvWindow::is_within(&owner, &live_search),
+        "D07 loading must keep focus visible, not assign hidden Live GtkText: {}",
+        owner.type_().name()
+    );
+    assert!(
+        TvWindow::is_within(&owner, &switcher),
+        "D07 loading Down remains inside mapped page switcher"
+    );
+    // Complete the real widget's offline load, without a network request.
+    win.imp().live_view.show_toolbar_for_test();
+    win.imp().live_view.install_r07_native_channel_rows();
+    settle();
+    assert!(live_search.is_mapped(), "Live Search now visibly ready");
+    inject("Down", false);
+    let owner = win.focused_widget().expect("D07 focus after loading");
+    assert!(
+        owner.is_mapped() && TvWindow::is_within(&owner, &live_search),
+        "D07 second physical Down reaches mapped Live Search"
+    );
+    // Page boundary remains reversible after the loading→populated transition.
+    inject("Up", false);
+    let owner = win.focused_widget().expect("D07 inverse after load");
+    assert!(
+        owner.is_mapped() && TvWindow::is_within(&owner, &switcher),
+        "D07 Up returns to responsive switcher after real load"
+    );
+}
+
+fn run_switcher_loading_boundary(width: i32, height: i32) {
+    adw::init().expect("native GTK X11");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered native application");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    check_switcher_loading_boundary(&win);
+    win.destroy();
+}
+
+#[test]
+#[ignore = "D07 native Live spinner-to-ready focus boundary, compact"]
+fn r07_native_category_loading_640_480() {
+    run_switcher_loading_boundary(640, 480);
+}
+
+#[test]
+#[ignore = "D07 native Live spinner-to-ready focus boundary, TV"]
+fn r07_native_category_loading_1280_800() {
+    run_switcher_loading_boundary(1280, 800);
 }
 
 // E04: complete physical first/middle/last Mediathek card route, with native
