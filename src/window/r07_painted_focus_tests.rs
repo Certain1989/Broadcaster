@@ -267,3 +267,115 @@ fn r07_native_painted_focus_1280_800() {
 fn r07_native_painted_focus_negative_pixels() {
     r07_native_painted_focus(640, 480, true);
 }
+// R07 G03: compare real framebuffer focus paint on the actual source-card
+// actions, not merely their GTK focus classes. Reuse G01's reversible
+// test-only CSS suppression and bounded screenshot oracle.
+fn r07_native_painted_cards(width: i32, height: i32) {
+    adw::init().expect("native display");
+    let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+        .expect("real Broadcaster resources");
+    gio::resources_register(&resource);
+    let css = gtk::CssProvider::new();
+    css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().expect("R07 painted display"),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>).expect("real app register");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    let mut deltas = Vec::new();
+
+    win.imp().stack.set_visible_child_name("live");
+    let live = &win.imp().live_view;
+    live.show_toolbar_for_test();
+    live.install_r07_native_channel_rows();
+    settle();
+    assert!(live.toolbar_focus_targets()[0].grab_focus());
+    settle();
+    inject("Down", true);
+    let live_list = TvWindow::find_descendant(live.upcast_ref(), &|w| w.is::<gtk::ListBox>())
+        .and_then(|w| w.downcast::<gtk::ListBox>().ok())
+        .expect("real Live card ListBox");
+    assert!(live_list.row_at_index(0).unwrap().has_focus());
+    inject("Return", false);
+    let play = win.focused_widget().expect("actual Live Play");
+    assert_eq!(play.downcast_ref::<gtk::Button>().and_then(|b| b.action_name()).as_deref(),
+        Some("card.play"));
+    deltas.push(("Live Play", r07_painted_probe(&win, &play, "live:card.Play")));
+    inject("Left", false);
+
+    win.imp().stack.set_visible_child_name("mediathek");
+    let med = &win.imp().mediathek_view;
+    med.r07_install_offline_result_cards();
+    settle();
+    assert!(med.toolbar_focus_targets()[0].grab_focus());
+    settle();
+    for _ in 0..10 {
+        if med.r07_result_row(0).has_focus() { break; }
+        inject("Down", false);
+    }
+    assert!(med.r07_result_row(0).has_focus());
+    inject("Return", false);
+    let row = med.r07_result_row(0);
+    let targets = [
+        ("Mediathek Play", TvWindow::find_descendant(row.upcast_ref(), &|w| w.is::<adw::SplitButton>()).unwrap()),
+        ("Mediathek Copy", TvWindow::find_descendant(row.upcast_ref(), &|w| w.is::<gtk::MenuButton>()).unwrap()),
+        ("Mediathek Download", TvWindow::find_descendant(row.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| b.action_name().as_deref() == Some("card.download"))
+        }).unwrap()),
+        ("Mediathek Website", TvWindow::find_descendant(row.upcast_ref(), &|w| {
+            w.downcast_ref::<gtk::Button>().is_some_and(|b| b.action_name().as_deref() == Some("card.open-website"))
+        }).unwrap()),
+    ];
+    for (label, target) in targets {
+        for _ in 0..7 {
+            if win.focused_widget().is_some_and(|w| TvWindow::is_within(&w, &target)) { break; }
+            inject("Right", false);
+        }
+        let focused = win.focused_widget().expect("Mediathek action owner");
+        assert!(TvWindow::is_within(&focused, &target), "G03 physically reach {label}");
+        deltas.push((label, r07_painted_probe(&win, &focused, label)));
+    }
+    inject("XF86Back", false);
+
+    win.imp().stack.set_visible_child_name("streams");
+    let streams = &win.imp().streams_view;
+    let ids = streams.install_remote_action_test_rows();
+    settle();
+    assert!(streams.toolbar_focus_targets()[0].grab_focus());
+    settle();
+    for _ in 0..16 {
+        if win.focused_widget().is_some_and(|w| streams.contains_results_focus(&w)) { break; }
+        inject("Down", false);
+    }
+    assert_eq!(streams.remote_action_test_selected_id().as_deref(), Some(ids[0].as_str()));
+    inject("Left", false);
+    let star = streams.remote_action_test_row_star(&ids[0]).expect("mapped real source-card Star");
+    assert!(star.has_focus());
+    deltas.push(("My Channels Star", r07_painted_probe(&win, star.upcast_ref(), "streams:star")));
+    inject("Right", false);
+    inject("Return", false);
+    for label in ["Play", "Edit Metadata", "Programme mapping"] {
+        let focused = win.focused_widget().expect("My Channels focused native card action");
+        assert_eq!(focused.downcast_ref::<gtk::Button>().and_then(|b| b.label()).as_deref(), Some(label));
+        streams.assert_remote_action_focus_owner(&focused, &ids[0]);
+        deltas.push((label, r07_painted_probe(&win, &focused, &format!("streams:{label}"))));
+        if label != "Programme mapping" { inject("Down", false); }
+    }
+    assert!(deltas.iter().all(|(_, pixels)| *pixels >= 15),
+        "R07_G03_MISSING_PAINTED_CARD: {deltas:?}");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 G03 physical card actions and painted pixel contrast 640x480"]
+fn r07_native_painted_cards_640_480() { r07_native_painted_cards(640, 480); }
+
+#[test]
+#[ignore = "R07 G03 physical card actions and painted pixel contrast 1280x800"]
+fn r07_native_painted_cards_1280_800() { r07_native_painted_cards(1280, 800); }
