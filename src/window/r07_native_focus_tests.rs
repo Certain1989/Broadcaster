@@ -83,10 +83,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
     win.imp().stack.set_visible_child_name(page);
     if page == "live" {
         win.imp().live_view.show_toolbar_for_test();
-        assert!(
-            win.imp().live_view.focus_first_channel_for_test(),
-            "real mapped Live row fixture"
-        );
+        win.imp().live_view.install_r07_native_channel_rows();
     }
     settle();
 
@@ -121,6 +118,21 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
             .expect("actual mapped Live ListBox");
         let first = list.row_at_index(0).expect("real first Live row");
         focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
+        for index in 1..3 {
+            inject("Down", false);
+            let next = list.row_at_index(index).expect("native mapped Live row");
+            assert_eq!(
+                win.imp().live_view.r07_native_channel_id(index),
+                Some(format!("r07-live-{index}")),
+                "R07 must focus the correctly identified real Live channel card"
+            );
+            focused_inside(&win, next.upcast_ref(), "Live real next row");
+        }
+        for index in (0..2).rev() {
+            inject("Up", false);
+            let previous = list.row_at_index(index).expect("real previous Live row");
+            focused_inside(&win, previous.upcast_ref(), "Live real previous row");
+        }
     } else {
         assert!(
             targets
