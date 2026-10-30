@@ -436,6 +436,20 @@ jobs:
             exit 1
           fi
           echo "C2 deliberately incorrect focus expectation rejected"
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked c2_native_negative_origin_focus -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 AG08 wrong origin owner unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_AG08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 AG08 negative origin test failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 AG08 deliberately wrong guide return owner rejected"
 
       - name: C4 physical XTest card, star and mapping action routes
         run: |
