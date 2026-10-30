@@ -2097,7 +2097,20 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &first_id,
         );
+        // R07 E08: these are the three actual source-qualified SQLite card
+        // actions, reached physically without triggering player, editor or
+        // mapping writes. Keep the persisted-favourite journey below intact.
+        for label in ["Edit Metadata", "Programme mapping"] {
+            inject("Down");
+            let focused = c4_focused_button(&win).expect("R07 real SQLite action focus");
+            assert_eq!(focused.label().as_deref(), Some(label));
+            assert!(focused.is_mapped() && focused.is_sensitive());
+            view.assert_remote_action_focus_owner(focused.upcast_ref(), &first_id);
+        }
+        assert_eq!(view.remote_action_test_counts(), (0, 0, 0));
         inject("Left");
+        let row_owner = gtk::prelude::GtkWindowExt::focus(&win).expect("R07 row return");
+        view.assert_remote_action_focus_owner(&row_owner, &first_id);
         inject("XF86Back");
         inject("Left");
         assert_eq!(

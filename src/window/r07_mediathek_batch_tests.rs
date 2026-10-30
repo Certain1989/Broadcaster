@@ -184,3 +184,108 @@ fn r07_native_page_home_back_640_480() {
 fn r07_native_page_home_back_1280_800() {
     run_home_back_across_pages(1280, 800);
 }
+
+// D07: enter the *actual* responsive title/bottom ViewSwitcher from Search
+// using XTest Up, activate all three real page buttons with XTest Return,
+// and return from each switcher to the page Search with XTest Down.
+// The disconnected My Channels result list is not manufactured here: this
+// covers the category transition, not the whole 91-ID D07 clause.
+fn run_actual_three_category_switcher(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered real application");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+
+    let med = &win.imp().mediathek_view;
+    let search = med.toolbar_focus_targets()[0].clone();
+    assert!(search.grab_focus(), "R07 D07 initial Search focus");
+    settle();
+    for (index, (page, title)) in [
+        ("live", "Live"),
+        ("mediathek", "Mediathek"),
+        ("streams", "My Channels"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = win.focused_widget().expect("D07 current Search focus");
+        assert!(start.is_mapped() && start.is_sensitive());
+        inject("Up", index == 0);
+        let switcher = TvWindow::find_descendant(win.upcast_ref(), &|widget| {
+            (widget.is::<adw::ViewSwitcher>() || widget.is::<adw::ViewSwitcherBar>())
+                && widget.is_mapped()
+        })
+        .expect("real responsive mapped ViewSwitcher");
+        let focused = win.focused_widget().expect("D07 focused real switcher button");
+        assert!(
+            TvWindow::is_within(&focused, &switcher),
+            "D07 {title}: native Up must enter actual page switcher"
+        );
+        for _ in 0..index {
+            inject("Right", false);
+        }
+        let focused = win.focused_widget().expect("D07 active switcher tab");
+        assert!(focused.is_mapped() && TvWindow::is_within(&focused, &switcher));
+        inject("Return", false);
+        if negative {
+            assert_eq!(
+                win.imp().stack.visible_child_name().as_deref(),
+                Some("wrong-category"),
+                "R07_D07_EXPECTED_NEGATIVE_ORACLE: physical selected page identity"
+            );
+            unreachable!("D07 wrong-page oracle unexpectedly survived");
+        }
+        assert_eq!(
+            win.imp().stack.visible_child_name().as_deref(),
+            Some(page),
+            "D07 {title}: native switcher Return must change selected page"
+        );
+        // The switcher remains focused until Down passes through the actual
+        // window boundary handler, restoring this page's Search.
+        inject("Down", false);
+        let expected = match page {
+            "live" => win.imp().live_view.toolbar_focus_targets()[0].clone(),
+            "mediathek" => win.imp().mediathek_view.toolbar_focus_targets()[0].clone(),
+            "streams" => win.imp().streams_view.toolbar_focus_targets()[0].clone(),
+            _ => unreachable!(),
+        };
+        let focused = win.focused_widget().expect("D07 restored page Search owner");
+        assert!(
+            TvWindow::is_within(&focused, &expected) && focused.is_mapped(),
+            "D07 {title}: Down must focus the newly selected page Search"
+        );
+    }
+    // Route back to Mediathek through physical Home, not a direct stack setter.
+    inject("XF86HomePage", false);
+    assert_eq!(
+        win.imp().stack.visible_child_name().as_deref(),
+        Some("mediathek"),
+        "D07 Home from My Channels must restore Mediathek"
+    );
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 D07 real responsive three-category native switcher, compact"]
+fn r07_native_category_switcher_640_480() {
+    run_actual_three_category_switcher(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 D07 real responsive three-category native switcher, TV"]
+fn r07_native_category_switcher_1280_800() {
+    run_actual_three_category_switcher(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 D07 intentionally wrong category after physical switch"]
+fn r07_native_category_switcher_negative_page() {
+    run_actual_three_category_switcher(640, 480, true);
+}
