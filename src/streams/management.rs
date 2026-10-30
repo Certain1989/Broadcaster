@@ -3149,6 +3149,47 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &ids[2],
         );
+        // B06/AG08 cross-component journey: real My Channels toolbar
+        // launches Sources, then its Programme Guides child; disabled XMLTV
+        // source remains listed rather than being mistaken for healthy.
+        // Closing the nested modal must restore the exact manager launcher.
+        let manage = view.c1_test_manage_button();
+        assert!(manage.grab_focus(), "B06 mapped source manager launcher");
+        inject("Return");
+        wait(
+            &|| c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").is_some(),
+            "B06 source manager opened from My Channels toolbar",
+        );
+        let manager = c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
+        let guides = c4_picker_button(manager.upcast_ref(), "Programme Guides");
+        assert!(guides.grab_focus(), "B06 real nested guide launcher");
+        inject("Return");
+        wait(
+            &|| c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").is_some(),
+            "B06 manager-to-guide modal",
+        );
+        let guide_manager = c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+        assert!(
+            c4_picker_has_label(guide_manager.upcast_ref(), "C4 other guide"),
+            "B06 disabled guide must remain identifiable in manager",
+        );
+        let guide_close = c4_picker_button(guide_manager.upcast_ref(), "Close");
+        assert!(guide_close.grab_focus());
+        inject("XF86Back");
+        wait(
+            &|| !guide_manager.is_mapped(),
+            "B06 close only child guide manager",
+        );
+        assert!(manager.is_mapped());
+        wait(
+            &|| guides.has_focus(),
+            "B06 nested focus returns to launcher",
+        );
+        let source_close = c4_picker_button(manager.upcast_ref(), "Close");
+        assert!(source_close.grab_focus());
+        inject("XF86Back");
+        wait(&|| !manager.is_mapped(), "B06 close source manager");
+        assert!(manage.is_mapped(), "B06 parent tab remains available");
         {
             let mut db = store.connect().unwrap();
             let count: i64 = db

@@ -255,6 +255,232 @@ fn run(width: i32, height: i32, wrong_id: bool) {
         5
     );
     assert_eq!(view.remote_action_test_visible_count(), 5);
+
+    // B07/D05: expand the source picker beyond the initial two-source
+    // boundary. Every new source owns a different SQLite UUID; physical
+    // keyboard selection must still resolve the final mapped source and
+    // return to the preceding source on the same focused dropdown.
+    let mut extra = Vec::new();
+    for index in 0..8_u32 {
+        let label = format!("R07 Extra Source {index:02}");
+        let id = fixture_source(
+            &store,
+            &label,
+            index + 2,
+            vec![row(index, &format!("Extra {index}"), "News", "de", "DE")],
+        );
+        extra.push(id);
+    }
+    view.source_mutated();
+    wait_count(13, "expanded source dropdown after SQLite source mutation");
+    assert_eq!(
+        source.model().expect("source popup model").n_items(),
+        11,
+        "B07 all + two base + eight extra source choices",
+    );
+    let last = filter_choice(source, "R07 Extra Source 07");
+    choose_by_keys(source, last);
+    wait_count(1, "B07 last source only");
+    assert_eq!(
+        view.remote_action_test_selected_id(),
+        store
+            .query_channels(&ChannelQuery {
+                source_id: Some(extra[7].clone()),
+                ..ChannelQuery::default()
+            })
+            .unwrap()
+            .items
+            .first()
+            .map(|row| row.id.clone()),
+        "B07 final source dropdown preserves identity",
+    );
+    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    wait_count(3, "B07 source return from last bounded item");
+    let owner =
+        gtk::prelude::GtkWindowExt::focus(&win).expect("B07 mapped focus after source return");
+    assert!(
+        source.has_focus() || owner.is_ancestor(source.upcast_ref::<gtk::Widget>()),
+        "B07 focus must remain inside source dropdown after async return: {}",
+        owner.type_().name()
+    );
+
+    // D05: actual mapped toolbar and footer directional reversibility.
+    // Spatial layout is responsive; do not assert an invented fixed adjacent
+    // control after a GTK source popover is dismissed.
+    inject("Escape");
+    assert!(source.grab_focus(), "D05 focused source toolbar origin");
+    inject("Down");
+    let down = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 Down must leave mapped owner");
+    assert!(
+        down.is_mapped() && targets.iter().any(|w| down == *w || down.is_ancestor(w)),
+        "D05 Down must remain in actual toolbar rather than escape the page"
+    );
+    inject("Up");
+    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 reverse focus");
+    assert!(
+        source.has_focus() || back.is_ancestor(source.upcast_ref::<gtk::Widget>()),
+        "D05 reverse Up must restore source portal"
+    );
+    assert!(clear.grab_focus(), "D05 populated footer entry");
+    inject("Down");
+    let footer = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 native footer Down owner");
+    assert!(
+        footer.is_mapped()
+            && (targets
+                .iter()
+                .any(|w| footer == *w || footer.is_ancestor(w))
+                || view.contains_results_focus(&footer)),
+        "D05 footer Down must stay on the current page's actions or results"
+    );
+    inject("Up");
+    let returned = gtk::prelude::GtkWindowExt::focus(&win)
+        .expect("D05 inverse from populated result or footer");
+    assert!(
+        returned.is_mapped()
+            && (targets
+                .iter()
+                .any(|w| returned == *w || returned.is_ancestor(w))
+                || view.contains_results_focus(&returned)),
+        "D05 Up may return to another mapped header action but not a detached row"
+    );
+
+    // F05: start a native text Search debounce while a source/group/country/
+    // language intersection is active, then mutate the real SQLite source
+    // catalogue and reload before the pending search commits. It must not
+    // resurrect a stale result or switch UUID across independent sources.
+    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    choose_by_keys(group, filter_choice(group, "News"));
+    choose_by_keys(country, filter_choice(country, "DE"));
+    choose_by_keys(language, filter_choice(language, "de"));
+    wait_count(1, "F05 four filters intersect before concurrent reload");
+    let sort = targets[3].clone().downcast::<gtk::DropDown>().unwrap();
+    choose_by_keys(&sort, 1);
+    assert_eq!(sort.selected(), 1, "F05 real sort changed by physical key");
+    wait_count(1, "F05 sorted filter intersection remains source-qualified");
+    let search = targets[0].clone().downcast::<gtk::SearchEntry>().unwrap();
+    assert!(search.grab_focus());
+    for key in ["g", "e", "r", "m", "a", "n"] {
+        inject(key);
+    }
+    assert_eq!(
+        search.text().as_str(),
+        "german",
+        "F05 real XTest search typing"
+    );
+    // Concurrent non-network change: third source appears while the 250ms
+    // Search debounce and prior async filter generations are pending.
+    let concurrent = fixture_source(
+        &store,
+        "R07 Concurrent Source",
+        20,
+        vec![row(0, "Concurrent German News", "News", "de", "DE")],
+    );
+    assert_ne!(concurrent, b);
+    view.source_mutated();
+    wait_count(1, "F05 post-source-change search generation");
+    assert_eq!(
+        view.remote_action_test_selected_id().as_deref(),
+        Some(target.as_str()),
+        "F05 latest search generation never takes concurrent source UUID",
+    );
+    let focused_search =
+        gtk::prelude::GtkWindowExt::focus(&win).expect("F05 async search focused widget");
+    assert!(
+        search.has_focus() || focused_search.is_ancestor(search.upcast_ref::<gtk::Widget>()),
+        "F05 SearchEntry or its GtkText child retains focus after rebind: {}",
+        focused_search.type_().name()
+    );
+    assert!(clear.grab_focus());
+    inject("space");
+    wait_count(14, "F05 clear after concurrent real catalogue reload");
+    assert!(search.text().is_empty(), "F05 clear removes debounced text");
+    for control in [source, group, language, country] {
+        assert_eq!(control.selected(), 0, "F05 no stale filter after clearing");
+    }
+    assert_eq!(sort.selected(), 0, "F05 Clear Filters resets sort too");
+    assert_eq!(
+        store
+            .query_channels(&ChannelQuery::default())
+            .unwrap()
+            .total,
+        14,
+        "F05 no channel deletions or cross-source writes",
+    );
+    // Repeat a filter after the rebind to detect stale GtkDropDown handles.
+    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    wait_count(3, "F05 source dropdown remains actionable after rebind");
+    choose_by_keys(source, 0);
+    wait_count(14, "F05 final inverse");
+
+    // B08/B09 adjacent OSK integration: these two dimensions are GTK
+    // DropDown selectors, not editable fields. Test their physical
+    // keyboard inverses above and verify that the actual shared My Channels
+    // search OSK does not mutate either selector when Back cancels.
+    crate::settings::TvSettings::get()
+        .set_boolean("osk-enabled", true)
+        .expect("isolated in-memory GSettings keyboard preference");
+    spin();
+    let keyboard = targets[11].clone().downcast::<gtk::Button>().unwrap();
+    assert!(
+        keyboard.is_mapped(),
+        "facet search keyboard launcher enabled"
+    );
+    assert!(keyboard.grab_focus());
+    inject("space");
+    fn osk_modal(root: &gtk::Widget) -> Option<adw::Dialog> {
+        if let Ok(dialog) = root.clone().downcast::<adw::Dialog>() {
+            if dialog.has_css_class("osk-production") && dialog.is_mapped() {
+                return Some(dialog);
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(next) = child {
+            if let Some(dialog) = osk_modal(&next) {
+                return Some(dialog);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+    let mut opened = false;
+    for _ in 0..15 {
+        spin();
+        if osk_modal(win.upcast_ref()).is_some() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(
+        opened,
+        "B08/B09 shared search OSK opens from mapped launcher"
+    );
+    inject("XF86Back");
+    for _ in 0..15 {
+        spin();
+        if osk_modal(win.upcast_ref()).is_none() {
+            break;
+        }
+    }
+    assert!(
+        osk_modal(win.upcast_ref()).is_none(),
+        "Back cancels nested OSK"
+    );
+    let restored_search =
+        gtk::prelude::GtkWindowExt::focus(&win).expect("OSK Back actual Search owner");
+    assert!(
+        search.has_focus() || restored_search.is_ancestor(search.upcast_ref::<gtk::Widget>()),
+        "OSK Back restores Search or its focused inner text widget: {}",
+        restored_search.type_().name(),
+    );
+    assert!(
+        search.text().is_empty(),
+        "OSK Cancel cannot commit stale search"
+    );
+    assert_eq!(country.selected(), 0, "OSK cannot change country choice");
+    assert_eq!(language.selected(), 0, "OSK cannot change language choice");
+    crate::settings::TvSettings::get()
+        .set_boolean("osk-enabled", false)
+        .unwrap();
     win.destroy();
 }
 
