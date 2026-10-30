@@ -315,6 +315,8 @@ fn check_switcher_loading_boundary(win: &TvWindow) {
     inject("Left", false);
     inject("Return", false);
     assert_eq!(win.imp().stack.visible_child_name().as_deref(), Some("live"));
+    win.imp().live_view.show_spinner_for_test();
+    settle();
     let live_search = win.imp().live_view.toolbar_focus_targets()[0].clone();
     assert!(
         !live_search.is_mapped(),

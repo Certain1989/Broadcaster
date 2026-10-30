@@ -284,6 +284,17 @@ impl TvLiveView {
         self.imp().stack.set_visible_child_name("channels");
     }
 
+    /// Hold the real spinner visible for native boundary testing even when
+    /// the host's asynchronous channel feed returns immediately. Invalidating
+    /// the pending load prevents a background completion from changing the
+    /// page while a physical D-pad assertion is being measured.
+    #[cfg(test)]
+    pub(crate) fn show_spinner_for_test(&self) {
+        let imp = self.imp();
+        imp.generation.set(imp.generation.get().saturating_add(1));
+        imp.stack.set_visible_child_name("spinner");
+    }
+
     /// Exercise the real channel-list-to-toolbar Up boundary without network
     /// requests. A synthetic row is only inserted when the offline fixture
     /// has not loaded a channel model.
