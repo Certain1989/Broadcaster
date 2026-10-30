@@ -143,7 +143,7 @@ fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize
     settle();
     let positive = box_.capture();
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(
+    provider.load_from_string(
         ".r07-suppress-paint, .r07-suppress-paint:focus, .r07-suppress-paint:focus-within, .r07-suppress-paint:focus-visible, .r07-suppress-paint * { outline: none; outline-width: 0; box-shadow: none; }",
     );
     let display = gtk::prelude::WidgetExt::display(widget);
