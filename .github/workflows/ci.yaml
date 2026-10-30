@@ -93,6 +93,38 @@ jobs:
           fi
           echo "Deliberately wrong focus expectation was correctly rejected"
 
+      - name: R07 connected source-row native traversal and identity control
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_source_rows_640_480 r07_native_source_rows_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            xvfb-run -a -s "-screen 0 "${geometry}"x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_negative_row_identity -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 source identity negative oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 negative oracle failed for the wrong reason" >&2
+            exit 1
+          fi
+          echo "R07 deliberately wrong persisted source identity was rejected"
+
       - name: C2 native guide manager 0/3 guides, OSK and SQLite
         run: |
           set -eu
