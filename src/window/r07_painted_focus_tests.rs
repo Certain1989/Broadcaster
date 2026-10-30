@@ -67,15 +67,18 @@ impl R07PaintBox {
         );
         assert!(right > left + 6 && bottom > top + 6, "real painted geometry");
         let margin = 8;
+        // Keep the capture in the X11 framebuffer even at compact edges.
+        let x = (left - margin).max(0);
+        let y = (top - margin).max(0);
         Self {
-            x: left - margin,
-            y: top - margin,
-            w: (right - left + margin * 2) as usize,
-            h: (bottom - top + margin * 2) as usize,
-            left: margin,
-            top: margin,
-            right: right - left + margin,
-            bottom: bottom - top + margin,
+            x,
+            y,
+            w: (right + margin - x) as usize,
+            h: (bottom + margin - y) as usize,
+            left: left - x,
+            top: top - y,
+            right: right - x,
+            bottom: bottom - y,
         }
     }
 
