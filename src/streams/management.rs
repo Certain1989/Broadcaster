@@ -2442,6 +2442,26 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         None
     }
 
+    // Read the selected guide from the actual mapped GTK DropDown, not a
+    // backend-only resolution or a fabricated view-model selector.
+    fn c4_picker_selected_guide(widget: &gtk::Widget) -> Option<String> {
+        if let Ok(picker) = widget.clone().downcast::<gtk::DropDown>() {
+            if let Some(selected) = picker.selected_item() {
+                if let Ok(item) = selected.downcast::<gtk::StringObject>() {
+                    return Some(item.string().to_string());
+                }
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(selected) = c4_picker_selected_guide(&next) {
+                return Some(selected);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+
     /// Real selected-guide SQLite, async snapshot, GTK modal, XTest and
     /// transaction CAS. Never use an owner's playlist or non-disposable guide.
     fn c4_native_mapping_picker(width: i32, height: i32) {
@@ -2979,6 +2999,113 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &ids[2],
         );
+
+        // B05: three real UI reopenings, with precedence determined by real
+        // SQLite row > playlist > shared selections. Changing selection must
+        // never silently rewrite any channel's manual guide override.
+        use crate::epg::bindings::{
+            clear_row_mapping, selected_guide_for_row, set_playlist_exception,
+            ConfirmedGuideSelection, ConfirmedRowMapping,
+        };
+        {
+            let mut db = store.connect().unwrap();
+            set_playlist_exception(
+                &mut db,
+                ConfirmedGuideSelection::after_user_confirmation(),
+                &playlist_id,
+                Some(&other_guide),
+                1234,
+            )
+            .unwrap();
+            assert_eq!(
+                selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
+                Some(guide.as_str()),
+                "B05 per-row guide wins over playlist exception",
+            );
+        }
+        for (tier, selected_name) in [
+            ("row override", "C4 selected guide"),
+            ("playlist exception", "C4 other guide"),
+            ("shared default", "C4 selected guide"),
+        ] {
+            if tier == "playlist exception" {
+                let mut db = store.connect().unwrap();
+                clear_row_mapping(
+                    &mut db,
+                    ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+                    &ids[2],
+                )
+                .unwrap();
+                assert_eq!(
+                    selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
+                    Some(other_guide.as_str()),
+                    "B05 playlist exception wins over shared",
+                );
+            } else if tier == "shared default" {
+                let mut db = store.connect().unwrap();
+                set_playlist_exception(
+                    &mut db,
+                    ConfirmedGuideSelection::after_user_confirmation(),
+                    &playlist_id,
+                    None,
+                    1235,
+                )
+                .unwrap();
+                assert_eq!(
+                    selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
+                    Some(guide.as_str()),
+                    "B05 shared guide restored after clearing playlist exception",
+                );
+            }
+            // Existing Mapping action is the naturally restored focus owner.
+            assert_eq!(
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
+                Some("Programme mapping"),
+                "B05 same source card before opening real picker",
+            );
+            inject("Return");
+            wait(
+                &|| editor::c4_test_picker_dialog().is_some_and(|dialog| dialog.is_mapped()),
+                "B05 real guide-precedence modal",
+            );
+            let picker = editor::c4_test_picker_dialog().unwrap();
+            assert_eq!(
+                c4_picker_selected_guide(picker.upcast_ref()).as_deref(),
+                Some(selected_name),
+                "B05 selected DropDown must reflect {tier}",
+            );
+            let cancel = c4_picker_button(picker.upcast_ref(), "Cancel");
+            assert!(cancel.grab_focus());
+            inject("Return");
+            wait(&|| editor::c4_test_picker_dialog().is_none(), "B05 Cancel");
+            view.assert_remote_action_focus_owner(
+                &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+                &ids[2],
+            );
+            let db = store.connect().unwrap();
+            let row_count: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                    [&ids[2]],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                row_count,
+                i64::from(tier == "row override"),
+                "B05 opening and cancelling picker cannot write an override",
+            );
+            let retained: String = db
+                .query_row(
+                    "SELECT guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                    [&ids[1]],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(retained, "one.001", "B05 unrelated mapping retained");
+        }
 
         // Suspend a completed background snapshot just before presentation,
         // switch the selected card while suspended, and assert no stale modal
