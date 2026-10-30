@@ -2207,6 +2207,69 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .is_some_and(|star| star.has_focus()),
             "the toggled star must reclaim focus after SQLite reload"
         );
+        // F02: move back into the exact real card, expand it using physical
+        // Return and reach its (still mapped) Star through physical keyboard
+        // focus traversal. Do not grab_focus() the star or use a model toggle.
+        inject("Right");
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &first_id,
+        );
+        inject("Return");
+        wait_until(
+            &|| c4_focused_button(&win).is_some_and(|b| b.label().as_deref() == Some("Play")),
+            "F02 expanded real card Play action",
+        );
+        let expanded_star = view
+            .remote_action_test_row_star(&first_id)
+            .expect("F02 same bound expanded row Star");
+        let mut reached_star = false;
+        for _ in 0..32 {
+            inject("Tab");
+            if expanded_star.has_focus() {
+                reached_star = true;
+                break;
+            }
+        }
+        assert!(
+            reached_star,
+            "F02 physical Tab must reach expanded card Star"
+        );
+        inject("Return");
+        wait_until(
+            &|| {
+                store
+                    .query_channels(&ChannelQuery::default())
+                    .is_ok_and(|page| !page.items[0].is_favourite)
+                    && view
+                        .remote_action_test_row_star(&first_id)
+                        .is_some_and(|star| {
+                            star.label().as_deref() == Some("☆") && star.has_focus()
+                        })
+            },
+            "F02 expanded-row star OFF persists and focus returns after async reload",
+        );
+        assert_eq!(
+            view.remote_action_test_selected_id().as_deref(),
+            Some(first_id.as_str()),
+            "F02 no cross-card focus or UUID after reload"
+        );
+        // Restore the established favourite-ON fixture using the same
+        // physically focused Star; retain the F03/F04 footer/restart journey.
+        inject("Return");
+        wait_until(
+            &|| {
+                store
+                    .query_channels(&ChannelQuery::default())
+                    .is_ok_and(|page| page.items[0].is_favourite)
+                    && view
+                        .remote_action_test_row_star(&first_id)
+                        .is_some_and(|star| {
+                            star.label().as_deref() == Some("★") && star.has_focus()
+                        })
+            },
+            "F02 inverse ON persists before favourite-filter regression",
+        );
         let (favourites, show_all) = view.remote_action_test_favourite_buttons();
         assert!(favourites.grab_focus());
         inject("Return");
@@ -2216,7 +2279,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
         // F04: a new OS process (not just another Rust service handle)
         // must see the true saved favourites-only mode on the same private DB.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        // The reusable Arch toolchain may invoke this test through its
+        // dynamic loader rather than a native host ELF interpreter. In that
+        // bounded local-only mode, launch the *same test binary* explicitly;
+        // normal CI still runs std::env::current_exe() unchanged.
+        let mut process = if let Ok(loader) = std::env::var("R07_FOCUS_LOCAL_LOADER") {
+            let libs = std::env::var("R07_FOCUS_LOCAL_LIBS")
+                .expect("local loader needs explicit recovered library paths");
+            let binary = std::env::var("R07_FOCUS_LOCAL_BINARY")
+                .expect("local loader must name the current test binary");
+            let mut command = std::process::Command::new(loader);
+            command.args(["--library-path", &libs, &binary]);
+            command
+        } else {
+            std::process::Command::new(std::env::current_exe().unwrap())
+        };
+        let output = process
             .args([
                 "r07_native_favourites_restart_child",
                 "--ignored",
