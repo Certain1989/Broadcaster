@@ -1116,13 +1116,46 @@ pub(crate) fn load_manager(
                 } else {
                     manager_target(&references, slot)
                 };
-                let restored_slot = if target.is_some_and(|target| target.grab_focus()) {
+                let restored_slot = if target.as_ref().is_some_and(|target| target.grab_focus()) {
                     slot
                 } else {
                     row.grab_focus();
                     MANAGER_ROW
                 };
                 view.set_manager_focus(id, restored_slot, chosen as i32);
+                // Closing an editor can finish unmapping its modal after the
+                // service has already rebuilt the manager rows. The initial
+                // grab_focus above may succeed transiently, then GTK clears
+                // the focus owner as the editor closes. Restore only if focus
+                // is still absent, and only for this live manager generation.
+                // Never steal a subsequently mapped user-chosen focus target.
+                let bound_row = row.clone();
+                let expected = id.clone();
+                let weak_view = view.downgrade();
+                let preferred = target.unwrap_or_else(|| row.clone().upcast());
+                glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                    let Some(view) = weak_view.upgrade() else {
+                        return;
+                    };
+                    if view.manager_generation() != generation || !bound_row.is_mapped() {
+                        return;
+                    }
+                    if view
+                        .manager_focus()
+                        .is_none_or(|(current, _, _)| current != expected)
+                    {
+                        return;
+                    }
+                    let Some(window) = bound_row.root().and_downcast::<gtk::Window>() else {
+                        return;
+                    };
+                    if gtk::prelude::GtkWindowExt::focus(&window)
+                        .is_none_or(|focused| !focused.is_mapped())
+                        && !preferred.grab_focus()
+                    {
+                        bound_row.grab_focus();
+                    }
+                });
             }
         }
     ));

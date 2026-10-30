@@ -807,3 +807,336 @@ fn r07_native_source_modal_1280_800() {
 fn r07_native_source_modal_negative_home() {
     r07_native_source_modal_semantics(640, 480, true);
 }
+
+// Source-manager R07 batch: exercise the real mapped dialog sequence rather
+// than invoking service callbacks or constructing detached buttons.
+fn source_sheet(win: &crate::window::TvWindow, title: &str) -> Option<adw::Dialog> {
+    descendants(win.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<adw::Dialog>().ok())
+        .find(|dialog| dialog.is_mapped() && dialog.title() == title)
+}
+
+fn source_sheet_button(dialog: &adw::Dialog, text: &str) -> gtk::Button {
+    descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(text))
+        .unwrap_or_else(|| panic!("R07 mapped {text} action in {}", dialog.title()))
+}
+
+fn source_sheet_entries(dialog: &adw::Dialog) -> Vec<gtk::Entry> {
+    descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Entry>().ok())
+        .collect()
+}
+
+fn source_action(
+    win: &crate::window::TvWindow,
+    list: &gtk::ListBox,
+    index: i32,
+    slot: usize,
+    title: &str,
+) -> adw::Dialog {
+    let action = controls(list, index)
+        .expect("source row before action")
+        .buttons[slot]
+        .clone();
+    assert!(
+        action.is_mapped() && action.grab_focus(),
+        "mapped source action {slot}"
+    );
+    inject("Return");
+    until(title, || source_sheet(win, title).is_some());
+    source_sheet(win, title).expect("actual mapped dialog")
+}
+
+fn press_sheet(dialog: &adw::Dialog, name: &str) {
+    let action = source_sheet_button(dialog, name);
+    assert!(
+        action.is_mapped() && action.grab_focus(),
+        "mapped native {name}"
+    );
+    inject("Return");
+}
+
+fn source_fixture_window(
+    count: usize,
+    width: i32,
+    height: i32,
+) -> (
+    Fixture,
+    crate::window::TvWindow,
+    TvStreamsView,
+    adw::Dialog,
+    gtk::ListBox,
+) {
+    adw::init().expect("native GTK display");
+    let res = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+        .expect("application GResource");
+    gio::resources_register(&res);
+    let fixture = Fixture::new(count);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("real SQLite-backed source service");
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered native application");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|widget| widget.downcast::<adw::ViewStack>().ok())
+        .expect("actual category stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("actual My Channels category");
+    view.c1_install_test_service(service);
+    let (dialog, list) = open(&view, &win, count);
+    (fixture, win, view, dialog, list)
+}
+
+fn native_source_editors(width: i32, height: i32, negative: bool) {
+    let (fixture, win, view, manager, list) = source_fixture_window(3, width, height);
+    let first_id = fixture.ids[0].clone();
+    let middle_id = fixture.ids[1].clone();
+    let last_id = fixture.ids[2].clone();
+
+    // AS09: source-qualified Rename has a validation failure that leaves
+    // SQLite untouched, followed by a real save and asynchronously rebound
+    // same-row action.  The physical key activates the actual dialog button.
+    let rename = source_action(&win, &list, 0, 2, "Rename Source");
+    let name = source_sheet_entries(&rename)
+        .into_iter()
+        .next()
+        .expect("name entry");
+    assert_eq!(name.text().as_str(), "Fixture 0");
+    name.set_text("");
+    press_sheet(&rename, "Save");
+    assert!(rename.is_mapped(), "empty rename rejected by real dialog");
+    assert_eq!(
+        fixture.storage.get_source(&first_id).unwrap().name,
+        "Fixture 0"
+    );
+    name.set_text("R07 native renamed source");
+    press_sheet(&rename, "Save");
+    until("source Rename persists and closes editor", || {
+        !rename.is_mapped()
+            && fixture
+                .storage
+                .get_source(&first_id)
+                .is_ok_and(|source| source.name == "R07 native renamed source")
+    });
+    until("source Rename restores mapped same-source focus", || {
+        controls(&list, 0).is_some_and(|row| {
+            row.buttons[2].has_focus()
+                || row.row.has_focus()
+                || gtk::prelude::GtkWindowExt::focus(&win)
+                    .is_some_and(|owner| owner.is_mapped() && row.row.is_ancestor(&owner))
+        })
+    });
+    assert_eq!(
+        fixture.storage.get_source(&middle_id).unwrap().name,
+        "Fixture 1"
+    );
+    if negative {
+        assert_eq!(
+            fixture.storage.get_source(&middle_id).unwrap().name,
+            "R07 native renamed source",
+            "R07_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE: rename may not mutate another UUID"
+        );
+    }
+
+    // AS08: Defaults form is the production long-form scroll/Expander
+    // with typed region fields. Invalid oversized code must not write;
+    // valid code+label persists to a new SQLite connection and rebinds.
+    let defaults = source_action(&win, &list, 1, 1, "Edit Source Defaults");
+    let fields = source_sheet_entries(&defaults);
+    assert!(fields.len() >= 2, "real advanced region code/name fields");
+    let code = &fields[fields.len() - 2];
+    let label = &fields[fields.len() - 1];
+    code.set_text(&"A".repeat(65));
+    press_sheet(&defaults, "Save");
+    assert!(
+        defaults.is_mapped(),
+        "oversized region must not close defaults editor"
+    );
+    assert!(fixture
+        .storage
+        .get_source(&middle_id)
+        .unwrap()
+        .defaults
+        .region
+        .is_none());
+    code.set_text("DE-BY");
+    label.set_text("Bavaria");
+    press_sheet(&defaults, "Save");
+    until("persist Defaults and return to same source", || {
+        !defaults.is_mapped()
+            && fixture.storage.get_source(&middle_id).is_ok_and(|src| {
+                src.defaults.region.as_ref().is_some_and(|region| {
+                    region.code.as_deref() == Some("DE-BY")
+                        && region.label.as_deref() == Some("Bavaria")
+                })
+            })
+            && controls(&list, 1).is_some_and(|row| row.buttons[1].has_focus())
+    });
+    assert!(fixture
+        .storage
+        .get_source(&first_id)
+        .unwrap()
+        .defaults
+        .region
+        .is_none());
+
+    // AS11 and AS10: Replace chooser must offer local/remote paths; an
+    // invalid non-HTTP remote address must not alter a local source or
+    // reach the network. Cancel returns to the populated source manager.
+    let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
+    let local = source_sheet_button(&replace, "Reselect Local File");
+    assert!(
+        local.is_mapped() && local.is_sensitive(),
+        "local chooser offered"
+    );
+    press_sheet(&replace, "Replace HTTP(S) URL");
+    until("remote replace URL editor", || {
+        source_sheet(&win, "Replace Playlist URL").is_some()
+    });
+    let replace_url = source_sheet(&win, "Replace Playlist URL").unwrap();
+    let input = source_sheet_entries(&replace_url)
+        .into_iter()
+        .next()
+        .expect("URL entry");
+    input.set_text("file:///local-only.m3u");
+    press_sheet(&replace_url, "Replace");
+    assert!(replace_url.is_mapped(), "invalid URL retained in form");
+    assert_eq!(
+        fixture.storage.get_source(&last_id).unwrap().origin.kind,
+        OriginKind::LocalFile,
+        "invalid URL cannot mutate persisted local source"
+    );
+    press_sheet(&replace_url, "Cancel");
+    until("URL editor Cancel", || !replace_url.is_mapped());
+    assert!(manager.is_mapped());
+    assert_eq!(
+        fixture.storage.get_source(&last_id).unwrap().name,
+        "Fixture 2"
+    );
+
+    // The source's nonnetwork Refresh remains a separate asynchronous
+    // contract. These editor checks must not depend on whether the fixture
+    // local file is sandbox-authorized by the runtime.
+    let refresh = controls(&list, 0).unwrap().buttons[0].clone();
+    assert!(refresh.is_mapped() && refresh.is_sensitive());
+    assert!(fixture.storage.get_source(&first_id).is_ok());
+    manager.close();
+    until("source manager tear down", || !manager.is_mapped());
+    view.c1_test_manage_button().grab_focus();
+    win.destroy();
+}
+
+fn native_source_delete_ordinal(width: i32, height: i32, index: i32, negative: bool) {
+    // Each ordinal runs on an independent 3-source SQLite fixture: a
+    // removed row must neither mutate nor steal focus from a neighbour.
+    let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
+    let removed_id = fixture.ids[index as usize].clone();
+    let before = fixture
+        .storage
+        .get_source(&removed_id)
+        .expect("source exists");
+    let delete = source_action(&win, &list, index, 4, "Delete Source?");
+    press_sheet(&delete, "Keep Source");
+    until("Keep Source dismissed without mutation", || {
+        !delete.is_mapped()
+    });
+    assert!(fixture.storage.get_source(&removed_id).is_ok());
+    let delete = source_action(&win, &list, index, 4, "Delete Source?");
+    press_sheet(&delete, "Delete Permanently");
+    until("actual source delete and two-row rebind", || {
+        !delete.is_mapped()
+            && fixture.storage.get_source(&removed_id).is_err()
+            && list.row_at_index(2).is_none()
+            && list.row_at_index(1).is_some()
+    });
+    assert!(!before.name.is_empty());
+    for surviving in &fixture.ids {
+        if *surviving != removed_id {
+            assert!(
+                fixture.storage.get_source(surviving).is_ok(),
+                "wrong UUID removed"
+            );
+        }
+    }
+    until("deleted row yields visible mapped manager focus", || {
+        gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|owner| owner.is_mapped())
+    });
+    assert!(manager.is_mapped(), "manager survives native deletion");
+    if negative {
+        assert!(
+            fixture.storage.get_source(&removed_id).is_ok(),
+            "R07_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE: confirmed removal must delete exact UUID"
+        );
+    }
+    manager.close();
+    until("manager removed after source deletion", || {
+        !manager.is_mapped()
+    });
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 source manager connected Rename/Defaults/Replace/Refresh, 640x480 XTest"]
+fn r07_native_source_editors_640_480() {
+    native_source_editors(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 source manager connected Rename/Defaults/Replace/Refresh, 1280x800 XTest"]
+fn r07_native_source_editors_1280_800() {
+    native_source_editors(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 negative wrong UUID during mapped source Rename"]
+fn r07_native_source_editors_negative() {
+    native_source_editors(640, 480, true);
+}
+
+#[test]
+#[ignore = "R07 physical first-source Keep/Delete and focus fallback compact"]
+fn r07_native_source_delete_first_640_480() {
+    native_source_delete_ordinal(640, 480, 0, false);
+}
+#[test]
+#[ignore = "R07 physical middle-source Keep/Delete and focus fallback compact"]
+fn r07_native_source_delete_middle_640_480() {
+    native_source_delete_ordinal(640, 480, 1, false);
+}
+#[test]
+#[ignore = "R07 physical last-source Keep/Delete and focus fallback compact"]
+fn r07_native_source_delete_last_640_480() {
+    native_source_delete_ordinal(640, 480, 2, false);
+}
+#[test]
+#[ignore = "R07 physical first-source Keep/Delete and focus fallback TV"]
+fn r07_native_source_delete_first_1280_800() {
+    native_source_delete_ordinal(1280, 800, 0, false);
+}
+#[test]
+#[ignore = "R07 physical middle-source Keep/Delete and focus fallback TV"]
+fn r07_native_source_delete_middle_1280_800() {
+    native_source_delete_ordinal(1280, 800, 1, false);
+}
+#[test]
+#[ignore = "R07 physical last-source Keep/Delete and focus fallback TV"]
+fn r07_native_source_delete_last_1280_800() {
+    native_source_delete_ordinal(1280, 800, 2, false);
+}
+#[test]
+#[ignore = "R07 wrong persisted source deletion negative control"]
+fn r07_native_source_deletions_negative() {
+    native_source_delete_ordinal(640, 480, 1, true);
+}

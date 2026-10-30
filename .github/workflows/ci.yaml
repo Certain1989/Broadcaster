@@ -196,6 +196,54 @@ jobs:
           fi
           echo "R07 disabled source-manager edge rejected as expected"
 
+      - name: R07 batched source editors and first/middle/last deletion
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in \
+            r07_native_source_editors_640_480 r07_native_source_editors_1280_800 \
+            r07_native_source_delete_first_640_480 r07_native_source_delete_middle_640_480 \
+            r07_native_source_delete_last_640_480 r07_native_source_delete_first_1280_800 \
+            r07_native_source_delete_middle_1280_800 r07_native_source_delete_last_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-source-dialogs-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+            rm -rf "$data_dir"
+          done
+          for case_name in r07_native_source_editors_negative r07_native_source_deletions_negative; do
+            case "$case_name" in
+              r07_native_source_editors_negative) marker=R07_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE ;;
+              *) marker=R07_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-source-dialogs-XXXXXXXX)
+            if xvfb-run -a -s "-screen 0 640x480x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1 \
+              >"$negative_log" 2>&1; then
+              cat "$negative_log"
+              echo "R07 source-dialog negative unexpectedly passed: $case_name" >&2
+              exit 1
+            fi
+            if ! grep -Fq "$marker" "$negative_log"; then
+              cat "$negative_log"
+              echo "R07 source-dialog negative failed for unrelated reason" >&2
+              exit 1
+            fi
+            rm -rf "$data_dir"
+          done
+          echo "R07 source-dialog and wrong-UUID negative controls passed"
+
       - name: R07 batched Source Manager Back Escape Home and negative oracle
         run: |
           set -eu
