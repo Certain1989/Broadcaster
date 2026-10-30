@@ -2352,8 +2352,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             .unwrap();
         adw::init().expect("GTK display");
         gio::resources_register(
-            &gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
-                .unwrap(),
+            &gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap(),
         );
         gio::Settings::new(crate::config::BASE_APP_ID)
             .set_boolean("osk-enabled", true)
@@ -2395,8 +2394,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             panic!("C4 mapping timeout: {reason}");
         };
         wait(
-            &|| view.remote_action_test_visible_count() == 3
-                && view.remote_action_test_row_star(&ids[0]).is_some(),
+            &|| {
+                view.remote_action_test_visible_count() == 3
+                    && view.remote_action_test_row_star(&ids[0]).is_some()
+            },
             "mapped SQLite rows",
         );
 
@@ -2428,22 +2429,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             let root = dialog.upcast_ref::<gtk::Widget>();
             let proposals = c4_picker_buttons(root)
                 .into_iter()
-                .filter(|b| b.label().is_some_and(|label| {
-                    label.contains("review variant") || label.contains("exact identity")
-                }))
+                .filter(|b| {
+                    b.label().is_some_and(|label| {
+                        label.contains("review variant") || label.contains("exact identity")
+                    })
+                })
                 .count();
             assert_eq!(proposals, expected_proposals, "selected-guide proposals");
             assert!(
-                !c4_picker_buttons(root).into_iter()
+                !c4_picker_buttons(root)
+                    .into_iter()
                     .any(|b| b.label().is_some_and(|label| label.contains("WrongGuide"))),
                 "wrong guide leaked into picker"
             );
 
             if index == 2 {
-                let search = c4_picker_button(
-                    root,
-                    "Search all guide channels / choose exact ID…",
-                );
+                let search = c4_picker_button(root, "Search all guide channels / choose exact ID…");
                 assert!(search.grab_focus());
                 inject("Return");
                 spin();
@@ -2451,38 +2452,58 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert!(entry.is_mapped());
                 entry.set_text("SearchMe");
                 wait(
-                    &|| c4_picker_buttons(root)
-                        .iter()
-                        .filter(|b| b.label().is_some_and(|l| l.contains("SearchMe") && l.contains("— [")))
-                        .count() == 30,
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 30
+                    },
                     "first 30 selected-guide exact results",
                 );
                 let next = c4_picker_button(root, "Next");
                 assert!(next.is_sensitive() && next.grab_focus());
                 inject("Return");
                 wait(
-                    &|| c4_picker_buttons(root)
-                        .iter()
-                        .filter(|b| b.label().is_some_and(|l| l.contains("SearchMe") && l.contains("— [")))
-                        .count() == 6,
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 6
+                    },
                     "second page with six exact results",
                 );
                 let previous = c4_picker_button(root, "Previous");
                 assert!(previous.is_sensitive() && previous.grab_focus());
                 inject("Return");
                 wait(
-                    &|| c4_picker_buttons(root)
-                        .iter()
-                        .filter(|b| b.label().is_some_and(|l| l.contains("SearchMe") && l.contains("— [")))
-                        .count() == 30,
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 30
+                    },
                     "back to first search page",
                 );
 
                 // Real OSK launcher, physical arrows on its live preview and
                 // physical Cancel. Never commit a fabricated search result.
-                let keyboard = c4_picker_buttons(root).into_iter()
-                    .find(|b| b.icon_name().as_deref() == Some("input-keyboard-symbolic")
-                        && b.is_mapped())
+                let keyboard = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|b| {
+                        b.icon_name().as_deref() == Some("input-keyboard-symbolic") && b.is_mapped()
+                    })
                     .expect("mapped picker keyboard launcher");
                 assert!(keyboard.grab_focus());
                 inject("Return");
@@ -2505,22 +2526,26 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 let osk_cancel = c4_picker_button(osk.upcast_ref(), "Cancel");
                 assert!(osk_cancel.grab_focus());
                 inject("Return");
-                wait(
-                    &|| !osk.is_mapped(),
-                    "OSK Cancel dismissed nested dialog",
+                wait(&|| !osk.is_mapped(), "OSK Cancel dismissed nested dialog");
+                assert_eq!(
+                    entry.text().as_str(),
+                    "SearchMe",
+                    "cancel cannot edit origin"
                 );
-                assert_eq!(entry.text().as_str(), "SearchMe", "cancel cannot edit origin");
 
                 // After a same-second guide revision, physical selection of
                 // a legitimate exact result must fail CAS and write no row.
-                store.connect().unwrap()
-                    .execute(
-                        "UPDATE epg_sources SET updated_at=11 WHERE id=?1",
-                        [&guide],
-                    )
+                store
+                    .connect()
+                    .unwrap()
+                    .execute("UPDATE epg_sources SET updated_at=11 WHERE id=?1", [&guide])
                     .unwrap();
-                let target = c4_picker_buttons(root).into_iter()
-                    .find(|b| b.label().is_some_and(|l| l.contains("SearchMe") && l.contains("— [")))
+                let target = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|b| {
+                        b.label()
+                            .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                    })
                     .expect("real exact-result action");
                 assert!(target.grab_focus());
                 inject("Return");
@@ -2540,15 +2565,21 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             }
                         }
                         collect(root, &mut labels);
-                        labels.iter().any(|l| l.contains("Channel, guide or binding changed"))
+                        labels
+                            .iter()
+                            .any(|l| l.contains("Channel, guide or binding changed"))
                     },
                     "same-second stale guide refuses UI mapping write",
                 );
-                let count: i64 = store.connect().unwrap().query_row(
-                    "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
-                    [id],
-                    |r| r.get(0),
-                ).unwrap();
+                let count: i64 = store
+                    .connect()
+                    .unwrap()
+                    .query_row(
+                        "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
                 assert_eq!(count, 0, "wrong programme cannot bind on stale guide");
             }
             let cancel = c4_picker_button(root, "Cancel");
@@ -2579,7 +2610,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         inject("Down");
         inject("Down");
         inject("Return");
-        wait(&editor::c4_test_picker_loaded, "paused completed picker snapshot");
+        wait(
+            &editor::c4_test_picker_loaded,
+            "paused completed picker snapshot",
+        );
         assert!(editor::c4_test_picker_dialog().is_none());
         view.remote_action_test_select(0);
         editor::c4_test_pause_picker(false);
