@@ -264,8 +264,36 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .enabled,
         "R01-F02 persisted Switch must stay disabled after service reopen"
     );
+    // AS04/AS05: perform the *inverse* native Switch change on the newly
+    // rebound widget. The same persisted UUID and semantic Switch slot must
+    // be retained across both asynchronous rebuilds and a fresh service read.
     let current = controls(&list, index).unwrap();
-    back(&dialog, Some(&current.row));
+    assert!(current.enabled.has_focus(), "rebound switch retains focus");
+    inject("space");
+    until("Switch ON again with persisted row focus", || {
+        fixture.enabled(&id)
+            && controls(&list, index).is_some_and(|c| {
+                c.enabled.is_active()
+                    && c.enabled.has_focus()
+                    && view.manager_focus() == Some((id.clone(), 0, index))
+            })
+    });
+    assert!(
+        !current.enabled.is_mapped(),
+        "old Switch unbound on second reload"
+    );
+    let reopened = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("SQLite service reopened after inverse toggle");
+    assert!(
+        glib::MainContext::default()
+            .block_on(reopened.source(&id))
+            .unwrap()
+            .enabled,
+        "R07 AS04/AS05 source enabled state must survive roundtrip"
+    );
+    let restored = controls(&list, index).unwrap();
+    back(&dialog, Some(&restored.row));
     win.destroy();
 }
 
