@@ -27,16 +27,27 @@ assert rx>=0 and ry>=0 and w>0 and h>0, (rx,ry,w,h)
 x.XSync.argtypes=[c.c_void_p,c.c_int];x.XSync(d,0)
 x.XGetImage.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_int,c.c_uint,c.c_uint,c.c_ulong,c.c_int]
 x.XGetImage.restype=c.c_void_p
-im=x.XGetImage(d,root,rx,ry,w,h,0xffffffffffffffff,2)
-assert im, 'R07_PIXEL_XGETIMAGE_FAILED'
-x.XGetPixel.argtypes=[c.c_void_p,c.c_int,c.c_int];x.XGetPixel.restype=c.c_ulong
+# A GTK-mapped scrolled action may extend beyond the Xvfb root. Capture
+# only the visible intersection; absent offscreen pixels remain zero in all
+# three frames and cannot manufacture positive focus contrast.
+x.XDefaultScreen.argtypes=[c.c_void_p];x.XDefaultScreen.restype=c.c_int
+x.XDisplayWidth.argtypes=[c.c_void_p,c.c_int];x.XDisplayWidth.restype=c.c_int
+x.XDisplayHeight.argtypes=[c.c_void_p,c.c_int];x.XDisplayHeight.restype=c.c_int
+screen=x.XDefaultScreen(d)
+sw,sh=x.XDisplayWidth(d,screen),x.XDisplayHeight(d,screen)
+sx,sy=max(rx,0),max(ry,0)
+ex,ey=min(rx+w,sw),min(ry+h,sh)
 pixels=bytearray(w*h*3)
-for yy in range(h):
- for xx in range(w):
-  v=x.XGetPixel(im,xx,yy)
-  i=(yy*w+xx)*3
-  pixels[i:i+3]=bytes(((v>>16)&255,(v>>8)&255,v&255))
-x.XDestroyImage.argtypes=[c.c_void_p];x.XDestroyImage(im)
+if ex>sx and ey>sy:
+ im=x.XGetImage(d,root,sx,sy,ex-sx,ey-sy,0xffffffffffffffff,2)
+ assert im, 'R07_PIXEL_VISIBLE_XGETIMAGE_FAILED'
+ x.XGetPixel.argtypes=[c.c_void_p,c.c_int,c.c_int];x.XGetPixel.restype=c.c_ulong
+ for yy in range(ey-sy):
+  for xx in range(ex-sx):
+   v=x.XGetPixel(im,xx,yy)
+   i=(((yy+sy-ry)*w)+(xx+sx-rx))*3
+   pixels[i:i+3]=bytes(((v>>16)&255,(v>>8)&255,v&255))
+ x.XDestroyImage.argtypes=[c.c_void_p];x.XDestroyImage(im)
 x.XCloseDisplay.argtypes=[c.c_void_p];x.XCloseDisplay(d)
 sys.stdout.buffer.write(pixels)
 "#;
@@ -339,7 +350,15 @@ fn r07_native_painted_cards(width: i32, height: i32) {
         }
         let focused = win.focused_widget().expect("Mediathek action owner");
         assert!(TvWindow::is_within(&focused, &target), "G03 physically reach {label}");
-        deltas.push((label, r07_painted_probe(&win, &focused, label)));
+        let child_pixels = r07_painted_probe(&win, &focused, label);
+        // SplitButton is composite: the drawn outline may be on its
+        // parent rather than on the internally focused GTK child.
+        let pixels = if label == "Mediathek Play" && child_pixels < 15 {
+            child_pixels.max(r07_painted_probe(&win, &target, "Mediathek Play parent"))
+        } else {
+            child_pixels
+        };
+        deltas.push((label, pixels));
     }
     inject("XF86Back", false);
 
