@@ -401,6 +401,137 @@ fn r07_native_negative_row_identity() {
     r07_native_source_rows(640, 480, true);
 }
 
+// R07 AS12/AS13: actual 3-source SQLite order changes from native D-pad,
+// with row/action focus restored by source UUID after each async rebuild.
+// This complements, rather than replaces, C1's switch and Back tests.
+fn r07_native_source_reorder(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+        .expect("resource");
+    gio::resources_register(&resource);
+    let fixture = Fixture::new(3);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("real SQLite source service");
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>).expect("register");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
+        .expect("real application page stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("real My Channels");
+    view.c1_install_test_service(service);
+    let (dialog, list) = open(&view, &win, 3);
+    let id = fixture.ids[1].clone();
+    let orders = || {
+        let conn = fixture.storage.connect().unwrap();
+        let mut sql = conn
+            .prepare("SELECT id FROM iptv_sources ORDER BY source_order")
+            .unwrap();
+        sql.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    assert_eq!(orders(), fixture.ids);
+    let middle = controls(&list, 1).expect("bound middle source");
+    assert!(middle.row.grab_focus());
+    spin();
+    inject("Return");
+    assert!(middle.enabled.has_focus(), "physical OK enters Switch");
+    inject("Right");
+    assert!(middle.buttons[0].has_focus(), "Right enters real Refresh");
+    inject("Down");
+    assert!(middle.buttons[4].has_focus(), "Down enters real Delete row");
+    inject("Right");
+    assert!(
+        middle.buttons[5].has_focus(),
+        "Right enters enabled Move Up"
+    );
+    inject("Return");
+    until("source moved up in real SQLite", || {
+        orders()
+            == [
+                fixture.ids[1].clone(),
+                fixture.ids[0].clone(),
+                fixture.ids[2].clone(),
+            ]
+            && view
+                .manager_focus()
+                .is_some_and(|(source, _, index)| source == id && index == 0)
+    });
+    if negative {
+        assert_eq!(
+            orders()[0],
+            fixture.ids[0],
+            "R07_AS12_EXPECTED_NEGATIVE_ORACLE: unchanged source order"
+        );
+        unreachable!("R07 reorder negative must fail");
+    }
+    let first = controls(&list, 0).expect("rebound moved source");
+    assert!(!middle.row.is_mapped(), "old GTK row unmapped after rebind");
+    assert_eq!(view.manager_focus().unwrap().0, id);
+    assert!(first.row.grab_focus(), "rebound source row");
+    spin();
+    inject("Return");
+    assert!(first.enabled.has_focus());
+    inject("Right");
+    assert!(first.buttons[0].has_focus());
+    inject("Down");
+    assert!(
+        first.buttons[4].has_focus(),
+        "real Delete as lower row entry"
+    );
+    inject("Right");
+    assert!(
+        first.buttons[6].has_focus(),
+        "disabled Move Up skipped to enabled Move Down"
+    );
+    inject("Return");
+    until(
+        "source moved back down in SQLite and focus identity restored",
+        || {
+            orders() == fixture.ids
+                && view
+                    .manager_focus()
+                    .is_some_and(|(source, _, index)| source == id && index == 1)
+        },
+    );
+    for id in &fixture.ids {
+        assert!(
+            fixture.enabled(id),
+            "navigation/reorder must not toggle source"
+        );
+    }
+    let rebound = controls(&list, 1).expect("restored middle source");
+    back(&dialog, Some(&rebound.row));
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 mapped SQLite manager Move Up and Move Down 640x480"]
+fn r07_native_source_reorder_640_480() {
+    r07_native_source_reorder(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 mapped SQLite manager Move Up and Move Down 1280x800"]
+fn r07_native_source_reorder_1280_800() {
+    r07_native_source_reorder(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 deliberately false source order after physical Move Up"]
+fn r07_native_source_reorder_negative_order() {
+    r07_native_source_reorder(640, 480, true);
+}
+
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
 fn c1_native_manager_0_640_480() {
