@@ -289,3 +289,102 @@ fn r07_native_category_switcher_1280_800() {
 fn r07_native_category_switcher_negative_page() {
     run_actual_three_category_switcher(640, 480, true);
 }
+
+// E04: complete physical first/middle/last Mediathek card route, with native
+// Return entering the real Play action and Back returning to the same row.
+// Unlike E05's action graph, this also verifies the reverse path to Search.
+fn r07_mediathek_three_row_inverse(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered actual application");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    win.imp().stack.set_visible_child_name("mediathek");
+    let med = &win.imp().mediathek_view;
+    med.r07_install_offline_result_cards();
+    settle();
+    let search = &med.toolbar_focus_targets()[0];
+    assert!(search.grab_focus(), "E04 actual Search entry");
+    settle();
+    for _ in 0..8 {
+        if med.r07_result_row(0).has_focus() {
+            break;
+        }
+        inject("Down", false);
+    }
+    for index in 0..3 {
+        let row = med.r07_result_row(index);
+        assert!(row.has_focus(), "E04 native row {index} direct focus");
+        assert_eq!(
+            med.r07_result_id(index),
+            Some(format!("Offline show {index}")),
+            "E04 actual source-qualified Mediathek row identity"
+        );
+        if negative {
+            assert_eq!(
+                med.r07_result_id(index).as_deref(),
+                Some("wrong-show"),
+                "R07_E04_EXPECTED_NEGATIVE_ORACLE: native Mediathek row identity"
+            );
+            unreachable!("E04 deliberately wrong row ID unexpectedly matched");
+        }
+        inject("Return", false);
+        let owner = win.focused_widget().expect("E04 Play focus owner");
+        assert_eq!(
+            owner.ancestor(gtk::ListBoxRow::static_type()),
+            Some(row.clone().upcast::<gtk::Widget>()),
+            "E04 action must belong to the same Mediathek row"
+        );
+        assert!(owner.is_mapped() && owner.is_sensitive());
+        inject("XF86Back", false);
+        assert!(row.has_focus(), "E04 return to same row after Back");
+        if index < 2 {
+            inject("Down", false);
+        }
+    }
+    for index in (0..2).rev() {
+        inject("Up", false);
+        assert!(med.r07_result_row(index).has_focus(), "E04 reverse row {index}");
+    }
+    for _ in 0..8 {
+        if TvWindow::is_within(
+            &win.focused_widget().expect("E04 reverse owner"),
+            search,
+        ) {
+            break;
+        }
+        inject("Up", false);
+    }
+    assert!(
+        TvWindow::is_within(
+            &win.focused_widget().expect("E04 final Search owner"),
+            search
+        ),
+        "E04 native reverse must return to mapped Search"
+    );
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 E04 real three-row Mediathek entry/reverse 640x480"]
+fn r07_native_mediathek_three_rows_640_480() {
+    r07_mediathek_three_row_inverse(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 E04 real three-row Mediathek entry/reverse 1280x800"]
+fn r07_native_mediathek_three_rows_1280_800() {
+    r07_mediathek_three_row_inverse(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 E04 deliberately wrong real Mediathek row identity"]
+fn r07_native_mediathek_three_rows_negative_identity() {
+    r07_mediathek_three_row_inverse(640, 480, true);
+}

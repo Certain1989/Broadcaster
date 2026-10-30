@@ -314,3 +314,5 @@ fn r07_native_live_play_negative_source_identity() {
 
 // Test-only native cross-component evidence; retained as one R07 module.
 include!("r07_mediathek_batch_tests.rs");
+
+include!("r07_painted_focus_tests.rs");
