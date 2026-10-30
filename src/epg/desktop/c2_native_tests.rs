@@ -171,7 +171,7 @@ impl Drop for Fixture {
     }
 }
 
-fn run(count: usize, width: i32, height: i32, negative: bool) {
+fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool) {
     let fixture = Fixture::new(count);
     adw::init().expect("native GTK");
     let resource =
@@ -258,6 +258,9 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             first_default.grab_focus(),
             "enter first source via real widget"
         );
+        // AG09: first enabled row, physical boundary and complete enabled grid.
+        inject("Left");
+        assert_remote_focus(&win, &first_default, "first guide Left stays inside grid");
         inject("Right");
         assert_remote_focus(
             &win,
@@ -326,6 +329,12 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             &guide_action(&guide, "Guide 2", "Remove"),
             "last row Down boundary stays within dialog",
         );
+        inject("Right");
+        assert_remote_focus(
+            &win,
+            &guide_action(&guide, "Guide 2", "Remove"),
+            "AG09 last enabled guide Right boundary stays on UUID",
+        );
         inject("Up");
         assert_remote_focus(
             &win,
@@ -369,7 +378,20 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             editor.is_mapped() && guide.is_mapped(),
             "Home must not fire behind the OSK"
         );
-        assert!(launcher.grab_focus());
+        // The production OSK deliberately returns focus to the editable Entry,
+        // not to the launcher. Follow the native Tab path back to the launcher.
+        until("AG09 nested Home restores editable origin", || {
+            gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
+                w.is_ancestor(name.upcast_ref::<gtk::Widget>())
+                    || w == name.clone().upcast::<gtk::Widget>()
+            })
+        });
+        inject("Tab");
+        assert_remote_focus(
+            &win,
+            &launcher,
+            "AG09 Home Entry -> launcher with native Tab",
+        );
         inject("Return");
         until("reopened OSK", || {
             find_dialog(win.upcast_ref(), "osk-production").is_some()
@@ -390,7 +412,18 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             editor.is_mapped() && guide.is_mapped(),
             "Cancel cannot act on background page"
         );
-        assert!(launcher.grab_focus());
+        until("AG09 OSK Cancel restores editable origin", || {
+            gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
+                w.is_ancestor(name.upcast_ref::<gtk::Widget>())
+                    || w == name.clone().upcast::<gtk::Widget>()
+            })
+        });
+        inject("Tab");
+        assert_remote_focus(
+            &win,
+            &launcher,
+            "AG09 Cancel Entry -> launcher with native Tab",
+        );
         inject("Return");
         until("OSK reopens after cancel", || {
             find_dialog(win.upcast_ref(), "osk-production").is_some()
@@ -534,6 +567,56 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
                 .unwrap()
                 .is_sensitive(),
             "disabled guide must skip Refresh"
+        );
+        // AG02: reverse enabled state through the genuine editor. The live row
+        // must be rebuilt and its original UUID / semantic Edit focus restored.
+        let edit_again = guide_action(&guide, "Updated Guide 1", "Edit");
+        assert!(edit_again.grab_focus());
+        inject("Return");
+        until("AG02 reopen persisted disabled guide editor", || {
+            named_button(win.upcast_ref(), "Apply").is_some()
+        });
+        let apply_again = named_button(win.upcast_ref(), "Apply").unwrap();
+        let editor_again = apply_again
+            .ancestor(adw::Dialog::static_type())
+            .unwrap()
+            .downcast::<adw::Dialog>()
+            .unwrap();
+        let enabled_again = descendants(editor_again.upcast_ref())
+            .into_iter()
+            .find_map(|w| w.downcast::<gtk::CheckButton>().ok())
+            .expect("persisted disabled guide Enabled checkbox");
+        assert!(!enabled_again.is_active(), "AG02 disabled state reopened");
+        assert!(enabled_again.grab_focus());
+        inject("space");
+        assert!(
+            enabled_again.is_active(),
+            "AG02 reenable via physical Space"
+        );
+        assert!(apply_again.grab_focus());
+        inject("Return");
+        until("AG02 source registry and list reenabled", || {
+            !editor_again.is_mapped()
+                && source_enabled(&fixture.storage, &source_id)
+                && row(&guide, "Updated Guide 1").is_some()
+        });
+        let restored_edit = guide_action(&guide, "Updated Guide 1", "Edit");
+        assert_remote_focus(
+            &win,
+            &restored_edit,
+            "AG02 reenabled UUID Edit after rebuild",
+        );
+        assert_eq!(
+            GuideSourceRegistry::new(fixture.storage.clone())
+                .get(&source_id)
+                .unwrap()
+                .id,
+            source_id,
+            "AG02 persisted enabled inverse retains guide identity"
+        );
+        assert!(
+            guide_action(&guide, "Updated Guide 1", "Refresh").is_sensitive(),
+            "AG02 enabled guide restores Refresh action"
         );
         // Shared default is an explicit confirmation and must be reversible.
         let original = row(&guide, "Guide 0").expect("surviving first guide");
@@ -806,6 +889,10 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         manager.is_mapped(),
         "source manager must remain under guide modal"
     );
+    until("AG08 Back restores actual source launcher focus", || {
+        guides.has_focus()
+    });
+    assert_remote_focus(&win, &guides, "guide Back returns to source origin");
     drop(manager_list);
     drop(guide);
     until(
@@ -835,6 +922,10 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         || !reopened.is_mapped(),
     );
     assert!(manager.is_mapped());
+    until("AG08 reopened Back restores source origin", || {
+        guides.has_focus()
+    });
+    assert_remote_focus(&win, &guides, "reopened guide Back restores origin");
     drop(reopened);
 
     // R07 AG08: a real GTK Escape dismisses just the nested guide modal;
@@ -855,8 +946,24 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     });
     assert!(manager.is_mapped(), "Escape cannot dismiss source origin");
     assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+    until("AG08 Escape restores real origin focus", || {
+        guides.has_focus()
+    });
+    assert_remote_focus(&win, &guides, "Escape returns to source launcher");
+    if wrong_origin {
+        let wrong = named_button(manager.upcast_ref(), "Close")
+            .expect("source manager Close is a deliberately wrong return owner");
+        assert_remote_focus(
+            &win,
+            &wrong,
+            "R07_AG08_EXPECTED_NEGATIVE_ORACLE: closed guide would restore wrong source button",
+        );
+        unreachable!("deliberately wrong AG08 source origin unexpectedly focused");
+    }
 
-    assert!(guides.grab_focus(), "guide launcher after Escape");
+    // The next Return is delivered to the physically restored launcher.
+    // No test-only grab_focus() may mask a broken modal return.
+
     inject("Return");
     until("AG08 guide modal for remote Home", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
@@ -882,25 +989,31 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
 fn c2_native_0_640_480() {
-    run(0, 640, 480, false);
+    run(0, 640, 480, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
 fn c2_native_3_640_480() {
-    run(3, 640, 480, false);
+    run(3, 640, 480, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
 fn c2_native_0_1280_800() {
-    run(0, 1280, 800, false);
+    run(0, 1280, 800, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
 fn c2_native_3_1280_800() {
-    run(3, 1280, 800, false);
+    run(3, 1280, 800, false, false);
 }
 #[test]
 #[ignore = "expected-RED negative focus oracle"]
 fn c2_native_negative_oracle() {
-    run(3, 640, 480, true);
+    run(3, 640, 480, true, false);
+}
+
+#[test]
+#[ignore = "R07 AG08 deliberately wrong focus owner after real guide Escape"]
+fn c2_native_negative_origin_focus() {
+    run(3, 640, 480, false, true);
 }
