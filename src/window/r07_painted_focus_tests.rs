@@ -154,6 +154,7 @@ fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize
     let focused = win.focused_widget().expect("R07 painted focus owner");
     assert!(TvWindow::is_within(&focused, widget), "R07 painted {label} logical owner");
     let box_ = R07PaintBox::new(win, widget);
+    eprintln!("R07_GEOM {label}: crop=({},{} {}x{}) control=({},{},{},{}) mapped={} css={:?}",box_.x,box_.y,box_.w,box_.h,box_.left,box_.top,box_.right,box_.bottom,widget.is_mapped(),widget.css_classes());
     settle();
     let positive = box_.capture();
     let provider = gtk::CssProvider::new();
