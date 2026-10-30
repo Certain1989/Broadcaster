@@ -337,6 +337,26 @@ jobs:
           fi
           echo "R07 real X11 pixel negative-control assertion rejected as expected"
 
+      - name: R07 batched painted source-card actions (Live, Mediathek and My Channels)
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_painted_cards_640_480 r07_native_painted_cards_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-painted-card-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+            rm -rf "$data_dir"
+          done
+
       - name: C2 native guide manager 0/3 guides, OSK and SQLite
         run: |
           set -eu
