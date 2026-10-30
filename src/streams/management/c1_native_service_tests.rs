@@ -382,7 +382,10 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
         view.manager_focus(),
         Some((fixture.ids[1].clone(), 0, 1))
     );
-    assert!(fixture.ids.iter().all(|id| fixture.enabled(id)), "pure navigation never mutates persisted enabled state");
+    assert!(
+        fixture.ids.iter().all(|id| fixture.enabled(id)),
+        "pure navigation never mutates persisted enabled state"
+    );
     inject("XF86Back");
     r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
     back(&dialog, None);
