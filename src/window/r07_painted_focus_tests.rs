@@ -182,6 +182,15 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
     gio::resources_register(&resource);
+    // Native test fixtures register() but do not run main.rs startup: install
+    // Broadcaster's application stylesheet before comparing painted pixels.
+    let css = gtk::CssProvider::new();
+    css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().expect("R07 painted GTK display"),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
     let app = TvApplication::new();
     app.register(None::<&gio::Cancellable>)
         .expect("registered real application");
