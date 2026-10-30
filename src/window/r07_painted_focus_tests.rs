@@ -169,7 +169,8 @@ fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize
     let changed = box_.outline_differences(&positive, &suppressed);
     let reversible = box_.outline_differences(&positive, &restored);
     eprintln!("R07_PIXEL {label}: suppressed_changed={changed} restored_changed={reversible} crop={}x{}", box_.w, box_.h);
-    assert!(changed >= 15, "R07 {label}: no visibly painted outline suppression (G01/G02)");
+    // Collect all measured controls before reporting missing painted outlines.
+    // No logical focus assertion alone can turn a blank ring into PASS.
     assert!(
         reversible <= (changed / 3).max(12),
         "R07 {label}: outline did not return after removing test-only suppression"
@@ -198,6 +199,7 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
     win.set_default_size(width, height);
     win.present();
     settle();
+    let mut missing_paint = Vec::new();
     for page in ["mediathek", "live", "streams"] {
         win.imp().stack.set_visible_child_name(page);
         if page == "live" {
@@ -217,6 +219,9 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
         inject("Right", true);
         inject("Left", false);
         let search_delta = r07_painted_probe(&win, search, &format!("{page}:Search"));
+        if search_delta < 15 {
+            missing_paint.push(format!("{page}:Search"));
+        }
         if negative {
             assert_eq!(
                 search_delta, 0,
@@ -233,8 +238,15 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
                     .is_some_and(|focused| TvWindow::is_within(&focused, candidate))
             })
             .expect("real next toolbar control after native Right");
-        r07_painted_probe(&win, button, &format!("{page}:button"));
+        let button_delta = r07_painted_probe(&win, button, &format!("{page}:button"));
+        if button_delta < 15 {
+            missing_paint.push(format!("{page}:button"));
+        }
     }
+    assert!(
+        missing_paint.is_empty(),
+        "R07_PAINTED_FOCUS_MISSING: {missing_paint:?}"
+    );
     win.destroy();
 }
 
