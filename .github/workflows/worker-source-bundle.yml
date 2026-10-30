@@ -3,7 +3,7 @@
 
 name: Worker source bundle
 
-# Source transport only. This does not run application tests or approve merges.
+# Public source transport only. Does not test application code or authorise integration.
 on:
   push:
     branches:
@@ -14,12 +14,22 @@ on:
         description: 'Optional full 40-hex Broadcaster commit SHA to export'
         required: false
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
 
 jobs:
   export-source:
+    # Comments can only request exports via issue #56, by the repository owner.
+    # All other comments skip the job before any checkout or runner work.
+    if: >-
+      ${{ github.event_name != 'issue_comment' ||
+          (github.event.issue.number == 56 &&
+           !github.event.issue.pull_request &&
+           github.event.comment.user.login == github.repository_owner &&
+           startsWith(github.event.comment.body, '/source-bundle ')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,17 +39,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Test source request authentication and parsing
+        shell: bash
+        run: bash .github/scripts/test-worker-source-request.sh
+
       - name: Create self-contained exact-commit Git bundle
         id: source
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           REQUESTED_SHA: ${{ inputs.target_sha }}
           PUSH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          sha="${REQUESTED_SHA:-$PUSH_SHA}"
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid commit SHA" >&2; exit 1; }
-          # Explicitly fetch even on dispatch, rather than silently using an old HEAD.
+          sha="$(bash .github/scripts/worker-source-request.sh "$EVENT_NAME" "$GITHUB_EVENT_PATH" "$REQUESTED_SHA" "$PUSH_SHA")"
+          # Exact full commit only; never interpolate comment text into shell commands.
           git fetch --no-tags origin "$sha"
           [[ "$(git cat-file -t "$sha")" == commit ]] || exit 1
           git update-ref refs/heads/worker-source-export "$sha"
@@ -48,7 +62,6 @@ jobs:
           printf '%s\n' "$sha" > export/SOURCE_SHA
           git rev-parse "$sha^{tree}" > export/SOURCE_TREE
           (cd export && sha256sum broadcaster-source.bundle SOURCE_SHA SOURCE_TREE > SHA256SUMS)
-          # A fresh empty bare repository must be able to verify the complete history.
           git init -q --bare "$RUNNER_TEMP/source-verify.git"
           git --git-dir="$RUNNER_TEMP/source-verify.git" bundle verify "$PWD/export/broadcaster-source.bundle"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
