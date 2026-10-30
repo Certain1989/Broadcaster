@@ -43,7 +43,7 @@ mod imp {
 
         filter: OnceCell<gtk::CustomFilter>,
         /// Incremented on every reload to discard outdated results.
-        generation: Cell<u64>,
+        pub(super) generation: Cell<u64>,
     }
 
     impl TvLiveView {
@@ -299,6 +299,44 @@ impl TvLiveView {
         imp.channels_list
             .row_at_index(0)
             .is_some_and(|row| row.grab_focus())
+    }
+
+    /// Test-only complete native Live rows backed by actual TvLiveCard and
+    /// ChannelObject widgets. No network requests or player activation.
+    #[cfg(test)]
+    pub(crate) fn install_r07_native_channel_rows(&self) {
+        let imp = self.imp();
+        // Invalidate a pending async production load before installing this
+        // disposable model so its completion cannot rebind the test rows.
+        imp.generation.set(imp.generation.get().saturating_add(1));
+        let model = (0..3)
+            .map(|index| {
+                ChannelObject::new(
+                    &format!("r07-live-{index}"),
+                    &format!("Fixture Live {index}"),
+                    "https://example.invalid/offline",
+                )
+            })
+            .collect::<gio::ListStore>();
+        imp.channels_list.bind_model(Some(&model), |channel| {
+            glib::Object::builder::<TvLiveCard>()
+                .property("channel", channel)
+                .build()
+                .upcast()
+        });
+        imp.results_stack.set_visible_child_name("list");
+        imp.stack.set_visible_child_name("channels");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_native_channel_id(&self, index: i32) -> Option<String> {
+        self.imp()
+            .channels_list
+            .row_at_index(index)?
+            .downcast::<TvLiveCard>()
+            .ok()?
+            .channel()
+            .map(|channel| channel.id())
     }
 
     /// The Live focus style must reach the button actually selected by the
