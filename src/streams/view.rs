@@ -2537,12 +2537,18 @@ impl TvStreamsView {
             .parent()
             .and_then(|header| header.parent())
             .expect("bound card root");
+        // GTK can focus the virtual ListItem container rather than its child
+        // after exiting an action. Check that exact owner's item container,
+        // never accept an arbitrary descendant of the entire results list.
+        let item = row_root.parent().expect("bound ListItem widget");
+        let list = imp.results_list.upcast_ref::<gtk::Widget>();
         assert!(
-            (focused == imp.results_list.upcast_ref::<gtk::Widget>()
-                && imp.results_list.has_focus())
+            (focused == list && imp.results_list.has_focus())
                 || focused == &row_root
-                || focused.is_ancestor(&row_root),
-            "focus belongs to another source-qualified GTK row"
+                || focused.is_ancestor(&row_root)
+                || (item != *list && (focused == &item || focused.is_ancestor(&item))),
+            "focus belongs to another source-qualified GTK row: widget={}",
+            focused.type_().name()
         );
     }
 
