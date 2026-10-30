@@ -8,7 +8,10 @@ use std::{thread, time::Duration};
 
 fn settle() {
     for _ in 0..20 {
-        while glib::MainContext::default().pending() {
+        for _ in 0..64 {
+            if !glib::MainContext::default().pending() {
+                break;
+            }
             glib::MainContext::default().iteration(false);
         }
         thread::sleep(Duration::from_millis(16));
@@ -308,3 +311,6 @@ fn r07_native_live_play_right_1280_800() {
 fn r07_native_live_play_negative_source_identity() {
     run_live_play_portals(640, 480, "Return", true);
 }
+
+// Test-only native cross-component evidence; retained as one R07 module.
+include!("r07_mediathek_batch_tests.rs");

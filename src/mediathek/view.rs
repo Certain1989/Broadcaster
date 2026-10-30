@@ -696,6 +696,57 @@ impl TvMediathekView {
         controls
     }
 
+    /// R07 isolated offline real Mediathek cards. No provider traffic or playback.
+    #[cfg(test)]
+    pub(crate) fn r07_install_offline_result_cards(&self) {
+        use mediathekviewweb::models::Item;
+
+        let imp = self.imp();
+        // Invalidate any pending asynchronous initial query before installing
+        // deterministic rows. Keep the normal ListBox model binding intact.
+        imp.requests.borrow_mut().begin_search();
+        let model = imp.shows_model();
+        model.remove_all();
+        for index in 0..3 {
+            model.append(&ShowObject::new(Item {
+                id: format!("r07-show-{index}"),
+                channel: "R07".to_owned(),
+                topic: "Offline navigation".to_owned(),
+                title: format!("Offline show {index}"),
+                description: Some("Disposable GTK focus fixture".to_owned()),
+                timestamp: 0,
+                duration: Some(Duration::from_secs(180)),
+                size: None,
+                url_website: "https://example.invalid/offline".to_owned(),
+                url_subtitle: None,
+                url_video: "https://example.invalid/offline.mp4".to_owned(),
+                url_video_low: None,
+                url_video_hd: None,
+                filmliste_timestamp: 0,
+            }));
+        }
+        imp.show_results();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_result_row(&self, index: i32) -> gtk::ListBoxRow {
+        self.imp()
+            .results_list
+            .row_at_index(index)
+            .expect("R07 actual Mediathek result row")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_result_id(&self, index: i32) -> Option<String> {
+        self.imp()
+            .results_list
+            .row_at_index(index)?
+            .downcast::<TvMediathekCard>()
+            .ok()?
+            .show()
+            .map(|show| show.title())
+    }
+
     pub fn focus_first_result(&self) -> bool {
         self.imp()
             .results_list
