@@ -2130,6 +2130,27 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             let owner =
                 gtk::prelude::GtkWindowExt::focus(&win).expect("R07 star-to-row physical return");
             view.assert_remote_action_focus_owner(&owner, id);
+            // E08: every *real SQLite-bound* first/middle/last card must
+            // offer all three actions and restore the exact card identity.
+            // Fake player/editor/picker counters must remain untouched.
+            inject("Return");
+            for label in ["Play", "Edit Metadata", "Programme mapping"] {
+                let action = c4_focused_button(&win).expect("R07 bound card action");
+                assert_eq!(action.label().as_deref(), Some(label));
+                assert!(action.is_mapped() && action.is_sensitive());
+                view.assert_remote_action_focus_owner(action.upcast_ref(), id);
+                if label != "Programme mapping" {
+                    inject("Down");
+                }
+            }
+            inject("Left");
+            view.assert_remote_action_focus_owner(
+                &gtk::prelude::GtkWindowExt::focus(&win).expect("R07 card inverse"),
+                id,
+            );
+            inject("XF86Back");
+            assert!(view.remote_action_test_state().contains("expanded=None"));
+            assert_eq!(view.remote_action_test_counts(), (0, 0, 0));
         }
         for index in [1, 0] {
             inject("Up");
@@ -2193,6 +2214,27 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &|| store.favourites_only() == Ok(true) && view.remote_action_test_visible_count() == 1,
             "favourites-only toggle and SQL filter",
         );
+        // F04: a new OS process (not just another Rust service handle)
+        // must see the true saved favourites-only mode on the same private DB.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "r07_native_favourites_restart_child",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("R07_C4_PROCESS_CHILD", "1")
+            .output()
+            .expect("spawn real independent test process");
+        assert!(
+            output.status.success(),
+            "R07 F04 process restart: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "R07 F04 child process must execute its SQLite restart oracle"
+        );
         let reopened = glib::MainContext::default()
             .block_on(StreamsService::with_storage(store.clone()))
             .expect("reopen disposable SQLite");
@@ -2237,6 +2279,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
         assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
         win.destroy();
+    }
+
+    #[test]
+    #[ignore = "child-process persisted SQLite favourite mode oracle"]
+    fn r07_native_favourites_restart_child() {
+        assert_eq!(std::env::var("R07_C4_PROCESS_CHILD").as_deref(), Ok("1"));
+        let home = std::env::var("XDG_DATA_HOME").expect("private C4 data directory");
+        assert!(home.contains("broadcaster-c4-fixture-"));
+        let storage = crate::streams::storage::Storage::new();
+        storage
+            .initialize()
+            .expect("reopened private DB after process restart");
+        assert_eq!(
+            storage.favourites_only(),
+            Ok(true),
+            "F04 persisted favourite mode"
+        );
     }
 
     #[test]
