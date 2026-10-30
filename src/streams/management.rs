@@ -2251,7 +2251,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             },
             storage::Storage,
         };
-        use rusqlite::{params, OptionalExtension};
+        use rusqlite::params;
         use std::collections::BTreeSet;
 
         let data_home = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME");
