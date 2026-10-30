@@ -210,7 +210,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     until("programme guide manager visible", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
     });
-    let guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+    let mut guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
     until("source-backed guide rows loaded", || {
         if count == 0 {
             return descendants(guide.upcast_ref()).iter().any(|w| {
@@ -556,6 +556,41 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .unwrap()
                 == Some(fixture.ids[0].clone())
         });
+        // AG01: set must survive closing this *real GTK manager*, then
+        // re-opening a newly constructed manager backed by the same SQLite.
+        let close_for_reload = named_button(guide.upcast_ref(), "Close").unwrap();
+        assert!(close_for_reload.grab_focus());
+        inject("XF86Back");
+        until("first-default manager fully closed", || !guide.is_mapped());
+        assert!(
+            manager.is_mapped(),
+            "nested close must retain parent manager"
+        );
+        assert!(guides.grab_focus());
+        inject("Return");
+        until("first-default new guide manager mapped", || {
+            find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
+        });
+        guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+        until("first-default recovered in reloaded UI", || {
+            row(&guide, "Guide 0").is_some()
+                && named_button(guide.upcast_ref(), "Clear Shared Default")
+                    .is_some_and(|button| button.is_mapped())
+        });
+        assert_eq!(
+            fixture
+                .storage
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap(),
+            Some(fixture.ids[0].clone()),
+            "first shared default survives a fresh GTK manager and SQLite reopen"
+        );
         let clear = named_button(guide.upcast_ref(), "Clear Shared Default").unwrap();
         assert!(clear.grab_focus());
         inject("Return");
@@ -616,6 +651,37 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
                 .unwrap()
                     == Some(fixture.ids[2].clone())
             },
+        );
+        // The last-guide default gets the same true-close/reopen round-trip.
+        let close_last = named_button(guide.upcast_ref(), "Close").unwrap();
+        assert!(close_last.grab_focus());
+        inject("XF86Back");
+        until("last-default manager fully closed", || !guide.is_mapped());
+        assert!(manager.is_mapped());
+        assert!(guides.grab_focus());
+        inject("Return");
+        until("last-default new guide manager mapped", || {
+            find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
+        });
+        guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+        until("last-default recovered in reloaded UI", || {
+            row(&guide, "Guide 2").is_some()
+                && named_button(guide.upcast_ref(), "Clear Shared Default")
+                    .is_some_and(|button| button.is_mapped())
+        });
+        assert_eq!(
+            fixture
+                .storage
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap(),
+            Some(fixture.ids[2].clone()),
+            "last shared default survives a fresh GTK manager and SQLite reopen"
         );
         let clear_last = named_button(guide.upcast_ref(), "Clear Shared Default")
             .expect("last guide clear action");
