@@ -1,0 +1,167 @@
+// SPDX-FileCopyrightText: 2026 Broadcaster contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Integrated R07 physical XTest regressions for the real Live/Mediathek
+//! toolbar entry and reverse route. Deliberately isolated GTK processes.
+use super::*;
+use std::{thread, time::Duration};
+
+fn settle() {
+    for _ in 0..20 {
+        while glib::MainContext::default().pending() {
+            glib::MainContext::default().iteration(false);
+        }
+        thread::sleep(Duration::from_millis(16));
+    }
+}
+
+fn inject(key: &str, initial: bool) {
+    // A real X11 key event to the mapped app window, never direct router
+    // invocation or gtk_widget_grab_focus substituted for a D-pad event.
+    const SCRIPT: &str = r#"
+import ctypes as c,sys
+x,t=c.CDLL('libX11.so.6'),c.CDLL('libXtst.so.6')
+x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
+d=x.XOpenDisplay(None);assert d
+x.XDefaultRootWindow.argtypes=[c.c_void_p];x.XDefaultRootWindow.restype=c.c_ulong
+x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)]
+x.XQueryTree.restype=c.c_int
+root=x.XDefaultRootWindow(d)
+a,b,n=c.c_ulong(),c.c_ulong(),c.c_uint();ch=c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(ch),c.byref(n))
+assert n.value
+x.XSetInputFocus.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_ulong]
+if sys.argv[2]=='initial':x.XSetInputFocus(d,ch[n.value-1],1,0)
+x.XFree.argtypes=[c.c_void_p];x.XFree(c.cast(ch,c.c_void_p))
+x.XStringToKeysym.argtypes=[c.c_char_p];x.XStringToKeysym.restype=c.c_ulong
+x.XKeysymToKeycode.argtypes=[c.c_void_p,c.c_ulong];x.XKeysymToKeycode.restype=c.c_uint
+code=x.XKeysymToKeycode(d,x.XStringToKeysym(sys.argv[1].encode()));assert code
+t.XTestFakeKeyEvent.argtypes=[c.c_void_p,c.c_uint,c.c_int,c.c_ulong]
+assert t.XTestFakeKeyEvent(d,code,1,0) and t.XTestFakeKeyEvent(d,code,0,0)
+x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p];x.XCloseDisplay(d)
+"#;
+    let mode = if initial { "initial" } else { "keep" };
+    let output = std::process::Command::new("python3")
+        .args(["-c", SCRIPT, key, mode])
+        .output()
+        .expect("native XTest injector");
+    assert!(
+        output.status.success(),
+        "XTest {key}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    settle();
+}
+
+fn focused_inside(win: &TvWindow, target: &gtk::Widget, label: &str) {
+    let owner = win.focused_widget().expect("R07 actual GTK window focus owner");
+    assert!(
+        owner.is_mapped() && owner.is_visible() && owner.is_sensitive(),
+        "R07 {label}: focused widget must be mapped, visible and sensitive"
+    );
+    assert!(
+        TvWindow::is_within(&owner, target),
+        "R07 {label}: unexpected focused widget type {}",
+        owner.type_().name()
+    );
+}
+
+fn run(page: &str, width: i32, height: i32, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("real app register");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    win.imp().stack.set_visible_child_name(page);
+    if page == "live" {
+        win.imp().live_view.show_toolbar_for_test();
+        assert!(
+            win.imp().live_view.focus_first_channel_for_test(),
+            "real mapped Live row fixture"
+        );
+    }
+    settle();
+
+    let page_widget: &gtk::Widget = if page == "live" {
+        win.imp().live_view.upcast_ref()
+    } else {
+        win.imp().mediathek_view.upcast_ref()
+    };
+    let targets = if page == "live" {
+        win.imp().live_view.toolbar_focus_targets()
+    } else {
+        win.imp().mediathek_view.toolbar_focus_targets()
+    };
+    let search = &targets[0];
+    assert!(search.is_mapped(), "R07 mapped Search");
+    assert!(search.grab_focus(), "R07 seed focus on real Search");
+    settle();
+    focused_inside(&win, search, "initial search");
+
+    inject("Down", true);
+    let after_down = win.focused_widget().expect("R07 Down focus owner");
+    if negative {
+        assert!(
+            TvWindow::is_within(&after_down, search),
+            "R07_EXPECTED_NEGATIVE_ORACLE: successful Down must leave Search"
+        );
+        unreachable!("R07 deliberately wrong focus assertion did not fail");
+    }
+    if page == "live" {
+        let list = TvWindow::find_descendant(page_widget, &|widget| {
+            widget.is::<gtk::ListBox>()
+        })
+        .and_then(|widget| widget.downcast::<gtk::ListBox>().ok())
+        .expect("actual mapped Live ListBox");
+        let first = list.row_at_index(0).expect("real first Live row");
+        focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
+    } else {
+        assert!(
+            targets
+                .iter()
+                .skip(1)
+                .any(|target| TvWindow::is_within(&after_down, target)),
+            "R07 Mediathek Search Down must reach a different mapped toolbar control"
+        );
+    }
+    inject("Up", false);
+    focused_inside(&win, search, "Down/Up must return to Search");
+
+    inject("Right", false);
+    focused_inside(&win, &targets[1], "Search Right -> Keyboard");
+    inject("Left", false);
+    focused_inside(&win, search, "Keyboard Left -> Search");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "mapped GTK/XTest with isolated display and GSettings"]
+fn r07_native_live_search_640_480() {
+    run("live", 640, 480, false);
+}
+#[test]
+#[ignore = "mapped GTK/XTest with isolated display and GSettings"]
+fn r07_native_live_search_1280_800() {
+    run("live", 1280, 800, false);
+}
+#[test]
+#[ignore = "mapped GTK/XTest with isolated display and GSettings"]
+fn r07_native_mediathek_search_640_480() {
+    run("mediathek", 640, 480, false);
+}
+#[test]
+#[ignore = "mapped GTK/XTest with isolated display and GSettings"]
+fn r07_native_mediathek_search_1280_800() {
+    run("mediathek", 1280, 800, false);
+}
+#[test]
+#[ignore = "deliberately wrong focus owner must fail via XTest"]
+fn r07_native_negative_live_search_stuck() {
+    run("live", 640, 480, true);
+}
