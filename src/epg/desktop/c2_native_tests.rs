@@ -592,6 +592,72 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .unwrap()
             .is_none()
         });
+        // R07 AG01: repeat real default->confirmation->SQLite persistence
+        // on the *last* guide, not only the first. Both edges must support
+        // Set/Clear with no stale default after guide-list rebuilding.
+        let last = guide_action(&guide, "Guide 2", "Use as Shared Default");
+        assert!(last.grab_focus(), "last real guide default action");
+        inject("Return");
+        until("last guide default confirmation", || {
+            named_button(win.upcast_ref(), "Confirm Shared Default").is_some()
+        });
+        let last_confirm = named_button(win.upcast_ref(), "Confirm Shared Default").unwrap();
+        assert!(last_confirm.grab_focus());
+        inject("Return");
+        until(
+            "last guide persisted in independently opened SQLite connection",
+            || {
+                let conn = fixture.storage.connect().unwrap();
+                conn.query_row(
+                    "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .unwrap()
+                    == Some(fixture.ids[2].clone())
+            },
+        );
+        let clear_last = named_button(guide.upcast_ref(), "Clear Shared Default")
+            .expect("last guide clear action");
+        assert!(clear_last.grab_focus());
+        inject("Return");
+        until("last guide clear confirmation", || {
+            descendants(win.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<adw::Dialog>().ok())
+                .any(|d| {
+                    d.is_mapped()
+                        && named_button(d.upcast_ref(), "Clear Shared Default").is_some()
+                        && named_button(d.upcast_ref(), "Cancel").is_some()
+                })
+        });
+        let clear_dialog = descendants(win.upcast_ref())
+            .into_iter()
+            .filter_map(|w| w.downcast::<adw::Dialog>().ok())
+            .find(|d| {
+                d.is_mapped()
+                    && named_button(d.upcast_ref(), "Clear Shared Default").is_some()
+                    && named_button(d.upcast_ref(), "Cancel").is_some()
+            })
+            .expect("real last guide clear confirmation");
+        let confirm_last_clear =
+            named_button(clear_dialog.upcast_ref(), "Clear Shared Default").unwrap();
+        assert!(confirm_last_clear.grab_focus());
+        inject("Return");
+        until("last guide cleared in reopened SQLite connection", || {
+            let conn = fixture.storage.connect().unwrap();
+            conn.query_row(
+                "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+            .is_none()
+        });
+        assert!(
+            guide.is_mapped() && manager.is_mapped(),
+            "default inverse stays in guide modal"
+        );
         // Remove is protected by Keep/Remove confirmation; Keep is not destructive.
         let third = row(&guide, "Guide 2").unwrap();
         let remove = named_button(third.upcast_ref(), "Remove").unwrap();

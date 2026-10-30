@@ -409,6 +409,126 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 
+// R07 AS03/AS15: traverse the entire two-line, real three-source GTK
+// action grid without activating Delete/Refresh/Move. Disabled first/last
+// movement edges are skipped by real XTest keys, not helper focus seeding.
+fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+        .expect("application resources");
+    gio::resources_register(&resource);
+    let fixture = Fixture::new(3);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("private SQLite source service");
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered app");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
+        .expect("real application page stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("actual My Channels view");
+    view.c1_install_test_service(service);
+    let (dialog, list) = open(&view, &win, 3);
+    let rows = [0, 1, 2].map(|i| controls(&list, i).expect("bound SQLite source"));
+    assert!(rows[0].row.grab_focus());
+    spin();
+    for (i, r) in rows.iter().enumerate() {
+        r07_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
+        inject("Return");
+        assert!(r.enabled.has_focus(), "Return enters same-row Switch");
+        // Upper line: Switch, Refresh, Defaults, Rename; all non-destructive
+        // until explicit activation. Walk forward, back and across lines.
+        for b in r.buttons.iter().take(3) {
+            inject("Right");
+            assert!(b.has_focus(), "upper right must stay with source {i}");
+        }
+        inject("Right");
+        assert!(r.buttons[2].has_focus(), "upper-right edge does not escape");
+        inject("Down");
+        let lower_edge = if i == 2 { 5 } else { 6 };
+        assert!(
+            r.buttons[lower_edge].has_focus(),
+            "lower right enabled edge"
+        );
+        if negative {
+            assert!(
+                r.buttons[5].has_focus(),
+                "R07_AS03_EXPECTED_NEGATIVE_ORACLE: disabled first Move Up must not own focus"
+            );
+            unreachable!("source-grid wrong-edge negative unexpectedly survived");
+        }
+        inject("Left");
+        if i == 1 {
+            assert!(r.buttons[5].has_focus(), "middle Move Down -> Move Up");
+            inject("Left");
+        }
+        assert!(
+            r.buttons[4].has_focus(),
+            "nearest lower predecessor is Delete"
+        );
+        inject("Left");
+        assert!(r.buttons[3].has_focus(), "Delete Left returns to Replace");
+        inject("Left");
+        r07_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
+        if i < 2 {
+            inject("Down");
+        }
+    }
+    for i in (0..2).rev() {
+        inject("Up");
+        r07_assert_source_row(&view, &win, &rows[i].row, &fixture.ids[i], i as i32);
+    }
+    assert!(
+        fixture.ids.iter().all(|id| fixture.enabled(id)),
+        "pure grid navigation cannot toggle sources"
+    );
+    let actual_order: Vec<String> = fixture
+        .storage
+        .connect()
+        .unwrap()
+        .prepare("SELECT id FROM iptv_sources ORDER BY source_order")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        actual_order, fixture.ids,
+        "grid traversal must not reorder any sources"
+    );
+    inject("XF86Back");
+    until("manager dismissed after real row Back", || {
+        !dialog.is_mapped()
+    });
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 AS03/AS15 actual source-manager two-line D-pad graph at 640"]
+fn r07_native_source_grid_640_480() {
+    r07_native_source_grid(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 AS03/AS15 actual source-manager two-line D-pad graph at 1280"]
+fn r07_native_source_grid_1280_800() {
+    r07_native_source_grid(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 AS03 wrong disabled movement edge must fail"]
+fn r07_native_source_grid_negative_edge() {
+    r07_native_source_grid(640, 480, true);
+}
+
 #[test]
 #[ignore = "R07 genuine XTest source-row traversal, disposable SQLite"]
 fn r07_native_source_rows_640_480() {

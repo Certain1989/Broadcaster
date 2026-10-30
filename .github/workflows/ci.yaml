@@ -160,6 +160,42 @@ jobs:
           fi
           echo "R07 wrong persisted source order rejected as expected"
 
+      - name: R07 batched source-grid XTest with negative oracle
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir" "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in \
+            r07_native_source_grid_640_480 r07_native_source_grid_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1
+            rm -rf "$data_dir"
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_source_grid_negative_edge -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 wrong disabled source-manager edge unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_AS03_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 negative grid oracle failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 disabled source-manager edge rejected as expected"
+
       - name: R07 native Live and Mediathek search focus reversal
         run: |
           set -eu
