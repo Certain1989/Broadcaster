@@ -118,7 +118,15 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
             .expect("actual mapped Live ListBox");
         let first = list.row_at_index(0).expect("real first Live row");
         focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
-        for index in 1..3 {
+        assert!(
+            first.has_focus(),
+            "R07 E01: first Live card row itself must own focus"
+        );
+        assert_eq!(
+            win.imp().live_view.r07_native_channel_id(0).as_deref(),
+            Some("r07-live-0")
+        );
+        for index in 1..5 {
             inject("Down", false);
             let next = list.row_at_index(index).expect("native mapped Live row");
             assert_eq!(
@@ -127,11 +135,19 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
                 "R07 must focus the correctly identified real Live channel card"
             );
             focused_inside(&win, next.upcast_ref(), "Live real next row");
+            assert!(
+                next.has_focus(),
+                "R07 E01: Down must focus the Live row, not an inner button"
+            );
         }
-        for index in (0..2).rev() {
+        for index in (0..4).rev() {
             inject("Up", false);
             let previous = list.row_at_index(index).expect("real previous Live row");
             focused_inside(&win, previous.upcast_ref(), "Live real previous row");
+            assert!(
+                previous.has_focus(),
+                "R07 E01: Up must focus the previous Live row directly"
+            );
         }
     } else {
         assert!(
