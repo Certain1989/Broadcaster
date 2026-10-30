@@ -339,6 +339,19 @@ impl TvLiveView {
             .map(|channel| channel.id())
     }
 
+    /// Collapse a disposable native Live row between independent E02 portals.
+    /// This only prepares the next physical D-pad route and never plays media.
+    #[cfg(test)]
+    pub(crate) fn r07_collapse_test_channel(&self, index: i32) {
+        self.imp()
+            .channels_list
+            .row_at_index(index)
+            .expect("r07 real Live row")
+            .downcast::<TvLiveCard>()
+            .expect("r07 real Live card")
+            .set_expanded(false);
+    }
+
     /// The Live focus style must reach the button actually selected by the
     /// remote, even when programmatic focus is not yet :focus-visible.
     #[cfg(test)]
