@@ -2566,6 +2566,63 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     .any(|b| b.label().is_some_and(|label| label.contains("WrongGuide"))),
                 "wrong guide leaked into picker"
             );
+            if index == 0 {
+                // B02: zero suggestions must neither invent an exact mapping
+                // nor silently save one before the user opens advanced search.
+                assert!(c4_picker_buttons(root).iter().all(|b| {
+                    !b.label().is_some_and(|l| {
+                        l.contains("exact identity") || l.contains("review variant")
+                    })
+                }));
+                let count: i64 = store
+                    .connect()
+                    .unwrap()
+                    .query_row(
+                        "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 0, "B02 no automatic mapping for zero candidates");
+            }
+            if index == 1 {
+                // B03: physical Return on the only scoped suggestion must
+                // reach the real SQLite CAS writer, close the live modal and
+                // return to the exact source-qualified card, not a test stub.
+                let exact = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|b| {
+                        b.label().is_some_and(|label| {
+                            label.contains("review variant") || label.contains("exact identity")
+                        })
+                    })
+                    .expect("B03 exactly one mapped action");
+                assert!(exact.grab_focus());
+                inject("Return");
+                wait(
+                    &|| editor::c4_test_picker_dialog().is_none(),
+                    "B03 confirmed mapping closes picker",
+                );
+                let (saved_guide, saved_target): (String, String) = store.connect().unwrap()
+                    .query_row(
+                        "SELECT guide_source_id,guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                        [id], |r| Ok((r.get(0)?, r.get(1)?)),
+                    ).expect("B03 exact row-level mapping persisted");
+                assert_eq!(
+                    (saved_guide, saved_target),
+                    (guide.clone(), "one.001".to_string())
+                );
+                assert_eq!(
+                    c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                    Some("Programme mapping"),
+                    "B03 focus returned to mapped card action",
+                );
+                view.assert_remote_action_focus_owner(
+                    &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+                    id,
+                );
+                continue;
+            }
 
             if index == 2 {
                 let search = c4_picker_button(root, "Search all guide channels / choose exact ID…");
