@@ -308,6 +308,7 @@ mod imp {
         pub(super) selected_id: RefCell<Option<ChannelId>>,
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
         pub(super) restore_results_focus: Cell<bool>,
+        pub(super) pending_star_focus: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
         pub(super) projection: OnceCell<ProjectionService>,
@@ -690,6 +691,25 @@ impl TvStreamsView {
         ));
     }
 
+    fn restore_pending_star_focus(&self) {
+        let Some(id) = self.imp().pending_star_focus.borrow().clone() else {
+            return;
+        };
+        if self.imp().selected_id.borrow().as_deref() != Some(id.as_str()) {
+            return;
+        }
+        let star = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+            .then(|| binding.ui.star.clone())
+        });
+        if star.is_some_and(|button| button.grab_focus()) {
+            self.imp().pending_star_focus.replace(None);
+        }
+    }
+
     fn toggle_row_star(&self, id: ChannelId) {
         let Some(service) = self.imp().service.borrow().clone() else {
             return;
@@ -704,6 +724,7 @@ impl TvStreamsView {
                 let result = service.toggle_favourite(&id).await;
                 view.imp().starred_busy.borrow_mut().remove(&id);
                 if result.is_ok() {
+                    view.imp().pending_star_focus.replace(Some(id));
                     view.reload();
                 }
             }
@@ -822,6 +843,7 @@ impl TvStreamsView {
             .set_label(&format!("{total} {}", gettext("channels")));
         if total == 0 {
             imp.expanded_id.replace(None);
+            imp.pending_star_focus.replace(None);
             imp.show_all_button.set_visible(query.favourites_only);
             let active_filters = query.search.is_some()
                 || query.source_id.is_some()
@@ -854,7 +876,11 @@ impl TvStreamsView {
         imp.suppress_controls.set(false);
         if imp.restore_results_focus.replace(false) {
             if total == 0 {
-                self.focus_search();
+                // Removing the last visible favourite must leave a usable
+                // one-key exit rather than focus on a vanished virtual row.
+                if !query.favourites_only || !imp.show_all_button.grab_focus() {
+                    self.focus_search();
+                }
             } else {
                 imp.results_list.grab_focus();
             }
@@ -1007,7 +1033,10 @@ impl TvStreamsView {
                 }
                 let target = match position {
                     Ok(Some(position)) if position < total as u64 => position as u32,
-                    Ok(None) => fallback.min(total - 1),
+                    Ok(None) => {
+                        view.imp().pending_star_focus.replace(None);
+                        fallback.min(total - 1)
+                    }
                     _ => return,
                 };
                 view.imp()
@@ -1019,6 +1048,7 @@ impl TvStreamsView {
                 view.imp()
                     .results_list
                     .scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                view.restore_pending_star_focus();
             }
         ));
     }
@@ -1163,6 +1193,43 @@ impl TvStreamsView {
         actions.append(&mapping);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
+        // Revealed action widgets are not necessarily mapped at the instant
+        // ListView activates a collapsed row. Move focus only after GTK has
+        // completed revealing this *same* bound, selected channel.
+        reveal.connect_child_revealed_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |revealer| {
+                if !revealer.is_child_revealed() {
+                    return;
+                }
+                let Some(id) = item
+                    .item()
+                    .and_downcast::<StreamSlot>()
+                    .and_then(|slot| slot.channel())
+                    .map(|channel| channel.id)
+                else {
+                    return;
+                };
+                let imp = view.imp();
+                if imp.expanded_id.borrow().as_deref() != Some(id.as_str())
+                    || imp.selected_id.borrow().as_deref() != Some(id.as_str())
+                {
+                    return;
+                }
+                let focused = view
+                    .root()
+                    .and_downcast::<gtk::Window>()
+                    .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
+                if focused.is_some_and(|focused| {
+                    view.contains_results_focus(&focused) && !focused.is::<gtk::Button>()
+                }) {
+                    view.focus_row_play(&id);
+                }
+            }
+        ));
         play.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -1285,6 +1352,16 @@ impl TvStreamsView {
         self.request_logo(&slot);
         self.request_page(slot.position());
         self.request_epg_for_slot(key, &slot);
+        // The same recycled slot may now hold a different playlist's row.
+        // Restore by persistent channel identity only, after binding settles.
+        if self.imp().pending_star_focus.borrow().is_some() {
+            let weak = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = weak.upgrade() {
+                    view.restore_pending_star_focus();
+                }
+            });
+        }
     }
 
     fn unbind_row(&self, item: &glib::Object) {
@@ -1857,19 +1934,56 @@ impl TvStreamsView {
 
     /// Return focus to the origin card action after OK/Back/Home/cancel, if
     /// virtualization has not removed it; otherwise return to the list.
+    /// Snapshot the currently expanded, bound mapping action before an async
+    /// picker load. A recycled row, source switch or reload invalidates it.
+    pub(crate) fn card_mapping_context(&self, id: &str) -> Option<(u64, String)> {
+        let imp = self.imp();
+        if imp.expanded_id.borrow().as_deref() != Some(id)
+            || imp.selected_id.borrow().as_deref() != Some(id)
+        {
+            return None;
+        }
+        let selected = imp.selection.get()?.selected();
+        let channel = imp.rows.get()?.channel(selected)?;
+        if channel.id != id {
+            return None;
+        }
+        let bound = imp.bindings.borrow().values().any(|binding| {
+            binding.connection.as_ref().is_some_and(|(slot, _)| {
+                slot.position() == selected
+                    && slot.channel().is_some_and(|row| {
+                        row.id == channel.id && row.source_id == channel.source_id
+                    })
+                    && binding.ui.mapping.is_mapped()
+                    && binding.ui.reveal.reveals_child()
+            })
+        });
+        bound.then(|| (imp.generation.get(), channel.source_id))
+    }
+
     pub(crate) fn restore_card_mapping_focus(&self, id: &str) {
-        for bound in self.imp().bindings.borrow().values() {
-            if bound
-                .connection
-                .as_ref()
-                .and_then(|(slot, _)| slot.channel())
-                .is_some_and(|channel| channel.id == id)
-                && bound.ui.mapping.grab_focus()
-            {
+        let imp = self.imp();
+        // A picker can outlive a row or a playlist/source swap. Never return
+        // keyboard focus to a recycled widget with an unrelated current owner.
+        if imp.expanded_id.borrow().as_deref() == Some(id)
+            && imp.selected_id.borrow().as_deref() == Some(id)
+        {
+            let action = imp.bindings.borrow().values().find_map(|bound| {
+                let (slot, _) = bound.connection.as_ref()?;
+                (slot.channel().is_some_and(|channel| channel.id == id)
+                    && bound.ui.reveal.reveals_child()
+                    && bound.ui.mapping.is_mapped())
+                .then(|| bound.ui.mapping.clone())
+            });
+            if action.is_some_and(|button| button.grab_focus()) {
                 return;
             }
         }
-        self.imp().results_list.grab_focus();
+        if !imp.results_list.grab_focus()
+            && (!imp.query.borrow().favourites_only || !imp.show_all_button.grab_focus())
+        {
+            self.focus_search();
+        }
     }
 
     fn repaint_bound_rows(&self) {
@@ -1879,6 +1993,20 @@ impl TvStreamsView {
                 Self::paint_row(&binding.ui, slot, expanded.as_deref());
             }
         }
+    }
+
+    /// Only a currently bound, expanded, source-qualified row may receive
+    /// Play focus. Virtualized positions alone are not durable identities.
+    fn focus_row_play(&self, id: &str) -> bool {
+        let play = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|channel| channel.id == id)
+                && binding.ui.reveal.reveals_child()
+                && binding.ui.play.is_mapped()
+                && binding.ui.play.is_sensitive())
+            .then(|| binding.ui.play.clone())
+        });
+        play.is_some_and(|button| button.grab_focus())
     }
 
     fn activate_position(&self, position: u32) {
@@ -1900,13 +2028,17 @@ impl TvStreamsView {
         }) {
             return;
         }
-        if self.imp().expanded_id.borrow().as_deref() == Some(channel.id.as_str()) {
-            self.play_position(position);
-        } else {
-            self.imp().expanded_id.replace(Some(channel.id.clone()));
-            self.imp().selected_id.replace(Some(channel.id));
+        // A ListView activation is an entry portal, never a playback command.
+        // Only a separate activation of the focused Play button can start it.
+        let id = channel.id;
+        if self.imp().expanded_id.borrow().as_deref() != Some(id.as_str()) {
+            self.imp().expanded_id.replace(Some(id.clone()));
+            self.imp().selected_id.replace(Some(id.clone()));
             self.repaint_bound_rows();
         }
+        // If mapped already, focus immediately; otherwise the Revealer's
+        // child-revealed signal completes the same-ID focus transition.
+        self.focus_row_play(&id);
     }
 
     fn play_position(&self, position: u32) {
@@ -2130,7 +2262,7 @@ impl TvStreamsView {
         // lazy data model detached from that GTK size-request artifact;
         // real mapped viewport/TV performance still needs device validation.
         let model = StreamRows::new();
-        for count in [100, 1_000, 10_000] {
+        for count in [100, 1_000, 10_000, 15_000] {
             let start = Instant::now();
             model.reset(count);
             assert_eq!(model.n_items(), count);
@@ -2187,17 +2319,17 @@ impl TvStreamsView {
             .emit_by_name::<()>("activate", &[&0u32]);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            1,
-            "second Enter plays once"
+            0,
+            "a second list activation cannot bypass the Play button"
         );
         self.play_position(0); // The explicit Play button's single callback.
-        assert_eq!(self.imp().fake_player_calls.get(), 2);
+        assert_eq!(self.imp().fake_player_calls.get(), 1);
         assert!(self.collapse_expanded());
         assert!(!self.collapse_expanded());
         self.play_position(0);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            2,
+            1,
             "collapsed row cannot play"
         );
         assert_eq!(
@@ -2208,35 +2340,43 @@ impl TvStreamsView {
         assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
     }
 
-    /// Two fabricated rows in the real virtualized ListView, with no provider
+    /// Three fabricated rows in the real virtualized ListView, with no provider
     /// fetch or media process. Window tests must present/map the parent first.
     #[cfg(test)]
-    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 2] {
+    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 3] {
         use super::model::ChannelEffective;
         use std::collections::BTreeSet;
 
-        let channels: Vec<_> = ["First fabricated channel", "Second fabricated channel"]
-            .into_iter()
-            .map(|name| ChannelEffective {
-                id: uuid::Uuid::new_v4().to_string(),
-                source_id: uuid::Uuid::new_v4().to_string(),
-                source_name: "Fabricated Source".into(),
-                visible_name: name.into(),
-                stream_url: "https://example.invalid/fake.m3u8".into(),
-                group: None,
-                languages: BTreeSet::new(),
-                countries: BTreeSet::new(),
-                region: None,
-                logo_url: None,
-                channel_number: None,
-                has_user_overrides: false,
-                is_favourite: false,
-            })
-            .collect();
-        let ids = [channels[0].id.clone(), channels[1].id.clone()];
+        let channels: Vec<_> = [
+            "First fabricated channel",
+            "Middle fabricated channel",
+            "Last fabricated channel",
+        ]
+        .into_iter()
+        .map(|name| ChannelEffective {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_id: uuid::Uuid::new_v4().to_string(),
+            source_name: "Fabricated Source".into(),
+            visible_name: name.into(),
+            stream_url: "https://example.invalid/fake.m3u8".into(),
+            group: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            region: None,
+            logo_url: None,
+            channel_number: None,
+            has_user_overrides: false,
+            is_favourite: false,
+        })
+        .collect();
+        let ids = [
+            channels[0].id.clone(),
+            channels[1].id.clone(),
+            channels[2].id.clone(),
+        ];
         let imp = self.imp();
         let rows = imp.rows.get().expect("rows");
-        rows.reset(2);
+        rows.reset(3);
         rows.insert_page(0, channels);
         imp.results_stack.set_visible_child_name("results");
         imp.selection.get().expect("selection").set_selected(0);
@@ -2248,6 +2388,69 @@ impl TvStreamsView {
         imp.fake_mapping_calls.set(0);
         self.repaint_bound_rows();
         ids
+    }
+
+    /// Attach a disposable service-backed SQLite catalogue to this mapped
+    /// view, including the remembered favourites-only preference.
+    #[cfg(test)]
+    pub(crate) fn install_remote_action_test_service(
+        &self,
+        service: StreamsService,
+        favourites_only: bool,
+    ) {
+        self.imp().service.replace(Some(service));
+        self.imp().query.borrow_mut().favourites_only = favourites_only;
+        self.imp().fake_player_enabled.set(true);
+        self.update_favourites_mode_button();
+        self.reload();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_visible_count(&self) -> u32 {
+        self.imp().rows.get().expect("rows").n_items()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_row_star(&self, id: &str) -> Option<gtk::Button> {
+        self.imp().bindings.borrow().values().find_map(|bound| {
+            let (slot, _) = bound.connection.as_ref()?;
+            slot.channel()
+                .filter(|row| row.id == id)
+                .and_then(|_| bound.ui.star.is_mapped().then(|| bound.ui.star.clone()))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_favourite_buttons(&self) -> (gtk::Button, gtk::Button) {
+        (
+            self.imp().favourites_button.get().clone(),
+            self.imp().show_all_button.get().clone(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_select(&self, position: u32) {
+        let imp = self.imp();
+        assert!(imp
+            .rows
+            .get()
+            .is_some_and(|rows| rows.channel(position).is_some()));
+        self.collapse_expanded();
+        imp.selection
+            .get()
+            .expect("selection")
+            .set_selected(position);
+        if let Some(id) = imp
+            .rows
+            .get()
+            .and_then(|rows| rows.channel(position))
+            .map(|ch| ch.id)
+        {
+            imp.selected_id.replace(Some(id));
+        }
+        imp.results_list
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        imp.results_list.grab_focus();
     }
 
     #[cfg(test)]
@@ -2301,6 +2504,54 @@ impl TvStreamsView {
         )
     }
 
+    /// Verify the GTK focus widget really belongs to the source-qualified
+    /// selected row, not merely to some other descendant of the ListView.
+    #[cfg(test)]
+    pub(crate) fn assert_remote_action_focus_owner(&self, focused: &gtk::Widget, id: &str) {
+        let imp = self.imp();
+        let selected = imp.selection.get().expect("selection").selected();
+        let row = imp
+            .rows
+            .get()
+            .expect("rows")
+            .channel(selected)
+            .expect("selected row");
+        assert_eq!(row.id, id, "selected GTK row has another identity");
+        assert_eq!(imp.selected_id.borrow().as_deref(), Some(id));
+        let binding = imp.bindings.borrow();
+        let owner = binding
+            .values()
+            .find(|bound| {
+                bound.connection.as_ref().is_some_and(|(slot, _)| {
+                    slot.position() == selected
+                        && slot.channel().is_some_and(|channel| {
+                            channel.id == id && channel.source_id == row.source_id
+                        })
+                        && bound.ui.star.is_mapped()
+                })
+            })
+            .expect("source-qualified owner must be bound and mapped");
+        let row_root = owner
+            .ui
+            .star
+            .parent()
+            .and_then(|header| header.parent())
+            .expect("bound card root");
+        // GTK can focus the virtual ListItem container rather than its child
+        // after exiting an action. Check that exact owner's item container,
+        // never accept an arbitrary descendant of the entire results list.
+        let item = row_root.parent().expect("bound ListItem widget");
+        let list = imp.results_list.upcast_ref::<gtk::Widget>();
+        assert!(
+            (focused == list && imp.results_list.has_focus())
+                || focused == &row_root
+                || focused.is_ancestor(&row_root)
+                || (item != list.clone() && (focused == &item || focused.is_ancestor(&item))),
+            "focus belongs to another source-qualified GTK row: widget={}",
+            focused.type_().name()
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn remote_action_test_selected_id(&self) -> Option<ChannelId> {
         self.imp().selected_id.borrow().clone()
@@ -2334,9 +2585,9 @@ impl TvStreamsView {
     pub(crate) fn remote_action_test_rebind(&self) {
         let imp = self.imp();
         let rows = imp.rows.get().expect("rows");
-        let channels: Vec<_> = (0..2).filter_map(|n| rows.channel(n)).collect();
-        assert_eq!(channels.len(), 2);
-        rows.reset(2);
+        let channels: Vec<_> = (0..3).filter_map(|n| rows.channel(n)).collect();
+        assert_eq!(channels.len(), 3);
+        rows.reset(3);
         rows.insert_page(0, channels);
     }
 
@@ -2439,7 +2690,36 @@ impl TvStreamsView {
         let Some(channel) = imp.rows.get().and_then(|rows| rows.channel(position)) else {
             return false;
         };
+        // A collapsed channel's star is an explicit Left portal: Right/OK
+        // remains the primary Play entry. Left from the star returns to the
+        // same logical row without toggling its expanded state.
+        let star = imp.bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == channel.id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+            .then(|| binding.ui.star.clone())
+        });
+        if let Some(star) = star.as_ref() {
+            if focused == star.upcast_ref::<gtk::Widget>()
+                || focused.is_ancestor(star.upcast_ref::<gtk::Widget>())
+            {
+                return match key {
+                    gtk::gdk::Key::Left | gtk::gdk::Key::Right => imp.results_list.grab_focus(),
+                    _ => false,
+                };
+            }
+        }
         if imp.expanded_id.borrow().as_deref() != Some(channel.id.as_str()) {
+            if !focused.is::<gtk::Button>() {
+                if key == gtk::gdk::Key::Left {
+                    return star.is_some_and(|button| button.grab_focus());
+                }
+                if key == gtk::gdk::Key::Right {
+                    self.activate_position(position);
+                    return true;
+                }
+            }
             return false;
         }
         // Only the current selection's actually bound widgets may be targeted.

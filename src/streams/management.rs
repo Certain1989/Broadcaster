@@ -1838,6 +1838,806 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         run_mapped_manager(1280, 800);
     }
 
+    /// C4 keeps the existing physical XTest injector. Direct router calls
+    /// cannot prove that a mapped list actually receives the remote key.
+    fn c4_focused_button(win: &crate::window::TvWindow) -> Option<gtk::Button> {
+        gtk::prelude::GtkWindowExt::focus(win)?
+            .downcast::<gtk::Button>()
+            .ok()
+    }
+
+    fn c4_native_cards(width: i32, height: i32, negative: bool) {
+        adw::init().expect("GTK display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application register");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        fn stack(w: &gtk::Widget) -> Option<adw::ViewStack> {
+            if let Ok(stack) = w.clone().downcast::<adw::ViewStack>() {
+                return Some(stack);
+            }
+            let mut child = w.first_child();
+            while let Some(widget) = child {
+                if let Some(stack) = stack(&widget) {
+                    return Some(stack);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        let pages = stack(win.upcast_ref()).expect("main navigation stack");
+        pages.set_visible_child_name("streams");
+        spin();
+        let view = find_view(win.upcast_ref()).expect("My Channels");
+        let ids = view.install_remote_action_test_rows();
+        spin();
+        for (index, id) in ids.iter().enumerate() {
+            view.remote_action_test_select(index as u32);
+            spin();
+            let previous = view.remote_action_test_counts().0;
+            // First Return seeds X11 window focus; subsequent directions
+            // genuinely traverse the GTK action graph.
+            if index == 0 {
+                inject("Return");
+            } else {
+                inject("Right");
+            }
+            let play = c4_focused_button(&win).unwrap_or_else(|| {
+                panic!(
+                    "Play action focus missing on row {index}: {}",
+                    view.remote_action_test_state()
+                )
+            });
+            assert_eq!(play.label().as_deref(), Some("Play"));
+            assert!(play.is_mapped() && play.has_focus());
+            view.assert_remote_action_focus_owner(play.upcast_ref(), id);
+            assert!(
+                view.card_mapping_context(id).is_some(),
+                "bound mapping context"
+            );
+            assert_eq!(
+                view.remote_action_test_counts().0,
+                previous,
+                "entry auto-played"
+            );
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str())
+            );
+            if negative {
+                assert_eq!(
+                    play.label().as_deref(),
+                    Some("Edit Metadata"),
+                    "C4_EXPECTED_NEGATIVE_ORACLE: Right/OK entry cannot focus Edit"
+                );
+            }
+            inject("Return");
+            assert_eq!(view.remote_action_test_counts().0, previous + 1);
+            inject("Left");
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("row");
+            view.assert_remote_action_focus_owner(&focused, id);
+            inject("XF86Back");
+            assert!(view.remote_action_test_state().contains("expanded=None"));
+            assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
+            inject("Left");
+            assert_eq!(
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
+                Some("☆"),
+                "collapsed star without expansion"
+            );
+            inject("Right");
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("row after star");
+            view.assert_remote_action_focus_owner(&focused, id);
+            inject("Right");
+            assert_eq!(
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
+                Some("Play")
+            );
+            inject("Down");
+            assert_eq!(
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
+                Some("Edit Metadata")
+            );
+            inject("Down");
+            assert_eq!(
+                c4_focused_button(&win)
+                    .and_then(|button| button.label())
+                    .as_deref(),
+                Some("Programme mapping")
+            );
+            inject("Left");
+            let focused = gtk::prelude::GtkWindowExt::focus(&win).expect("mapping return");
+            view.assert_remote_action_focus_owner(&focused, id);
+            inject("XF86Back");
+            assert!(view.remote_action_test_state().contains("expanded=None"));
+            assert!(
+                view.card_mapping_context(id).is_none(),
+                "collapsed picker context"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped C4 cards"]
+    fn c4_native_cards_640_480() {
+        c4_native_cards(640, 480, false);
+    }
+
+    #[test]
+    #[ignore = "native XTest mapped C4 cards"]
+    fn c4_native_cards_1280_800() {
+        c4_native_cards(1280, 800, false);
+    }
+
+    #[test]
+    #[ignore = "deliberately wrong physical focus oracle"]
+    fn c4_native_negative_oracle() {
+        c4_native_cards(640, 480, true);
+    }
+
+    /// Test the real star click, persisted SQLite preference, filter and
+    /// zero-results focus return, not merely a fabricated glyph/focus route.
+    /// The CI wrapper must provide a fresh isolated XDG_DATA_HOME.
+    fn c4_native_favourites(width: i32, height: i32) {
+        use crate::streams::{
+            model::{ChannelQuery, IncomingChannel, SourceDraft, SourceOrigin, ValidatedSnapshot},
+            storage::Storage,
+        };
+        use std::collections::BTreeSet;
+
+        let data_home = std::env::var("XDG_DATA_HOME").expect("isolated C4 XDG_DATA_HOME");
+        assert!(
+            data_home.contains("broadcaster-c4-fixture-"),
+            "refusing to use a real user's My Channels database"
+        );
+        let store = Storage::new();
+        store.initialize().expect("disposable SQLite database");
+        let source_id = uuid::Uuid::new_v4().to_string();
+        let source = SourceDraft {
+            name: "C4 disposable source".into(),
+            origin: SourceOrigin {
+                kind: OriginKind::RemoteUrl,
+                locator: "https://example.invalid/c4.m3u".into(),
+            },
+            enabled: true,
+            order: 0,
+            defaults: SourceDefaults::default(),
+        };
+        let entries: Vec<IncomingChannel> = (0..3)
+            .map(|i| IncomingChannel {
+                order: i,
+                imported_name: format!("C4 channel {i}"),
+                stream_url: format!("https://example.invalid/c4/{i}.m3u8"),
+                tvg_id: Some(format!("c4-{i}")),
+                tvg_name: None,
+                group_title: None,
+                logo_url: None,
+                channel_number: None,
+                region: None,
+                languages: BTreeSet::new(),
+                countries: BTreeSet::new(),
+                user_agent: None,
+                referer: None,
+            })
+            .collect();
+        let snapshot = ValidatedSnapshot::new(source_id.clone(), entries).unwrap();
+        store
+            .create_source_with_initial_snapshot(&source_id, &source, &snapshot, 1_800_000_000)
+            .unwrap();
+        let all = store.query_channels(&ChannelQuery::default()).unwrap();
+        assert_eq!(all.total, 3);
+        let first_id = all.items[0].id.clone();
+        let service = glib::MainContext::default()
+            .block_on(StreamsService::with_storage(store.clone()))
+            .expect("service-backed test");
+        adw::init().expect("GTK display");
+        let resource =
+            gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+        gio::resources_register(&resource);
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>)
+            .expect("application register");
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        fn stack(w: &gtk::Widget) -> Option<adw::ViewStack> {
+            if let Ok(stack) = w.clone().downcast::<adw::ViewStack>() {
+                return Some(stack);
+            }
+            let mut child = w.first_child();
+            while let Some(widget) = child {
+                if let Some(stack) = stack(&widget) {
+                    return Some(stack);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        let pages = stack(win.upcast_ref()).expect("main navigation");
+        pages.set_visible_child_name("streams");
+        spin();
+        let view = find_view(win.upcast_ref()).expect("My Channels");
+        view.install_remote_action_test_service(service, false);
+        let wait_until = |predicate: &dyn Fn() -> bool, reason: &str| {
+            for _ in 0..40 {
+                spin();
+                if predicate() {
+                    return;
+                }
+            }
+            panic!("C4 timed out: {reason}");
+        };
+        wait_until(
+            &|| {
+                view.remote_action_test_visible_count() == 3
+                    && view.remote_action_test_row_star(&first_id).is_some()
+            },
+            "SQLite rows bound",
+        );
+        assert!(view.show_and_focus_test_results());
+        inject("Return");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("Play")
+        );
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &first_id,
+        );
+        inject("Left");
+        inject("XF86Back");
+        inject("Left");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("☆")
+        );
+        inject("Return");
+        wait_until(
+            &|| {
+                store
+                    .query_channels(&ChannelQuery::default())
+                    .is_ok_and(|page| page.items[0].is_favourite)
+                    && view
+                        .remote_action_test_row_star(&first_id)
+                        .is_some_and(|star| star.label().as_deref() == Some("★"))
+            },
+            "star toggle, reload and persisted favourite",
+        );
+        assert!(
+            view.remote_action_test_row_star(&first_id)
+                .is_some_and(|star| star.has_focus()),
+            "the toggled star must reclaim focus after SQLite reload"
+        );
+        let (favourites, show_all) = view.remote_action_test_favourite_buttons();
+        assert!(favourites.grab_focus());
+        inject("Return");
+        wait_until(
+            &|| store.favourites_only() == Ok(true) && view.remote_action_test_visible_count() == 1,
+            "favourites-only toggle and SQL filter",
+        );
+        let reopened = glib::MainContext::default()
+            .block_on(StreamsService::with_storage(store.clone()))
+            .expect("reopen disposable SQLite");
+        assert_eq!(store.favourites_only(), Ok(true));
+        view.install_remote_action_test_service(reopened, true);
+        wait_until(
+            &|| {
+                view.remote_action_test_visible_count() == 1
+                    && view.remote_action_test_row_star(&first_id).is_some()
+            },
+            "favourite visible after database reopen",
+        );
+        view.remote_action_test_select(0);
+        spin();
+        inject("Left");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("★")
+        );
+        inject("Return");
+        let filtered = ChannelQuery {
+            favourites_only: true,
+            ..ChannelQuery::default()
+        };
+        wait_until(
+            &|| {
+                store
+                    .query_channels(&filtered)
+                    .is_ok_and(|page| page.total == 0)
+                    && view.remote_action_test_visible_count() == 0
+                    && show_all.has_focus()
+            },
+            "last favourite removal restores Show All focus",
+        );
+        assert!(show_all.is_mapped() && show_all.has_focus());
+        inject("Return");
+        wait_until(
+            &|| {
+                store.favourites_only() == Ok(false) && view.remote_action_test_visible_count() == 3
+            },
+            "Show All exits empty favourites",
+        );
+        assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
+    fn c4_native_favourites_640_480() {
+        c4_native_favourites(640, 480);
+    }
+
+    #[test]
+    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
+    fn c4_native_favourites_1280_800() {
+        c4_native_favourites(1280, 800);
+    }
+
+    // Walk the live GTK widget tree, not test-fabricated action widgets.
+    fn c4_picker_buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
+        fn visit(widget: &gtk::Widget, found: &mut Vec<gtk::Button>) {
+            if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
+                found.push(button);
+            }
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                visit(&next, found);
+                child = next.next_sibling();
+            }
+        }
+        let mut buttons = Vec::new();
+        visit(widget, &mut buttons);
+        buttons
+    }
+
+    fn c4_picker_button(root: &gtk::Widget, name: &str) -> gtk::Button {
+        c4_picker_buttons(root)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("C4 modal button absent: {name}"))
+    }
+
+    fn c4_picker_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
+        if let Ok(entry) = widget.clone().downcast::<gtk::Entry>() {
+            return Some(entry);
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(entry) = c4_picker_entry(&next) {
+                return Some(entry);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+
+    fn c4_picker_modal(widget: &gtk::Widget, css: &str) -> Option<adw::Dialog> {
+        if let Ok(dialog) = widget.clone().downcast::<adw::Dialog>() {
+            if dialog.has_css_class(css) && dialog.is_mapped() {
+                return Some(dialog);
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(dialog) = c4_picker_modal(&next, css) {
+                return Some(dialog);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+
+    /// Real selected-guide SQLite, async snapshot, GTK modal, XTest and
+    /// transaction CAS. Never use an owner's playlist or non-disposable guide.
+    fn c4_native_mapping_picker(width: i32, height: i32) {
+        use crate::streams::{
+            editor,
+            model::{
+                ChannelQuery, IncomingChannel, OriginKind, SourceDraft, SourceOrigin,
+                ValidatedSnapshot,
+            },
+            storage::Storage,
+        };
+        use rusqlite::params;
+        use std::collections::BTreeSet;
+
+        let data_home = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME");
+        assert!(data_home.contains("broadcaster-c4-fixture-"));
+        let store = Storage::new();
+        store.initialize().unwrap();
+        let playlist_id = uuid::Uuid::new_v4().to_string();
+        let entries: Vec<_> = [
+            ("Zero match", "zero.original"),
+            ("One match", "one.original"),
+            ("Five match", "five.original"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, tvg))| IncomingChannel {
+            order: index as u32,
+            imported_name: name.into(),
+            stream_url: format!("https://example.invalid/c4-picker/{index}.m3u8"),
+            tvg_id: Some(tvg.into()),
+            tvg_name: None,
+            group_title: None,
+            logo_url: None,
+            channel_number: None,
+            region: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            user_agent: None,
+            referer: None,
+        })
+        .collect();
+        store
+            .create_source_with_initial_snapshot(
+                &playlist_id,
+                &SourceDraft {
+                    name: "C4 picker playlist".into(),
+                    origin: SourceOrigin {
+                        kind: OriginKind::RemoteUrl,
+                        locator: "https://example.invalid/c4-picker.m3u".into(),
+                    },
+                    enabled: true,
+                    order: 0,
+                    defaults: SourceDefaults::default(),
+                },
+                &ValidatedSnapshot::new(playlist_id.clone(), entries).unwrap(),
+                1_800_000_000,
+            )
+            .unwrap();
+        let ids: Vec<_> = store
+            .query_channels(&ChannelQuery::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(ids.len(), 3);
+        let guide = uuid::Uuid::new_v4().to_string();
+        let other_guide = uuid::Uuid::new_v4().to_string();
+        {
+            let mut db = store.connect().unwrap();
+            for (id, name) in [
+                (&guide, "C4 selected guide"),
+                (&other_guide, "C4 other guide"),
+            ] {
+                db.execute(
+                    "INSERT INTO epg_sources
+                     (id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+                     VALUES (?1,?2,'local_file','/fabricated/c4-guide',1,1,10,1000)",
+                    params![id, name],
+                )
+                .unwrap();
+            }
+            crate::epg::bindings::set_shared_guide(
+                &mut db,
+                crate::epg::bindings::ConfirmedGuideSelection::after_user_confirmation(),
+                Some(&guide),
+            )
+            .unwrap();
+            for (id, name) in std::iter::once(("one.001".to_string(), "One match".to_string()))
+                .chain((1..=5).map(|i| (format!("five.{i:03}"), "Five match".into())))
+                .chain((0..36).map(|i| (format!("searchme.{i:03}"), format!("SearchMe {i:03}"))))
+            {
+                db.execute(
+                    "INSERT INTO epg_channels(source_id,channel_id,display_name)
+                     VALUES (?1,?2,?3)",
+                    params![guide, id, name],
+                )
+                .unwrap();
+            }
+            db.execute(
+                "INSERT INTO epg_channels(source_id,channel_id,display_name)
+                 VALUES (?1,'wrong.guide','WrongGuide Only')",
+                [&other_guide],
+            )
+            .unwrap();
+        }
+        let service = glib::MainContext::default()
+            .block_on(StreamsService::with_storage(store.clone()))
+            .unwrap();
+        adw::init().expect("GTK display");
+        gio::resources_register(
+            &gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap(),
+        );
+        gio::Settings::new(crate::config::BASE_APP_ID)
+            .set_boolean("osk-enabled", true)
+            .unwrap();
+        let app = TvApplication::new();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let win = crate::window::TvWindow::new(&app);
+        win.set_default_size(width, height);
+        win.present();
+        spin();
+        let view = find_view(win.upcast_ref()).expect("My Channels");
+        // Switch the real window to the real view. The isolated service is
+        // injected only because production startup is disabled in Rust tests.
+        fn stack(widget: &gtk::Widget) -> Option<adw::ViewStack> {
+            if let Ok(stack) = widget.clone().downcast::<adw::ViewStack>() {
+                return Some(stack);
+            }
+            let mut child = widget.first_child();
+            while let Some(next) = child {
+                if let Some(stack) = stack(&next) {
+                    return Some(stack);
+                }
+                child = next.next_sibling();
+            }
+            None
+        }
+        stack(win.upcast_ref())
+            .expect("navigation stack")
+            .set_visible_child_name("streams");
+        view.install_remote_action_test_service(service, false);
+
+        let wait = |predicate: &dyn Fn() -> bool, reason: &str| {
+            for _ in 0..35 {
+                spin();
+                if predicate() {
+                    return;
+                }
+            }
+            panic!("C4 mapping timeout: {reason}");
+        };
+        wait(
+            &|| {
+                view.remote_action_test_visible_count() == 3
+                    && view.remote_action_test_row_star(&ids[0]).is_some()
+            },
+            "mapped SQLite rows",
+        );
+
+        // Each case physically opens the *actual* compact card picker.
+        // The selected index is seeded explicitly, as in the original C4
+        // action test; no false claim of fully physical row-to-row traversal.
+        for (index, expected_proposals) in [(0_u32, 0), (1, 1), (2, 5)] {
+            let id = &ids[index as usize];
+            view.remote_action_test_select(index);
+            spin();
+            inject("Right");
+            let play = c4_focused_button(&win).expect("Play entry");
+            assert_eq!(play.label().as_deref(), Some("Play"));
+            view.assert_remote_action_focus_owner(play.upcast_ref(), id);
+            inject("Down");
+            inject("Down");
+            assert_eq!(
+                c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                Some("Programme mapping")
+            );
+            let previous = view.remote_action_test_counts().2;
+            inject("Return");
+            wait(
+                &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+                "real mapping dialog",
+            );
+            assert_eq!(view.remote_action_test_counts().2, previous + 1);
+            let dialog = editor::c4_test_picker_dialog().unwrap();
+            let root = dialog.upcast_ref::<gtk::Widget>();
+            let proposals = c4_picker_buttons(root)
+                .into_iter()
+                .filter(|b| {
+                    b.label().is_some_and(|label| {
+                        label.contains("review variant") || label.contains("exact identity")
+                    })
+                })
+                .count();
+            assert_eq!(proposals, expected_proposals, "selected-guide proposals");
+            assert!(
+                !c4_picker_buttons(root)
+                    .into_iter()
+                    .any(|b| b.label().is_some_and(|label| label.contains("WrongGuide"))),
+                "wrong guide leaked into picker"
+            );
+
+            if index == 2 {
+                let search = c4_picker_button(root, "Search all guide channels / choose exact ID…");
+                assert!(search.grab_focus());
+                inject("Return");
+                spin();
+                let entry = c4_picker_entry(root).expect("real search field");
+                assert!(entry.is_mapped());
+                entry.set_text("SearchMe");
+                wait(
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 30
+                    },
+                    "first 30 selected-guide exact results",
+                );
+                let next = c4_picker_button(root, "Next");
+                assert!(next.is_sensitive() && next.grab_focus());
+                inject("Return");
+                wait(
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 6
+                    },
+                    "second page with six exact results",
+                );
+                let previous = c4_picker_button(root, "Previous");
+                assert!(previous.is_sensitive() && previous.grab_focus());
+                inject("Return");
+                wait(
+                    &|| {
+                        c4_picker_buttons(root)
+                            .iter()
+                            .filter(|b| {
+                                b.label()
+                                    .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                            })
+                            .count()
+                            == 30
+                    },
+                    "back to first search page",
+                );
+
+                // Real OSK launcher, physical arrows on its live preview and
+                // physical Cancel. Never commit a fabricated search result.
+                let keyboard = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|b| {
+                        b.icon_name().as_deref() == Some("input-keyboard-symbolic") && b.is_mapped()
+                    })
+                    .expect("mapped picker keyboard launcher");
+                assert!(keyboard.grab_focus());
+                inject("Return");
+                wait(
+                    &|| c4_picker_modal(win.upcast_ref(), "osk-production").is_some(),
+                    "mapped production OSK",
+                );
+                let osk = c4_picker_modal(win.upcast_ref(), "osk-production").unwrap();
+                let preview = c4_picker_entry(osk.upcast_ref()).expect("OSK draft entry");
+                preview.set_text("ab");
+                preview.set_position(1);
+                let left = c4_picker_button(osk.upcast_ref(), "←");
+                assert!(left.grab_focus());
+                inject("Return");
+                assert_eq!(preview.position(), 0, "physical OSK caret left");
+                let right = c4_picker_button(osk.upcast_ref(), "→");
+                assert!(right.grab_focus());
+                inject("Return");
+                assert_eq!(preview.position(), 1, "physical OSK caret right");
+                let osk_cancel = c4_picker_button(osk.upcast_ref(), "Cancel");
+                assert!(osk_cancel.grab_focus());
+                inject("Return");
+                wait(&|| !osk.is_mapped(), "OSK Cancel dismissed nested dialog");
+                assert_eq!(
+                    entry.text().as_str(),
+                    "SearchMe",
+                    "cancel cannot edit origin"
+                );
+
+                // After a same-second guide revision, physical selection of
+                // a legitimate exact result must fail CAS and write no row.
+                store
+                    .connect()
+                    .unwrap()
+                    .execute("UPDATE epg_sources SET updated_at=11 WHERE id=?1", [&guide])
+                    .unwrap();
+                let target = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|b| {
+                        b.label()
+                            .is_some_and(|l| l.contains("SearchMe") && l.contains("— ["))
+                    })
+                    .expect("real exact-result action");
+                assert!(target.grab_focus());
+                inject("Return");
+                wait(
+                    &|| {
+                        // This is the user-visible CAS denial from the real
+                        // picker callback, not a backend-only error oracle.
+                        let mut labels = Vec::new();
+                        fn collect(widget: &gtk::Widget, out: &mut Vec<String>) {
+                            if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+                                out.push(label.text().to_string());
+                            }
+                            let mut child = widget.first_child();
+                            while let Some(next) = child {
+                                collect(&next, out);
+                                child = next.next_sibling();
+                            }
+                        }
+                        collect(root, &mut labels);
+                        labels
+                            .iter()
+                            .any(|l| l.contains("Channel, guide or binding changed"))
+                    },
+                    "same-second stale guide refuses UI mapping write",
+                );
+                let count: i64 = store
+                    .connect()
+                    .unwrap()
+                    .query_row(
+                        "SELECT COUNT(*) FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(count, 0, "wrong programme cannot bind on stale guide");
+            }
+            let cancel = c4_picker_button(root, "Cancel");
+            assert!(cancel.grab_focus());
+            inject("Return");
+            wait(
+                &|| editor::c4_test_picker_dialog().is_none(),
+                "real picker Cancel close",
+            );
+            assert_eq!(
+                c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                Some("Programme mapping"),
+                "mapping close must restore its exact source-qualified card"
+            );
+            view.assert_remote_action_focus_owner(
+                &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+                id,
+            );
+        }
+
+        // Suspend a completed background snapshot just before presentation,
+        // switch the selected card while suspended, and assert no stale modal
+        // becomes visible after release.
+        editor::c4_test_pause_picker(true);
+        view.remote_action_test_select(2);
+        spin();
+        inject("Right");
+        inject("Down");
+        inject("Down");
+        inject("Return");
+        wait(
+            &editor::c4_test_picker_loaded,
+            "paused completed picker snapshot",
+        );
+        assert!(editor::c4_test_picker_dialog().is_none());
+        view.remote_action_test_select(0);
+        editor::c4_test_pause_picker(false);
+        spin();
+        assert!(
+            editor::c4_test_picker_dialog().is_none(),
+            "stale source/row completion must never present a picker"
+        );
+        assert!(view.card_mapping_context(&ids[2]).is_none());
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "real selected-guide mapping modal, CAS and XTest"]
+    fn c4_native_mapping_640_480() {
+        c4_native_mapping_picker(640, 480);
+    }
+
+    #[test]
+    #[ignore = "real selected-guide mapping modal, CAS and XTest"]
+    fn c4_native_mapping_1280_800() {
+        c4_native_mapping_picker(1280, 800);
+    }
+
     fn run_mapped_manager(width: i32, height: i32) {
         adw::init().expect("display");
         let resource =

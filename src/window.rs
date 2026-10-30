@@ -1118,9 +1118,16 @@ mod playback_navigation_tests {
             .contains_results_focus(&window.focused_widget().expect("toolbar should hold focus")));
         streams.assert_remote_toolbar_focus_styled();
         assert!(streams.show_and_focus_test_results());
+        // Left from a collapsed row enters its always-visible star; another
+        // Left returns to the owning list without crossing the page boundary.
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
-        assert!(!streams
-            .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
+        let star_focus = window.focused_widget().expect("collapsed star focus");
+        assert!(star_focus.is::<gtk::Button>());
+        assert!(streams.contains_results_focus(&star_focus));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(
+            streams.contains_results_focus(&window.focused_widget().expect("same row after star"))
+        );
         assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
@@ -1315,16 +1322,16 @@ mod playback_navigation_tests {
         spin();
         assert!(streams.show_and_focus_test_results());
         assert!(
-            !window.focus_boundary_key(gtk::gdk::Key::Right),
-            "collapsed row must retain native arrow behavior"
+            window.focus_boundary_key(gtk::gdk::Key::Right),
+            "Right from a collapsed row must expand and enter Play"
         );
+        assert_eq!(streams.remote_action_test_counts(), (0, 0, 0));
         eprintln!(
             "E4 before activation: {}",
             streams.remote_action_test_state()
         );
-        streams.remote_action_test_activate();
         eprintln!(
-            "E4 after activation: {}",
+            "C4 after Right entry: {}",
             streams.remote_action_test_state()
         );
         spin();
@@ -1412,6 +1419,8 @@ mod playback_navigation_tests {
                 "GTK focus styling requires focus"
             );
         };
+        // First entry focused Play without invoking the player.
+        assert_action(0);
         // Repeated Right must not make any of the expanded actions lose GTK focus.
         // This verifies the routed widget state, not compositor-rendered pixels.
         for (index, button) in buttons.iter().enumerate() {
