@@ -2525,13 +2525,50 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             "mapped SQLite rows",
         );
 
-        // Each case physically opens the *actual* compact card picker.
-        // The selected index is seeded explicitly, as in the original C4
-        // action test; no false claim of fully physical row-to-row traversal.
+        // B01: only the initial Search field is focus-seeded. Traverse the
+        // real toolbar, filter row, and virtualised SQLite list with physical
+        // XTest Down before opening the *actual* picker; do not call
+        // remote_action_test_select() for any of these three card entries.
+        let search = view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus(), "B01 mapped Search entry");
+        spin();
+        for _ in 0..16 {
+            let owner =
+                gtk::prelude::GtkWindowExt::focus(&win).expect("B01 Search-to-results focus owner");
+            if view.contains_results_focus(&owner) {
+                break;
+            }
+            inject("Down");
+        }
+        let owner = gtk::prelude::GtkWindowExt::focus(&win)
+            .expect("B01 focus after actual toolbar traversal");
+        assert!(
+            owner.is_mapped() && view.contains_results_focus(&owner),
+            "B01 physical Search→filters→SQLite result route"
+        );
+        assert_eq!(
+            view.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str()),
+            "B01 first real row after Search traversal"
+        );
         for (index, expected_proposals) in [(0_u32, 0), (1, 1), (2, 5)] {
             let id = &ids[index as usize];
-            view.remote_action_test_select(index);
-            spin();
+            if index != 0 {
+                // The previous picker closed to its expanded Mapping action;
+                // return/collapse/traverse the next row without helper seeding.
+                inject("Left");
+                view.assert_remote_action_focus_owner(
+                    &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+                    &ids[index as usize - 1],
+                );
+                inject("XF86Back");
+                inject("Down");
+            }
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str()),
+                "B01 row traversal must preserve source-qualified ID"
+            );
             inject("Right");
             let play = c4_focused_button(&win).expect("Play entry");
             assert_eq!(play.label().as_deref(), Some("Play"));
@@ -2780,6 +2817,90 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 id,
             );
         }
+
+        // B04: reopen the *same* third card after the stale-CAS rejection.
+        // This freshly loaded picker sees the updated guide revision. Walk
+        // all five bounded suggestions through genuine Down/Up keys, then
+        // choose the fourth via physical Return, verifying only that UUID's
+        // guide mapping persists and the modal restores its card focus.
+        assert_eq!(
+            view.remote_action_test_selected_id().as_deref(),
+            Some(ids[2].as_str()),
+            "B04 still on five-suggestion card"
+        );
+        inject("Return");
+        wait(
+            &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+            "B04 fresh five-suggestion picker",
+        );
+        let five_dialog = editor::c4_test_picker_dialog().unwrap();
+        let five_root = five_dialog.upcast_ref::<gtk::Widget>();
+        let candidates: Vec<_> = c4_picker_buttons(five_root)
+            .into_iter()
+            .filter(|b| {
+                b.label()
+                    .is_some_and(|l| l.contains("review variant") || l.contains("exact identity"))
+            })
+            .collect();
+        assert_eq!(candidates.len(), 5, "B04 bounded five exact candidates");
+        assert!(candidates[0].grab_focus());
+        for (i, expected) in candidates.iter().enumerate().skip(1) {
+            inject("Down");
+            assert!(
+                expected.has_focus(),
+                "B04 physical Down must reach suggestion {i} without escaping modal"
+            );
+        }
+        // Up is the inverse of the four candidate-to-candidate Down hops.
+        // A further Down from the last candidate belongs to the following
+        // Search action, not to this bounded five-suggestion graph.
+        for (i, expected) in candidates.iter().enumerate().rev().skip(1) {
+            inject("Up");
+            assert!(
+                expected.has_focus(),
+                "B04 physical Up must reverse to suggestion {i}"
+            );
+        }
+        for _ in 0..3 {
+            inject("Down");
+        }
+        assert!(
+            candidates[3].has_focus(),
+            "B04 fourth suggestion navigation"
+        );
+        inject("Return");
+        wait(
+            &|| editor::c4_test_picker_dialog().is_none(),
+            "B04 physical fourth-suggestion mapping closes picker",
+        );
+        let saved: (String, String) = store.connect().unwrap().query_row(
+            "SELECT guide_source_id,guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+            [&ids[2]], |r| Ok((r.get(0)?, r.get(1)?))
+        ).expect("B04 selected source's guide mapping persisted");
+        assert_eq!(
+            saved,
+            (guide.clone(), "five.004".to_string()),
+            "B04 fourth candidate binds no other source or channel"
+        );
+        let one_binding: String = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
+                [&ids[1]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(one_binding, "one.001", "B04 cannot rewrite earlier card");
+        assert_eq!(
+            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            Some("Programme mapping"),
+            "B04 focus returns to same card"
+        );
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &ids[2],
+        );
 
         // Suspend a completed background snapshot just before presentation,
         // switch the selected card while suspended, and assert no stale modal
