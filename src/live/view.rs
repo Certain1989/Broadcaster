@@ -273,6 +273,82 @@ impl TvLiveView {
         spawn(async move { slf.reload().await });
     }
 
+    /// Synthetic row inserted into the real Live ListBox, using the actual
+    /// row activation and Play controls; no stream is ever requested by setup.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_disposable_live_row(&self) -> (gtk::ListBoxRow, gtk::Button) {
+        let channel = ChannelObject::new(
+            "focus001.synthetic",
+            "FOCUS001 synthetic channel",
+            "https://example.invalid/never-play",
+        );
+        let card: TvLiveCard = glib::Object::builder()
+            .property("channel", &channel)
+            .build();
+        fn play_button(root: &gtk::Widget) -> Option<gtk::Button> {
+            if let Some(button) = root.downcast_ref::<gtk::Button>() {
+                if button.action_name().as_deref() == Some("card.play") {
+                    return Some(button.clone());
+                }
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                if let Some(found) = play_button(&current) {
+                    return Some(found);
+                }
+                child = current.next_sibling();
+            }
+            None
+        }
+        let play = play_button(card.upcast_ref()).expect("actual Live Play action button");
+        self.imp().channels_list.append(&card);
+        (card.upcast(), play)
+    }
+
+    /// Several unique real LiveCard/ListBox rows for long connected native
+    /// D-pad journeys. No stream is fetched or playback started during setup.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_disposable_live_rows(
+        &self,
+        count: u32,
+    ) -> Vec<(gtk::ListBoxRow, gtk::Button)> {
+        assert!((3..=12).contains(&count));
+        let mut rows = Vec::new();
+        for index in 0..count {
+            let channel = ChannelObject::new(
+                &format!("focus001.synthetic.live.{index}"),
+                &format!("FOCUS001 synthetic Live channel {index}"),
+                "https://example.invalid/live-fake-no-play",
+            );
+            let card: TvLiveCard = glib::Object::builder()
+                .property("channel", &channel)
+                .build();
+            let button = {
+                let mut found = None;
+                let mut stack = vec![card.clone().upcast::<gtk::Widget>()];
+                while let Some(widget) = stack.pop() {
+                    if let Some(candidate) = widget.downcast_ref::<gtk::Button>() {
+                        if candidate.action_name().as_deref() == Some("card.play") {
+                            found = Some(candidate.clone());
+                            break;
+                        }
+                    }
+                    let mut child = widget.first_child();
+                    while let Some(next) = child {
+                        child = next.next_sibling();
+                        stack.push(next);
+                    }
+                }
+                found.expect("real LiveCard Play exists")
+            };
+            self.imp().channels_list.append(&card);
+            rows.push((card.upcast::<gtk::ListBoxRow>(), button));
+        }
+        self.imp().stack.set_visible_child_name("channels");
+        self.imp().results_stack.set_visible_child_name("list");
+        rows
+    }
+
     pub fn focus_search(&self) {
         self.imp().focus_search();
     }

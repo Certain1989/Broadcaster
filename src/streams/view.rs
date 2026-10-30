@@ -2188,6 +2188,268 @@ impl TvStreamsView {
         ids
     }
 
+    /// Hydrate a single synthetic page of the REAL mapped GTK ListView at a
+    /// chosen index. Unlike a detached StreamRows count assertion this drives
+    /// the live ListView item factory, scroll allocation and row recycling.
+    /// No network, storage, or media backend is consulted.
+    #[cfg(test)]
+    pub(crate) fn focus001_mapped_virtual_page(&self, total: u32, index: u32) -> String {
+        use super::model::ChannelEffective;
+        use std::collections::BTreeSet;
+        assert!(total > 0 && total <= 15_000 && index < total);
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("live GtkListView backing model");
+        rows.reset(total);
+        let page = index / PAGE_SIZE;
+        let first = page * PAGE_SIZE;
+        let channel = |position: u32| ChannelEffective {
+            id: format!("focus001-source:{total}:row:{position}"),
+            source_id: "focus001-source".into(),
+            source_name: "Synthetic virtualized source".into(),
+            visible_name: format!("Synthetic row {position}"),
+            stream_url: "https://example.invalid/fake.m3u8".into(),
+            group: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            region: None,
+            logo_url: None,
+            channel_number: None,
+            has_user_overrides: false,
+            is_favourite: false,
+        };
+        let channels: Vec<_> = (first..(first + PAGE_SIZE).min(total))
+            .map(channel)
+            .collect();
+        let id = format!("focus001-source:{total}:row:{index}");
+        rows.insert_page(page, channels);
+        imp.results_stack.set_visible_child_name("results");
+        imp.selected_id.replace(Some(id.clone()));
+        imp.expanded_id.replace(None);
+        imp.fake_player_enabled.set(true);
+        imp.fake_player_calls.set(0);
+        imp.selection
+            .get()
+            .expect("active virtual GtkSingleSelection")
+            .set_selected(index);
+        self.repaint_bound_rows();
+        imp.results_list
+            .scroll_to(index, gtk::ListScrollFlags::NONE, None);
+        id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focus001_mapped_virtual_stats(&self) -> (usize, usize, u32) {
+        let rows = self.imp().rows.get().expect("rows");
+        (rows.created_slots(), rows.cached_pages(), rows.n_items())
+    }
+
+    /// Observable selection only; never a substitute for real D-pad input.
+    #[cfg(test)]
+    pub(crate) fn focus001_selected_index(&self) -> u32 {
+        self.imp()
+            .selection
+            .get()
+            .expect("real selection")
+            .selected()
+    }
+
+    /// Create one genuine manager row in a disposable SQLite database.
+    /// No playlist retrieval or real owner data is involved.
+    #[cfg(test)]
+    pub(crate) fn focus001_seed_disposable_manager_source(path: std::path::PathBuf) {
+        Self::focus001_seed_disposable_manager_sources(path, 1);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focus001_seed_disposable_manager_sources(path: std::path::PathBuf, count: u32) {
+        use super::model::{
+            IncomingChannel, OriginKind, SourceDefaults, SourceDraft, SourceOrigin,
+            ValidatedSnapshot,
+        };
+        let store = super::storage::Storage::at(path);
+        store
+            .initialize()
+            .expect("initialize disposable source fixture");
+        assert!(count <= 4, "bounded isolated fixture");
+        for index in 0..count {
+            let id = uuid::Uuid::new_v4().to_string();
+            let snapshot = ValidatedSnapshot::new(
+                id.clone(),
+                vec![IncomingChannel {
+                    order: 0,
+                    imported_name: "Synthetic channel".into(),
+                    stream_url: "https://example.invalid/unused".into(),
+                    tvg_id: None,
+                    tvg_name: None,
+                    group_title: None,
+                    logo_url: None,
+                    channel_number: None,
+                    region: None,
+                    languages: Default::default(),
+                    countries: Default::default(),
+                    user_agent: None,
+                    referer: None,
+                }],
+            )
+            .expect("synthetic snapshot");
+            let draft = SourceDraft {
+                name: format!("FOCUS001 disposable playlist {index}"),
+                origin: SourceOrigin {
+                    kind: OriginKind::RemoteUrl,
+                    locator: format!("https://example.invalid/disposable-{index}.m3u"),
+                },
+                enabled: true,
+                order: index,
+                defaults: SourceDefaults::default(),
+            };
+            store
+                .create_source_with_initial_snapshot(&id, &draft, &snapshot, 1_800_000_000)
+                .expect("create disposable manager source");
+        }
+    }
+
+    /// Disposable persisted multi-facet fixture for real mapped XTest dropdowns.
+    /// No network request, owner playlist, or production code path is changed.
+    #[cfg(test)]
+    pub(crate) fn focus001_seed_rich_facet_sources(path: std::path::PathBuf) {
+        use super::model::{
+            IncomingChannel, OriginKind, Region, SourceDefaults, SourceDraft, SourceOrigin,
+            ValidatedSnapshot,
+        };
+        let store = super::storage::Storage::at(path);
+        store.initialize().expect("disposable facets SQLite");
+        for index in 0..3u32 {
+            let id = uuid::Uuid::new_v4().to_string();
+            let entries: Vec<_> = (0..4u32)
+                .map(|i| {
+                    let second = i % 2 == 1;
+                    IncomingChannel {
+                        order: i,
+                        imported_name: format!("Fixture channel {index}:{i}"),
+                        stream_url: format!("https://example.invalid/focus/{index}/{i}"),
+                        tvg_id: None,
+                        tvg_name: None,
+                        group_title: Some(if second { "Sport" } else { "News" }.to_owned()),
+                        logo_url: None,
+                        channel_number: None,
+                        region: Some(Region {
+                            code: Some(if second { "DE-BY" } else { "DE-NI" }.to_owned()),
+                            label: Some(if second { "Bavaria" } else { "Lower Saxony" }.to_owned()),
+                        }),
+                        languages: [if second { "en" } else { "de" }.to_owned()]
+                            .into_iter()
+                            .collect(),
+                        countries: [if second { "GB" } else { "DE" }.to_owned()]
+                            .into_iter()
+                            .collect(),
+                        user_agent: None,
+                        referer: None,
+                    }
+                })
+                .collect();
+            let draft = SourceDraft {
+                name: format!("Disposable rich facets {index}"),
+                origin: SourceOrigin {
+                    kind: OriginKind::RemoteUrl,
+                    locator: format!("https://example.invalid/focus-facets-{index}.m3u"),
+                },
+                enabled: true,
+                order: index,
+                defaults: SourceDefaults::default(),
+            };
+            let snapshot = ValidatedSnapshot::new(id.clone(), entries)
+                .expect("canonical language/country/region fixture");
+            store
+                .create_source_with_initial_snapshot(&id, &draft, &snapshot, 1_800_000_000)
+                .expect("persist disposable multi-facet channels");
+        }
+    }
+
+    /// Read-only evidence of actual async query results for a disposable test
+    /// fixture. This is not a way of changing the selection or invoking reload.
+    #[cfg(test)]
+    pub(crate) fn focus001_test_result_snapshot(&self) -> (u64, u32, Vec<(String, String)>) {
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("test must use mapped row model");
+        let mut identities = Vec::new();
+        for position in 0..rows.n_items().min(16) {
+            if let Some(channel) = rows.channel(position) {
+                identities.push((channel.source_id.clone(), channel.id.clone()));
+            }
+        }
+        (imp.generation.get(), rows.n_items(), identities)
+    }
+
+    /// Map one persisted, disposable IPTV row into the real GtkListView. The
+    /// storage identity must match the card action, so the production picker
+    /// reads its genuine SQLite snapshot instead of a fabricated view-only ID.
+    /// Test-only setup; navigation and picker code remain unchanged.
+    #[cfg(test)]
+    pub(crate) fn focus001_install_persisted_mapping_row(&self, row_id: &str, source_id: &str) {
+        use super::model::ChannelEffective;
+        use std::collections::BTreeSet;
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("mapped rows model");
+        rows.reset(1);
+        rows.insert_page(
+            0,
+            vec![ChannelEffective {
+                id: row_id.to_owned(),
+                source_id: source_id.to_owned(),
+                source_name: "Disposable playlist".into(),
+                visible_name: "Synthetic channel".into(),
+                stream_url: "https://example.invalid/unused.m3u8".into(),
+                group: None,
+                languages: BTreeSet::new(),
+                countries: BTreeSet::new(),
+                region: None,
+                logo_url: None,
+                channel_number: None,
+                has_user_overrides: false,
+                is_favourite: false,
+            }],
+        );
+        imp.results_stack.set_visible_child_name("results");
+        imp.selection
+            .get()
+            .expect("mapped selection")
+            .set_selected(0);
+        imp.selected_id.replace(Some(row_id.to_owned()));
+        imp.expanded_id.replace(None);
+        self.repaint_bound_rows();
+    }
+
+    /// Supply an isolated SQLite service so FOCUS-001 can exercise the real
+    /// favourites footer click/async persistence path, never a user's DB.
+    #[cfg(test)]
+    pub(crate) fn focus001_attach_disposable_service(
+        &self,
+        path: std::path::PathBuf,
+    ) -> std::rc::Rc<Cell<bool>> {
+        let ready = std::rc::Rc::new(Cell::new(false));
+        let completed = ready.clone();
+        let view = self.clone();
+        spawn(async move {
+            let service = StreamsService::with_storage(super::storage::Storage::at(path))
+                .await
+                .expect("disposable SQLite favourites service");
+            view.imp().service.replace(Some(service));
+            completed.set(true);
+        });
+        ready
+    }
+
+    // Expose the actual bound card star to the independent mapped focus
+    // regression. This is a test-only accessor, not an alternative route.
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_star(&self) -> Option<gtk::Button> {
+        let position = self.imp().selection.get()?.selected();
+        self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.position() == position).then(|| binding.ui.star.clone())
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn remote_action_test_buttons(&self) -> Option<[gtk::Button; 3]> {
         let position = self.imp().selection.get()?.selected();

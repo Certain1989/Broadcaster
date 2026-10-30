@@ -757,6 +757,38 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
 }
 
 #[cfg(test)]
+pub(crate) fn focus001_seed_disposable_guides(count: usize) {
+    // The run-mapped harness must isolate all profile storage. A production
+    // XDG location may never be used by this direct registry fixture.
+    let data = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME required");
+    assert!(
+        data.starts_with("/tmp/")
+            && std::env::var("GSETTINGS_BACKEND").ok().as_deref() == Some("memory"),
+        "refuse to seed guides outside an isolated Xvfb fixture"
+    );
+    let storage = crate::streams::storage::Storage::new();
+    storage
+        .initialize()
+        .expect("initialize disposable guide DB");
+    let registry = super::sources::GuideSourceRegistry::new(storage);
+    for index in 0..count {
+        let origin = SourceOrigin::entered_remote_url(
+            format!("https://example.invalid/focus-guide-{index}.xml"),
+            TrustScope::Public,
+        )
+        .expect("synthetic safe guide origin");
+        let source = registry
+            .add(&format!("FOCUS synthetic guide {index}"), &origin)
+            .expect("seed disposable guide");
+        if index == 1 {
+            registry
+                .set_enabled(&source.id, false)
+                .expect("disabled guide fixture");
+        }
+    }
+}
+
+#[cfg(test)]
 mod focus_tests {
     use super::*;
 
