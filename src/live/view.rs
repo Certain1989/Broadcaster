@@ -309,7 +309,7 @@ impl TvLiveView {
         // Invalidate a pending async production load before installing this
         // disposable model so its completion cannot rebind the test rows.
         imp.generation.set(imp.generation.get().saturating_add(1));
-        let model = (0..3)
+        let model = (0..5)
             .map(|index| {
                 ChannelObject::new(
                     &format!("r07-live-{index}"),
