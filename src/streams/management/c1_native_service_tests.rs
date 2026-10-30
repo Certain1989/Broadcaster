@@ -279,7 +279,10 @@ fn r07_assert_source_row(
     index: i32,
 ) {
     assert!(row.is_mapped(), "R07 source row {index} remains mapped");
-    assert!(row.has_focus(), "R07 physical key must focus source row {index}");
+    assert!(
+        row.has_focus(),
+        "R07 physical key must focus source row {index}"
+    );
     let owner = gtk::prelude::GtkWindowExt::focus(win).expect("R07 window focus owner");
     assert_eq!(
         owner,
@@ -359,10 +362,7 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     // the row; source identity must remain stable across both action rows.
     inject("Return");
     assert!(rows[0].enabled.has_focus(), "source 0 Switch portal");
-    assert_eq!(
-        view.manager_focus(),
-        Some((fixture.ids[0].clone(), 0, 0))
-    );
+    assert_eq!(view.manager_focus(), Some((fixture.ids[0].clone(), 0, 0)));
     inject("Right");
     assert!(rows[0].buttons[0].has_focus(), "source 0 Refresh");
     inject("Right");
@@ -378,10 +378,7 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
     inject("Return");
     assert!(rows[1].enabled.has_focus(), "source 1 must own Switch");
-    assert_eq!(
-        view.manager_focus(),
-        Some((fixture.ids[1].clone(), 0, 1))
-    );
+    assert_eq!(view.manager_focus(), Some((fixture.ids[1].clone(), 0, 1)));
     assert!(
         fixture.ids.iter().all(|id| fixture.enabled(id)),
         "pure navigation never mutates persisted enabled state"
