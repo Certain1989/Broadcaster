@@ -327,14 +327,8 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     let rows = [0, 1, 2].map(|index| controls(&list, index).expect("bound source row"));
     assert!(rows[0].row.grab_focus(), "initial source-row portal");
     spin();
-    for index in 0..3 {
-        r07_assert_source_row(
-            &view,
-            &win,
-            &rows[index].row,
-            &fixture.ids[index],
-            index as i32,
-        );
+    for (index, row) in rows.iter().enumerate() {
+        r07_assert_source_row(&view, &win, &row.row, &fixture.ids[index], index as i32);
         if index != 2 {
             inject("Down");
         }
