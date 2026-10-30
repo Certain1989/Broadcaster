@@ -2087,7 +2087,59 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             },
             "SQLite rows bound",
         );
-        assert!(view.show_and_focus_test_results());
+        // R07: use only one real Search focus seed. Descend through the
+        // mapped toolbar/filters into the actual three-row virtualized list
+        // with XTest, never the show_and_focus_test_results helper.
+        let search = view.toolbar_focus_targets()[0].clone();
+        assert!(search.grab_focus(), "R07 My Channels Search entry");
+        spin();
+        for _ in 0..16 {
+            let owner = gtk::prelude::GtkWindowExt::focus(&win)
+                .expect("R07 mapped My Channels focus owner");
+            if view.contains_results_focus(&owner) {
+                break;
+            }
+            inject("Down");
+        }
+        let owner =
+            gtk::prelude::GtkWindowExt::focus(&win).expect("R07 physical Search-to-results owner");
+        assert!(
+            owner.is_mapped() && view.contains_results_focus(&owner),
+            "R07 Search must reach real virtualized SQLite results through D-pad"
+        );
+        let row_ids: Vec<_> = all.items.iter().map(|row| row.id.clone()).collect();
+        // Traverse and reverse three distinct source-qualified SQLite rows;
+        // while each is collapsed, enter and leave that same row's real Star
+        // with physical Left/Right without changing persisted preferences.
+        for (index, id) in row_ids.iter().enumerate() {
+            if index > 0 {
+                inject("Down");
+            }
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(id.as_str()),
+                "R07 source-qualified native row selection {index}"
+            );
+            inject("Left");
+            let star = view
+                .remote_action_test_row_star(id)
+                .expect("R07 mapped star in actual selected SQLite row");
+            assert!(star.has_focus() && star.is_mapped());
+            assert_eq!(star.label().as_deref(), Some("☆"));
+            inject("Right");
+            let owner =
+                gtk::prelude::GtkWindowExt::focus(&win).expect("R07 star-to-row physical return");
+            view.assert_remote_action_focus_owner(&owner, id);
+        }
+        for index in [1, 0] {
+            inject("Up");
+            assert_eq!(
+                view.remote_action_test_selected_id().as_deref(),
+                Some(row_ids[index].as_str()),
+                "R07 physical reverse row selection {index}"
+            );
+        }
+        assert_eq!(view.remote_action_test_counts(), (0, 0, 0));
         inject("Return");
         assert_eq!(
             c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
