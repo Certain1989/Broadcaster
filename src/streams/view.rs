@@ -2546,7 +2546,7 @@ impl TvStreamsView {
             (focused == list && imp.results_list.has_focus())
                 || focused == &row_root
                 || focused.is_ancestor(&row_root)
-                || (item != *list && (focused == &item || focused.is_ancestor(&item))),
+                || (item != list.clone() && (focused == &item || focused.is_ancestor(&item))),
             "focus belongs to another source-qualified GTK row: widget={}",
             focused.type_().name()
         );
