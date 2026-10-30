@@ -247,10 +247,9 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             })
         },
     );
-    assert!(
-        !target.enabled.is_mapped(),
-        "old GTK row destroyed on service rebuild"
-    );
+    until("old GTK row unmaps after async switch rebuild", || {
+        !target.enabled.is_mapped()
+    });
     for other in fixture.ids.iter().filter(|other| *other != &id) {
         assert!(fixture.enabled(other), "wrong-row source was mutated");
     }
@@ -278,10 +277,9 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
                     && view.manager_focus() == Some((id.clone(), 0, index))
             })
     });
-    assert!(
-        !current.enabled.is_mapped(),
-        "old Switch unbound on second reload"
-    );
+    until("old GTK Switch unmaps after inverse async rebuild", || {
+        !current.enabled.is_mapped()
+    });
     let reopened = glib::MainContext::default()
         .block_on(StreamsService::with_storage(fixture.storage.clone()))
         .expect("SQLite service reopened after inverse toggle");
