@@ -193,3 +193,118 @@ fn r07_native_mediathek_search_1280_800() {
 fn r07_native_negative_live_search_stuck() {
     run("live", 640, 480, true);
 }
+
+// E02: use the real Live card model and a physical key to enter Play.
+// The Play button is never activated: pressing OK *again* would start mpv.
+fn run_live_play_portals(width: i32, height: i32, entry_key: &str, negative: bool) {
+    adw::init().expect("native GTK display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("real app register");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    win.imp().stack.set_visible_child_name("live");
+    let live = &win.imp().live_view;
+    live.show_toolbar_for_test();
+    live.install_r07_native_channel_rows();
+    settle();
+    let page: &gtk::Widget = live.upcast_ref();
+    let list = TvWindow::find_descendant(page, &|w| w.is::<gtk::ListBox>())
+        .and_then(|w| w.downcast::<gtk::ListBox>().ok())
+        .expect("real Live ListBox");
+    let search = &live.toolbar_focus_targets()[0];
+    assert!(search.grab_focus());
+    settle();
+    inject("Down", true);
+    let mut current = 0;
+    for index in [0, 2, 4] {
+        while current < index {
+            inject("Down", false);
+            current += 1;
+        }
+        let row = list.row_at_index(index).expect("mapped real LiveCard");
+        assert!(
+            row.has_focus(),
+            "E02 source row must own native focus before entry"
+        );
+        assert_eq!(
+            live.r07_native_channel_id(index),
+            Some(format!("r07-live-{index}")),
+            "E02 wrong channel before entry"
+        );
+        inject(entry_key, false);
+        let owner = win.focused_widget().expect("E02 actual window focus owner");
+        assert!(
+            owner.is_mapped() && owner.is_sensitive() && owner.is_visible(),
+            "E02 Play owner must be mapped, sensitive, visible"
+        );
+        let play = owner
+            .clone()
+            .downcast::<gtk::Button>()
+            .expect("E02 Play Button");
+        assert_eq!(
+            play.action_name().as_deref(),
+            Some("card.play"),
+            "E02 {entry_key} must focus primary Play, not a row or unrelated control"
+        );
+        assert_eq!(
+            owner.ancestor(gtk::ListBoxRow::static_type()),
+            Some(row.clone().upcast::<gtk::Widget>()),
+            "E02 focus must belong to the current source-qualified card"
+        );
+        if negative {
+            assert_eq!(
+                live.r07_native_channel_id(index),
+                Some("r07-live-wrong".to_owned()),
+                "R07_E02_EXPECTED_NEGATIVE_ORACLE: Play cannot be attributed to another source"
+            );
+            unreachable!("E02 wrong-source identity oracle unexpectedly survived");
+        }
+        inject("Left", false);
+        assert!(
+            row.has_focus(),
+            "E02 native Left must return to same LiveCard"
+        );
+        // Reset this disposable row's reveal state without starting playback;
+        // subsequent movement must be a genuine injected Down key.
+        live.r07_collapse_test_channel(index);
+        settle();
+        assert!(row.has_focus(), "E02 reset must preserve current row focus");
+    }
+    win.destroy();
+}
+
+#[test]
+#[ignore = "mapped real Live cards/XTest: native OK Play entry at 640x480"]
+fn r07_native_live_play_ok_640_480() {
+    run_live_play_portals(640, 480, "Return", false);
+}
+
+#[test]
+#[ignore = "mapped real Live cards/XTest: native OK Play entry at 1280x800"]
+fn r07_native_live_play_ok_1280_800() {
+    run_live_play_portals(1280, 800, "Return", false);
+}
+
+#[test]
+#[ignore = "mapped real Live cards/XTest: native Right Play entry at 640x480"]
+fn r07_native_live_play_right_640_480() {
+    run_live_play_portals(640, 480, "Right", false);
+}
+
+#[test]
+#[ignore = "mapped real Live cards/XTest: native Right Play entry at 1280x800"]
+fn r07_native_live_play_right_1280_800() {
+    run_live_play_portals(1280, 800, "Right", false);
+}
+
+#[test]
+#[ignore = "E02 wrong source identity must be rejected after real Play entry"]
+fn r07_native_live_play_negative_source_identity() {
+    run_live_play_portals(640, 480, "Return", true);
+}
