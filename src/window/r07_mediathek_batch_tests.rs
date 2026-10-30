@@ -352,14 +352,18 @@ fn r07_mediathek_three_row_inverse(width: i32, height: i32, negative: bool) {
         inject("Up", false);
         assert!(med.r07_result_row(index).has_focus(), "E04 reverse row {index}");
     }
-    for _ in 0..8 {
-        if TvWindow::is_within(
-            &win.focused_widget().expect("E04 reverse owner"),
-            search,
-        ) {
+    // Return from the selected result through the actual mapped toolbar.
+    let toolbar = med.toolbar_focus_targets();
+    for step in 0..10 {
+        let owner = win.focused_widget().expect("E04 reverse owner");
+        if TvWindow::is_within(&owner, search) {
             break;
         }
-        inject("Up", false);
+        let top = toolbar.iter().take(4).enumerate().find_map(|(i, widget)| {
+            TvWindow::is_within(&owner, widget).then_some(i)
+        });
+        eprintln!("R07_E04_REV step={step} focused={} top={top:?}", owner.type_().name());
+        inject(if top.is_some() { "Left" } else { "Up" }, false);
     }
     assert!(
         TvWindow::is_within(
