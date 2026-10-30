@@ -54,7 +54,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 }
 
 fn focused_inside(win: &TvWindow, target: &gtk::Widget, label: &str) {
-    let owner = win.focused_widget().expect("R07 actual GTK window focus owner");
+    let owner = win
+        .focused_widget()
+        .expect("R07 actual GTK window focus owner");
     assert!(
         owner.is_mapped() && owner.is_visible() && owner.is_sensitive(),
         "R07 {label}: focused widget must be mapped, visible and sensitive"
@@ -114,11 +116,9 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
         unreachable!("R07 deliberately wrong focus assertion did not fail");
     }
     if page == "live" {
-        let list = TvWindow::find_descendant(page_widget, &|widget| {
-            widget.is::<gtk::ListBox>()
-        })
-        .and_then(|widget| widget.downcast::<gtk::ListBox>().ok())
-        .expect("actual mapped Live ListBox");
+        let list = TvWindow::find_descendant(page_widget, &|widget| widget.is::<gtk::ListBox>())
+            .and_then(|widget| widget.downcast::<gtk::ListBox>().ok())
+            .expect("actual mapped Live ListBox");
         let first = list.row_at_index(0).expect("real first Live row");
         focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
     } else {
