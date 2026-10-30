@@ -269,6 +269,144 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 
+// R07: prove that actual physical D-pad events traverse *different* persisted
+// sources in the real manager, rather than just entering a test-selected row.
+fn r07_assert_source_row(
+    view: &TvStreamsView,
+    win: &crate::window::TvWindow,
+    row: &gtk::ListBoxRow,
+    id: &str,
+    index: i32,
+) {
+    assert!(row.is_mapped(), "R07 source row {index} remains mapped");
+    assert!(row.has_focus(), "R07 physical key must focus source row {index}");
+    let owner = gtk::prelude::GtkWindowExt::focus(win).expect("R07 window focus owner");
+    assert_eq!(
+        owner,
+        row.clone().upcast::<gtk::Widget>(),
+        "R07 focus must own the actual indexed source row"
+    );
+    assert_eq!(
+        view.manager_focus(),
+        Some((id.to_owned(), MANAGER_ROW, index)),
+        "R07 focus record must match the persisted source UUID and row"
+    );
+}
+
+fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
+    adw::init().expect("native display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let fixture = Fixture::new(3);
+    let service = glib::MainContext::default()
+        .block_on(StreamsService::with_storage(fixture.storage.clone()))
+        .expect("real three-source SQLite service");
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("application register");
+    let win = crate::window::TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    spin();
+    let stack = descendants(win.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<adw::ViewStack>().ok())
+        .expect("real window page stack");
+    stack.set_visible_child_name("streams");
+    spin();
+    let view = find_view(win.upcast_ref()).expect("real My Channels view");
+    view.c1_install_test_service(service);
+
+    // The existing C1 test already verifies physical Return on the real
+    // manager launcher. Seed only its first row, not the middle/last.
+    let (dialog, list) = open(&view, &win, 3);
+    let rows = [0, 1, 2].map(|index| controls(&list, index).expect("bound source row"));
+    assert!(rows[0].row.grab_focus(), "initial source-row portal");
+    spin();
+    for index in 0..3 {
+        r07_assert_source_row(
+            &view,
+            &win,
+            &rows[index].row,
+            &fixture.ids[index],
+            index as i32,
+        );
+        if index != 2 {
+            inject("Down");
+        }
+    }
+    if negative {
+        assert_eq!(
+            view.manager_focus(),
+            Some((fixture.ids[1].clone(), MANAGER_ROW, 1)),
+            "R07_EXPECTED_NEGATIVE_ORACLE: third source cannot masquerade as second"
+        );
+        unreachable!("R07 source identity negative oracle unexpectedly survived");
+    }
+
+    for index in (0..2).rev() {
+        inject("Up");
+        r07_assert_source_row(
+            &view,
+            &win,
+            &rows[index].row,
+            &fixture.ids[index],
+            index as i32,
+        );
+    }
+    // Enter real actions without clicking a switch, and return physically to
+    // the row; source identity must remain stable across both action rows.
+    inject("Return");
+    assert!(rows[0].enabled.has_focus(), "source 0 Switch portal");
+    assert_eq!(
+        view.manager_focus(),
+        Some((fixture.ids[0].clone(), 0, 0))
+    );
+    inject("Right");
+    assert!(rows[0].buttons[0].has_focus(), "source 0 Refresh");
+    inject("Right");
+    assert!(rows[0].buttons[1].has_focus(), "source 0 Defaults");
+    inject("Left");
+    assert!(rows[0].buttons[0].has_focus(), "Defaults -> Refresh");
+    inject("Left");
+    assert!(rows[0].enabled.has_focus(), "Refresh -> Switch");
+    inject("Left");
+    r07_assert_source_row(&view, &win, &rows[0].row, &fixture.ids[0], 0);
+
+    inject("Down");
+    r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
+    inject("Return");
+    assert!(rows[1].enabled.has_focus(), "source 1 must own Switch");
+    assert_eq!(
+        view.manager_focus(),
+        Some((fixture.ids[1].clone(), 0, 1))
+    );
+    assert!(fixture.ids.iter().all(|id| fixture.enabled(id)), "pure navigation never mutates persisted enabled state");
+    inject("XF86Back");
+    r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
+    back(&dialog, None);
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 genuine XTest source-row traversal, disposable SQLite"]
+fn r07_native_source_rows_640_480() {
+    r07_native_source_rows(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 genuine XTest source-row traversal, disposable SQLite"]
+fn r07_native_source_rows_1280_800() {
+    r07_native_source_rows(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 deliberately wrong source UUID/index must fail"]
+fn r07_native_negative_row_identity() {
+    r07_native_source_rows(640, 480, true);
+}
+
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
 fn c1_native_manager_0_640_480() {
