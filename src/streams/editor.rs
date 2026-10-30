@@ -912,6 +912,32 @@ fn confirm_epg_mapping(
     dialog.present(Some(parent));
 }
 
+// The native GTK regression drives the *actual* picker and database. These
+// test-only controls expose its modal and hold one completed async load so a
+// source swap can be injected before presentation; no production shortcut.
+#[cfg(test)]
+thread_local! {
+    static C4_PICKER_DIALOG: std::cell::RefCell<Option<glib::WeakRef<adw::Dialog>>> =
+        const { std::cell::RefCell::new(None) };
+    static C4_PICKER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static C4_PICKER_LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[cfg(test)]
+pub(crate) fn c4_test_picker_dialog() -> Option<adw::Dialog> {
+    C4_PICKER_DIALOG.with(|slot| slot.borrow().as_ref().and_then(glib::WeakRef::upgrade))
+}
+#[cfg(test)]
+pub(crate) fn c4_test_pause_picker(paused: bool) {
+    C4_PICKER_PAUSED.with(|state| state.set(paused));
+    if paused {
+        C4_PICKER_LOADED.with(|state| state.set(false));
+    }
+}
+#[cfg(test)]
+pub(crate) fn c4_test_picker_loaded() -> bool {
+    C4_PICKER_LOADED.with(std::cell::Cell::get)
+}
+
 // D35 compact on-card mapper. The fuller manager is retained for the other
 // explicit guide management workflows; the card action uses only this picker.
 #[derive(Clone)]
@@ -1253,6 +1279,13 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                     return;
                 }
             };
+            #[cfg(test)]
+            {
+                C4_PICKER_LOADED.with(|state| state.set(true));
+                while C4_PICKER_PAUSED.with(std::cell::Cell::get) {
+                    glib::timeout_future(std::time::Duration::from_millis(10)).await;
+                }
+            }
             if data.snapshot.playlist_id != source_id
                 || view.card_mapping_context(&row_id) != Some((generation, source_id))
             {
@@ -1474,10 +1507,16 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             dialog.connect_closed(glib::clone!(
                 #[weak]
                 view,
-                move |_| view.restore_card_mapping_focus(&restore_id)
+                move |_| {
+                    #[cfg(test)]
+                    C4_PICKER_DIALOG.with(|slot| slot.replace(None));
+                    view.restore_card_mapping_focus(&restore_id);
+                }
             ));
             dialog.set_child(Some(&body));
             dialog.present(Some(&parent));
+            #[cfg(test)]
+            C4_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
         }
     ));
 }
