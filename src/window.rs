@@ -1007,6 +1007,10 @@ fn modal_remote_action(
 }
 
 #[cfg(test)]
+#[path = "window/r07_native_focus_tests.rs"]
+mod r07_native_focus_tests;
+
+#[cfg(test)]
 mod remote_dialog_tests {
     use super::{modal_remote_action, ModalRemoteAction};
     use adw::gtk::gdk::{Key, ModifierType};
