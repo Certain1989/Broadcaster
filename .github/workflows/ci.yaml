@@ -240,7 +240,8 @@ jobs:
             r07_native_live_search_640_480 r07_native_live_search_1280_800 \
             r07_native_mediathek_search_640_480 r07_native_mediathek_search_1280_800 \
             r07_native_live_play_ok_640_480 r07_native_live_play_ok_1280_800 \
-            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800; do
+            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800 \
+            r07_native_live_full_graph_640_480 r07_native_live_full_graph_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -280,6 +281,20 @@ jobs:
             exit 1
           fi
           echo "R07 deliberately wrong native Live Play source identity was rejected"
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_live_full_graph_negative_identity -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 wrong Live full-graph identity unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_D01_D02_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 full-graph negative failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 full-graph last-row negative oracle rejected"
 
       - name: R07 native Mediathek actions and app-wide Back/Home
         run: |

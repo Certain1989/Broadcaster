@@ -312,6 +312,127 @@ fn r07_native_live_play_negative_source_identity() {
     run_live_play_portals(640, 480, "Return", true);
 }
 
+// D01/D02/D07: combine the Live controls, first/middle/last real rows,
+// expanded Play, real category switcher and Home in one physical journey.
+// This deliberately tests the complete navigation connection rather than
+// giving PASS credit for isolated toolbar-only or row-only fixtures.
+fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
+    adw::init().expect("native GTK X11 display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered real application");
+    let win = TvWindow::new(&app);
+    win.set_default_size(width, height);
+    win.present();
+    settle();
+    win.imp().stack.set_visible_child_name("live");
+    let live = &win.imp().live_view;
+    live.show_toolbar_for_test();
+    live.install_r07_native_channel_rows();
+    settle();
+    let list = TvWindow::find_descendant(live.upcast_ref(), &|w| w.is::<gtk::ListBox>())
+        .and_then(|w| w.downcast::<gtk::ListBox>().ok())
+        .expect("actual Live ListBox");
+    let search = live.toolbar_focus_targets()[0].clone();
+    let keyboard = live.toolbar_focus_targets()[1].clone();
+    assert!(search.is_mapped() && search.grab_focus());
+    settle();
+    inject("Right", true);
+    focused_inside(&win, &keyboard, "D01/D02 real keyboard right");
+    inject("Left", false);
+    focused_inside(&win, &search, "D01/D02 Search inverse");
+    inject("Down", false);
+    let first = list.row_at_index(0).expect("mapped first Live row");
+    focused_inside(&win, first.upcast_ref(), "D01/D02 Search to first result");
+    for index in 0..5 {
+        if index > 0 {
+            inject("Down", false);
+        }
+        let row = list.row_at_index(index).expect("complete five-card list");
+        assert!(row.has_focus() && row.is_mapped());
+        assert_eq!(
+            live.r07_native_channel_id(index),
+            Some(format!("r07-live-{index}"))
+        );
+        if index == 4 && wrong_row {
+            assert_eq!(
+                live.r07_native_channel_id(index).as_deref(),
+                Some("r07-live-wrong"),
+                "R07_D01_D02_EXPECTED_NEGATIVE_ORACLE: last Live row source identity",
+            );
+        }
+    }
+    let last = list.row_at_index(4).unwrap();
+    // Physical OK enters Play but never starts mpv; Left returns to the same row.
+    inject("Return", false);
+    let play = win.focused_widget().expect("D01/D02 real focused Play");
+    assert!(play.is_mapped() && TvWindow::is_within(&play, last.upcast_ref()));
+    assert_eq!(
+        play.downcast_ref::<gtk::Button>()
+            .and_then(|button| button.action_name())
+            .as_deref(),
+        Some("card.play"),
+    );
+    inject("Left", false);
+    assert!(last.has_focus(), "D01/D02 Play Left returns last Live row");
+    live.r07_collapse_test_channel(4);
+    settle();
+    for index in (0..4).rev() {
+        inject("Up", false);
+        let row = list.row_at_index(index).unwrap();
+        assert!(row.has_focus(), "D01/D02 reverse returns row {index}");
+    }
+    inject("Up", false);
+    focused_inside(&win, &search, "D01/D02 first row Up to Search");
+    inject("Up", false);
+    let switcher = TvWindow::find_descendant(win.upcast_ref(), &|w| {
+        (w.is::<adw::ViewSwitcher>() || w.is::<adw::ViewSwitcherBar>()) && w.is_mapped()
+    })
+    .expect("mapped real responsive switcher");
+    let selected = win.focused_widget().expect("focused Live switcher");
+    focused_inside(&win, &switcher, "D07 Live Search Up to switcher");
+    assert!(selected.is_mapped());
+    // An actual Home event from the focused switcher returns to Mediathek.
+    // GTK may keep focus on the newly selected mapped switcher tab; the
+    // existing D07 gate independently covers Down into Mediathek Search.
+    inject("XF86HomePage", false);
+    assert_eq!(
+        win.imp().stack.visible_child_name().as_deref(),
+        Some("mediathek"),
+        "D01/D02 Home switches to Mediathek",
+    );
+    let home_owner = win.focused_widget().expect("D01/D02 Home focus owner");
+    assert!(
+        home_owner.is_mapped()
+            && home_owner.is_sensitive()
+            && (TvWindow::is_within(&home_owner, &switcher)
+                || TvWindow::is_within(&home_owner, win.imp().mediathek_view.upcast_ref(),)),
+        "D01/D02 Home focus must remain on a mapped Mediathek or switcher control",
+    );
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 physical full loaded Live Search, rows, Play, categories and Home at 640x480"]
+fn r07_native_live_full_graph_640_480() {
+    run_live_complete_graph(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 physical full loaded Live Search, rows, Play, categories and Home at 1280x800"]
+fn r07_native_live_full_graph_1280_800() {
+    run_live_complete_graph(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 deliberate wrong last real Live-card identity"]
+fn r07_native_live_full_graph_negative_identity() {
+    run_live_complete_graph(640, 480, true);
+}
+
 // Test-only native cross-component evidence; retained as one R07 module.
 include!("r07_mediathek_batch_tests.rs");
 
