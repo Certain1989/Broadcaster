@@ -5,7 +5,7 @@
 //! The timings exercise the real parser and SQLite cache implementation.
 //! Run only in the dedicated, bounded capacity CI workflow.
 use super::{
-    cache::replace_guide_snapshot,
+    cache::{read_guide_window, replace_guide_snapshot},
     ingest::{enable_o01_measurement, import_xmltv, take_o01_observation},
     model::{EpgError, GuideChannel, GuideSnapshot, Programme},
     xmltv::{decode_xmltv, ParseLimits},
@@ -16,6 +16,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::atomic::AtomicBool,
     time::Instant,
 };
@@ -248,8 +249,22 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
         file_bytes(&path),
         start.elapsed().as_millis()
     );
+    // Checksum the *actual* serialized test fixture, not a nominal recipe.
+    let digest_output = Command::new("sha256sum")
+        .arg(&path)
+        .output()
+        .expect("SHA-256 utility for synthetic capacity fixture");
+    assert!(digest_output.status.success());
+    let checksum = String::from_utf8(digest_output.stdout).unwrap();
+    let checksum = checksum.split_whitespace().next().unwrap();
+    println!("EPG_CAPACITY scenario={scenario} fixture_sha256={checksum}");
+
     let mut conn = disk_db(&dir);
     let cancelled = AtomicBool::new(false);
+    let previous_temp_cap: i64 = conn
+        .query_row("PRAGMA temp.max_page_count", [], |r| r.get(0))
+        .unwrap();
+    enable_o01_measurement();
     let start = Instant::now();
     let rows = import_xmltv(
         &mut conn,
@@ -261,8 +276,14 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
         &cancelled,
     )
     .expect("complete streaming XMLTV import must succeed");
+    let importer_ms = start.elapsed().as_millis();
+    let observation = take_o01_observation().expect("transactional importer observation");
     assert_eq!(rows.channels, channels);
     assert_eq!(rows.programmes, programmes);
+    assert_eq!(observation.retained, programmes);
+    assert_eq!(observation.parsed, programmes);
+    assert_eq!(rows.omitted_c1_programmes, 0);
+    assert_eq!(rows.conflicting_duplicate_rows, 0);
     let persisted: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
@@ -271,13 +292,74 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
         )
         .unwrap();
     assert_eq!(persisted as usize, programmes);
-    report(
-        scenario,
-        "streamed_sqlite_committed",
-        start.elapsed().as_millis(),
-        &dir,
+    let actual_channels: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM epg_channels WHERE source_id='fixture'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(actual_channels as usize, channels);
+    let restored_cap: i64 = conn
+        .query_row("PRAGMA temp.max_page_count", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(restored_cap, previous_temp_cap);
+    let temp_bytes = observation.temp_pages * observation.temp_page_size;
+    assert!(temp_bytes <= super::limits::SQLITE_TEMP_PAGE_BYTES);
+    assert!(
+        observation.db_bytes.saturating_add(observation.wal_bytes)
+            <= super::limits::DATABASE_AND_WAL_BYTES
     );
+    println!(
+        "EPG_CAPACITY scenario={scenario} attempted={programmes} parsed={} retained={} \
+         omitted={} conflicting_duplicates={} temp_logical_bytes={temp_bytes} \
+         temp_fd_logical_bytes={:?} db_snapshot_bytes={} wal_snapshot_bytes={} \
+         pre_drop_ms={} importer_ms={importer_ms} temp_cap_restored={restored_cap}",
+        observation.parsed,
+        rows.programmes,
+        rows.omitted_c1_programmes,
+        rows.conflicting_duplicate_rows,
+        observation.temp_fd_bytes,
+        observation.db_bytes,
+        observation.wal_bytes,
+        observation.elapsed_ms,
+    );
+    let start_utc = super::xmltv::parse_timestamp("20261024000000 +0000").unwrap();
+    let end_utc = super::xmltv::parse_timestamp("20261026000000 +0000").unwrap();
+    let query_start = Instant::now();
+    let page = read_guide_window(
+        &conn,
+        "fixture",
+        &["c00000".to_owned()],
+        start_utc,
+        end_utc,
+        start_utc,
+        &cancelled,
+    )
+    .expect("bounded cached time-window query after full import");
+    assert_eq!(page.programmes.len(), 2);
+    println!(
+        "EPG_CAPACITY scenario={scenario} window_ms={} window_rows={} window_truncated={}",
+        query_start.elapsed().as_millis(),
+        page.programmes.len(),
+        page.truncated
+    );
+    report(scenario, "streamed_sqlite_committed", importer_ms, &dir);
     drop(conn);
+    let reopened = Connection::open(dir.join("cache.sqlite3")).unwrap();
+    let reopened_rows: i64 = reopened
+        .query_row(
+            "SELECT COUNT(*) FROM epg_programmes WHERE source_id='fixture'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(reopened_rows as usize, programmes);
+    let integrity: String = reopened
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(reopened);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -285,6 +367,12 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
 #[ignore = "bounded opt-in release importer benchmark; fabricated XMLTV only"]
 fn epg_capacity_de_plain_streamed_success() {
     streamed_capacity_case("de-plain", 2_000, 100_000, false);
+}
+
+#[test]
+#[ignore = "R08 D33 approved 15k / 1.5m exact-floor real-importer gate"]
+fn epg_capacity_r08_d33_support_floor_streamed() {
+    streamed_capacity_case("r08-floor-gzip", 15_000, 1_500_000, true);
 }
 
 #[test]
