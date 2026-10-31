@@ -608,6 +608,27 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
     list.add_css_class("boxed-list");
+    // Native GTK spatial fallback can strand a remote in the first source
+    // card: the row's Up key has no preceding ListBoxRow. Give every header
+    // action a physical Down route back into that first source portal.
+    for header in [&add, &guides, &close] {
+        let key = gtk::EventControllerKey::new();
+        key.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak_list = list.downgrade();
+        key.connect_key_pressed(move |_, pressed, _, modifiers| {
+            if crate::keyboard::unmodified_remote(modifiers)
+                && matches!(pressed, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+                && weak_list
+                    .upgrade()
+                    .and_then(|list| list.row_at_index(0))
+                    .is_some_and(|row| row.grab_focus())
+            {
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        header.add_controller(key);
+    }
     scroll.set_child(Some(&list));
     body.append(&scroll);
     body.append(&status);
@@ -798,6 +819,7 @@ fn bind_manager_navigation(
         let actions = std::array::from_fn(|i| controls[i].downgrade());
         let weak_list = list.downgrade();
         let weak_row = row.downgrade();
+        let weak_header = view.manager_header_add().map(|button| button.downgrade());
         let key_hop = vertical_hop.clone();
         key.connect_key_pressed(move |_, pressed, _, modifiers| {
             let (Some(list), Some(row)) = (weak_list.upgrade(), weak_row.upgrade()) else {
@@ -863,7 +885,16 @@ fn bind_manager_navigation(
                     list.row_at_index(index + 1).map(|item| item.upcast())
                 }
                 Key::Up | Key::KP_Up if slot == MANAGER_ROW => {
-                    list.row_at_index(index - 1).map(|item| item.upcast())
+                    if index == 0 {
+                        // End the first card's Up boundary at a real header
+                        // action, not a missing row or the modal's focus trap.
+                        weak_header
+                            .as_ref()
+                            .and_then(glib::WeakRef::upgrade)
+                            .map(|button| button.upcast())
+                    } else {
+                        list.row_at_index(index - 1).map(|item| item.upcast())
+                    }
                 }
                 _ => None,
             };
@@ -976,7 +1007,22 @@ pub(crate) fn load_manager(
                 let enabled = gtk::Switch::new();
                 enabled.set_active(source.enabled);
                 enabled.set_tooltip_text(Some(&gettext("Enable or disable source")));
-                upper_actions.append(&enabled);
+                // A GtkSwitch should not stretch to the width of a full
+                // action button. Keep its normal geometry and show its
+                // current state in plain text for remote-only users.
+                enabled.set_halign(gtk::Align::Center);
+                enabled.set_hexpand(false);
+                let enabled_slot = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                let enabled_state = if source.enabled {
+                    gettext("Enabled")
+                } else {
+                    gettext("Disabled")
+                };
+                let enabled_caption = gtk::Label::new(Some(&enabled_state));
+                enabled_caption.add_css_class("dim-label");
+                enabled_slot.append(&enabled);
+                enabled_slot.append(&enabled_caption);
+                upper_actions.append(&enabled_slot);
                 let refresh = button(&gettext("Refresh"), &upper_actions);
                 let edit = button(&gettext("Defaults"), &upper_actions);
                 let rename = button(&gettext("Rename"), &upper_actions);
@@ -1012,8 +1058,15 @@ pub(crate) fn load_manager(
                 enabled.connect_active_notify(glib::clone!(
                     #[weak]
                     view,
+                    #[weak]
+                    enabled_caption,
                     move |switch| {
                         let target = switch.is_active();
+                        enabled_caption.set_text(&if target {
+                            gettext("Enabled")
+                        } else {
+                            gettext("Disabled")
+                        });
                         let service = svc.clone();
                         let id = src.id.clone();
                         spawn(glib::clone!(

@@ -653,6 +653,15 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             line.set_margin_top(6);
         }
         rows.append(&line);
+        // The third letter row has ten keys, unlike the eleven-key rows
+        // above. Reserve its missing eleventh slot so the letter keys keep
+        // exactly the same physical width at every remote/TV size. A leading
+        // spacer also gives the customary staggered third-row placement.
+        if r == 3 {
+            let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            spacer.set_hexpand(true);
+            line.append(&spacer);
+        }
         let mut refs = Vec::new();
         for (c, _) in labels.iter().enumerate() {
             let button = gtk::Button::with_label(&label_for(r, c, qwertz.get(), false, false));

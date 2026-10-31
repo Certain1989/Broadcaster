@@ -1006,6 +1006,12 @@ fn show_add(
     )));
     note.set_wrap(true);
     body.append(&note);
+    let matching_note = gtk::Label::new(Some(&gettext(
+        "After saving, choose ‘Use as Shared Default’ in Programme Guides to enable automatic channel matching. Or select the guide for a particular playlist in Programme Mapping."
+    )));
+    matching_note.set_wrap(true);
+    matching_note.add_css_class("dim-label");
+    body.append(&matching_note);
     let error = status_label();
     body.append(&error);
     let save = command(&gettext("Save Guide"), &body);
@@ -1137,7 +1143,7 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         title(&dialog, &gettext("Programme Guides"));
         let body = box_column();
         let intro = gtk::Label::new(Some(&gettext(
-            "One shared programme-guide registry for all IPTV playlists. Sources are never imported from M3U hints automatically."
+            "Adding a programme guide does not automatically enable matching. After adding it, choose ‘Use as Shared Default’ for automatic matching across your playlists; otherwise select a guide for each playlist in Programme Mapping. M3U guide hints are never imported automatically."
         )));
         intro.set_wrap(true);
         body.append(&intro);

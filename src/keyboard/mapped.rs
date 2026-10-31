@@ -1083,6 +1083,16 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     let mut buttons = Vec::new();
     scan(&content, &mut buttons);
     assert_eq!(buttons.len(), 10 + 11 + 11 + 10 + 12 + 5 + 5);
+    // The ten-key z/x/c row uses a noninteractive eleventh layout slot to
+    // retain the same button geometry as the eleven-key alphabet rows.
+    let q = find_button(&content, "q").expect("first alphabet-row key");
+    let x = find_button(&content, "x").expect("third alphabet-row key");
+    let q_width = q.compute_bounds(&dialog).expect("mapped q").width();
+    let x_width = x.compute_bounds(&dialog).expect("mapped x").width();
+    assert!(
+        (q_width - x_width).abs() <= 1.0,
+        "G09 OSK character rows have uneven key widths: q={q_width}, x={x_width}"
+    );
     let assert_inside = || {
         for button in &buttons {
             assert!(button.is_mapped(), "every key must be mapped");

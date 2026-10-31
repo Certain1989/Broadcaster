@@ -2247,14 +2247,16 @@ impl TvStreamsView {
         self.imp().manager_rebuilding.set(rebuilding);
     }
 
-    pub(crate) fn focus_empty_source_manager(&self) {
-        if let Some(add) = self
-            .imp()
+    pub(crate) fn manager_header_add(&self) -> Option<gtk::Button> {
+        self.imp()
             .manager_add
             .borrow()
             .as_ref()
             .and_then(glib::WeakRef::upgrade)
-        {
+    }
+
+    pub(crate) fn focus_empty_source_manager(&self) {
+        if let Some(add) = self.manager_header_add() {
             add.grab_focus();
         }
     }

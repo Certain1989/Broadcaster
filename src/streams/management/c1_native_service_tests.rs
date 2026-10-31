@@ -187,6 +187,40 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     assert!(!first.buttons[5].is_sensitive(), "first Move Up disabled");
     assert!(!last.buttons[6].is_sensitive(), "last Move Down disabled");
     assert!(first.row.grab_focus(), "row portal");
+    // G09 owner report: a one-source manager trapped remote focus inside the
+    // first card, making Add Playlist/Programme Guides/Close unreachable.
+    let header = view.manager_header_add().expect("live Add Playlist header");
+    inject("Up");
+    assert!(
+        header.has_focus(),
+        "first row Up must enter the manager header"
+    );
+    // The owner reported that *all three* header actions were inaccessible.
+    // Reach each with real remote keys instead of only grabbing their focus.
+    let header_guides = descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(gettext("Programme Guides").as_str()))
+        .expect("manager Programme Guides action");
+    let header_close = descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(gettext("Close").as_str()))
+        .expect("manager Close action");
+    inject("Right");
+    assert!(header_guides.has_focus(), "header Right must reach Guides");
+    inject("Right");
+    assert!(header_close.has_focus(), "header Right must reach Close");
+    inject("Left");
+    assert!(
+        header_guides.has_focus(),
+        "header Left must return to Guides"
+    );
+    inject("Down");
+    assert!(
+        first.row.has_focus(),
+        "header Down must return to first row"
+    );
     inject("Return");
     assert!(
         first.enabled.has_focus(),
