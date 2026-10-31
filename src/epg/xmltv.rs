@@ -246,8 +246,11 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
         if attributes.len() >= 32 {
             return Err(EpgError::Capacity(LimitKind::Attributes));
         }
-        let key = std::str::from_utf8(item.key.as_ref()).map_err(|_| EpgError::InvalidInput)?;
-        let value = item.unescape_value().map_err(|_| EpgError::InvalidInput)?;
+        let key: &str = item.key.as_ref();
+        // Retain the pre-0.42 decoded-entity semantics without silently
+        // normalizing whitespace inside user-supplied channel identities.
+        let value =
+            quick_xml::escape::unescape(item.value.as_ref()).map_err(|_| EpgError::InvalidInput)?;
         // Validate decoded values even when the attribute is not interpreted.
         // An XML attribute is never eligible for direct-desc C1 omission.
         if value.chars().any(|c| forbidden_xml_control(c, false)) {
@@ -286,9 +289,7 @@ fn append_bounded(value: &mut String, text: &str, maximum: usize, truncated: &mu
 
 impl ParseState {
     fn begin(&mut self, tag: &BytesStart<'_>, max_depth: usize) -> Result<(), EpgError> {
-        let name = std::str::from_utf8(tag.name().as_ref())
-            .map_err(|_| EpgError::InvalidInput)?
-            .to_owned();
+        let name = tag.name().as_ref().to_owned();
         // Namespace/XInclude processing is deliberately not enabled. Do not
         // silently interpret or dereference namespaced "include" elements.
         if name.contains(':') {
@@ -576,29 +577,25 @@ fn parse_xml_stream<R: BufRead>(
         match event {
             Event::Start(tag) => state.begin(&tag, max_depth)?,
             Event::Empty(tag) => {
-                let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?
-                    .to_owned();
+                let name = tag.name().as_ref().to_owned();
                 state.begin(&tag, max_depth)?;
                 state.end(&name, source_id)?;
             }
             Event::End(tag) => {
-                let tag_name = tag.name();
-                let name =
-                    std::str::from_utf8(tag_name.as_ref()).map_err(|_| EpgError::InvalidInput)?;
-                state.end(name, source_id)?;
+                state.end(tag.name().as_ref(), source_id)?;
             }
             Event::Text(text) => {
-                let decoded = text.decode().map_err(|_| EpgError::InvalidInput)?;
-                state.add_text(&decoded)?;
+                // Reader 0.42 validates UTF-8 before constructing this event;
+                // general references are handled independently below.
+                state.add_text(text.as_ref())?;
             }
             Event::CData(text) => {
-                let decoded = text.decode().map_err(|_| EpgError::InvalidInput)?;
-                state.add_text(&decoded)?;
+                // Reader 0.42 validates UTF-8 before constructing this event;
+                // general references are handled independently below.
+                state.add_text(text.as_ref())?;
             }
             Event::GeneralRef(entity) => {
-                let decoded = entity.decode().map_err(|_| EpgError::InvalidInput)?;
-                let replacement = match decoded.as_ref() {
+                let replacement = match entity.as_ref() {
                     "amp" => '&',
                     "lt" => '<',
                     "gt" => '>',
@@ -617,7 +614,7 @@ fn parse_xml_stream<R: BufRead>(
                 }
                 if let Some(encoding) = decl.encoding() {
                     let encoding = encoding.map_err(|_| EpgError::InvalidInput)?;
-                    if !encoding.eq_ignore_ascii_case(b"utf-8") {
+                    if !encoding.eq_ignore_ascii_case("utf-8") {
                         return Err(EpgError::InvalidInput);
                     }
                 }
@@ -1035,9 +1032,7 @@ where
         match event {
             Event::Start(tag) => state.begin(&tag, 64)?,
             Event::Empty(tag) => {
-                let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?
-                    .to_owned();
+                let name = tag.name().as_ref().to_owned();
                 state.begin(&tag, 64)?;
                 state.end(&name, source_id)?;
                 emit_stream_row(
@@ -1052,9 +1047,7 @@ where
                 )?;
             }
             Event::End(tag) => {
-                let name = std::str::from_utf8(tag.name().as_ref())
-                    .map_err(|_| EpgError::InvalidInput)?
-                    .to_owned();
+                let name = tag.name().as_ref().to_owned();
                 state.end(&name, source_id)?;
                 emit_stream_row(
                     &mut state,
@@ -1068,16 +1061,17 @@ where
                 )?;
             }
             Event::Text(text) => {
-                let decoded = text.decode().map_err(|_| EpgError::InvalidInput)?;
-                state.add_text(&decoded)?;
+                // Reader 0.42 validates UTF-8 before constructing this event;
+                // general references are handled independently below.
+                state.add_text(text.as_ref())?;
             }
             Event::CData(text) => {
-                let decoded = text.decode().map_err(|_| EpgError::InvalidInput)?;
-                state.add_text(&decoded)?;
+                // Reader 0.42 validates UTF-8 before constructing this event;
+                // general references are handled independently below.
+                state.add_text(text.as_ref())?;
             }
             Event::GeneralRef(entity) => {
-                let decoded = entity.decode().map_err(|_| EpgError::InvalidInput)?;
-                let replacement = match decoded.as_ref() {
+                let replacement = match entity.as_ref() {
                     "amp" => '&',
                     "lt" => '<',
                     "gt" => '>',
@@ -1096,7 +1090,7 @@ where
                 }
                 if let Some(encoding) = decl.encoding() {
                     let encoding = encoding.map_err(|_| EpgError::InvalidInput)?;
-                    if !encoding.eq_ignore_ascii_case(b"utf-8") {
+                    if !encoding.eq_ignore_ascii_case("utf-8") {
                         return Err(EpgError::InvalidInput);
                     }
                 }
@@ -1127,6 +1121,68 @@ mod formatted_xmltv_regression {
         StreamingLimits,
     };
     use std::{fmt::Write as _, io::Cursor, sync::atomic::AtomicBool};
+
+    #[test]
+    fn quick_xml_042_escaped_identity_cdata_and_reference_compatibility() {
+        let xml = "<?xml version='1.0' encoding='UTF-8'?>\
+                   <tv><channel id='id&amp;\twest'><display-name>A&amp;B</display-name></channel>\
+                   <programme channel='id&amp;\twest' start='20300101000000 +0000'\
+                   stop='20300101010000 +0000'><title>A&#xE9;<![CDATA[&literal]]>&amp;</title>\
+                   </programme></tv>";
+        let mut channels = Vec::new();
+        let mut programmes = Vec::new();
+        let rows = decode_xmltv_rows(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |c| {
+                channels.push(c);
+                Ok(())
+            },
+            |p, _| {
+                programmes.push(p);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!((rows.channels, rows.programmes), (1, 1));
+        assert_eq!(channels[0].channel_id, "id&\twest");
+        assert_eq!(programmes[0].channel_id, channels[0].channel_id);
+        assert_eq!(programmes[0].title, "Aé&literal&");
+    }
+
+    #[test]
+    fn quick_xml_042_rejects_non_utf8_and_declared_legacy_encoding() {
+        let valid = b"<tv><channel id='c'><display-name>C</display-name></channel>\
+                      <programme channel='c' start='20300101000000 +0000'\
+                      stop='20300101010000 +0000'><title>OK</title></programme></tv>";
+        let mut invalid = valid.to_vec();
+        let marker = invalid.windows(2).position(|v| v == b"OK").unwrap();
+        invalid[marker] = 0xff;
+        for input in [
+            invalid,
+            [
+                b"<?xml version='1.0' encoding='ISO-8859-1'?>".as_slice(),
+                valid.as_slice(),
+            ]
+            .concat(),
+        ] {
+            let result = decode_xmltv_rows(
+                Cursor::new(input),
+                "synthetic",
+                0,
+                false,
+                StreamingLimits::candidate(),
+                &AtomicBool::new(false),
+                |_| Ok(()),
+                |_, _| Ok(()),
+            );
+            assert!(result.is_err(), "non-UTF-8 XMLTV must fail closed");
+        }
+    }
 
     /// Mirrors ordinary indented XMLTV with roughly 75,000 programmes.
     /// Previously the spaces between <programme> rows exhausted the 1 MiB
