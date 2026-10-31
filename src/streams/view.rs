@@ -734,6 +734,19 @@ impl TvStreamsView {
     fn update_dropdown(&self, dropdown: &gtk::DropDown, labels: &[String], selected: u32) {
         let references: Vec<&str> = labels.iter().map(String::as_str).collect();
         let model = gtk::StringList::new(&references);
+        // GtkDropDown's search is not automatically text-aware for a
+        // StringList. Bind the visible StringObject.string property so typed
+        // source/country/language fragments filter the *same* item identities
+        // rather than merely opening an unfiltered SearchEntry.
+        if dropdown.enables_search() {
+            let label = gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<&gtk::Expression>,
+                "string",
+            );
+            dropdown.set_expression(Some(&label));
+            dropdown.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
+        }
         dropdown.set_model(Some(&model));
         dropdown.set_selected(selected);
     }
@@ -822,6 +835,66 @@ impl TvStreamsView {
         ));
     }
 
+    /// A compact status page can resize *after* GTK has assigned focus. A
+    /// one-shot idle scroll races the later Adw.Stack transition and can leave
+    /// the focused fallback physically below the display, despite a correct
+    /// GTK focus owner. Check a bounded series of settled frames, and stop
+    /// immediately if the user moves focus elsewhere. The adjustment is local
+    /// to the owning scroller: it never changes action or channel identity.
+    fn scroll_focused_button_into_view(button: &gtk::Button) {
+        let weak = button.downgrade();
+        let attempts = Cell::new(0_u8);
+        glib::timeout_add_local(Duration::from_millis(24), move || {
+            let Some(button) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !button.has_focus() {
+                return glib::ControlFlow::Break;
+            }
+            let attempt = attempts.get() + 1;
+            attempts.set(attempt);
+            let next = if attempt >= 12 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            };
+            if !button.is_mapped() {
+                return next;
+            }
+            let Some(scroll) = button
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+            else {
+                return glib::ControlFlow::Break;
+            };
+            if scroll.height() <= 0 {
+                return next;
+            }
+            let Some(rect) = button.compute_bounds(scroll.upcast_ref::<gtk::Widget>()) else {
+                return next;
+            };
+            let adjustment = scroll.vadjustment();
+            // Put a newly offscreen action near the top of its scroller,
+            // rather than barely inside the bottom edge: the containing
+            // window's minimum height may exceed a 640x480 physical screen.
+            let delta = if rect.y() < 8.0 {
+                rect.y() - 8.0
+            } else if rect.y() + rect.height() + 8.0 > scroll.height() as f32 {
+                rect.y() - 12.0
+            } else {
+                0.0
+            };
+            if delta.abs() > 0.5 {
+                let max = (adjustment.upper() - adjustment.page_size()).max(0.0);
+                let new_value = (adjustment.value() + f64::from(delta)).clamp(0.0, max);
+                if (new_value - adjustment.value()).abs() > 0.5 {
+                    adjustment.set_value(new_value);
+                }
+            }
+            next
+        });
+    }
+
     fn apply_results(
         &self,
         query: ChannelQuery,
@@ -878,7 +951,9 @@ impl TvStreamsView {
             if total == 0 {
                 // Removing the last visible favourite must leave a usable
                 // one-key exit rather than focus on a vanished virtual row.
-                if !query.favourites_only || !imp.show_all_button.grab_focus() {
+                if query.favourites_only && imp.show_all_button.grab_focus() {
+                    Self::scroll_focused_button_into_view(&imp.show_all_button);
+                } else {
                     self.focus_search();
                 }
             } else {
@@ -1190,6 +1265,15 @@ impl TvStreamsView {
         actions.append(&edit);
         let mapping = gtk::Button::with_label(&gettext("Programme mapping"));
         mapping.set_halign(gtk::Align::Start);
+        // GTK can move logical focus into the expanded action column while
+        // the bottom action is still clipped by the compact results viewport.
+        // After the focused widget has been allocated, scroll just enough to
+        // expose it; never change the channel selection or focus identity.
+        mapping.connect_notify_local(Some("has-focus"), |button, _| {
+            if button.has_focus() {
+                TvStreamsView::scroll_focused_button_into_view(button);
+            }
+        });
         actions.append(&mapping);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
@@ -2149,6 +2233,14 @@ impl TvStreamsView {
 
     pub(crate) fn manager_focus(&self) -> Option<(String, usize, i32)> {
         self.imp().manager_focus.borrow().clone()
+    }
+
+    pub(crate) fn live_source_manager_list(&self) -> Option<gtk::ListBox> {
+        self.imp()
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
     }
 
     pub(crate) fn manager_rebuilding(&self, rebuilding: bool) {

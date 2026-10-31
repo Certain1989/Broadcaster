@@ -1313,3 +1313,449 @@ fn r07_native_source_delete_last_1280_800() {
 fn r07_native_source_deletions_negative() {
     native_source_delete_ordinal(640, 480, 1, true);
 }
+
+// R07 G05: real painted source-manager upper/lower/confirm focus in two
+// viewports. All navigation/confirm entry uses XTest, never fake GTK signals.
+fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: bool) {
+    use crate::window::r07_native_focus_tests::r07_painted_probe_physical_inverse;
+    let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
+    // Fixed GTK animation setting avoids a stale X11 transition-frame capture.
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_enable_animations(false);
+    }
+    let css = gtk::CssProvider::new();
+    css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
+    gtk::style_context_add_provider_for_display(
+        &gtk::prelude::WidgetExt::display(&win),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    spin();
+    let first = controls(&list, 0).expect("source 0 mapped controls");
+    assert!(first.row.grab_focus());
+    inject("Return");
+    assert!(first.enabled.has_focus());
+    inject("Right");
+    let upper = &first.buttons[0];
+    assert!(
+        upper.has_focus() && upper.is_mapped(),
+        "physical upper Refresh"
+    );
+    let upper_px = if target == "upper" {
+        r07_painted_probe_physical_inverse(
+            &win,
+            upper.upcast_ref(),
+            "G05 source Refresh upper",
+            || inject("Left"),
+            || inject("Right"),
+        )
+    } else {
+        0
+    };
+    inject("Down");
+    let lower = &first.buttons[4];
+    assert!(
+        lower.has_focus() && lower.is_mapped(),
+        "physical lower Delete"
+    );
+    let lower_px = if target == "lower" {
+        r07_painted_probe_physical_inverse(
+            &win,
+            lower.upcast_ref(),
+            "G05 source Delete lower",
+            || inject("Up"),
+            || inject("Down"),
+        )
+    } else {
+        0
+    };
+    // Open a *real* nested Delete dialog, but only ever activate Keep Source.
+    inject("Return");
+    until("nested source delete confirmation appears", || {
+        source_sheet(&win, "Delete Source?").is_some_and(|d| d.is_mapped())
+    });
+    let confirm = source_sheet(&win, "Delete Source?").expect("real nested confirm");
+    let safe = source_sheet_button(&confirm, "Keep Source");
+    let destructive = source_sheet_button(&confirm, "Delete Permanently");
+    // This initial GTK focus seed is limited to the existing modal's safe
+    // action; subsequent movement and dismissal are physical XTest events.
+    assert!(safe.grab_focus());
+    spin();
+    inject("Right");
+    assert!(
+        destructive.has_focus(),
+        "native Right reaches real confirm action"
+    );
+    inject("Left");
+    assert!(
+        safe.has_focus(),
+        "native Left restores non-destructive action"
+    );
+    // Render the safe, selected confirmation after first proving that the
+    // destructive peer was reachable. Never press the destructive action.
+    let confirm_px = if target == "confirm" {
+        r07_painted_probe_physical_inverse(
+            &win,
+            safe.upcast_ref(),
+            "G05 nested Keep Source",
+            || inject("Right"),
+            || inject("Left"),
+        )
+    } else {
+        0
+    };
+    inject("Return");
+    until("Keep Source dismissed confirmation", || {
+        !confirm.is_mapped()
+    });
+    assert!(
+        fixture
+            .ids
+            .iter()
+            .all(|id| fixture.storage.get_source(id).is_ok()),
+        "G05 cancelled nested confirmation must never delete any source"
+    );
+    eprintln!("R07_G05_PAINTED viewport={width}x{height} upper={upper_px} lower={lower_px} nested={confirm_px}");
+    if negative {
+        assert_eq!(
+            upper_px, 0,
+            "R07_G05_EXPECTED_NEGATIVE_PAINT: real upper action focus must have pixels"
+        );
+        unreachable!("R07 G05 false pixel oracle was accepted");
+    }
+    let measured = match target {
+        "upper" => upper_px,
+        "lower" => lower_px,
+        "confirm" => confirm_px,
+        _ => panic!("unexpected G05 painted target"),
+    };
+    assert!(
+        measured >= 15,
+        "G05 selected actual native action focus was not visibly painted"
+    );
+    manager.close();
+    win.destroy();
+}
+
+// Keep each rendered suppression/restore test in a fresh process. Repeated
+// display-global GTK CSS provider churn across three widgets can itself
+// leave a stale composited frame; the native physical graph remains complete
+// in every test, while each individual button has a real positive/negative
+// and restored pixel oracle on its own isolated X11 process.
+#[test]
+#[ignore = "R07 G05 X11 source upper focus pixels compact"]
+fn r07_native_manager_paint_upper_640_480() {
+    r07_native_painted_manager(640, 480, "upper", false);
+}
+#[test]
+#[ignore = "R07 G05 X11 source upper focus pixels TV"]
+fn r07_native_manager_paint_upper_1280_800() {
+    r07_native_painted_manager(1280, 800, "upper", false);
+}
+#[test]
+#[ignore = "R07 G05 X11 source lower focus pixels compact"]
+fn r07_native_manager_paint_lower_640_480() {
+    r07_native_painted_manager(640, 480, "lower", false);
+}
+#[test]
+#[ignore = "R07 G05 X11 source lower focus pixels TV"]
+fn r07_native_manager_paint_lower_1280_800() {
+    r07_native_painted_manager(1280, 800, "lower", false);
+}
+#[test]
+#[ignore = "R07 G05 X11 nested source confirmation focus pixels compact"]
+fn r07_native_manager_paint_confirm_640_480() {
+    r07_native_painted_manager(640, 480, "confirm", false);
+}
+#[test]
+#[ignore = "R07 G05 X11 nested source confirmation focus pixels TV"]
+fn r07_native_manager_paint_confirm_1280_800() {
+    r07_native_painted_manager(1280, 800, "confirm", false);
+}
+#[test]
+#[ignore = "R07 G05 intentionally false source-manager pixel oracle"]
+fn r07_native_manager_paint_negative() {
+    r07_native_painted_manager(640, 480, "upper", true);
+}
+
+// R07 AS06/AS07/AS17/AS18: complete offline source refresh and major
+// reduction Keep Existing. Synthetic local M3U bytes are stored in a
+// disposable private directory: this must never issue external network I/O.
+fn r07_native_source_refresh_paths(width: i32, height: i32, count: usize, negative: bool) {
+    let (fixture, win, _view, manager, list) = source_fixture_window(count, width, height);
+    let index = if count == 3 { 1 } else { 0 };
+    let id = fixture.ids[index].clone();
+    let path = fixture.dir.join(format!("playlist-{index}.m3u"));
+    let make_playlist = |n: usize| {
+        let mut body = "#EXTM3U\n".to_owned();
+        for i in 0..n {
+            body.push_str(&format!(
+                "#EXTINF:-1 tvg-id=\"fixture-{i}\",Fixture {i}\nhttps://example.invalid/stream/{i}\n"
+            ));
+        }
+        body
+    };
+    fs::write(&path, make_playlist(20)).expect("synthetic local playlist");
+    let origin = gio::File::for_path(&path).uri();
+    fixture
+        .storage
+        .connect()
+        .unwrap()
+        .execute(
+            "UPDATE iptv_sources SET origin_locator=?1 WHERE id=?2",
+            rusqlite::params![origin.as_str(), &id],
+        )
+        .expect("source origin is a real local GFile URI");
+    let refresh = controls(&list, index as i32).unwrap().buttons[0].clone();
+    assert!(refresh.grab_focus());
+    inject("Return");
+    until(
+        "native source refresh imported twenty local channels",
+        || {
+            fixture
+                .storage
+                .query_channels(&crate::streams::model::ChannelQuery::default())
+                .is_ok_and(|p| p.total == 20)
+        },
+    );
+    until("native successful Refresh returned to same source", || {
+        controls(&list, index as i32).is_some_and(|r| r.buttons[0].has_focus())
+    });
+    assert_eq!(
+        fixture.storage.get_source(&id).unwrap().name,
+        format!("Fixture {index}")
+    );
+    if count == 3 {
+        assert!(fixture.ids.iter().enumerate().all(|(i, other)| i == index
+            || fixture
+                .storage
+                .get_source(other)
+                .unwrap()
+                .last_success_at
+                .is_none()));
+    }
+    if negative {
+        assert_eq!(
+            fixture.storage.query_channels(&crate::streams::model::ChannelQuery::default()).unwrap().total,
+            0,
+            "R07_AS07_EXPECTED_NEGATIVE_ORACLE: successful native Refresh must actually persist twenty channels"
+        );
+        unreachable!("R07 AS07 intentionally wrong source-refresh oracle escaped");
+    }
+
+    // Replace the same source file with an 95%-smaller catalogue. A second
+    // physical Refresh must request actual consent, not discard cached rows.
+    fs::write(&path, make_playlist(1)).expect("major reduction local fixture");
+    let refresh = controls(&list, index as i32).unwrap().buttons[0].clone();
+    assert!(refresh.grab_focus());
+    inject("Return");
+    until("real major-reduction confirmation", || {
+        source_sheet(&win, "Confirm Major Channel Reduction").is_some()
+    });
+    let confirm = source_sheet(&win, "Confirm Major Channel Reduction").unwrap();
+    assert_eq!(
+        fixture
+            .storage
+            .query_channels(&crate::streams::model::ChannelQuery::default())
+            .unwrap()
+            .total,
+        20,
+        "preview never removes previously cached channels"
+    );
+    press_sheet(&confirm, "Keep Existing");
+    until(
+        "Keep Existing dismissed without deleting cached channels",
+        || !confirm.is_mapped(),
+    );
+    assert_eq!(
+        fixture
+            .storage
+            .query_channels(&crate::streams::model::ChannelQuery::default())
+            .unwrap()
+            .total,
+        20,
+        "Keep Existing protects previous catalogue"
+    );
+    assert!(fixture.storage.get_source(&id).is_ok());
+    assert!(
+        manager.is_mapped(),
+        "Keep Existing returns to source manager"
+    );
+    until("manager refocus after declined major reduction", || {
+        controls(&list, index as i32).is_some_and(|r| r.buttons[0].has_focus())
+    });
+
+    // An invalid local document fails without network and preserves the 20
+    // valid cached channels. Refreshed action remains reachable on retry.
+    fs::write(&path, "not a valid M3U file\n").expect("malformed local fixture");
+    assert!(controls(&list, index as i32).unwrap().buttons[0].grab_focus());
+    inject("Return");
+    until("malformed local source fails", || {
+        fixture
+            .storage
+            .get_source(&id)
+            .is_ok_and(|s| s.last_error_code.is_some())
+    });
+    assert_eq!(
+        fixture
+            .storage
+            .query_channels(&crate::streams::model::ChannelQuery::default())
+            .unwrap()
+            .total,
+        20
+    );
+    until("failed refresh leaves same row Retry available", || {
+        controls(&list, index as i32)
+            .is_some_and(|r| r.buttons[0].is_mapped() && r.buttons[0].is_sensitive())
+    });
+    // Retry a corrected file through the same real native button. A failure
+    // must not leave the manager permanently disabled or retain stale error
+    // status once the repaired source has been imported.
+    fs::write(&path, make_playlist(21)).expect("corrected local M3U retry fixture");
+    assert!(controls(&list, index as i32).unwrap().buttons[0].grab_focus());
+    inject("Return");
+    until(
+        "successful retry replaced cached catalogue with 21 channels",
+        || {
+            fixture.storage.get_source(&id).is_ok_and(|source| {
+                source.last_error_code.is_none()
+                    && fixture
+                        .storage
+                        .query_channels(&crate::streams::model::ChannelQuery::default())
+                        .is_ok_and(|channels| channels.total == 21)
+            })
+        },
+    );
+    until(
+        "successful retry restored original source Refresh owner",
+        || controls(&list, index as i32).is_some_and(|r| r.buttons[0].has_focus()),
+    );
+    manager.close();
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 offline one-source refresh success/failure and major-reduction Keep Existing compact"]
+fn r07_native_source_refresh_one_640_480() {
+    r07_native_source_refresh_paths(640, 480, 1, false);
+}
+#[test]
+#[ignore = "R07 offline three-source refresh success/failure and major-reduction Keep Existing TV"]
+fn r07_native_source_refresh_three_1280_800() {
+    r07_native_source_refresh_paths(1280, 800, 3, false);
+}
+#[test]
+#[ignore = "R07 deliberately wrong real SQLite source-refresh result"]
+fn r07_native_source_refresh_negative() {
+    r07_native_source_refresh_paths(640, 480, 1, true);
+}
+
+// R07 AS10: use the production GtkFileDialog, its real mapped native X11
+// chooser and XTest keyboard input. This tests permission-scoped local file
+// selection, not a constructed GFile returned directly to the service.
+fn r07_native_source_file_chooser(width: i32, height: i32, negative: bool) {
+    const PHYSICAL_CHOOSER: &str = r#"
+import ctypes as c,sys,time
+x=c.CDLL('libX11.so.6');t=c.CDLL('libXtst.so.6')
+x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
+d=x.XOpenDisplay(None);assert d
+x.XDefaultRootWindow.argtypes=[c.c_void_p];x.XDefaultRootWindow.restype=c.c_ulong
+x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)]
+x.XQueryTree.restype=c.c_int
+x.XSetInputFocus.argtypes=[c.c_void_p,c.c_ulong,c.c_int,c.c_ulong]
+x.XStringToKeysym.argtypes=[c.c_char_p];x.XStringToKeysym.restype=c.c_ulong
+x.XKeysymToKeycode.argtypes=[c.c_void_p,c.c_ulong];x.XKeysymToKeycode.restype=c.c_uint
+t.XTestFakeKeyEvent.argtypes=[c.c_void_p,c.c_uint,c.c_int,c.c_ulong]
+x.XFlush.argtypes=[c.c_void_p]
+def key(name,down=True):
+ code=x.XKeysymToKeycode(d,x.XStringToKeysym(name.encode()));assert code,name
+ assert t.XTestFakeKeyEvent(d,code,1 if down else 0,0)
+def press(name):key(name);key(name,False)
+time.sleep(1.0)
+root=x.XDefaultRootWindow(d);a,b,n=c.c_ulong(),c.c_ulong(),c.c_uint();children=c.POINTER(c.c_ulong)()
+assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(children),c.byref(n)) and n.value
+import subprocess,shutil
+has_wm = shutil.which('xprop') is not None and 'window id #' in subprocess.run(
+ ['xprop','-root','_NET_SUPPORTING_WM_CHECK'],capture_output=True,text=True).stdout
+if not has_wm: x.XSetInputFocus(d,children[n.value-1],1,0)
+x.XFlush(d)
+key('Control_L');press('l');key('Control_L',False)
+x.XFlush(d);time.sleep(.25)
+for char in sys.argv[1]:
+ press({'/':'slash','.':'period','-':'minus','_':'underscore'}.get(char,char))
+x.XFlush(d);time.sleep(.15)
+press('Return');x.XFlush(d);time.sleep(.6)
+press('Return');x.XFlush(d)
+print('R07_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
+"#;
+    let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
+    let id = fixture.ids[2].clone();
+    let sibling = fixture.ids[0].clone();
+    let old = fixture.storage.get_source(&id).unwrap().origin.locator;
+    let selected_path = fixture.dir.join("replacement-safe.m3u");
+    fs::write(
+        &selected_path,
+        "#EXTM3U\n#EXTINF:-1 tvg-id=\"selected-one\",Selected One\nhttps://example.invalid/stream-one\n#EXTINF:-1 tvg-id=\"selected-two\",Selected Two\nhttps://example.invalid/stream-two\n",
+    )
+    .expect("genuine local playlist file for GTK chooser");
+    let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
+    press_sheet(&replace, "Reselect Local File");
+    let mut driver = std::process::Command::new("python3")
+        .args(["-c", PHYSICAL_CHOOSER, selected_path.to_str().unwrap()])
+        .spawn()
+        .expect("native XTest file chooser driver");
+    until(
+        "real GTK FileDialog physical selection and SQLite replacement",
+        || {
+            let _ = driver.try_wait();
+            fixture.storage.get_source(&id).is_ok_and(|src| {
+                src.origin.kind == OriginKind::LocalFile
+                    && src.origin.locator.contains("replacement-safe.m3u")
+            })
+        },
+    );
+    assert!(
+        driver.wait().unwrap().success(),
+        "physical XTest driver completed"
+    );
+    assert_ne!(fixture.storage.get_source(&id).unwrap().origin.locator, old);
+    assert!(fixture.storage.get_source(&sibling).is_ok());
+    if negative {
+        assert_eq!(
+            fixture.storage.get_source(&sibling).unwrap().origin.locator,
+            fixture.storage.get_source(&id).unwrap().origin.locator,
+            "R07_AS10_EXPECTED_NEGATIVE_ORACLE: a real file chooser must not replace another source"
+        );
+        unreachable!("false selected-source oracle passed");
+    }
+    until("native chooser restored manager action focus", || {
+        controls(&list, 2).is_some_and(|r| {
+            r.buttons[3].has_focus()
+                || r.row.has_focus()
+                || gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|owner| {
+                    owner.is_mapped()
+                        && (owner == r.row.clone().upcast::<gtk::Widget>()
+                            || r.row.is_ancestor(&owner))
+                })
+        })
+    });
+    assert!(manager.is_mapped(), "chooser did not escape source manager");
+    manager.close();
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 AS10 genuine GTK file chooser compact, XTest local M3U selection"]
+fn r07_native_source_file_chooser_640_480() {
+    r07_native_source_file_chooser(640, 480, false);
+}
+#[test]
+#[ignore = "R07 AS10 genuine GTK file chooser TV, XTest local M3U selection"]
+fn r07_native_source_file_chooser_1280_800() {
+    r07_native_source_file_chooser(1280, 800, false);
+}
+#[test]
+#[ignore = "R07 AS10 intentionally wrong selected-source UUID oracle"]
+fn r07_native_source_file_chooser_negative() {
+    r07_native_source_file_chooser(640, 480, true);
+}

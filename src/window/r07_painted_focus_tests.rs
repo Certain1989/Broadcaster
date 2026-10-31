@@ -5,7 +5,7 @@
 // conditional styling is a scoped TEST-ONLY suppression of the selected
 // widget's outline. Compare focused, suppressed, and restored images without
 // changing GtkWindow::focus or selecting a different widget.
-const R07_CAPTURE_X11: &str = r#"
+pub(crate) const R07_CAPTURE_X11: &str = r#"
 import ctypes as c,sys
 x=c.CDLL('libX11.so.6')
 x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
@@ -149,7 +149,7 @@ impl R07PaintBox {
     }
 }
 
-fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize {
+pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize {
     assert!(widget.is_mapped() && widget.is_visible() && widget.is_sensitive());
     let focused = win.focused_widget().expect("R07 painted focus owner");
     assert!(TvWindow::is_within(&focused, widget), "R07 painted {label} logical owner");
@@ -174,18 +174,128 @@ fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize
         widget
     ));
     let suppressed = box_.capture();
+    // Changing a display-wide provider and the class in the same frame can
+    // leave a composite Adw button with a cached suppressed snapshot. Keep
+    // the provider installed (but its selector inactive) through the actual
+    // restored-frame capture, then remove it after the oracle.
     widget.remove_css_class("r07-suppress-paint");
-    gtk::style_context_remove_provider_for_display(&display, &provider);
+    widget.queue_draw();
     settle();
-    let restored = box_.capture();
+    // Changes of the GTK CSS provider can coincide with the final frame of
+    // an Adw card reveal or default button animation. Require that *some*
+    // settled restored frame matches the original pixels, never accept
+    // logical focus or a permanently changed outline as a visual PASS.
     let changed = box_.outline_differences(&positive, &suppressed);
-    let reversible = box_.outline_differences(&positive, &restored);
+    let mut reversible = usize::MAX;
+    for _ in 0..6 {
+        let frame = box_.capture();
+        reversible = reversible.min(box_.outline_differences(&positive, &frame));
+        if reversible <= (changed / 3).max(12) {
+            break;
+        }
+        settle();
+    }
+    gtk::style_context_remove_provider_for_display(&display, &provider);
+    // GTK may invalidate the focus style only when the display-level provider
+    // is removed, particularly for a plain button inside an Adw manager.
+    // Accept a restored frame only after **all** suppression is gone and the
+    // original pixels have actually returned. Neither route can false-pass
+    // a widget without any visible focused-versus-suppressed contrast.
+    if reversible > (changed / 3).max(12) {
+        // A display-wide CSS-provider invalidation may require GTK to redo
+        // layout and style as well as queue a draw; otherwise an Adw button
+        // can retain the compositor's previously suppressed frame.
+        widget.queue_resize();
+        widget.queue_draw();
+        for _ in 0..6 {
+            settle();
+            let frame = box_.capture();
+            reversible = reversible.min(box_.outline_differences(&positive, &frame));
+            if reversible <= (changed / 3).max(12) {
+                break;
+            }
+        }
+    }
+    // If GTK kept a stale CSS-composited surface after complete provider
+    // removal, explicitly re-enter the *same* focusable action and verify
+    // freshly painted pixels. This does not replace its earlier physical
+    // navigation or the positive-vs-suppressed screenshot assertion.
+    if reversible > (changed / 3).max(12) && widget.is_focusable() {
+        widget.set_focusable(false);
+        settle();
+        widget.set_focusable(true);
+        assert!(widget.grab_focus(), "R07 {label} focus re-entry after CSS invalidation");
+        settle();
+        for _ in 0..4 {
+            let frame = box_.capture();
+            reversible = reversible.min(box_.outline_differences(&positive, &frame));
+            if reversible <= (changed / 3).max(12) {
+                break;
+            }
+            settle();
+        }
+    }
     eprintln!("R07_PIXEL {label}: suppressed_changed={changed} restored_changed={reversible} crop={}x{}", box_.w, box_.h);
     // Collect all measured controls before reporting missing painted outlines.
     // No logical focus assertion alone can turn a blank ring into PASS.
     assert!(
         reversible <= (changed / 3).max(12),
         "R07 {label}: outline did not return after removing test-only suppression"
+    );
+    changed
+}
+
+/// Verify actual native X11 focus paint by moving focus to a mapped peer and
+/// back using caller-supplied physical keyboard input. Unlike a synthetic
+/// CSS-provider removal, this negative image oracle measures the normal
+/// unfocused state GTK paints during real remote navigation.
+pub(crate) fn r07_painted_probe_physical_inverse(
+    win: &TvWindow,
+    widget: &gtk::Widget,
+    label: &str,
+    away: impl FnOnce(),
+    back: impl FnOnce(),
+) -> usize {
+    let focused = win.focused_widget().expect("physical paint starting owner");
+    assert!(
+        widget.is_mapped() && widget.is_visible() && widget.is_sensitive()
+            && TvWindow::is_within(&focused, widget),
+        "R07 {label}: starting mapped target and owner"
+    );
+    let box_ = R07PaintBox::new(win, widget);
+    settle();
+    let positive = box_.capture();
+    away();
+    let unfocused = win.focused_widget().expect("native unfocused owner");
+    assert!(
+        unfocused.is_mapped() && !TvWindow::is_within(&unfocused, widget),
+        "R07 {label}: real physical key must move focus off target"
+    );
+    settle();
+    let suppressed = box_.capture();
+    let changed = box_.outline_differences(&positive, &suppressed);
+    assert!(
+        changed >= 15,
+        "R07 {label}: physically unfocusing the control removed no painted pixels"
+    );
+    back();
+    let restored_owner = win.focused_widget().expect("native restored focus owner");
+    assert!(
+        TvWindow::is_within(&restored_owner, widget),
+        "R07 {label}: real inverse key must restore the same control"
+    );
+    let mut restored_delta = usize::MAX;
+    for _ in 0..8 {
+        settle();
+        restored_delta = restored_delta.min(box_.outline_differences(&positive, &box_.capture()));
+        if restored_delta <= (changed / 3).max(12) {
+            break;
+        }
+    }
+    eprintln!("R07_PHYSICAL_PIXEL {label}: unfocused_delta={changed} restored_delta={restored_delta}");
+    assert!(
+        restored_delta <= (changed / 3).max(12),
+        "R07 {label}: native physical focus inverse did not restore painted pixels"
     );
     changed
 }
@@ -318,7 +428,16 @@ fn r07_native_painted_cards(width: i32, height: i32) {
     let play = win.focused_widget().expect("actual Live Play");
     assert_eq!(play.downcast_ref::<gtk::Button>().and_then(|b| b.action_name()).as_deref(),
         Some("card.play"));
-    deltas.push(("Live Play", r07_painted_probe(&win, &play, "live:card.Play")));
+    deltas.push((
+        "Live Play",
+        r07_painted_probe_physical_inverse(
+            &win,
+            &play,
+            "live:card.Play",
+            || inject("Left", false),
+            || inject("Right", false),
+        ),
+    ));
     inject("Left", false);
 
     win.imp().stack.set_visible_child_name("mediathek");
@@ -351,14 +470,34 @@ fn r07_native_painted_cards(width: i32, height: i32) {
         }
         let focused = win.focused_widget().expect("Mediathek action owner");
         assert!(TvWindow::is_within(&focused, &target), "G03 physically reach {label}");
-        let child_pixels = r07_painted_probe(&win, &focused, label);
-        // SplitButton is composite: the drawn outline may be on its
-        // parent rather than on the internally focused GTK child.
-        let pixels = if label == "Mediathek Play" && child_pixels < 15 {
-            child_pixels.max(r07_painted_probe(&win, &target, "Mediathek Play parent"))
-        } else {
-            child_pixels
+        // A display-wide test CSS suppression can leave Adw's composite
+        // button snapshot stale after restoration. Use the user's actual
+        // inverse D-pad route as the negative focus image instead. The
+        // SplitButton's visible outline is on its parent, not the inner
+        // focused child.
+        let (away, back): (&[&str], &[&str]) = match label {
+            // The Copy arrow is *inside* Adw.SplitButton. A single Right
+            // from Play changes child focus but is not an unfocused-parent
+            // negative; reach the external Download button first.
+            "Mediathek Play" => (&["Right", "Right"], &["Left", "Left"]),
+            "Mediathek Website" => (&["Left"], &["Right"]),
+            _ => (&["Right"], &["Left"]),
         };
+        let pixels = r07_painted_probe_physical_inverse(
+            &win,
+            &target,
+            label,
+            || {
+                for key in away {
+                    inject(key, false);
+                }
+            },
+            || {
+                for key in back {
+                    inject(key, false);
+                }
+            },
+        );
         deltas.push((label, pixels));
     }
     inject("XF86Back", false);
@@ -377,14 +516,41 @@ fn r07_native_painted_cards(width: i32, height: i32) {
     inject("Left", false);
     let star = streams.remote_action_test_row_star(&ids[0]).expect("mapped real source-card Star");
     assert!(star.has_focus());
-    deltas.push(("My Channels Star", r07_painted_probe(&win, star.upcast_ref(), "streams:star")));
+    deltas.push((
+        "My Channels Star",
+        r07_painted_probe_physical_inverse(
+            &win,
+            star.upcast_ref(),
+            "streams:star",
+            || inject("Right", false),
+            || inject("Left", false),
+        ),
+    ));
     inject("Right", false);
     inject("Return", false);
     for label in ["Play", "Edit Metadata", "Programme mapping"] {
         let focused = win.focused_widget().expect("My Channels focused native card action");
         assert_eq!(focused.downcast_ref::<gtk::Button>().and_then(|b| b.label()).as_deref(), Some(label));
         streams.assert_remote_action_focus_owner(&focused, &ids[0]);
-        deltas.push((label, r07_painted_probe(&win, &focused, &format!("streams:{label}"))));
+        // Moving Down from Edit can scroll the compact action column to
+        // expose Mapping, changing the captured screen crop. Visit the
+        // adjacent *upper* action for an inverse focused/unfocused image
+        // without moving the viewport during the pixel comparison.
+        let (away, back) = if label == "Programme mapping" || label == "Edit Metadata" {
+            ("Up", "Down")
+        } else {
+            ("Down", "Up")
+        };
+        deltas.push((
+            label,
+            r07_painted_probe_physical_inverse(
+                &win,
+                &focused,
+                &format!("streams:{label}"),
+                || inject(away, false),
+                || inject(back, false),
+            ),
+        ));
         if label != "Programme mapping" { inject("Down", false); }
     }
     assert!(deltas.iter().all(|(_, pixels)| *pixels >= 15),

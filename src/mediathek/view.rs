@@ -278,7 +278,7 @@ mod imp {
         #[template_child]
         pub(super) sort_button: TemplateChild<gtk::MenuButton>,
         #[template_child]
-        status_page: TemplateChild<adw::StatusPage>,
+        pub(super) status_page: TemplateChild<adw::StatusPage>,
         #[template_child]
         pub(super) results_list: TemplateChild<gtk::ListBox>,
         #[template_child]
@@ -288,9 +288,11 @@ mod imp {
         #[template_child]
         pub(super) results_view: TemplateChild<gtk::ScrolledWindow>,
         #[template_child]
-        loading_view: TemplateChild<adw::Spinner>,
+        pub(super) loading_view: TemplateChild<adw::Spinner>,
         #[template_child]
-        error_view: TemplateChild<adw::StatusPage>,
+        pub(super) error_view: TemplateChild<adw::StatusPage>,
+        #[template_child]
+        pub(super) retry_button: TemplateChild<gtk::Button>,
 
         #[property(get, set)]
         compact: Cell<bool>,
@@ -318,6 +320,14 @@ mod imp {
         pub(super) requests: RefCell<SearchRequests>,
         pub(super) broadcasters: RefCell<Vec<Broadcaster>>,
         pub(super) pending_broadcasters: RefCell<Option<Vec<Broadcaster>>>,
+        #[cfg(test)]
+        pub(super) r07_disposable_paging: Cell<bool>,
+        // Disposable fake two-stage request: error page, then successful Retry.
+        // Intercepts only the test binary and never calls the remote provider.
+        #[cfg(test)]
+        pub(super) r07_offline_search_state: Cell<u8>,
+        #[cfg(test)]
+        pub(super) r07_offline_search_calls: Cell<u32>,
         pub(super) updating_broadcaster_model: Cell<bool>,
         /// Only choose automatic focus on the first mapping.
         initial_focus_assigned: Cell<bool>,
@@ -617,6 +627,18 @@ impl TvMediathekView {
 
         if key == gtk::gdk::Key::Up {
             if widget_contains_focus(results, focused) {
+                // Load More sits after the ListBox in the same results column,
+                // but GTK list navigation does not reliably reverse across
+                // this widget boundary. Restore the last source-qualified row.
+                if widget_contains_focus(imp.load_more_button.upcast_ref(), focused)
+                    && imp.load_more_button.is_mapped()
+                {
+                    let last = imp.shows_model().n_items().saturating_sub(1) as i32;
+                    return imp
+                        .results_list
+                        .row_at_index(last)
+                        .is_some_and(|row| row.grab_focus());
+                }
                 if let Some(row) = result_row_for_focus(focused, &imp.results_list) {
                     if row.index() > 0 {
                         // Even an expanded card's Play button can move upward
@@ -650,6 +672,19 @@ impl TvMediathekView {
                 return imp.search_entry.grab_focus();
             }
         } else if key == gtk::gdk::Key::Down {
+            if widget_contains_focus(results, focused) {
+                if let Some(row) = result_row_for_focus(focused, &imp.results_list) {
+                    // Preserve GTK's normal inter-row Down handling. Only
+                    // the last mapped row needs a deterministic footer portal.
+                    let is_last = imp.results_list.row_at_index(row.index() + 1).is_none();
+                    if is_last
+                        && imp.load_more_button.is_mapped()
+                        && imp.load_more_button.is_sensitive()
+                    {
+                        return imp.load_more_button.grab_focus();
+                    }
+                }
+            }
             if widget_contains_focus(search, focused) {
                 return imp.keyboard_button.grab_focus();
             }
@@ -696,36 +731,88 @@ impl TvMediathekView {
         controls
     }
 
+    /// R07 offline source identity is the same across first and second pages.
+    /// The test-only transport never fetches MediathekViewWeb or streams.
+    #[cfg(test)]
+    fn r07_offline_item(index: usize) -> ShowObject {
+        use mediathekviewweb::models::Item;
+        ShowObject::new(Item {
+            id: format!("r07-show-{index}"),
+            channel: "R07".to_owned(),
+            topic: "Offline navigation".to_owned(),
+            title: format!("Offline show {index}"),
+            description: Some("Disposable GTK focus fixture".to_owned()),
+            timestamp: 0,
+            duration: Some(Duration::from_secs(180)),
+            size: None,
+            url_website: "https://example.invalid/offline".to_owned(),
+            url_subtitle: None,
+            url_video: "https://example.invalid/offline.mp4".to_owned(),
+            url_video_low: None,
+            url_video_hd: None,
+            filmliste_timestamp: 0,
+        })
+    }
+
     /// R07 isolated offline real Mediathek cards. No provider traffic or playback.
     #[cfg(test)]
     pub(crate) fn r07_install_offline_result_cards(&self) {
-        use mediathekviewweb::models::Item;
-
         let imp = self.imp();
-        // Invalidate any pending asynchronous initial query before installing
-        // deterministic rows. Keep the normal ListBox model binding intact.
         imp.requests.borrow_mut().begin_search();
+        imp.r07_disposable_paging.set(false);
         let model = imp.shows_model();
         model.remove_all();
         for index in 0..3 {
-            model.append(&ShowObject::new(Item {
-                id: format!("r07-show-{index}"),
-                channel: "R07".to_owned(),
-                topic: "Offline navigation".to_owned(),
-                title: format!("Offline show {index}"),
-                description: Some("Disposable GTK focus fixture".to_owned()),
-                timestamp: 0,
-                duration: Some(Duration::from_secs(180)),
-                size: None,
-                url_website: "https://example.invalid/offline".to_owned(),
-                url_subtitle: None,
-                url_video: "https://example.invalid/offline.mp4".to_owned(),
-                url_video_low: None,
-                url_video_hd: None,
-                filmliste_timestamp: 0,
-            }));
+            model.append(&Self::r07_offline_item(index));
         }
         imp.show_results();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_install_offline_paging(&self) {
+        let imp = self.imp();
+        self.r07_install_offline_result_cards();
+        imp.r07_disposable_paging.set(true);
+        self.set_total_results(6);
+        imp.show_results();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_enable_offline_error_retry(&self) {
+        let imp = self.imp();
+        imp.r07_offline_search_state.set(1);
+        imp.r07_offline_search_calls.set(0);
+        self.reload();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_offline_search_calls(&self) -> u32 {
+        self.imp().r07_offline_search_calls.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_offline_error_is_mapped(&self) -> bool {
+        self.imp().error_view.is_mapped()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_offline_initial_empty_is_mapped(&self) -> bool {
+        self.imp().status_page.is_mapped()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_offline_loading_is_mapped(&self) -> bool {
+        self.imp().loading_view.is_mapped()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_load_more_button(&self) -> gtk::Button {
+        self.imp().load_more_button.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_offline_result_count(&self) -> u32 {
+        self.imp().shows_model().n_items()
     }
 
     #[cfg(test)]
@@ -827,8 +914,28 @@ impl TvMediathekView {
             sort_order,
         }
     }
+    /// A user invoking Retry from the error page must not be left focused on
+    /// its unmapped button after the request resolves. Other refresh/search
+    /// initiators preserve their own focus without being redirected.
+    fn restore_retry_focus(&self, retry_was_focused: bool) {
+        if !retry_was_focused {
+            return;
+        }
+        let imp = self.imp();
+        if imp.error_view.is_mapped() {
+            imp.retry_button.grab_focus();
+        } else if !self.focus_first_result() {
+            imp.search_entry.grab_focus();
+        }
+    }
+
     async fn load(&self) {
         let imp = self.imp();
+        let retry_was_focused = self
+            .root()
+            .and_then(|root| root.downcast::<gtk::Window>().ok())
+            .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+            .is_some_and(|owner| widget_contains_focus(imp.error_view.upcast_ref(), &owner));
         let generation = imp.requests.borrow_mut().begin_search();
 
         let QueryProperties {
@@ -847,6 +954,35 @@ impl TvMediathekView {
         self.set_total_results(0);
         self.set_more_available(false);
         self.action_set_enabled("mediathek.load-more", false);
+
+        // E07 native contract: the actual reload/search action transitions
+        // through a pending spinner, a failed request and a subsequent Retry
+        // success. The synthetic result is generated only in this test-only
+        // branch, without contacting any provider.
+        #[cfg(test)]
+        if imp.r07_offline_search_state.get() != 0 {
+            let current_state = imp.r07_offline_search_state.get();
+            imp.r07_offline_search_calls
+                .set(imp.r07_offline_search_calls.get() + 1);
+            imp.show_loading();
+            glib::timeout_future(Duration::from_millis(30)).await;
+            if !imp.requests.borrow().is_current(generation) {
+                return;
+            }
+            if current_state == 1 {
+                imp.r07_offline_search_state.set(2);
+                imp.show_error_page();
+            } else {
+                let model = imp.shows_model();
+                for index in 0..3 {
+                    model.append(&Self::r07_offline_item(index));
+                }
+                self.set_total_results(3);
+                imp.show_results();
+            }
+            self.restore_retry_focus(retry_was_focused);
+            return;
+        }
 
         if query_string.is_empty()
             && broadcaster.is_none()
@@ -901,9 +1037,39 @@ impl TvMediathekView {
             }
             Err(_) => imp.show_error_page(),
         }
+        self.restore_retry_focus(retry_was_focused);
     }
     async fn load_more(&self) {
         let imp = self.imp();
+        // Native acceptance only: exercise the real enabled Load More action,
+        // asynchronous request ledger and exactly the production focus-return
+        // rule, without ever invoking a remote provider or building URLs.
+        #[cfg(test)]
+        if imp.r07_disposable_paging.get() {
+            let model = imp.shows_model();
+            let offset = model.n_items();
+            let had_focus = imp.load_more_button.has_focus();
+            let Some(generation) = imp.requests.borrow_mut().begin_page(offset) else {
+                return;
+            };
+            self.action_set_enabled("mediathek.load-more", false);
+            glib::timeout_future(std::time::Duration::from_millis(25)).await;
+            if !imp.requests.borrow_mut().finish_page(generation, offset) {
+                return;
+            }
+            for index in offset..6 {
+                model.append(&Self::r07_offline_item(index as usize));
+            }
+            imp.show_results();
+            if had_focus {
+                if self.more_available() {
+                    imp.load_more_button.grab_focus();
+                } else if let Some(row) = imp.results_list.row_at_index(offset as i32) {
+                    row.grab_focus();
+                }
+            }
+            return;
+        }
 
         let QueryProperties {
             query_string,

@@ -20,6 +20,10 @@
 		<key name="osk-enabled" type="b">
 			<default>true</default>
 		</key>
+		<!-- Retain the explicitly chosen on-screen keyboard alphabet layout. -->
+		<key name="osk-qwertz" type="b">
+			<default>false</default>
+		</key>
 		<key name="search-everywhere" type="b">
 			<default>false</default>
 		</key>

@@ -137,7 +137,7 @@ template $TvMediathekView: Adw.Bin {
         icon-name: "error-symbolic";
         title: _("Could Not Load Results");
 
-        child: Gtk.Button {
+        child: Gtk.Button retry_button {
           label: _("Retry");
           halign: center;
           action-name: "window.reload";

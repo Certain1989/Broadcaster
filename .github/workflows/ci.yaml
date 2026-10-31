@@ -58,6 +58,16 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Unit tests
         run: cargo test --locked
+      - name: Verify exact-positive runner rejects silent Cargo zero-test success
+        run: |
+          set -eu
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+          if bash tests/ci-require-one-ignored.sh r07_nonexistent_ci_filter_sentinel >"$log" 2>&1; then
+            echo 'R07 exact-positive runner silently accepted zero matched tests' >&2
+            exit 1
+          fi
+          grep -Fq 'CI false-green prevented' "$log"
       - name: C1 real source-manager native XTest and SQLite regressions
         run: |
           set -eu
@@ -74,7 +84,7 @@ jobs:
             esac
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
           done
           negative_log=$(mktemp)
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
@@ -108,7 +118,7 @@ jobs:
             esac
             xvfb-run -a -s "-screen 0 "${geometry}"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -142,7 +152,7 @@ jobs:
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -178,7 +188,7 @@ jobs:
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -217,7 +227,7 @@ jobs:
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           for case_name in r07_native_source_editors_negative r07_native_source_deletions_negative; do
@@ -261,7 +271,7 @@ jobs:
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           data_dir=$(mktemp -d -t broadcaster-r07-source-osk-XXXXXXXX)
@@ -297,7 +307,7 @@ jobs:
             esac
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -336,7 +346,7 @@ jobs:
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -402,7 +412,7 @@ jobs:
             xvfb-run -a -s "-screen 0 "${geometry}"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -449,14 +459,17 @@ jobs:
             esac
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
           done
           # Each service-backed GTK case uses a fresh, private real SQLite
           # database. Never touch the developer's XDG data directory.
           for case_name in \
             c4_native_favourites_640_480 c4_native_favourites_1280_800 \
             c4_native_mapping_640_480 c4_native_mapping_1280_800 \
-            r07_native_facets_640_480 r07_native_facets_1280_800; do
+            r07_native_facets_640_480 r07_native_facets_1280_800 \
+            r07_native_popup_search_640_480 r07_native_popup_search_1280_800 \
+            r07_native_playlist_guide_640_480 r07_native_playlist_guide_1280_800 \
+            r07_native_e08_action_graph_640_480 r07_native_e08_action_graph_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -465,7 +478,7 @@ jobs:
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -481,6 +494,39 @@ jobs:
             echo "C4 negative oracle failed for the wrong reason" >&2
             exit 1
           fi
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_e08_action_graph_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 E08 false middle-row return unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_E08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 E08 negative oracle failed before its target assertion" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "R07 E08 false-row identity rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_compact_geometry_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo 'R07 R1 false compact viewport oracle unexpectedly passed' >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_R1_EXPECTED_NEGATIVE_VISIBILITY "$negative_log"; then
+            cat "$negative_log"
+            echo 'R07 R1 geometry negative failed before its target assertion' >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
           echo "C4 deliberately incorrect Play-entry expectation rejected"
           negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -499,6 +545,57 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "R07 source-qualified facet focus negative oracle rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_popup_search_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 searched popup false selection unexpectedly accepted" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_POPUP_MIDDLE_EXPECTED_NEGATIVE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 searched popup negative failed for unrelated reason" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "R07 searched popup selection negative oracle rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_popup_facet_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 false French country/language UUID unexpectedly accepted" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_POPUP_FACET_EXPECTED_NEGATIVE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 French facet negative failed for unrelated reason" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "R07 false French popup identity correctly rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_playlist_guide_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 wrong playlist guide unexpectedly accepted" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_B06_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 playlist guide negative failed for unrelated reason" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "R07 confirmed playlist-guide negative oracle rejected"
 
       - name: R07 D07 real three-category switcher and wrong-page oracle
         run: |
@@ -517,7 +614,7 @@ jobs:
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -553,7 +650,7 @@ jobs:
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
@@ -587,7 +684,7 @@ jobs:
             esac
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1
+              bash tests/ci-require-one-ignored.sh "$case_name"
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -619,27 +716,27 @@ jobs:
           echo "R07 AG08 deliberately wrong guide return owner rejected"
 
       - name: Exercise external-player D-Bus discovery on an isolated session bus
-        run: dbus-run-session -- cargo test --locked dbus_proxy_lists_activatable_names -- --ignored --test-threads=1
+        run: dbus-run-session -- bash tests/ci-require-one-ignored.sh dbus_proxy_lists_activatable_names
       # Tests icon-name lookup on a *live* GDK display; file existence or PNG
       # decoding alone would have missed the N100 About placeholder.
       - name: Verify About icon theme lookup under a live display
-        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked icon_theme_resolves_about_icon_on_open_display -- --ignored --test-threads=1
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh icon_theme_resolves_about_icon_on_open_display
       - name: Verify live-channel GTK activation with an actual ListBox
-        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked gtk_row_activation_expands_then_plays_exactly_once -- --ignored --test-threads=1
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_row_activation_expands_then_plays_exactly_once
       - name: Verify list-boundary GTK child widget ancestry
-        run: xvfb-run -a env GDK_BACKEND=x11 cargo test --locked gtk_focus_boundary_distinguishes_first_and_interior_rows -- --ignored --test-threads=1
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_focus_boundary_distinguishes_first_and_interior_rows
       - name: Exercise Mediathek remote focus across filters, results and expanded cards
         run: |
           schema_dir=$(mktemp -d)
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_tv_remote_vertical_focus_follows_all_filters -- --ignored --test-threads=1
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_tv_remote_vertical_focus_follows_all_filters
       - name: Verify real playback-view restoration and cold-start routing in GTK
         run: |
           schema_dir=$(mktemp -d)
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" cargo test --locked gtk_playback_window_origin_and_cold_start -- --ignored --test-threads=1
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_playback_window_origin_and_cold_start
       - name: Verify isolated first-launch fullscreen settings
         run: bash tests/first-launch-fullscreen.sh
       - name: Exercise MPV remote overlay state transitions
@@ -647,6 +744,103 @@ jobs:
           LC_ALL=C lua tests/mpv-remote.lua
           LC_ALL=de_DE.UTF-8 lua tests/mpv-remote.lua
           LC_ALL=fr_FR.UTF-8 lua tests/mpv-remote.lua
+      # One integrated R07 gate for connected native journeys accumulated
+      # locally before publication. Each X11 fixture gets fresh SQLite and
+      # GSettings; deliberately wrong assertions must fail for their marker.
+      - name: R07 integrated keyboard, managers, rebind, menu and scale native matrix
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          # GTK's native file chooser needs its own schema even when the
+          # application uses an isolated disposable GSettings directory.
+          cp /usr/share/glib-2.0/schemas/org.gtk.gtk4.Settings.FileChooser.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          trap 'rm -rf "$schema_dir"' EXIT
+          for case_name in \
+            r07_osk_native_grid_640_480 r07_osk_native_grid_1280_800 \
+            r07_osk_native_paint_640_480 r07_osk_native_paint_1280_800 \
+            r07_osk_native_persist_qwertz_restart \
+            r07_native_source_refresh_one_640_480 r07_native_source_refresh_three_1280_800 \
+            r07_native_source_file_chooser_640_480 r07_native_source_file_chooser_1280_800 \
+            r07_native_guide_add_url_640_480 r07_native_guide_add_url_1280_800 \
+            r07_native_guide_refresh_640_480 r07_native_guide_refresh_1280_800 \
+            r07_native_guide_local_chooser_640_480 r07_native_guide_local_chooser_1280_800 \
+            r07_native_guide_manager_paint_640_480 r07_native_guide_manager_paint_1280_800 \
+            r07_native_picker_osk_paint_640_480 r07_native_picker_osk_paint_1280_800 \
+            r07_native_nested_guide_osk_640_480 r07_native_nested_guide_osk_1280_800 \
+            r07_native_app_menu_640_480 r07_native_app_menu_1280_800 \
+            r07_native_mediathek_loaded_vertical_640_480 r07_native_mediathek_loaded_vertical_1280_800 \
+            r07_native_recycle_removed_source_640_480 r07_native_recycle_removed_source_1280_800 \
+            r07_native_manager_paint_upper_640_480 r07_native_manager_paint_upper_1280_800 \
+            r07_native_manager_paint_lower_640_480 r07_native_manager_paint_lower_1280_800 \
+            r07_native_manager_paint_confirm_640_480 r07_native_manager_paint_confirm_1280_800 \
+            r07_native_live_player_failure_640_480 r07_native_live_player_failure_1280_800 \
+            r07_native_mediathek_paged_640_480 r07_native_mediathek_paged_1280_800 \
+            r07_native_mediathek_retry_640_480 r07_native_mediathek_retry_1280_800 \
+            r07_native_fake_fullscreen_cancel_640_480 r07_native_fake_fullscreen_cancel_1280_800 \
+            r07_native_three_page_loaded_640_480 r07_native_three_page_loaded_1280_800 \
+            r07_native_picker_guide_removed_640_480 r07_native_picker_guide_removed_1280_800 \
+            r07_native_picker_source_refreshed_640_480 r07_native_picker_source_refreshed_1280_800 \
+            r07_native_scale_284 r07_native_scale_1484 r07_native_scale_10000 r07_native_scale_15000; do
+            case "$case_name" in
+              *_1280_800|r07_native_scale_1484|r07_native_scale_15000) geometry=1280x800 ;;
+              *) geometry=640x480 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            echo "R07 native positive: $case_name ($geometry)"
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          for item in \
+            r07_osk_native_grid_negative_owner:R07_OSK_EXPECTED_NEGATIVE_ORACLE \
+            r07_osk_native_paint_negative:R07_OSK_EXPECTED_NEGATIVE_PAINT \
+            r07_native_source_refresh_negative:R07_AS07_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_source_file_chooser_negative:R07_AS10_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_guide_add_url_negative:R07_AG06_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_guide_refresh_negative:R07_AG03_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_guide_local_chooser_negative:R07_AG07_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_guide_manager_paint_negative:R07_G06_EXPECTED_NEGATIVE_PAINT \
+            r07_native_picker_osk_paint_negative:R07_G06_EXPECTED_NEGATIVE_PAINT \
+            r07_native_nested_guide_osk_negative:R07_C09_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_app_menu_negative:R07_D08_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_mediathek_loaded_vertical_negative:R07_D03_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_recycle_removed_source_negative:R07_F10_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_manager_paint_negative:R07_G05_EXPECTED_NEGATIVE_PAINT \
+            r07_native_live_player_failure_negative:R07_E03_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_mediathek_paged_negative:R07_E06_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_mediathek_retry_negative:R07_E07_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_fake_fullscreen_cancel_negative:R07_E11_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_three_page_loaded_negative:R07_D07_CONNECTED_EXPECTED_NEGATIVE \
+            r07_native_picker_guide_removed_negative:R07_B13_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_picker_source_refreshed_negative:R07_B12_EXPECTED_NEGATIVE_ORACLE \
+            r07_native_scale_negative:R07_SCALE_EXPECTED_NEGATIVE_ORACLE; do
+            case_name=${item%%:*}
+            marker=${item#*:}
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            if xvfb-run -a -s '-screen 0 640x480x24' \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              cargo test --locked "$case_name" -- --ignored --test-threads=1 \
+              >"$negative_log" 2>&1; then
+              cat "$negative_log"
+              echo "Unexpectedly accepted deliberately false $case_name" >&2
+              exit 1
+            fi
+            if ! grep -Fq "$marker" "$negative_log"; then
+              cat "$negative_log"
+              echo "R07 $case_name failed for the wrong reason" >&2
+              exit 1
+            fi
+            rm -rf "$data_dir"
+          done
+          echo 'R07 integrated native positives and marker-controlled negatives passed'
+
       - name: Native Meson compile and validation
         run: |
           meson compile -C _build
@@ -668,6 +862,39 @@ jobs:
           test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
           test -z "$(git status --porcelain --untracked-files=all)"
 
+      # G07/G08: make the CI-side environment and physical key routes visible
+      # for comparison with the independently recorded local X11 baseline.
+      # This does not substitute for owner-only Wayland/remote validation.
+      - name: R07 G07 G08 controlled Live Search Down and Right Play environment comparison
+        run: |
+          set -eu
+          echo 'R07_G07_G08_ENVIRONMENT_BEGIN'
+          echo "GTK=$(pkg-config --modversion gtk4)"
+          echo "Adwaita=$(pkg-config --modversion libadwaita-1)"
+          echo "font=$(fc-match -f '%{family}|%{style}' Cantarell)"
+          echo "GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 GTK_THEME=${GTK_THEME-<default>}"
+          echo 'viewport=640x480/1280x800'
+          echo 'R07_G07_G08_ENVIRONMENT_END'
+          schema_dir=$(mktemp -d)
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in \
+            r07_native_live_search_640_480 r07_native_live_search_1280_800 \
+            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-variance-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          echo 'R07_G07_G08_LIVE_KEY_ROUTES_PASS'
+
       - name: R07 batched painted source-card actions (Live, Mediathek and My Channels)
         run: |
           set -eu
@@ -685,7 +912,7 @@ jobs:
             if xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
-              cargo test --locked "$case_name" -- --ignored --test-threads=1; then
+              bash tests/ci-require-one-ignored.sh "$case_name"; then
               echo "R07 G03 ${case_name}: painted-card PASS"
             else
               echo "R07 G03 ${case_name}: visible-pixel RED; keep clause open" >&2
@@ -697,6 +924,46 @@ jobs:
             echo 'R07_G03_MATERIAL_PAINTED_FOCUS_RED: examine actual visible outline and viewport geometry' >&2
             exit 1
           fi
+
+      - name: R07 favourites-to-Show-All physical painted fallback at both viewports
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_favourites_paint_640_480 r07_native_favourites_paint_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+            GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_favourites_paint_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo 'R07 false G04 painted focus unexpectedly accepted' >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_G04_EXPECTED_NEGATIVE_PAINT "$negative_log"; then
+            cat "$negative_log"
+            echo 'R07 G04 negative failed before the painted-focus assertion' >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo 'R07 G04 physical painted positive and negative checks passed'
 
   flatpak:
     name: "Flatpak"
