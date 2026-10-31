@@ -1087,6 +1087,179 @@ fn native_source_delete_ordinal(width: i32, height: i32, index: i32, negative: b
     win.destroy();
 }
 
+// Connected AS08/AS09/AS11/C06 regression: operate the production K2 OSK
+// through mapped launcher/buttons, not by emitting signal handlers. Every
+// source ID is real SQLite and each modal belongs to an actual manager row.
+fn osk_for_source_field(win: &crate::window::TvWindow, entry: &gtk::Entry) -> adw::Dialog {
+    let parent = entry.parent().expect("editable row around real field");
+    let launcher = descendants(&parent)
+        .into_iter()
+        .filter_map(|w| w.downcast::<gtk::Button>().ok())
+        .find(|button| {
+            button.icon_name().as_deref() == Some("input-keyboard-symbolic") && button.is_mapped()
+        })
+        .expect("mapped real OSK launcher beside editable");
+    assert!(launcher.grab_focus(), "physical OSK launcher focus");
+    inject("Return");
+    until("real K2 OSK opened", || {
+        source_sheet(win, "On-screen keyboard").is_some()
+    });
+    let osk = source_sheet(win, "On-screen keyboard").unwrap();
+    assert!(osk.has_css_class("osk-production"));
+    osk
+}
+
+fn osk_key(osk: &adw::Dialog, key: &str) {
+    press_sheet(osk, key);
+    spin();
+}
+
+fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
+    crate::settings::TvSettings::get()
+        .set_boolean("osk-enabled", true)
+        .expect("test GSettings enables OSK");
+    let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
+    let [first, middle, last] = [
+        fixture.ids[0].clone(),
+        fixture.ids[1].clone(),
+        fixture.ids[2].clone(),
+    ];
+
+    // Rename: Cancel an edited draft without mutating the source, then
+    // re-open and type a new name using actual K2 key buttons/Done.
+    let rename = source_action(&win, &list, 0, 2, "Rename Source");
+    let name = source_sheet_entries(&rename)[0].clone();
+    let osk = osk_for_source_field(&win, &name);
+    osk_key(&osk, "Clear");
+    osk_key(&osk, "q");
+    let preview = source_sheet_entries(&osk)[0].clone();
+    assert_eq!(preview.text().as_str(), "q");
+    osk_key(&osk, "←");
+    assert_eq!(preview.position(), 0, "real OSK caret left");
+    osk_key(&osk, "→");
+    assert_eq!(preview.position(), 1, "real OSK caret right");
+    osk_key(&osk, "Cancel");
+    until("K2 Rename cancel", || !osk.is_mapped());
+    assert_eq!(
+        name.text().as_str(),
+        "Fixture 0",
+        "OSK Cancel preserves draft origin"
+    );
+    assert_eq!(
+        fixture.storage.get_source(&first).unwrap().name,
+        "Fixture 0"
+    );
+    let osk = osk_for_source_field(&win, &name);
+    osk_key(&osk, "Clear");
+    osk_key(&osk, "q");
+    osk_key(&osk, "w");
+    osk_key(&osk, "Done");
+    until("K2 Rename commits editable", || {
+        !osk.is_mapped() && name.text().as_str() == "qw"
+    });
+    press_sheet(&rename, "Save");
+    until("K2 Rename SQLite save and focus restoration", || {
+        !rename.is_mapped()
+            && fixture
+                .storage
+                .get_source(&first)
+                .is_ok_and(|s| s.name == "qw")
+            && gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|f| f.is_mapped())
+    });
+    assert_eq!(
+        fixture.storage.get_source(&middle).unwrap().name,
+        "Fixture 1"
+    );
+    if negative {
+        assert_eq!(
+            fixture.storage.get_source(&middle).unwrap().name,
+            "qw",
+            "R07_SOURCE_OSK_EXPECTED_NEGATIVE_ORACLE: OSK Rename must not target foreign UUID"
+        );
+    }
+
+    // Advanced Defaults is a real expanded, scrollable form. Physical OSK
+    // Done applies a separate draft to region code; native Save persists.
+    let defaults = source_action(&win, &list, 1, 1, "Edit Source Defaults");
+    let entries = source_sheet_entries(&defaults);
+    let code = entries[entries.len() - 2].clone();
+    let region_label = entries[entries.len() - 1].clone();
+    assert!(code.grab_focus(), "advanced Defaults code focusable");
+    spin();
+    assert!(code.is_mapped(), "expanded real Defaults region code");
+    let osk = osk_for_source_field(&win, &code);
+    osk_key(&osk, "Clear");
+    osk_key(&osk, "d");
+    osk_key(&osk, "e");
+    osk_key(&osk, "Done");
+    until("K2 region draft committed", || {
+        !osk.is_mapped() && code.text().as_str() == "de"
+    });
+    region_label.set_text("Germany");
+    press_sheet(&defaults, "Save");
+    until("K2 source region persisted", || {
+        !defaults.is_mapped()
+            && fixture.storage.get_source(&middle).is_ok_and(|s| {
+                s.defaults.region.as_ref().is_some_and(|r| {
+                    r.code.as_deref() == Some("de") && r.label.as_deref() == Some("Germany")
+                })
+            })
+    });
+
+    // Replace URL: K2's URL validator rejects a non-HTTP draft before any
+    // network call or SQLite mutation, and Back/Cancel cannot commit it.
+    let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
+    press_sheet(&replace, "Replace HTTP(S) URL");
+    until("K2 Replace URL editor", || {
+        source_sheet(&win, "Replace Playlist URL").is_some()
+    });
+    let url = source_sheet(&win, "Replace Playlist URL").unwrap();
+    let entry = source_sheet_entries(&url)[0].clone();
+    let osk = osk_for_source_field(&win, &entry);
+    let preview = source_sheet_entries(&osk)[0].clone();
+    preview.set_text("file:///blocked.m3u");
+    osk_key(&osk, "Done");
+    assert!(osk.is_mapped(), "K2 rejects non-HTTP URL without saving");
+    assert!(
+        entry.text().is_empty(),
+        "failed URL validator cannot write origin"
+    );
+    osk_key(&osk, "Cancel");
+    until("K2 URL cancel", || !osk.is_mapped());
+    assert!(entry.text().is_empty());
+    press_sheet(&url, "Cancel");
+    until("K2 replacement URL editor closed", || !url.is_mapped());
+    assert_eq!(
+        fixture.storage.get_source(&last).unwrap().origin.kind,
+        OriginKind::LocalFile
+    );
+    assert!(
+        manager.is_mapped(),
+        "source manager remains after K2 cancel"
+    );
+    manager.close();
+    until("source manager closed after K2", || !manager.is_mapped());
+    win.destroy();
+}
+
+#[test]
+#[ignore = "R07 real source Rename Defaults Replace K2 OSK physical compact"]
+fn r07_native_source_osk_640_480() {
+    native_source_osk_forms(640, 480, false);
+}
+
+#[test]
+#[ignore = "R07 real source Rename Defaults Replace K2 OSK physical TV"]
+fn r07_native_source_osk_1280_800() {
+    native_source_osk_forms(1280, 800, false);
+}
+
+#[test]
+#[ignore = "R07 deliberate foreign UUID after real K2 source Rename"]
+fn r07_native_source_osk_negative() {
+    native_source_osk_forms(640, 480, true);
+}
+
 #[test]
 #[ignore = "R07 source manager connected Rename/Defaults/Replace/Refresh, 640x480 XTest"]
 fn r07_native_source_editors_640_480() {
