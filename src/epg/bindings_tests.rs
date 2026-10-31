@@ -1157,6 +1157,93 @@ fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
     fk_ok(&c);
 }
 
+// R07 B12/B13: negative transactional controls complement the mapped picker
+// XTest journeys. They do not alone establish the whole modal/async clauses.
+fn r07_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
+    let playlist_revision: i64 = conn
+        .query_row(
+            "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    PickerMappingSnapshot {
+        row_id: "a1".into(),
+        playlist_id: "playlist-a".into(),
+        tvg_id: Some("TVG.EXACT".into()),
+        effective_name: "Station".into(),
+        playlist_revision,
+        guide_source_id: "g".into(),
+        guide_last_success_at: 1000,
+        guide_revision: 1,
+        prior_row_target: None,
+        prior_alias_target: None,
+    }
+}
+
+#[test]
+fn r07_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
+    let mut conn = setup();
+    selected(&mut conn, "g");
+    add_channel(&conn, "g", "target", "Station");
+    let snapshot = r07_picker_snapshot(&conn);
+    // A real source deletion cascades its IPTV rows while a stale picker can
+    // still hold a snapshot. It must never resurrect that row or write an
+    // override for another playlist's same-name channel.
+    assert_eq!(
+        conn.execute("DELETE FROM iptv_sources WHERE id='playlist-a'", [])
+            .unwrap(),
+        1
+    );
+    assert_eq!(count(&conn, "iptv_channels"), 2);
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(
+            &mut conn,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            &snapshot,
+            "target",
+            1001,
+        ),
+        Err(BindingError::NotFound)
+    );
+    assert_eq!(count(&conn, "epg_channel_overrides"), 0);
+    assert_eq!(count(&conn, "epg_global_id_aliases"), 0);
+    fk_ok(&conn);
+}
+
+#[test]
+fn r07_b13_picker_rejects_guide_removed_and_other_guide_selected() {
+    let mut conn = setup();
+    selected(&mut conn, "g");
+    add_channel(&conn, "g", "target", "Station");
+    let snapshot = r07_picker_snapshot(&conn);
+    // A manager-confirmed guide removal cascades guide data and clears the
+    // shared selection. A different guide with the *same channel ID* must
+    // not silently capture the stale old-guide choice.
+    assert_eq!(
+        conn.execute("DELETE FROM epg_sources WHERE id='g'", [])
+            .unwrap(),
+        1
+    );
+    add_guide(&conn, "replacement", true);
+    add_channel(&conn, "replacement", "target", "Station");
+    selected(&mut conn, "replacement");
+    assert_eq!(
+        set_row_mapping_from_picker_if_unchanged(
+            &mut conn,
+            ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+            &snapshot,
+            "target",
+            1001,
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    assert_eq!(count(&conn, "epg_channel_overrides"), 0);
+    assert_eq!(count(&conn, "epg_global_id_aliases"), 0);
+    assert_eq!(count(&conn, "iptv_channels"), 4);
+    fk_ok(&conn);
+}
+
 #[test]
 fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
     let mut c = setup();

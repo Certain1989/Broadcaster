@@ -469,10 +469,22 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
             };
             let dialog = adw::Dialog::new();
             dialog.set_title(&gettext("Edit Channel Metadata"));
-            dialog.set_content_width(560);
-            dialog.set_content_height(670);
+            // The 670px desktop sheet used to exceed the actual 640x480
+            // AdwBreakpointBin height and clip remote-only actions. Keep
+            // the same editable fields and confirmation semantics, with a
+            // bounded compact sheet and a scrollable X/Y content viewport.
+            let compact = parent.width() <= 700;
+            dialog.set_content_width(if compact { 480 } else { 560 });
+            dialog.set_content_height(if compact { 350 } else { 670 });
             let scroll = gtk::ScrolledWindow::new();
-            scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            scroll.set_policy(
+                if compact {
+                    gtk::PolicyType::Automatic
+                } else {
+                    gtk::PolicyType::Never
+                },
+                gtk::PolicyType::Automatic,
+            );
             let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
             body.set_margin_top(16);
             body.set_margin_bottom(16);
@@ -1251,6 +1263,75 @@ fn refresh_card_guide_search(
     ));
 }
 
+// Check the actual catalogue and row again after an asynchronous picker
+// snapshot was loaded, before presenting a modal. The view-generation guard
+// below catches GTK rebinds; this cheap SQLite read catches independent Guide
+// Manager deletion/selection and source refresh between load and presentation.
+// Confirmation still uses the original immediate-transaction CAS; this is a
+// visibility/return-focus guard, not permission to weaken the write gate.
+async fn card_picker_snapshot_presentable(
+    expected: crate::epg::bindings::PickerMappingSnapshot,
+) -> bool {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use rusqlite::OptionalExtension;
+            let Ok(mut conn) = super::storage::Storage::new().connect() else {
+                return false;
+            };
+            let Ok(tx) = conn.transaction() else {
+                return false;
+            };
+            let row: Option<(String, i64, i64, i64)> = match tx
+                .query_row(
+                    "SELECT c.source_id,s.revision,c.is_present,s.enabled
+                 FROM iptv_channels c JOIN iptv_sources s ON s.id=c.source_id
+                 WHERE c.id=?1",
+                    [&expected.row_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .optional()
+            {
+                Ok(row) => row,
+                Err(_) => return false,
+            };
+            let Some((source, revision, present, enabled)) = row else {
+                return false;
+            };
+            if source != expected.playlist_id
+                || revision != expected.playlist_revision
+                || present != 1
+                || enabled != 1
+            {
+                return false;
+            }
+            let Ok(selected) = crate::epg::bindings::selected_guide_for_row(&tx, &expected.row_id)
+            else {
+                return false;
+            };
+            if selected.as_deref() != Some(expected.guide_source_id.as_str()) {
+                return false;
+            }
+            let guide: Option<(i64, i64, Option<i64>)> = match tx
+                .query_row(
+                    "SELECT enabled,updated_at,last_success_at FROM epg_sources WHERE id=?1",
+                    [&expected.guide_source_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()
+            {
+                Ok(guide) => guide,
+                Err(_) => return false,
+            };
+            matches!(guide, Some((1, revision, Some(imported)))
+                if revision == expected.guide_revision
+                    && imported == expected.guide_last_success_at)
+        })
+        .await
+        .unwrap_or(false)
+    })
+    .await
+}
+
 pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
     let Some(parent) = view.root().and_downcast::<gtk::Window>() else {
         return;
@@ -1287,6 +1368,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 }
             }
             if data.snapshot.playlist_id != source_id
+                || view.card_mapping_context(&row_id) != Some((generation, source_id.clone()))
+                || !card_picker_snapshot_presentable(data.snapshot.clone()).await
                 || view.card_mapping_context(&row_id) != Some((generation, source_id))
             {
                 return;
@@ -1334,6 +1417,9 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             let search_toggle =
                 gtk::Button::with_label(&gettext("Search all guide channels / choose exact ID…"));
             search_toggle.set_halign(gtk::Align::Start);
+            // The transient guide picker is outside the My Channels toolbar
+            // focus styles. Keep a visible cue on its real advanced action.
+            search_toggle.add_css_class("tv-epg-picker-focus");
             body.append(&search_toggle);
             let advanced = gtk::Revealer::new();
             advanced.set_reveal_child(false);
@@ -1357,6 +1443,33 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             search_area.append(&pager);
             advanced.set_child(Some(&search_area));
             body.append(&advanced);
+            // The compact D35 row picker deliberately only confirms a single
+            // exact channel identity. Route explicit playlist-guide overrides
+            // to the pre-existing, separately confirmed full mapping editor;
+            // never change a playlist binding merely by opening this control.
+            let guide_settings =
+                gtk::Button::with_label(&gettext("Change guide / playlist exception…"));
+            guide_settings.set_halign(gtk::Align::Start);
+            guide_settings.add_css_class("tv-epg-picker-focus");
+            let editor_row = row_id.clone();
+            let editor_context = (generation, data.snapshot.playlist_id.clone());
+            guide_settings.connect_clicked(glib::clone!(
+                #[weak]
+                view,
+                #[weak]
+                dialog,
+                move |_| {
+                    // The picker is transient. A refresh or list rebind may
+                    // already have invalidated its original source identity.
+                    if view.card_mapping_context(&editor_row) == Some(editor_context.clone()) {
+                        dialog.close();
+                        show_epg_mapping_editor(&view, editor_row.clone());
+                    } else {
+                        dialog.close();
+                    }
+                }
+            ));
+            body.append(&guide_settings);
             body.append(&status);
             let close = gtk::Button::with_label(&gettext("Cancel"));
             close.connect_clicked(glib::clone!(
@@ -1513,7 +1626,22 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                     view.restore_card_mapping_focus(&restore_id);
                 }
             ));
-            dialog.set_child(Some(&body));
+            // Bound the entire expanded search sheet on compact displays.
+            // The inner paged result scroller alone does not limit its shell.
+            if parent.width() <= 700 {
+                let scroll = gtk::ScrolledWindow::new();
+                scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+                scroll.set_min_content_height(180);
+                scroll.set_max_content_height(340);
+                scroll.set_min_content_width(240);
+                scroll.set_max_content_width(430);
+                scroll.set_child(Some(&body));
+                dialog.set_content_width(480);
+                dialog.set_content_height(350);
+                dialog.set_child(Some(&scroll));
+            } else {
+                dialog.set_child(Some(&body));
+            }
             dialog.present(Some(&parent));
             #[cfg(test)]
             C4_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
@@ -1530,6 +1658,19 @@ fn show_epg_mapping_editor_with_hint(view: &TvStreamsView, id: String, hint: Opt
     else {
         return;
     };
+    // The normal card route is generation/playlist-bound. Reject async
+    // results for a recycled row before exposing guide-changing controls.
+    // Bulk-review hints have their own separately checked identity snapshot.
+    let card_context = hint
+        .is_none()
+        .then(|| view.card_mapping_context(&id))
+        .flatten();
+    // An already recycled/filtered card has no stable generation/source.
+    // Do not let its async detail lookup reopen a guide-changing modal.
+    // Bulk-review hints use their separate transaction-checked snapshot.
+    if hint.is_none() && card_context.is_none() {
+        return;
+    }
     spawn(glib::clone!(
         #[weak]
         view,
@@ -1554,9 +1695,25 @@ fn show_epg_mapping_editor_with_hint(view: &TvStreamsView, id: String, hint: Opt
                 return;
             }
             let effective_guide = effective_row_guide(detail.effective.id.clone()).await;
+            if card_context
+                .as_ref()
+                .is_some_and(|expected| view.card_mapping_context(&id).as_ref() != Some(expected))
+            {
+                return;
+            }
             let dialog = adw::Dialog::new();
             dialog.set_title(&gettext("Programme Mapping"));
-            dialog.set_content_width(530);
+            dialog.add_css_class("broadcaster-full-mapping-editor");
+            // Keep the existing multi-action editor reachable at compact TV
+            // resolutions. Its long form must scroll rather than requesting
+            // a floating sheet taller or wider than the physical viewport.
+            dialog.set_content_width(452);
+            let restore_row = detail.effective.id.clone();
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| view.restore_card_mapping_focus(&restore_row)
+            ));
             let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
             body.set_margin_top(16);
             body.set_margin_bottom(16);
@@ -1756,8 +1913,35 @@ fn show_epg_mapping_editor_with_hint(view: &TvStreamsView, id: String, hint: Opt
                     }
                 ));
             }
-            dialog.set_child(Some(&body));
+            let scroll = gtk::ScrolledWindow::new();
+            scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            scroll.set_min_content_height(180);
+            scroll.set_max_content_height(390);
+            scroll.set_child(Some(&body));
+            dialog.set_child(Some(&scroll));
+            // The approved full mapping editor is now entered from a
+            // D-pad-only compact picker. Begin inside its actual selected
+            // guide rather than leaving focus on the closed picker behind
+            // the newly presented sheet. Do not focus until it is mapped.
+            dialog.connect_map(glib::clone!(
+                #[weak]
+                picker,
+                move |_| {
+                    picker.grab_focus();
+                }
+            ));
             dialog.present(Some(&window));
+            // libadwaita may move initial focus once the sheet presentation
+            // settles, after GtkWidget::map. Reassert only while this editor
+            // and its guide chooser remain mapped; later user navigation is
+            // never overridden by periodic or delayed retries.
+            let initial_dialog = dialog.clone();
+            let initial_picker = picker.clone();
+            glib::idle_add_local_once(move || {
+                if initial_dialog.is_mapped() && initial_picker.is_mapped() {
+                    initial_picker.grab_focus();
+                }
+            });
         }
     ));
 }

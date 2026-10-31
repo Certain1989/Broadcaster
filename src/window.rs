@@ -816,7 +816,10 @@ impl TvWindow {
                 .as_ref()
                 .is_some_and(|bar| Self::is_within(&focused, bar))
             {
-                return search.as_ref().is_some_and(|entry| entry.grab_focus());
+                return search
+                    .as_ref()
+                    .filter(|entry| entry.is_mapped() && entry.is_sensitive())
+                    .is_none_or(|entry| entry.grab_focus());
             }
         }
         false
@@ -946,8 +949,13 @@ impl TvWindow {
                 // Give an open GTK popover its native Escape behavior first.
                 // Expanded rows collapse; otherwise Escape exits the list to
                 // the tabs while the remote Back key still goes to Mediathek.
-                if Self::find_mapped_popover(self.upcast_ref()).is_some() {
-                    glib::Propagation::Proceed
+                if let Some(popover) = Self::find_mapped_popover(self.upcast_ref()) {
+                    // Search-enabled GtkDropDown's internal GtkText consumes
+                    // Escape without closing the popup. Explicitly dismiss
+                    // the actual mapped popover, preserving the selected
+                    // filter and returning keyboard focus to its origin.
+                    popover.popdown();
+                    glib::Propagation::Stop
                 } else if self.imp().streams_view.collapse_expanded()
                     || (self.focused_widget().is_some_and(|focused| {
                         self.imp().streams_view.contains_results_focus(&focused)
@@ -1005,6 +1013,10 @@ fn modal_remote_action(
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "window/r07_native_focus_tests.rs"]
+pub(crate) mod r07_native_focus_tests;
 
 #[cfg(test)]
 mod remote_dialog_tests {

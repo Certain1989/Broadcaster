@@ -170,3 +170,34 @@ label.channel-fallback {
   padding-left: 3px;
   padding-right: 3px;
 }
+
+/* The Play action is an Adw.SplitButton: the inner GTK button gets focus,
+ * but the compound surface needs its own visible focus cue. GTK can set
+ * :focus without :focus-visible after physical remote navigation. */
+.tv-medithek-play-focus:focus,
+.tv-medithek-play-focus:focus-within,
+.tv-medithek-play-focus:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
+/* The empty favourites view is outside .tv-streams-controls and the
+ * virtualized channel-row selector; make its one-key exit equally visible. */
+.tv-stream-show-all-focus:focus,
+.tv-stream-show-all-focus:focus-within,
+.tv-stream-show-all-focus:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+
+/* The Programme Mapping sheet is outside the main toolbar focus container.
+ * Its advanced search must paint a cue under real remote focus. */
+button.tv-epg-picker-focus:focus,
+button.tv-epg-picker-focus:focus-within,
+button.tv-epg-picker-focus:focus-visible {
+  outline: 3px solid @accent_color;
+  outline-offset: -2px;
+  border-radius: 10px;
+}
