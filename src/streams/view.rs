@@ -2799,6 +2799,13 @@ impl TvStreamsView {
                 || focused.is_ancestor(star.upcast_ref::<gtk::Widget>())
             {
                 return match key {
+                    // In an expanded card, the star is one Right from Play;
+                    // the inverse Left must return to that same Play action.
+                    gtk::gdk::Key::Left
+                        if imp.expanded_id.borrow().as_deref() == Some(channel.id.as_str()) =>
+                    {
+                        self.focus_row_play(&channel.id)
+                    }
                     gtk::gdk::Key::Left | gtk::gdk::Key::Right => imp.results_list.grab_focus(),
                     _ => false,
                 };
@@ -2847,10 +2854,22 @@ impl TvStreamsView {
                 gtk::gdk::Key::Up => buttons[index - 1].grab_focus(),
                 gtk::gdk::Key::Down if index == buttons.len() - 1 => imp.results_list.grab_focus(),
                 gtk::gdk::Key::Down => buttons[index + 1].grab_focus(),
-                // Right remains in the action group; Left is its explicit exit.
+                // The primary Play action's Right enters the favourite
+                // star directly, with Star Left restoring Play. Secondary
+                // actions keep their established Right-in-group semantics.
+                gtk::gdk::Key::Right if index == 0 => {
+                    star.is_some_and(|button| button.grab_focus())
+                }
                 gtk::gdk::Key::Right => true,
                 _ => false,
             };
+        }
+        // The expanded row also needs a *remote* route to its star.
+        // Previously only a Tab loop could reach this mapped button.
+        // Left from Play still returns to the row, and a second Left
+        // reaches the star without toggling Play or changing selection.
+        if key == gtk::gdk::Key::Left && !focused.is::<gtk::Button>() {
+            return star.is_some_and(|button| button.grab_focus());
         }
         // Preserve the existing row Up/Down/OK behavior. A single Right on
         // the selected expanded row enters Play without Tab or a pointer.

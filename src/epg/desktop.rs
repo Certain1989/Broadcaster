@@ -512,6 +512,7 @@ fn repaint_focused(
                     // Two action lines fit narrow TV viewports without clipping.
                     let first = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                     let set_default = command(&gettext("Use as Shared Default"), &first);
+                    set_default.add_css_class("broadcaster-guide-first-action");
                     let refresh = command(&gettext("Refresh"), &first);
                     refresh.set_sensitive(source.enabled);
                     let second = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -639,7 +640,7 @@ fn repaint_focused(
                         }
                     });
                 }
-                wire_guide_rows(&focus_rows);
+                wire_guide_rows(&focus_rows, guide_header_button(&list));
                 if let Some((id, slot)) = focus {
                     let target = focus_rows
                         .iter()
@@ -710,7 +711,44 @@ fn guide_neighbor(
     }
 }
 
-fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
+// Find the real manager header in its enclosing mapped AdwDialog.
+// A CSS marker, not translated button text or child order, identifies it.
+fn guide_header_button(list: &gtk::Box) -> Option<gtk::Button> {
+    let dialog = list.ancestor(adw::Dialog::static_type())?;
+    fn find(widget: &gtk::Widget) -> Option<gtk::Button> {
+        if widget.has_css_class("broadcaster-guide-header-entry") {
+            return widget.clone().downcast::<gtk::Button>().ok();
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(button) = find(&next) {
+                return Some(button);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+    find(&dialog)
+}
+
+fn guide_first_row_button(list: &gtk::Box) -> Option<gtk::Button> {
+    fn find(widget: &gtk::Widget) -> Option<gtk::Button> {
+        if widget.has_css_class("broadcaster-guide-first-action") {
+            return widget.clone().downcast::<gtk::Button>().ok();
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            if let Some(button) = find(&next) {
+                return Some(button);
+            }
+            child = next.next_sibling();
+        }
+        None
+    }
+    find(&list.first_child()?)
+}
+
+fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])], header: Option<gtk::Button>) {
     // All destinations are weak. No button handler can own the list or peer
     // buttons through a captured strong reference.
     let targets: Vec<[glib::WeakRef<gtk::Button>; 4]> = rows
@@ -720,6 +758,7 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
     for (index, (_, controls)) in rows.iter().enumerate() {
         for slot in 0..4 {
             let targets = targets.clone();
+            let weak_header = header.as_ref().map(gtk::prelude::ObjectExt::downgrade);
             let enabled = controls[1].is_sensitive();
             let key = gtk::EventControllerKey::new();
             key.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -739,6 +778,19 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])]) {
                         | gtk::gdk::Key::KP_Down
                 ) {
                     return glib::Propagation::Proceed;
+                }
+                // A first-row Up must be able to leave the row action grid.
+                // Otherwise every key is swallowed at the first guide, and
+                // Add URL / Choose Local / Close become remote-inaccessible.
+                if index == 0
+                    && slot <= 1
+                    && matches!(pressed, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                    && weak_header
+                        .as_ref()
+                        .and_then(glib::WeakRef::upgrade)
+                        .is_some_and(|button| button.is_mapped() && button.grab_focus())
+                {
+                    return glib::Propagation::Stop;
                 }
                 if let Some((row, action)) =
                     guide_neighbor(targets.len(), index, slot, enabled, pressed)
@@ -1149,6 +1201,7 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         body.append(&intro);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let add_remote = command(&gettext("Add URL"), &actions);
+        add_remote.add_css_class("broadcaster-guide-header-entry");
         let add_local = command(&gettext("Choose Local XMLTV"), &actions);
         body.append(&actions);
         let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1157,6 +1210,26 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         body.append(&more_actions);
         let scroller = guide_list_scroller();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        // From every upper action Down re-enters the first current guide.
+        // Resolve its widget at key time: async repaint replaces all rows.
+        for header in [&add_remote, &add_local, &clear_default, &close] {
+            let key = gtk::EventControllerKey::new();
+            key.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak_list = list.downgrade();
+            key.connect_key_pressed(move |_, pressed, _, modifiers| {
+                if crate::keyboard::unmodified_remote(modifiers)
+                    && matches!(pressed, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+                    && weak_list
+                        .upgrade()
+                        .and_then(|list| guide_first_row_button(&list))
+                        .is_some_and(|button| button.is_mapped() && button.grab_focus())
+                {
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            });
+            header.add_controller(key);
+        }
         scroller.set_child(Some(&list));
         body.append(&scroller);
         let status = status_label();

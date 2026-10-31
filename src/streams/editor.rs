@@ -475,7 +475,9 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
             // bounded compact sheet and a scrollable X/Y content viewport.
             let compact = parent.width() <= 700;
             dialog.set_content_width(if compact { 480 } else { 560 });
-            dialog.set_content_height(if compact { 350 } else { 670 });
+            dialog.set_content_height(
+                (parent.height() - 90).clamp(300, if compact { 350 } else { 670 }),
+            );
             let scroll = gtk::ScrolledWindow::new();
             scroll.set_policy(
                 if compact {
@@ -504,9 +506,20 @@ pub(crate) fn show_metadata_editor(view: &TvStreamsView, id: String) {
             actions.append(&reset);
             actions.append(&save);
             body.append(&errors);
-            body.append(&actions);
+            // Keep the remote-only Save/Cancel/Reset controls above the
+            // bottom edge even when a long Countries/Region editor scrolls.
+            // Only the editable field body scrolls; footer stays mapped.
+            actions.set_margin_start(12);
+            actions.set_margin_end(12);
+            actions.set_margin_top(6);
+            actions.set_margin_bottom(12);
+            scroll.set_focusable(false);
             scroll.set_child(Some(&body));
-            dialog.set_child(Some(&scroll));
+            let shell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            scroll.set_vexpand(true);
+            shell.append(&scroll);
+            shell.append(&actions);
+            dialog.set_child(Some(&shell));
             cancel.connect_clicked(glib::clone!(
                 #[weak]
                 dialog,

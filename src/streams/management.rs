@@ -2442,8 +2442,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             "the toggled star must reclaim focus after SQLite reload"
         );
         // F02: move back into the exact real card, expand it using physical
-        // Return and reach its (still mapped) Star through physical keyboard
-        // focus traversal. Do not grab_focus() the star or use a model toggle.
+        // Return and reach its Star with the *remote D-pad*.
+        // Tab-only evidence did not prove real TV remote accessibility.
         inject("Right");
         view.assert_remote_action_focus_owner(
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
@@ -2457,17 +2457,31 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         let expanded_star = view
             .remote_action_test_row_star(&first_id)
             .expect("F02 same bound expanded row Star");
-        let mut reached_star = false;
-        for _ in 0..32 {
-            inject("Tab");
-            if expanded_star.has_focus() {
-                reached_star = true;
-                break;
-            }
-        }
+        // New direct remote route: Play Right enters Star, Star Left
+        // reverses to Play. This must not require Tab or focus injection.
+        inject("Right");
         assert!(
-            reached_star,
-            "F02 physical Tab must reach expanded card Star"
+            expanded_star.has_focus(),
+            "G09 Play Right must reach favourite Star"
+        );
+        inject("Left");
+        assert_eq!(
+            c4_focused_button(&win)
+                .and_then(|button| button.label())
+                .as_deref(),
+            Some("Play"),
+            "G09 Star Left returns to same expanded Play"
+        );
+        // The older Play Left -> source row -> Left Star path remains valid.
+        inject("Left");
+        view.assert_remote_action_focus_owner(
+            &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
+            &first_id,
+        );
+        inject("Left");
+        assert!(
+            expanded_star.has_focus(),
+            "G09 real Left/Left must reach expanded card Star without Tab"
         );
         inject("Return");
         wait_until(

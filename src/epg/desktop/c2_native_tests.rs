@@ -258,6 +258,29 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             first_default.grab_focus(),
             "enter first source via real widget"
         );
+        // G09: a populated Guide Manager must not consume Up forever at
+        // the first row. Reach the real header, then return by physical Down.
+        inject("Up");
+        assert_remote_focus(
+            &win,
+            &named_button(guide.upcast_ref(), "Add URL").unwrap(),
+            "first guide Up enters manager header",
+        );
+        for label in [
+            "Add URL",
+            "Choose Local XMLTV",
+            "Clear Shared Default",
+            "Close",
+        ] {
+            let header = named_button(guide.upcast_ref(), label).unwrap();
+            assert!(header.grab_focus(), "G09 header {label} exists");
+            inject("Down");
+            assert_remote_focus(
+                &win,
+                &first_default,
+                "guide header Down reenters first UUID",
+            );
+        }
         // AG09: first enabled row, physical boundary and complete enabled grid.
         inject("Left");
         assert_remote_focus(&win, &first_default, "first guide Left stays inside grid");
