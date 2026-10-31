@@ -1655,6 +1655,21 @@ fn r07_guide_manager_paint(width: i32, height: i32, negative: bool) {
     assert!(refresh.is_mapped() && refresh.is_sensitive());
     assert!(refresh.grab_focus());
     spin();
+    // A programmatic grab_focus can paint a different :focus-visible state
+    // from a real remote key transition, depending on the CI GTK theme.
+    // Prime the baseline with an actual reversible D-pad journey, so both
+    // captured focused frames represent physical-keyboard focus. Never
+    // treat the logical owner alone as proof of visible paint.
+    inject("Left");
+    assert!(
+        !refresh.has_focus(),
+        "G06 priming Left must physically leave Refresh"
+    );
+    inject("Right");
+    assert!(
+        refresh.has_focus(),
+        "G06 priming Right must physically restore Refresh"
+    );
     let pixels = crate::window::r07_native_focus_tests::r07_painted_probe_physical_inverse(
         &win,
         refresh.upcast_ref(),
