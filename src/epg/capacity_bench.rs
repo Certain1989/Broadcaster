@@ -337,7 +337,8 @@ fn streamed_capacity_case(scenario: &str, channels: usize, programmes: usize, gz
         &cancelled,
     )
     .expect("bounded cached time-window query after full import");
-    assert_eq!(page.programmes.len(), 2);
+    assert_eq!(page.programmes.len(), 48);
+    assert!(!page.truncated);
     println!(
         "EPG_CAPACITY scenario={scenario} window_ms={} window_rows={} window_truncated={}",
         query_start.elapsed().as_millis(),
