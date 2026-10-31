@@ -1433,9 +1433,21 @@ mod playback_navigation_tests {
         };
         // First entry focused Play without invoking the player.
         assert_action(0);
-        // Repeated Right must not make any of the expanded actions lose GTK focus.
+        let star = streams
+            .remote_action_test_row_star(&ids[0])
+            .expect("mapped favourite Star for the selected expanded row");
+        // G09: Right from Play now deliberately enters the same channel's Star;
+        // Left from Star must return to Play, never a stale recycled row.
+        // Exercise the real window capture router, not direct grab_focus() on Star.
+        for _ in 0..10 {
+            assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+            assert!(star.has_focus(), "Play Right must enter its favourite Star");
+            assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+            assert_action(0);
+        }
+        // Secondary actions retain their prior Right-in-group semantics.
         // This verifies the routed widget state, not compositor-rendered pixels.
-        for (index, button) in buttons.iter().enumerate() {
+        for (index, button) in buttons.iter().enumerate().skip(1) {
             assert!(button.grab_focus(), "action {index} must accept focus");
             assert_action(index);
             for _ in 0..10 {
@@ -1448,6 +1460,8 @@ mod playback_navigation_tests {
         // A disabled or unmatched programme guide must never gate Play/focus.
         streams.remote_action_test_status("Selected programme guide disabled");
         assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert!(star.has_focus(), "EPG status must not block Play -> Star");
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
         assert_action(0);
         assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
         assert_action(1);
