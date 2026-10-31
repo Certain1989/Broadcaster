@@ -17,10 +17,12 @@ if ! cargo test --locked "$case_name" -- --ignored --test-threads=1 >"$log" 2>&1
   exit 1
 fi
 cat "$log"
-# Require one exact function tail, one passed test total, and zero failed.
-# This rejects both the silently successful zero-test case and ambiguous
-# substring matches that run multiple tests.
-if [[ $(grep -Ec "^test ([A-Za-z0-9_]+::)*${case_name} \.\.\. ok$" "$log" || true) != 1 ]] || \
+# Require one exact executed function tail, one passed test total and zero failed.
+# GTK may print its own warnings onto the same stdout line between Cargo's
+# "test name ..." prefix and the separate "ok" result. Do not require an
+# uninterrupted "... ok" line: the one-pass Cargo summary proves success.
+# A zero-match or ambiguous substring match still fails the count checks.
+if [[ $(grep -Ec "^test ([A-Za-z0-9_]+::)*${case_name} \.\.\." "$log" || true) != 1 ]] || \
    [[ $(grep -Ec '^test result: ok\. 1 passed; 0 failed;' "$log" || true) != 1 ]]; then
   echo "CI false-green prevented: expected exactly one passed $case_name" >&2
   exit 1
