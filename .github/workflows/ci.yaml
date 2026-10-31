@@ -68,6 +68,43 @@ jobs:
             exit 1
           fi
           grep -Fq 'CI false-green prevented' "$log"
+      - name: R07 native painted X11 focus pixels and suppressed-control oracle
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_painted_focus_640_480 r07_native_painted_focus_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-pixels-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+            GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_painted_focus_negative_pixels -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 painted negative oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_G01_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 painted negative oracle failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 real X11 pixel negative-control assertion rejected as expected"
+
       - name: C1 real source-manager native XTest and SQLite regressions
         run: |
           set -eu
@@ -444,6 +481,262 @@ jobs:
           fi
           echo "R07 E04 real-row identity negative control rejected as expected"
 
+      - name: R07 D07 real three-category switcher and wrong-page oracle
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_category_switcher_640_480 r07_native_category_switcher_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-switcher-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked r07_native_category_switcher_negative_page -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 wrong-category oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_D07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 wrong-category oracle failed for the wrong reason" >&2
+            exit 1
+          fi
+          echo "R07 deliberately wrong physical category assertion was rejected"
+
+      - name: C2 native guide manager 0/3 guides, OSK and SQLite
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in c2_native_0_640_480 c2_native_3_640_480 c2_native_0_1280_800 c2_native_3_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            xvfb-run -a -s "-screen 0 "$geometry"x24" \
+              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+          done
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked c2_native_negative_oracle -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "C2 negative focus oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq C2_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "C2 negative oracle failed for the wrong reason" >&2
+            exit 1
+          fi
+          echo "C2 deliberately incorrect focus expectation rejected"
+          if xvfb-run -a -s "-screen 0 640x480x24" \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            cargo test --locked c2_native_negative_origin_focus -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "R07 AG08 wrong origin owner unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_AG08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "R07 AG08 negative origin test failed for unrelated reason" >&2
+            exit 1
+          fi
+          echo "R07 AG08 deliberately wrong guide return owner rejected"
+
+      - name: Exercise external-player D-Bus discovery on an isolated session bus
+        run: dbus-run-session -- bash tests/ci-require-one-ignored.sh dbus_proxy_lists_activatable_names
+      # Tests icon-name lookup on a *live* GDK display; file existence or PNG
+      # decoding alone would have missed the N100 About placeholder.
+      - name: Verify About icon theme lookup under a live display
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh icon_theme_resolves_about_icon_on_open_display
+      - name: Verify live-channel GTK activation with an actual ListBox
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_row_activation_expands_then_plays_exactly_once
+      - name: Verify list-boundary GTK child widget ancestry
+        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_focus_boundary_distinguishes_first_and_interior_rows
+      - name: Exercise Mediathek remote focus across filters, results and expanded cards
+        run: |
+          schema_dir=$(mktemp -d)
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_tv_remote_vertical_focus_follows_all_filters
+      - name: Verify real playback-view restoration and cold-start routing in GTK
+        run: |
+          schema_dir=$(mktemp -d)
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_playback_window_origin_and_cold_start
+      - name: Verify isolated first-launch fullscreen settings
+        run: bash tests/first-launch-fullscreen.sh
+      - name: Exercise MPV remote overlay state transitions
+        run: |
+          LC_ALL=C lua tests/mpv-remote.lua
+          LC_ALL=de_DE.UTF-8 lua tests/mpv-remote.lua
+          LC_ALL=fr_FR.UTF-8 lua tests/mpv-remote.lua
+      # One integrated R07 gate for connected native journeys accumulated
+      # locally before publication. Each X11 fixture gets fresh SQLite and
+      # GSettings; deliberately wrong assertions must fail for their marker.
+      - name: Native Meson compile and validation
+        run: |
+          meson compile -C _build
+          meson test -C _build --print-errorlogs
+      - name: Verify staged native installation
+        run: |
+          DESTDIR="$PWD/_build/install-root" meson install -C _build --no-rebuild
+          test -x _build/install-root/usr/local/bin/broadcaster
+          test -f _build/install-root/usr/local/share/glib-2.0/schemas/io.github.Certain1989.Broadcaster.gschema.xml
+          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-input.conf
+          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-remote.lua
+          test -f _build/install-root/usr/local/share/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png
+          grep -Fx 'Icon=io.github.Certain1989.Broadcaster' _build/install-root/usr/local/share/applications/io.github.Certain1989.Broadcaster.desktop
+          test ! -f _build/install-root/usr/local/share/icons/hicolor/scalable/apps/io.github.Certain1989.Broadcaster.svg
+      - name: Verify builds did not modify source checkout
+        run: |
+          test ! -e src/config.rs
+          test ! -e data/resources/shortcuts-dialog.ui
+          test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      # G07/G08: make the CI-side environment and physical key routes visible
+      # for comparison with the independently recorded local X11 baseline.
+      # This does not substitute for owner-only Wayland/remote validation.
+      - name: R07 G07 G08 controlled Live Search Down and Right Play environment comparison
+        run: |
+          set -eu
+          echo 'R07_G07_G08_ENVIRONMENT_BEGIN'
+          echo "GTK=$(pkg-config --modversion gtk4)"
+          echo "Adwaita=$(pkg-config --modversion libadwaita-1)"
+          echo "font=$(fc-match -f '%{family}|%{style}' Cantarell)"
+          echo "GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 GTK_THEME=${GTK_THEME-<default>}"
+          echo 'viewport=640x480/1280x800'
+          echo 'R07_G07_G08_ENVIRONMENT_END'
+          schema_dir=$(mktemp -d)
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in \
+            r07_native_live_search_640_480 r07_native_live_search_1280_800 \
+            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-variance-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          echo 'R07_G07_G08_LIVE_KEY_ROUTES_PASS'
+
+      - name: R07 batched painted source-card actions (Live, Mediathek and My Channels)
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          audit_failure=0
+          for case_name in r07_native_painted_cards_640_480 r07_native_painted_cards_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-r07-painted-card-XXXXXXXX)
+            if xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"; then
+              echo "R07 G03 ${case_name}: painted-card PASS"
+            else
+              echo "R07 G03 ${case_name}: visible-pixel RED; keep clause open" >&2
+              audit_failure=1
+            fi
+            rm -rf "$data_dir"
+          done
+          if [ "$audit_failure" -ne 0 ]; then
+            echo 'R07_G03_MATERIAL_PAINTED_FOCUS_RED: examine actual visible outline and viewport geometry' >&2
+            exit 1
+          fi
+
+      - name: R07 favourites-to-Show-All physical painted fallback at both viewports
+        run: |
+          set -eu
+          schema_dir=$(mktemp -d)
+          negative_log=$(mktemp)
+          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          for case_name in r07_native_favourites_paint_640_480 r07_native_favourites_paint_1280_800; do
+            case "$case_name" in
+              *_640_480) geometry=640x480 ;;
+              *) geometry=1280x800 ;;
+            esac
+            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            xvfb-run -a -s "-screen 0 ${geometry}x24" \
+              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+              XDG_DATA_HOME="$data_dir" \
+              bash tests/ci-require-one-ignored.sh "$case_name"
+            rm -rf "$data_dir"
+          done
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
+            GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_favourites_paint_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo 'R07 false G04 painted focus unexpectedly accepted' >&2
+            exit 1
+          fi
+          if ! grep -Fq R07_G04_EXPECTED_NEGATIVE_PAINT "$negative_log"; then
+            cat "$negative_log"
+            echo 'R07 G04 negative failed before the painted-focus assertion' >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo 'R07 G04 physical painted positive and negative checks passed'
+
+  # Independent native matrices run in parallel with Rust/other native gates.
+  # Each Actions job has its own Xvfb, temporary GSettings and SQLite fixtures;
+  # preserve all positive tests and marker-checked negative controls.
+  native-c4:
+    name: "R07 native C4 cards, mapping and facets"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-targets: true
+          cache-all-crates: false
+          key: archlinux-container
+      - name: Configure
+        run: meson setup _build -Dprofile=development
       - name: C4 physical XTest card, star and mapping action routes
         run: |
           set -eu
@@ -597,156 +890,22 @@ jobs:
           rm -rf "$negative_data_dir"
           echo "R07 confirmed playlist-guide negative oracle rejected"
 
-      - name: R07 D07 real three-category switcher and wrong-page oracle
-        run: |
-          set -eu
-          schema_dir=$(mktemp -d)
-          negative_log=$(mktemp)
-          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_category_switcher_640_480 r07_native_category_switcher_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            data_dir=$(mktemp -d -t broadcaster-r07-switcher-XXXXXXXX)
-            xvfb-run -a -s "-screen 0 ${geometry}x24" \
-              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              XDG_DATA_HOME="$data_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"
-            rm -rf "$data_dir"
-          done
-          if xvfb-run -a -s "-screen 0 640x480x24" \
-            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_category_switcher_negative_page -- --ignored --test-threads=1 \
-            >"$negative_log" 2>&1; then
-            cat "$negative_log"
-            echo "R07 wrong-category oracle unexpectedly passed" >&2
-            exit 1
-          fi
-          if ! grep -Fq R07_D07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
-            cat "$negative_log"
-            echo "R07 wrong-category oracle failed for the wrong reason" >&2
-            exit 1
-          fi
-          echo "R07 deliberately wrong physical category assertion was rejected"
-
-      - name: R07 native painted X11 focus pixels and suppressed-control oracle
-        run: |
-          set -eu
-          schema_dir=$(mktemp -d)
-          negative_log=$(mktemp)
-          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_painted_focus_640_480 r07_native_painted_focus_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            data_dir=$(mktemp -d -t broadcaster-r07-pixels-XXXXXXXX)
-            xvfb-run -a -s "-screen 0 ${geometry}x24" \
-              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              XDG_DATA_HOME="$data_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"
-            rm -rf "$data_dir"
-          done
-          if xvfb-run -a -s "-screen 0 640x480x24" \
-            env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-            GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_painted_focus_negative_pixels -- --ignored --test-threads=1 \
-            >"$negative_log" 2>&1; then
-            cat "$negative_log"
-            echo "R07 painted negative oracle unexpectedly passed" >&2
-            exit 1
-          fi
-          if ! grep -Fq R07_G01_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
-            cat "$negative_log"
-            echo "R07 painted negative oracle failed for unrelated reason" >&2
-            exit 1
-          fi
-          echo "R07 real X11 pixel negative-control assertion rejected as expected"
-
-      - name: C2 native guide manager 0/3 guides, OSK and SQLite
-        run: |
-          set -eu
-          schema_dir=$(mktemp -d)
-          negative_log=$(mktemp)
-          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          for case_name in c2_native_0_640_480 c2_native_3_640_480 c2_native_0_1280_800 c2_native_3_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            xvfb-run -a -s "-screen 0 "$geometry"x24" \
-              env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"
-          done
-          if xvfb-run -a -s "-screen 0 640x480x24" \
-            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c2_native_negative_oracle -- --ignored --test-threads=1 \
-            >"$negative_log" 2>&1; then
-            cat "$negative_log"
-            echo "C2 negative focus oracle unexpectedly passed" >&2
-            exit 1
-          fi
-          if ! grep -Fq C2_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
-            cat "$negative_log"
-            echo "C2 negative oracle failed for the wrong reason" >&2
-            exit 1
-          fi
-          echo "C2 deliberately incorrect focus expectation rejected"
-          if xvfb-run -a -s "-screen 0 640x480x24" \
-            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c2_native_negative_origin_focus -- --ignored --test-threads=1 \
-            >"$negative_log" 2>&1; then
-            cat "$negative_log"
-            echo "R07 AG08 wrong origin owner unexpectedly passed" >&2
-            exit 1
-          fi
-          if ! grep -Fq R07_AG08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
-            cat "$negative_log"
-            echo "R07 AG08 negative origin test failed for unrelated reason" >&2
-            exit 1
-          fi
-          echo "R07 AG08 deliberately wrong guide return owner rejected"
-
-      - name: Exercise external-player D-Bus discovery on an isolated session bus
-        run: dbus-run-session -- bash tests/ci-require-one-ignored.sh dbus_proxy_lists_activatable_names
-      # Tests icon-name lookup on a *live* GDK display; file existence or PNG
-      # decoding alone would have missed the N100 About placeholder.
-      - name: Verify About icon theme lookup under a live display
-        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh icon_theme_resolves_about_icon_on_open_display
-      - name: Verify live-channel GTK activation with an actual ListBox
-        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_row_activation_expands_then_plays_exactly_once
-      - name: Verify list-boundary GTK child widget ancestry
-        run: xvfb-run -a env GDK_BACKEND=x11 bash tests/ci-require-one-ignored.sh gtk_focus_boundary_distinguishes_first_and_interior_rows
-      - name: Exercise Mediathek remote focus across filters, results and expanded cards
-        run: |
-          schema_dir=$(mktemp -d)
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_tv_remote_vertical_focus_follows_all_filters
-      - name: Verify real playback-view restoration and cold-start routing in GTK
-        run: |
-          schema_dir=$(mktemp -d)
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          xvfb-run -a env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" bash tests/ci-require-one-ignored.sh gtk_playback_window_origin_and_cold_start
-      - name: Verify isolated first-launch fullscreen settings
-        run: bash tests/first-launch-fullscreen.sh
-      - name: Exercise MPV remote overlay state transitions
-        run: |
-          LC_ALL=C lua tests/mpv-remote.lua
-          LC_ALL=de_DE.UTF-8 lua tests/mpv-remote.lua
-          LC_ALL=fr_FR.UTF-8 lua tests/mpv-remote.lua
-      # One integrated R07 gate for connected native journeys accumulated
-      # locally before publication. Each X11 fixture gets fresh SQLite and
-      # GSettings; deliberately wrong assertions must fail for their marker.
+  native-integrated:
+    name: "R07 native integrated keyboard, managers and scale"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-targets: true
+          cache-all-crates: false
+          key: archlinux-container
+      - name: Configure
+        run: meson setup _build -Dprofile=development
       - name: R07 integrated keyboard, managers, rebind, menu and scale native matrix
         run: |
           set -eu
@@ -841,129 +1000,6 @@ jobs:
           done
           echo 'R07 integrated native positives and marker-controlled negatives passed'
 
-      - name: Native Meson compile and validation
-        run: |
-          meson compile -C _build
-          meson test -C _build --print-errorlogs
-      - name: Verify staged native installation
-        run: |
-          DESTDIR="$PWD/_build/install-root" meson install -C _build --no-rebuild
-          test -x _build/install-root/usr/local/bin/broadcaster
-          test -f _build/install-root/usr/local/share/glib-2.0/schemas/io.github.Certain1989.Broadcaster.gschema.xml
-          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-input.conf
-          test -f _build/install-root/usr/local/share/broadcaster/broadcaster-mpv-remote.lua
-          test -f _build/install-root/usr/local/share/icons/hicolor/128x128/apps/io.github.Certain1989.Broadcaster.png
-          grep -Fx 'Icon=io.github.Certain1989.Broadcaster' _build/install-root/usr/local/share/applications/io.github.Certain1989.Broadcaster.desktop
-          test ! -f _build/install-root/usr/local/share/icons/hicolor/scalable/apps/io.github.Certain1989.Broadcaster.svg
-      - name: Verify builds did not modify source checkout
-        run: |
-          test ! -e src/config.rs
-          test ! -e data/resources/shortcuts-dialog.ui
-          test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
-          test -z "$(git status --porcelain --untracked-files=all)"
-
-      # G07/G08: make the CI-side environment and physical key routes visible
-      # for comparison with the independently recorded local X11 baseline.
-      # This does not substitute for owner-only Wayland/remote validation.
-      - name: R07 G07 G08 controlled Live Search Down and Right Play environment comparison
-        run: |
-          set -eu
-          echo 'R07_G07_G08_ENVIRONMENT_BEGIN'
-          echo "GTK=$(pkg-config --modversion gtk4)"
-          echo "Adwaita=$(pkg-config --modversion libadwaita-1)"
-          echo "font=$(fc-match -f '%{family}|%{style}' Cantarell)"
-          echo "GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 GTK_THEME=${GTK_THEME-<default>}"
-          echo 'viewport=640x480/1280x800'
-          echo 'R07_G07_G08_ENVIRONMENT_END'
-          schema_dir=$(mktemp -d)
-          trap 'rm -rf "$schema_dir"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          for case_name in \
-            r07_native_live_search_640_480 r07_native_live_search_1280_800 \
-            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            data_dir=$(mktemp -d -t broadcaster-r07-variance-XXXXXXXX)
-            xvfb-run -a -s "-screen 0 ${geometry}x24" \
-              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"
-            rm -rf "$data_dir"
-          done
-          echo 'R07_G07_G08_LIVE_KEY_ROUTES_PASS'
-
-      - name: R07 batched painted source-card actions (Live, Mediathek and My Channels)
-        run: |
-          set -eu
-          schema_dir=$(mktemp -d)
-          trap 'rm -rf "$schema_dir"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          audit_failure=0
-          for case_name in r07_native_painted_cards_640_480 r07_native_painted_cards_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            data_dir=$(mktemp -d -t broadcaster-r07-painted-card-XXXXXXXX)
-            if xvfb-run -a -s "-screen 0 ${geometry}x24" \
-              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"; then
-              echo "R07 G03 ${case_name}: painted-card PASS"
-            else
-              echo "R07 G03 ${case_name}: visible-pixel RED; keep clause open" >&2
-              audit_failure=1
-            fi
-            rm -rf "$data_dir"
-          done
-          if [ "$audit_failure" -ne 0 ]; then
-            echo 'R07_G03_MATERIAL_PAINTED_FOCUS_RED: examine actual visible outline and viewport geometry' >&2
-            exit 1
-          fi
-
-      - name: R07 favourites-to-Show-All physical painted fallback at both viewports
-        run: |
-          set -eu
-          schema_dir=$(mktemp -d)
-          negative_log=$(mktemp)
-          trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
-          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
-          glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_favourites_paint_640_480 r07_native_favourites_paint_1280_800; do
-            case "$case_name" in
-              *_640_480) geometry=640x480 ;;
-              *) geometry=1280x800 ;;
-            esac
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
-            xvfb-run -a -s "-screen 0 ${geometry}x24" \
-              env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-              GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-              XDG_DATA_HOME="$data_dir" \
-              bash tests/ci-require-one-ignored.sh "$case_name"
-            rm -rf "$data_dir"
-          done
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
-          if xvfb-run -a -s '-screen 0 640x480x24' \
-            env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
-            GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_favourites_paint_negative -- --ignored --test-threads=1 \
-            >"$negative_log" 2>&1; then
-            cat "$negative_log"
-            echo 'R07 false G04 painted focus unexpectedly accepted' >&2
-            exit 1
-          fi
-          if ! grep -Fq R07_G04_EXPECTED_NEGATIVE_PAINT "$negative_log"; then
-            cat "$negative_log"
-            echo 'R07 G04 negative failed before the painted-focus assertion' >&2
-            exit 1
-          fi
-          rm -rf "$negative_data_dir"
-          echo 'R07 G04 physical painted positive and negative checks passed'
 
   flatpak:
     name: "Flatpak"
