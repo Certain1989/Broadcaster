@@ -107,7 +107,11 @@ fn controls(list: &gtk::ListBox, index: i32) -> Option<Controls> {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Button>().ok())
         .collect::<Vec<_>>();
-    assert_eq!(buttons.len(), 7, "seven real row actions");
+    assert_eq!(
+        buttons.len(),
+        8,
+        "eight real row actions, including Programme Guide"
+    );
     Some(Controls {
         row,
         enabled,
