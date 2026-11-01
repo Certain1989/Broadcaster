@@ -2590,7 +2590,8 @@ mod tests {
                 programme("c", "Retained", None, None)
             ),
         );
-        let stats = import_fixture(&mut conn, &fixed, "source", 3, 3).unwrap();
+        // The cancelled transaction never advanced the persisted revision.
+        let stats = import_fixture(&mut conn, &fixed, "source", 3, 2).unwrap();
         assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 1));
         assert_eq!(
             conn.query_row("SELECT title FROM epg_programmes", [], |r| r
