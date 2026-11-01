@@ -14,7 +14,12 @@ glib-compile-schemas "$schema_dir"
 
 run_positive() {
   local case_name=$1 geometry=$2 data_dir
-  data_dir=$(mktemp -d -t broadcaster-fast-ci-XXXXXXXX)
+  # C4's real-SQLite safety guard requires its established fixture prefix.
+  # Preserve that guard; never relax production or test storage protections.
+  case "$case_name" in
+    c4_native_*) data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX) ;;
+    *) data_dir=$(mktemp -d -t broadcaster-fast-ci-XXXXXXXX) ;;
+  esac
   if ! xvfb-run -a -s "-screen 0 ${geometry}x24" \
     env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
       XDG_DATA_HOME="$data_dir" \
