@@ -48,13 +48,16 @@ leave the prior output untouched. The output directory and private key must
 never be published, committed or copied to a public Pages directory. The
 `u1-public-key.gpg` file is public material only.
 
-The U1 PR workflow constructs two **real** Devel bundles independently on
-x86-64 and ARM64 runners, stages both, installs on the x86-64 user installation,
-and checks a subsequent *signed metadata-only revision* with `flatpak update`.
-A modified summary is checked through an independently configured remote,
-rather than counting a CLI-option error as proof of signature enforcement.
-This is a **transport test**, not yet a two-distinct-application-versions test,
-and not an ARM64 client-install test. Those remain required before acceptance.
+The U1 PR workflow constructs **two distinct packaged-content revisions** of
+Broadcaster Devel independently on native x86-64 and ARM64 runners (the second
+adds a named U1 test-only `/app` marker, without changing the application
+binary). An isolated signed remote contains both architecture refs at each
+revision. Clients on **both native architectures** install the first revision
+and use ordinary `flatpak update` to reach the second, checking the changed
+installed marker. A deliberately tampered summary is tested through a fresh
+remote to avoid cached-metadata false greens. This proves a normal signed
+**content update**, not yet a distinct upstream release-version upgrade or a
+production HTTP delivery test; both remain acceptance requirements.
 
 ## Production path — separate owner decision required
 
