@@ -54,10 +54,14 @@ adds a named U1 test-only `/app` marker, without changing the application
 binary). An isolated signed remote contains both architecture refs at each
 revision. Clients on **both native architectures** install the first revision
 and use ordinary `flatpak update` to reach the second, checking the changed
-installed marker. A deliberately tampered summary is tested through a fresh
-remote to avoid cached-metadata false greens. This proves a normal signed
-**content update**, not yet a distinct upstream release-version upgrade or a
-production HTTP delivery test; both remain acceptance requirements.
+installed marker. The update is served from a loopback static HTTP server, not public hosting.
+Replayed/mismatched architecture refs and unplanned test-key rotation are rejected
+before signing a new summary. A deliberately mutated summary is tested through
+a fresh, independent system installation rather than a remote listing, which
+can use cached metadata. This proves a normal signed **content update** on
+both architectures and local HTTP transport, not a distinct upstream
+release-version upgrade or GitHub Pages delivery; both remain acceptance
+requirements.
 
 ## Production path — separate owner decision required
 

@@ -44,6 +44,14 @@ else
   cmp -s "$stage/u1-public-key.gpg" "$previous/u1-public-key.gpg" ||
     { echo "Key change requires an explicit test migration; refusing" >&2; exit 2; }
   cp -a -- "$previous/repo" "$repo"
+  # A previous branch must not conceal an absent or replayed architecture.
+  declare -A previous_refs=()
+  for arch in x86_64 aarch64; do
+    ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+    previous_refs["$arch"]=$(ostree --repo="$repo" rev-parse "$ref")
+    [[ -n "${previous_refs[$arch]}" ]] ||
+      { echo "Previous repository lacks $arch ref" >&2; exit 1; }
+  done
 fi
 # Both imports must succeed before publishing *any* new signed summary.
 flatpak build-import-bundle --no-update-summary --gpg-sign="$fingerprint" \
@@ -52,8 +60,14 @@ flatpak build-import-bundle --no-update-summary --gpg-sign="$fingerprint" \
   --gpg-homedir="$key_home" "$repo" "$arm"
 refs=$(ostree --repo="$repo" refs)
 for arch in x86_64 aarch64; do
-  grep -Fx "app/io.github.Certain1989.Broadcaster.Devel/$arch/master" <<< "$refs" >/dev/null ||
+  ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+  grep -Fx "$ref" <<< "$refs" >/dev/null ||
     { echo "Wrong or missing Devel architecture: $arch" >&2; exit 1; }
+  current_ref=$(ostree --repo="$repo" rev-parse "$ref")
+  if [[ "$previous" != "-" && "$current_ref" == "${previous_refs[$arch]}" ]]; then
+    echo "Unchanged $arch ref after import; refusing mixed-version summary" >&2
+    exit 1
+  fi
 done
 flatpak build-update-repo --gpg-sign="$fingerprint" --gpg-homedir="$key_home" \
   --title='Broadcaster U1 isolated nonproduction proof' "$repo"

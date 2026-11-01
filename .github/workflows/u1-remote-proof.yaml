@@ -144,7 +144,38 @@ jobs:
             after=$(ostree --repo="$RUNNER_TEMP/u1-v2/repo" rev-parse "$ref")
             test -n "$before" && test -n "$after" && test "$before" != "$after"
           done
-          flatpak --user remote-modify --url="file://$RUNNER_TEMP/u1-v2/repo" broadcaster-u1-test
+          # Negative: replay an x86 bundle under the aarch64 filename.
+          cp "dist/broadcaster-u1-v2-x86_64.flatpak" "$RUNNER_TEMP/replayed-aarch64.flatpak"
+          if bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-mixed" "$RUNNER_TEMP/u1-v1" \
+               "dist/broadcaster-u1-v2-x86_64.flatpak" "$RUNNER_TEMP/replayed-aarch64.flatpak" \
+               "$dir" >"$RUNNER_TEMP/u1-mixed.log" 2>&1; then
+            echo 'U1 accepted mixed-version arch staging' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/u1-mixed"
+          grep -Fq 'Unchanged aarch64 ref after import' "$RUNNER_TEMP/u1-mixed.log"
+          # Negative: a new unapproved test key cannot extend the previous remote.
+          bash build-aux/u1/make-test-key.sh "$RUNNER_TEMP/u1-other-key"
+          if bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-wrong-key" "$RUNNER_TEMP/u1-v1" \
+               "dist/broadcaster-u1-v2-x86_64.flatpak" "dist/broadcaster-u1-v2-aarch64.flatpak" \
+               "$RUNNER_TEMP/u1-other-key" >"$RUNNER_TEMP/u1-wrong-key.log" 2>&1; then
+            echo 'U1 accepted unexpected signing-key rotation' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/u1-wrong-key"
+          grep -Fq 'Key change requires' "$RUNNER_TEMP/u1-wrong-key.log"
+          # Loopback HTTP server verifies static transport, without publishing remotely.
+          python3 -m http.server 18389 --bind 127.0.0.1 \
+            --directory "$RUNNER_TEMP/u1-v2/repo" >"$RUNNER_TEMP/u1-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18389/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18389/summary >/dev/null
+          flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-u1-test
+          flatpak --user remote-ls --refresh broadcaster-u1-test >/dev/null
           flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
           second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
           test -n "$second" && test "$first" != "$second"
@@ -155,21 +186,39 @@ jobs:
           # Use a NEW remote so old cached summaries cannot yield a false PASS.
           mkdir -p "$RUNNER_TEMP/bad-copy"
           cp -a "$RUNNER_TEMP/u1-v2/repo" "$RUNNER_TEMP/bad-copy/repo"
-          printf 'tampered' >> "$RUNNER_TEMP/bad-copy/repo/summary"
+          # Mutate a signed byte; merely appending ignored trailing data is not tampering.
+          python3 - "$RUNNER_TEMP/bad-copy/repo/summary" <<'PY'
+          import pathlib
+          import sys
+          path = pathlib.Path(sys.argv[1])
+          data = bytearray(path.read_bytes())
+          assert len(data) > 64
+          data[len(data) // 2] ^= 1
+          path.write_bytes(data)
+          PY
           sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/bad-copy/repo#" \
               -e 's#^Name=.*#Name=broadcaster-u1-forged#' \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/forged.flatpakrepo"
-          if flatpak --user remote-add --from broadcaster-u1-forged "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1; then
-            if flatpak --user remote-ls broadcaster-u1-forged >>"$RUNNER_TEMP/forged.log" 2>&1; then
-              echo 'Tampered summary was accepted; trust test FAILED' >&2
+          # Probe a distinct ephemeral system installation: remote listing alone
+          # may use cached appstream metadata and is NOT a signature check.
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Expected a clean disposable system installation' >&2
+            exit 1
+          fi
+          if sudo flatpak --system remote-add --from broadcaster-u1-forged "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1; then
+            if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+                 broadcaster-u1-forged io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/forged.log" 2>&1; then
+              echo 'Tampered summary was accepted for a real installation; trust test FAILED' >&2
               exit 1
             fi
           fi
-          if ! grep -Eiq 'summary|signature|gpg|verification|invalid' "$RUNNER_TEMP/forged.log"; then
+          if ! grep -Eiq 'summary|signature|gpg|verification|invalid|not valid' "$RUNNER_TEMP/forged.log"; then
             echo 'Forged remote failed for an unrelated reason; not a trust PASS' >&2
             cat "$RUNNER_TEMP/forged.log"
             exit 1
           fi
-          echo 'U1 changed-content update and tampered-summary negative oracle: PASS'
+          echo 'U1 dual-architecture signed changed-content update, mixed-arch/key rejection, HTTP transport and invalid-summary oracle: PASS'
           cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
           cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
+          printf 'Loopback HTTP requests (server log entries): '
+          grep -c 'GET /' "$RUNNER_TEMP/u1-http.log" || true
