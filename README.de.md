@@ -8,18 +8,32 @@
 
 **[English](README.md) | Deutsch**
 
-Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtliches Live-TV, Mediathek-Sendungen und eigene M3U-/IPTV-Sender. Die Wiedergabe erfolgt mit mpv. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus und Tastatur sowie mit Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
+Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtliches Live-TV, Mediathek-Sendungen und eigene M3U-/IPTV-Sender. Die Wiedergabe erfolgt mit mpv. Optionale XMLTV-Programmführer liefern **Jetzt/Nächste-Informationen** für eigene Sender; **Favoriten** erleichtern den Überblick. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus, Tastatur und Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
 
 ## Funktionen
 
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
 - **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
-- **XMLTV-Programmführer (v0.2.5-Kandidat):** Optionale Quellen als lokale XMLTV-Datei oder explizit konfigurierte HTTP(S)-Adresse. Ein Programmführer muss als **Shared Default** ausgewählt oder einer Playlist zugeordnet werden. Allein das Hinzufügen genügt nicht für Jetzt/Nächste. Unsichere Zuordnungen können bestätigt oder manuell überschrieben werden.
-- **Favoriten (v0.2.5-Kandidat):** Sender als Favoriten markieren und filtern. Verbesserte Fernbedienungsnavigation in Karten, Quellenverwaltung und Dialogen.
+- **XMLTV-Programmführer (v0.2.5):** Mehrere XMLTV-Quellen aus lokalen Dateien oder ausdrücklich gewählten HTTP(S)-Adressen hinzufügen und manuell aktualisieren. Einen Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Allein das Hinzufügen aktiviert ihn nicht.
+- **Jetzt/Nächste und Senderzuordnung (v0.2.5):** Laufende und folgende Sendungen für eigene Sender anzeigen, sofern ein Programmführer ausgewählt und der Sender zugeordnet ist. Vorsichtige Zuordnungsvorschläge prüfen, bestätigen oder korrigieren; regionale Varianten können manuell überschrieben werden.
+- **Favoriten (v0.2.5):** IPTV-Sender mit einem Stern markieren und den Favoritenfilter verwenden. Favoriten und Sendermetadaten bleiben unabhängig von Programmführer-Zuordnungen erhalten.
+- **Fernbedienungsnavigation (v0.2.5):** Verbesserte Richtungsnavigation und Erreichbarkeit von Kartenaktionen, Favoriten, Quellenverwaltung, Senderbearbeitung und Bildschirmtastatur.
 - **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
 - **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
+
+## XMLTV-Programmführer für eigene Sender verwenden
+
+Programmführer sind **optional**. Broadcaster lädt eine in einer M3U-Playlist vorgeschlagene EPG-Adresse nicht automatisch herunter. So werden Jetzt/Nächste-Informationen für eigene Sender eingerichtet:
+
+1. Unter **Eigene Sender** eine lokale M3U-Playlist oder eine HTTP(S)-Playlist hinzufügen.
+2. Die EPG-Quellenverwaltung öffnen, eine zulässig nutzbare XMLTV-Datei oder HTTP(S)-Adresse hinzufügen und die Quelle aktualisieren.
+3. Den Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Ein gemeinsamer Programmführer kann mehrere Playlists versorgen. **Eine EPG-Quelle nur hinzuzufügen reicht nicht aus.**
+4. Die vorgeschlagenen Senderzuordnungen prüfen. Unsichere Zuordnungen bestätigen oder manuell korrigieren, insbesondere bei regionalen Varianten.
+5. Unter **Eigene Sender** verfügbare Jetzt/Nächste-Informationen ansehen und gewünschte Sender für den Favoritenfilter markieren.
+
+Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Einzelheiten stehen in den [Versionshinweisen zu v0.2.5](docs/release-v0.2.5-notes.md).
 
 ## Screenshots
 
@@ -59,20 +73,20 @@ Weitere ältere Screenshots, auch zum Hinzufügen von Playlists, zeigt das [Rele
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-[Versionshinweise zu v0.2.5](docs/release-v0.2.5-notes.md): **v0.2.5 ist noch nicht veröffentlicht.** Die folgenden Downloadlinks und Prüfbeispiele beziehen sich deshalb weiterhin auf die veröffentlichte v0.2.1.
+Die [Versionshinweise zu v0.2.5](docs/release-v0.2.5-notes.md) erläutern den Programmführer und seine Einschränkungen. Das veröffentlichte Produktions-Flatpak für die eigene Architektur herunterladen und vor der Installation anhand der Prüfsumme kontrollieren.
 
 ## Broadcaster installieren
 
-Das Produktions-Flatpak für die passende Architektur und die zugehörige Datei `SHA256SUMS` vom [veröffentlichten Broadcaster-Release v0.2.1](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.1) herunterladen. Das folgende Beispiel verwendet x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen.
+Das Produktions-Flatpak für die passende Architektur und die zugehörige Datei `SHA256SUMS` vom [veröffentlichten Broadcaster-Release v0.2.5](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.5) herunterladen. Das folgende Beispiel verwendet x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen.
 
 ```bash
-grep 'broadcaster-0.2.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.2.5-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./broadcaster-0.2.1-x86_64.flatpak
+flatpak install --user ./broadcaster-0.2.5-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
-Die Prüfsumme gleicht das heruntergeladene Flatpak mit der `SHA256SUMS`-Datei desselben Releases ab. Für ARM64 den passenden Namen in **beiden** Befehlen verwenden. Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Für eine systemweite Installation auf einem separaten TV-Konto die Befehle `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.1-x86_64.flatpak` und `sudo flatpak uninstall --system ...` verwenden; die Anwendung selbst ohne sudo starten.
+Die Prüfsumme gleicht das heruntergeladene Flatpak mit der `SHA256SUMS`-Datei desselben Releases ab. Für ARM64 den passenden Namen in **beiden** Befehlen verwenden. Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Für eine systemweite Installation auf einem separaten TV-Konto die Befehle `sudo flatpak remote-add --system ...`, `sudo flatpak install --system ./broadcaster-0.2.5-x86_64.flatpak` und `sudo flatpak uninstall --system ...` verwenden; die Anwendung selbst ohne sudo starten.
 
 Die Anwendung benötigt GNOME Platform 51; Flatpak kann diese Runtime von Flathub beziehen. **Broadcaster selbst wird nicht über Flathub angeboten.** Eigenständige Flatpak-Bundles richten **keine automatischen Anwendungsupdates** ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von `io.github.Certain1989.Broadcaster.Devel` für Entwicklungsbuilds.
 
