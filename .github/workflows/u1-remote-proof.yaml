@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install native packaging tools before checking negative oracles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
       - name: Syntax and negative-path guards
         run: |
           bash -n build-aux/u1/*.sh
@@ -120,15 +124,24 @@ jobs:
           flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
           second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
           test -n "$second" && test "$first" != "$second"
-          # Ensure the remote does not accept forged unsigned metadata.
+          # Use a NEW remote so old cached summaries cannot yield a false PASS.
           mkdir -p "$RUNNER_TEMP/bad-copy"
           cp -a "$RUNNER_TEMP/u1-v2/repo" "$RUNNER_TEMP/bad-copy/repo"
           printf 'tampered' >> "$RUNNER_TEMP/bad-copy/repo/summary"
-          flatpak --user remote-modify --url="file://$RUNNER_TEMP/bad-copy/repo" broadcaster-u1-test
-          if flatpak --user remote-ls --refresh broadcaster-u1-test >/dev/null 2>&1; then
-            echo 'Tampered summary was accepted; trust test FAILED' >&2
+          sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/bad-copy/repo#" \
+              -e 's#^Name=.*#Name=broadcaster-u1-forged#' \
+              "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/forged.flatpakrepo"
+          if flatpak --user remote-add --from broadcaster-u1-forged "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1; then
+            if flatpak --user remote-ls broadcaster-u1-forged >>"$RUNNER_TEMP/forged.log" 2>&1; then
+              echo 'Tampered summary was accepted; trust test FAILED' >&2
+              exit 1
+            fi
+          fi
+          if ! grep -Eiq 'summary|signature|gpg|verification|invalid' "$RUNNER_TEMP/forged.log"; then
+            echo 'Forged remote failed for an unrelated reason; not a trust PASS' >&2
+            cat "$RUNNER_TEMP/forged.log"
             exit 1
           fi
-          echo 'U1 signed update transport and invalid-summary rejection: PASS'
+          echo 'U1 signed transport and tampered-summary negative oracle: PASS'
           cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
           cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
