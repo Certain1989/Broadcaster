@@ -175,7 +175,7 @@ struct PendingProgramme {
     description_truncated: bool,
     title_truncated: bool,
     subtitle_truncated: bool,
-    description_c1: bool,
+    omit_c1: bool,
 }
 
 /// Compact provenance for display fields shortened by the streaming parser.
@@ -193,7 +193,7 @@ impl ProgrammeTruncation {
     }
 }
 
-/// A validation-only signal; the invalid description and optional metadata
+/// A validation-only signal; the invalid title/description and optional metadata
 /// are never forwarded to the retained-programme insertion callback.
 #[derive(Debug)]
 pub(crate) struct OmittedProgrammeIdentity {
@@ -231,12 +231,13 @@ struct ParseState {
 }
 
 // Uniform decoded-scalar rule for element text and *every* attribute value.
-// Only direct programme-description text can opt into D27's C1 omission.
-fn forbidden_xml_control(c: char, direct_desc: bool) -> bool {
+// Only direct programme title/description text can opt into the bounded C1
+// omission path. Attributes and all other fields stay strictly validated.
+fn forbidden_xml_control(c: char, direct_omittable_field: bool) -> bool {
     let u = c as u32;
     (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
         || u == 0x7f
-        || ((0x80..=0x9f).contains(&u) && !direct_desc)
+        || ((0x80..=0x9f).contains(&u) && !direct_omittable_field)
 }
 
 fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError> {
@@ -369,21 +370,21 @@ impl ParseState {
     }
 
     fn add_text(&mut self, text: &str) -> Result<(), EpgError> {
-        let direct_desc = self.allow_c1_omission
+        let direct_omittable_field = self.allow_c1_omission
             && self.tags.len() == 3
             && self.tags[0] == "tv"
             && self.tags[1] == "programme"
-            && self.tags[2] == "desc";
+            && matches!(self.tags[2].as_str(), "title" | "desc");
         let mut contains_c1 = false;
         for c in text.chars() {
-            if forbidden_xml_control(c, direct_desc) {
+            if forbidden_xml_control(c, direct_omittable_field) {
                 return Err(EpgError::InvalidInput);
             }
             contains_c1 |= (0x80..=0x9f).contains(&(c as u32));
         }
         if contains_c1 {
             if let Some(programme) = self.programme.as_mut() {
-                programme.description_c1 = true;
+                programme.omit_c1 = true;
             }
         }
         if self.tags.is_empty() {
@@ -514,7 +515,7 @@ impl ParseState {
         }
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
-            self.last_programme_c1 = p.description_c1;
+            self.last_programme_c1 = p.omit_c1;
             self.last_programme_truncation = ProgrammeTruncation::default();
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
                 if start < stop
@@ -728,7 +729,7 @@ pub struct StreamedRows {
     pub truncated_channel_names: usize,
     /// Conflicting repeated-row occurrences, not unique programme identities.
     pub conflicting_duplicate_rows: usize,
-    /// Otherwise-valid programme elements omitted for C1 in a direct description.
+    /// Otherwise-valid programme elements omitted for C1 in direct title or description.
     pub omitted_c1_programmes: usize,
 }
 
@@ -1551,8 +1552,8 @@ mod formatted_xmltv_regression {
         assert_eq!(outcome.unwrap_err(), EpgError::Capacity(LimitKind::XmlText));
     }
 
-    // Only the direct programme <desc> element's text is eligible for D27
-    // omission. Parsed/ignored attributes must all obey the strict text rule.
+    // Only direct programme <title>/<desc> text can be omitted for C1.
+    // Parsed/ignored attributes must all obey the strict text rule.
     fn parse_with_c1_omission(input: &str) -> Result<StreamedRows, EpgError> {
         decode_xmltv_rows_omitting_c1(
             Cursor::new(input.as_bytes()),
@@ -1612,6 +1613,97 @@ mod formatted_xmltv_regression {
                 );
             }
         }
+    }
+
+    #[test]
+    fn direct_title_c1_omits_exactly_one_programme_across_event_kinds() {
+        // Title C1 must not be silently repaired or forwarded to the row sink.
+        // The same logical bad title spans text, CDATA, decimal and hex references.
+        let bad = "A\u{0080}<![CDATA[\u{0093}]]>&#148;&#x9F;Z";
+        let xml = format!(
+            "<tv><channel id='c'><display-name>C</display-name></channel>\
+             <programme channel='c' start='20300101000000 +0000'\
+             stop='20300101010000 +0000'><title>{bad}</title>\
+             <desc>even otherwise valid</desc></programme>\
+             <programme channel='c' start='20300101010000 +0000'\
+             stop='20300101020000 +0000'><title>Valid</title></programme></tv>"
+        );
+        let mut retained = Vec::new();
+        let mut omitted = Vec::new();
+        let stats = decode_xmltv_rows_omitting_c1(
+            Cursor::new(xml.as_bytes()),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |_| Ok(()),
+            |p, _| {
+                retained.push(p.title);
+                Ok(())
+            },
+            |p, _| {
+                omitted.push(p.title);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 1));
+        assert_eq!(retained, ["Valid"]);
+        assert_eq!(omitted.len(), 1);
+        assert!(omitted[0].contains('\u{0080}'));
+        // The non-transactional API must retain its strict rejection policy.
+        assert_eq!(
+            decode_xmltv_rows(
+                Cursor::new(xml.as_bytes()),
+                "synthetic",
+                0,
+                false,
+                StreamingLimits::candidate(),
+                &AtomicBool::new(false),
+                |_| Ok(()),
+                |_, _| Ok(())
+            ),
+            Err(EpgError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn title_c1_does_not_mask_unrelated_control_or_bad_attribute() {
+        let good = "<tv><channel id='c'><display-name>C</display-name></channel>\
+                    <programme channel='c' start='20300101000000 +0000'\
+                    stop='20300101010000 +0000'><title>Bad&#x85;</title>\
+                    <desc>ordinary</desc></programme>\
+                    <programme channel='c' start='20300101010000 +0000'\
+                    stop='20300101020000 +0000'><title>Valid</title></programme></tv>";
+        assert_eq!(
+            parse_with_c1_omission(good).unwrap().omitted_c1_programmes,
+            1
+        );
+        for invalid in [
+            good.replace("<desc>ordinary", "<desc>\u{0001}ordinary"),
+            good.replace("<desc>ordinary", "<desc>\u{007f}ordinary"),
+            good.replace("<desc>ordinary", "<desc><nested>\u{0085}</nested>ordinary"),
+            good.replace("<title>Valid", "<title ignored='&#x85;'>Valid"),
+            good.replace("<display-name>C", "<display-name>\u{0085}C"),
+            good.replace("</tv>", "<!DOCTYPE tv></tv>"),
+        ] {
+            assert_eq!(
+                parse_with_c1_omission(&invalid),
+                Err(EpgError::InvalidInput)
+            );
+        }
+    }
+
+    #[test]
+    fn empty_self_closing_title_does_not_inflate_c1_omission_count() {
+        let xml = "<tv><channel id='c'><display-name>C</display-name></channel>\
+                   <programme channel='c' start='20300101000000 +0000'\
+                   stop='20300101010000 +0000'><title/></programme>\
+                   <programme channel='c' start='20300101010000 +0000'\
+                   stop='20300101020000 +0000'><title>Good</title></programme></tv>";
+        let stats = parse_with_c1_omission(xml).unwrap();
+        assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 0));
     }
 
     #[test]
