@@ -260,6 +260,42 @@ jobs:
             exit 1
           fi
           echo 'U1 trusted-summary onboarding succeeded; wrong-key commit installation rejected'
+          # Negative: an otherwise valid dual-arch repository with a trusted
+          # signed summary but UNSIGNED imported commits must not install.
+          # This complements wrong-key commit rejection, and tests a distinct
+          # failure mode without changing stable IDs or production keys.
+          unsigned_repo="$RUNNER_TEMP/u1-unsigned/repo"
+          mkdir -p "$RUNNER_TEMP/u1-unsigned"
+          ostree --repo="$unsigned_repo" init --mode=archive-z2
+          flatpak build-import-bundle --no-update-summary "$unsigned_repo" \
+            "dist/broadcaster-u1-v2-x86_64.flatpak"
+          flatpak build-import-bundle --no-update-summary "$unsigned_repo" \
+            "dist/broadcaster-u1-v2-aarch64.flatpak"
+          flatpak build-update-repo --gpg-sign="$trusted_fingerprint" \
+            --gpg-homedir="$RUNNER_TEMP/u1-key" "$unsigned_repo"
+          test -s "$unsigned_repo/summary.sig"
+          sed -e "s#^Url=.*#Url=file://$unsigned_repo#" \
+              -e 's#^Name=.*#Name=broadcaster-u1-unsigned#' \
+              "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/unsigned.flatpakrepo"
+          sudo flatpak --system remote-add --from broadcaster-u1-unsigned \
+            "$RUNNER_TEMP/unsigned.flatpakrepo" >"$RUNNER_TEMP/unsigned.log" 2>&1
+          sudo flatpak --system remote-ls broadcaster-u1-unsigned | \
+            grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+               broadcaster-u1-unsigned io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/unsigned.log" 2>&1; then
+            echo 'Unsigned commit installed despite trusted summary; trust test FAILED' >&2
+            exit 1
+          fi
+          if ! grep -Eiq 'gpg|signature|verification|not signed|trusted key|public key' "$RUNNER_TEMP/unsigned.log"; then
+            echo 'Unsigned commit install failed for unrelated reason; not a trust PASS' >&2
+            cat "$RUNNER_TEMP/unsigned.log"
+            exit 1
+          fi
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Unsigned commit install left an application installed' >&2
+            exit 1
+          fi
+          echo 'U1 trusted-summary onboarding succeeded; unsigned commit installation rejected'
           # Positive system-scope counterpart: this uses a separate test remote
           # and the same signed Devel revisions, never the stable application.
           sudo flatpak --system remote-add --from broadcaster-u1-system \
