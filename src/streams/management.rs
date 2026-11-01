@@ -1110,7 +1110,9 @@ fn show_database_actions(view: &TvStreamsView) {
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     dialog.present(Some(&window));
 }
@@ -1202,7 +1204,9 @@ fn confirm_database_restore(
     cancel.connect_clicked(glib::clone!(
         #[weak]
         dialog,
-        move |_| dialog.close()
+        move |_| {
+            dialog.close();
+        }
     ));
     confirm.connect_clicked(glib::clone!(
         #[weak]

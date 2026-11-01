@@ -2223,10 +2223,12 @@ pub(super) fn validate_snapshot_schema(conn: &Connection, version: i64) -> Stora
     fn object_names(conn: &Connection) -> StorageResult<Vec<(String, String)>> {
         let mut stmt = conn.prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
             .map_err(|_| StorageError::IncompatibleDatabase)?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        let names = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|_| StorageError::IncompatibleDatabase)?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|_| StorageError::IncompatibleDatabase)
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        Ok(names)
     }
     if object_names(conn)? != object_names(&reference)? {
         return Err(StorageError::IncompatibleDatabase);

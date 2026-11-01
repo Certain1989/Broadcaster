@@ -8,11 +8,17 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
 };
 
-use rusqlite::{backup::Backup, Connection, OpenFlags};
+use rusqlite::{
+    backup::{Backup, StepResult},
+    Connection, OpenFlags,
+};
 
 use super::storage::{self, Storage, StorageError, StorageResult, APPLICATION_ID, SCHEMA_VERSION};
 
@@ -21,6 +27,7 @@ const REQUEST: &str = ".broadcaster-d1-restore-request";
 const CANDIDATE_PREFIX: &str = ".broadcaster-d1-import-";
 const RECOVERY_PREFIX: &str = ".broadcaster-d1-recovery-";
 static STARTUP_ARMED: AtomicBool = AtomicBool::new(false);
+static STARTUP_RESTORE_LOCK: Mutex<()> = Mutex::new(());
 static RESTORE_PROCESSED: AtomicBool = AtomicBool::new(false);
 
 /// Set only on the primary GtkApplication's startup signal (not a second
@@ -34,6 +41,12 @@ pub(crate) fn suppress_automatic_refresh_this_startup() -> bool {
 }
 
 pub(super) fn check_startup_restore(storage: &Storage) -> StorageResult<()> {
+    // Multiple async initializers can race at first startup. Serialize the
+    // entire pre-open restore, not just the ownership flag, so none can open
+    // the previous database while its bytes are being replaced.
+    let _guard = STARTUP_RESTORE_LOCK
+        .lock()
+        .map_err(|_| StorageError::StorageFailure)?;
     if STARTUP_ARMED.swap(false, Ordering::SeqCst) {
         // If an old DB exists, the first service's initialization must complete
         // the replacement before any other connection is opened.
@@ -168,9 +181,23 @@ fn online_backup(source: &Connection, target: &Path) -> StorageResult<()> {
         .map_err(|_| StorageError::StorageFailure)?;
     {
         let backup = Backup::new(source, &mut dest).map_err(storage::map_sql)?;
-        backup
-            .run_to_completion(128, Duration::from_millis(25), None)
-            .map_err(storage::map_sql)?;
+        // SQLite BUSY/LOCKED can otherwise spin indefinitely when another
+        // process keeps a read/write lock. A finite deadline prevents export
+        // from retaining a worker forever under a hostile or broken source.
+        // 512 pages per step keeps WAL writers responsive for large guides.
+        let deadline = Instant::now() + Duration::from_secs(900);
+        loop {
+            if Instant::now() >= deadline {
+                return Err(StorageError::StorageFailure);
+            }
+            let status = backup.step(512).map_err(storage::map_sql)?;
+            match status {
+                StepResult::Done => break,
+                StepResult::More | StepResult::Busy | StepResult::Locked => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
     }
     // Online backup of a WAL source can preserve the source journal-mode
     // header. Convert the independent destination to a standalone DELETE
