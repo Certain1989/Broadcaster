@@ -131,7 +131,7 @@ fn exact_migration_v1_with_fk_and_d6_constraints() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(index_count, 8);
+    assert_eq!(index_count, 9);
     let (source, _) = f.new_source("Region test", 1);
     assert!(conn
         .execute(

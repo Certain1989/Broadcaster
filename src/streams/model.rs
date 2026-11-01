@@ -171,6 +171,8 @@ pub struct Source {
     pub last_attempt_at: Option<i64>,
     pub last_success_at: Option<i64>,
     pub last_error_code: Option<String>,
+    pub auto_refresh: bool,
+    pub refresh_interval_seconds: i64,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

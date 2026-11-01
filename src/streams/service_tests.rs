@@ -589,3 +589,98 @@ async fn purge_and_refresh_serialize_without_catalogue_loss() {
         3
     );
 }
+
+#[tokio::test]
+async fn p1_unattended_shrink_pauses_without_granting_approval() {
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(20)).await;
+    let service = &test.service;
+    let source = service
+        .add_url(
+            "P1 shrink",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    server.replace(playlist(4));
+    // A normal import is not an authorization for further network activity.
+    assert!(matches!(
+        service.refresh_scheduled(source.id.clone()).await,
+        Ok(())
+    ));
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
+    service
+        .set_source_schedule(&source.id, true, 21600)
+        .await
+        .unwrap();
+    // Simulate elapsed time without system-clock fiddling by resetting only
+    // the deterministic persisted timestamps in this test database.
+    let db = Storage::at(&test.path);
+    db.connect()
+        .unwrap()
+        .execute(
+            "UPDATE iptv_sources SET last_success_at=1,last_attempt_at=1 WHERE id=?1",
+            [&source.id],
+        )
+        .unwrap();
+    assert!(matches!(
+        service.refresh_scheduled(source.id.clone()).await,
+        Err(ServiceError::Storage(StorageError::ApprovalRequired))
+    ));
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
+    let state = service.source(&source.id).await.unwrap();
+    assert_eq!(state.last_error_code.as_deref(), Some("approval_required"));
+    assert!(matches!(
+        service.refresh_scheduled(source.id.clone()).await,
+        Ok(())
+    ));
+    assert_eq!(
+        service.query(ChannelQuery::default()).await.unwrap().total,
+        20
+    );
+    service
+        .set_source_schedule(&source.id, false, 21600)
+        .await
+        .unwrap();
+    assert!(!service.source(&source.id).await.unwrap().auto_refresh);
+}
+
+#[tokio::test]
+async fn p1_opt_out_and_disabled_source_do_not_fetch() {
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(2)).await;
+    let service = &test.service;
+    let source = service
+        .add_url(
+            "No unattended network",
+            server.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    server.replace(b"broken payload".to_vec());
+    service.refresh_scheduled(source.id.clone()).await.unwrap();
+    assert_eq!(
+        service.source(&source.id).await.unwrap().last_error_code,
+        None
+    );
+    service
+        .set_source_schedule(&source.id, true, 21600)
+        .await
+        .unwrap();
+    service.toggle_source(&source.id, false).await.unwrap();
+    service.refresh_scheduled(source.id.clone()).await.unwrap();
+    assert_eq!(
+        service.source(&source.id).await.unwrap().last_error_code,
+        None
+    );
+}

@@ -4,7 +4,7 @@
 //! Disposable on-disk migration fixtures using the actual published v1 SQL.
 use super::storage::{
     Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
-    SCHEMA_VERSION,
+    MIGRATION_005, SCHEMA_VERSION,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::PathBuf};
@@ -73,7 +73,7 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
 }
 
 #[test]
-fn clean_new_database_is_schema_v4_after_reopening() {
+fn clean_new_database_is_schema_v5_after_reopening() {
     let dir = Sandbox::new();
     let storage = Storage::at(dir.path());
     storage.initialize().unwrap();
@@ -561,7 +561,7 @@ fn g1_v3_to_v4_preserves_user_data_and_recovery_copy() {
     let version: i64 = c
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, SCHEMA_VERSION);
     assert_eq!(
         c.query_row("SELECT COUNT(*) FROM iptv_channel_favourites", [], |r| r
             .get::<_, i64>(0))
@@ -657,4 +657,138 @@ fn g1_reopening_corrupt_dual_selection_is_rejected() {
         storage.connect().is_err(),
         "dual selection corruption must fail validation"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn p1_v4_to_v5_preserves_guide_optout_channel_and_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let conn = Connection::open(&path).unwrap();
+        for part in [MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+            conn.execute_batch(part).unwrap();
+        }
+        conn.execute("INSERT INTO epg_playlist_guide_optouts (playlist_source_id,updated_at) VALUES('playlist-one',200)",[]).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    let source = storage.get_source("playlist-one").unwrap();
+    assert!(!source.auto_refresh);
+    assert_eq!(source.refresh_interval_seconds, 86400);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM iptv_channels", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM iptv_channel_overrides", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    let copies: Vec<_> = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.to_string_lossy().contains("-v4-recovery-"))
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(
+        Connection::open(&copies[0])
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+}
+
+#[test]
+fn p1_schedule_opt_in_backoff_attention_and_isolation() {
+    use super::storage::ErrorCode;
+    let dir = Sandbox::new();
+    let storage = Storage::at(dir.path());
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    for id in ["playlist-a", "playlist-b"] {
+        conn.execute("INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at) VALUES(?1,?1,'local_file','/fabricated/source',1,1)",[id]).unwrap();
+    }
+    drop(conn);
+    let t = 1_800_000_000;
+    assert!(storage.due_source_ids(t, 2).unwrap().is_empty());
+    assert!(storage
+        .set_source_schedule("playlist-a", true, 5 * 3600, t)
+        .is_err());
+    assert!(storage
+        .set_source_schedule("playlist-a", true, 169 * 3600, t)
+        .is_err());
+    storage
+        .set_source_schedule("playlist-a", true, 6 * 3600, t)
+        .unwrap();
+    assert_eq!(storage.due_source_ids(t, 2).unwrap(), vec!["playlist-a"]);
+    storage
+        .record_refresh_failure("playlist-a", ErrorCode::Network, t)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 21599, 2).unwrap().is_empty());
+    assert_eq!(
+        storage.due_source_ids(t + 21600, 2).unwrap(),
+        vec!["playlist-a"]
+    );
+    storage
+        .record_refresh_failure("playlist-a", ErrorCode::ApprovalRequired, t + 21600)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 172800, 2).unwrap().is_empty());
+    storage
+        .set_source_schedule("playlist-a", true, 6 * 3600, t + 172800)
+        .unwrap();
+    assert_eq!(
+        storage.due_source_ids(t + 172800, 2).unwrap(),
+        vec!["playlist-a"]
+    );
+    storage
+        .set_source_enabled("playlist-a", false, t + 172801)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 999999, 2).unwrap().is_empty());
+    assert!(!storage.get_source("playlist-b").unwrap().auto_refresh);
+}
+
+#[cfg(unix)]
+#[test]
+fn p1_invalid_v5_shape_is_rejected_without_mutating_db() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        for sql in [MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+            c.execute_batch(sql).unwrap();
+        }
+        let malicious = MIGRATION_005.replace(
+            "CHECK (auto_refresh IN (0,1))",
+            "CHECK (auto_refresh IN (0,1,2))",
+        );
+        c.execute_batch(&malicious).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(Storage::at(&path).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
 }

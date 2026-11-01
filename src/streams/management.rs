@@ -1132,11 +1132,11 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
 }
 
 // A row is the non-destructive portal; semantic slots are upper 0..4,
-// lower 4..8, and the full-width Programme Guide action at slot 8. Navigation is explicit because GTK's geometric fallback can
+// lower 4..8, and Guide/Automatic Refresh actions at slots 8..10. Navigation is explicit because GTK's geometric fallback can
 // leave the two compact rows or land on a disabled edge move button.
-const MANAGER_ROW: usize = 9;
+const MANAGER_ROW: usize = 10;
 
-fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 9], slot: usize) -> Option<gtk::Widget> {
+fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 10], slot: usize) -> Option<gtk::Widget> {
     controls
         .get(slot)
         .and_then(glib::WeakRef::upgrade)
@@ -1180,7 +1180,7 @@ fn bind_manager_navigation(
     view: &TvStreamsView,
     list: &gtk::ListBox,
     row: &gtk::ListBoxRow,
-    controls: &[gtk::Widget; 9],
+    controls: &[gtk::Widget; 10],
     source_id: &str,
     index: i32,
 ) {
@@ -1254,8 +1254,12 @@ fn bind_manager_navigation(
                 Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
                     nearest_manager_slot(slot - 4, 0, 4, |i| manager_target(&actions, i).is_some())
                 }
-                Key::Down | Key::KP_Down if (4..8).contains(&slot) => Some(8),
-                Key::Up | Key::KP_Up if slot == 8 => Some(4),
+                Key::Down | Key::KP_Down if (4..8).contains(&slot) => {
+                    Some(if slot >= 6 { 9 } else { 8 })
+                }
+                Key::Up | Key::KP_Up if (8..10).contains(&slot) => {
+                    Some(if slot == 9 { 6 } else { 4 })
+                }
                 _ => None,
             };
             let next = match pressed {
@@ -1288,7 +1292,7 @@ fn bind_manager_navigation(
                     } else if slot < 8 {
                         8
                     } else {
-                        9
+                        10
                     };
                     ((slot + 1)..end).find_map(|i| manager_target(&actions, i))
                 }
@@ -1301,11 +1305,11 @@ fn bind_manager_navigation(
                 Key::Down | Key::KP_Down if (4..8).contains(&slot) => {
                     vertical_slot.and_then(|i| manager_target(&actions, i))
                 }
-                Key::Up | Key::KP_Up if slot == 8 => {
+                Key::Up | Key::KP_Up if (8..10).contains(&slot) => {
                     vertical_slot.and_then(|i| manager_target(&actions, i))
                 }
                 Key::Up | Key::KP_Up if slot < 4 => Some(row.clone().upcast()),
-                Key::Down | Key::KP_Down if slot == MANAGER_ROW || slot == 8 => {
+                Key::Down | Key::KP_Down if slot == MANAGER_ROW || (8..10).contains(&slot) => {
                     list.row_at_index(index + 1).map(|item| item.upcast())
                 }
                 Key::Up | Key::KP_Up if slot == MANAGER_ROW => {
@@ -1384,7 +1388,7 @@ pub(crate) fn load_manager(
             }
             let restore = view.manager_focus();
             view.manager_rebuilding(true);
-            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 9])> = Vec::new();
+            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 10])> = Vec::new();
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -1409,10 +1413,19 @@ pub(crate) fn load_manager(
                     OriginKind::LocalFile => gettext("Local file"),
                     OriginKind::RemoteUrl => gettext("Remote playlist"),
                 };
-                let state = source
-                    .last_error_code
-                    .as_ref()
-                    .map_or_else(|| gettext("No recorded error"), |code| code.clone());
+                let state = match source.last_error_code.as_deref() {
+                    None => gettext("No recorded error"),
+                    Some("approval_required") => {
+                        gettext("Review required: playlist channels changed significantly")
+                    }
+                    Some("reauthorization") => gettext("Local playlist: reselect file permission"),
+                    Some("network") => gettext("Network refresh failed"),
+                    Some("invalid_playlist") => gettext("Invalid playlist"),
+                    Some("permission") => gettext("Playlist permission unavailable"),
+                    Some("cancelled") => gettext("Refresh cancelled"),
+                    Some("write") => gettext("Refresh storage error"),
+                    _ => gettext("Refresh unavailable"),
+                };
                 let (present, retained) = counts
                     .get(index)
                     .and_then(|result| result.as_ref().ok().copied())
@@ -1435,6 +1448,18 @@ pub(crate) fn load_manager(
                 summary.set_wrap(true);
                 summary.add_css_class("dim-label");
                 panel.append(&summary);
+                let schedule_status = gtk::Label::new(Some(&if source.auto_refresh {
+                    format!(
+                        "{}: {} h",
+                        gettext("Automatic Refresh"),
+                        source.refresh_interval_seconds / 3600
+                    )
+                } else {
+                    format!("{}: {}", gettext("Automatic Refresh"), gettext("Off"))
+                }));
+                schedule_status.set_xalign(0.0);
+                schedule_status.add_css_class("dim-label");
+                panel.append(&schedule_status);
                 let upper_actions = gtk::Box::new(gtk::Orientation::Horizontal, 5);
                 let lower_actions = gtk::Box::new(gtk::Orientation::Horizontal, 5);
                 let enabled = gtk::Switch::new();
@@ -1471,10 +1496,16 @@ pub(crate) fn load_manager(
                 lower_actions.set_homogeneous(true);
                 panel.append(&upper_actions);
                 panel.append(&lower_actions);
-                let guide_action = gtk::Button::with_label(&gettext("Programme Guide"));
+                let source_options = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+                let guide_action = button(&gettext("Programme Guide"), &source_options);
                 guide_action.set_hexpand(true);
                 guide_action.set_tooltip_text(Some(&gettext("Choose the guide for this playlist")));
-                panel.append(&guide_action);
+                let schedule_action = button(&gettext("Automatic Refresh"), &source_options);
+                schedule_action.set_hexpand(true);
+                schedule_action.set_tooltip_text(Some(&gettext(
+                    "Set this playlist's own automatic refresh consent and interval",
+                )));
+                panel.append(&source_options);
                 let guide_summary = gtk::Label::new(None);
                 guide_summary.set_wrap(true);
                 guide_summary.set_xalign(0.0);
@@ -1491,7 +1522,7 @@ pub(crate) fn load_manager(
                 panel.append(&guide_summary);
                 let row = gtk::ListBoxRow::new();
                 row.set_child(Some(&panel));
-                let controls: [gtk::Widget; 9] = [
+                let controls: [gtk::Widget; 10] = [
                     enabled.clone().upcast(),
                     refresh.clone().upcast(),
                     edit.clone().upcast(),
@@ -1501,6 +1532,7 @@ pub(crate) fn load_manager(
                     up.clone().upcast(),
                     down.clone().upcast(),
                     guide_action.clone().upcast(),
+                    schedule_action.clone().upcast(),
                 ];
                 bind_manager_navigation(&view, &list, &row, &controls, &source.id, index as i32);
                 focus_rows.push((source.id.clone(), row.clone(), controls));
@@ -1551,6 +1583,12 @@ pub(crate) fn load_manager(
                     move |_| {
                         show_source_form(&view, None, Some(edit_source.clone()));
                     }
+                ));
+                let source_for_schedule = source.clone();
+                schedule_action.connect_clicked(glib::clone!(
+                    #[weak]
+                    view,
+                    move |_| show_schedule_form(&view, source_for_schedule.clone())
                 ));
                 let playlist_id_for_guide = source.id.clone();
                 guide_action.connect_clicked(glib::clone!(
@@ -1944,6 +1982,70 @@ fn restore_manager_after_picker(
             glib::ControlFlow::Continue
         }
     });
+}
+
+fn show_schedule_form(view: &TvStreamsView, source: Source) {
+    let Some(window) = parent(view) else { return };
+    let Some(service) = view.service() else {
+        return;
+    };
+    let (dialog, body, status) = sheet(&gettext("Automatic Playlist Refresh"));
+    let explanation = gtk::Label::new(Some(&gettext(
+        "Disabled by default. When enabled, this source is checked while Broadcaster runs. An unexpected loss of channels always requires manual review."
+    )));
+    explanation.set_wrap(true);
+    explanation.set_xalign(0.0);
+    body.append(&explanation);
+    let consent = gtk::Switch::new();
+    consent.set_active(source.auto_refresh);
+    consent.set_halign(gtk::Align::Start);
+    row(
+        &gettext("Enable automatic refresh for this playlist"),
+        &consent,
+        &body,
+    );
+    let hours = gtk::SpinButton::with_range(6.0, 168.0, 1.0);
+    hours.set_value((source.refresh_interval_seconds / 3600) as f64);
+    hours.set_numeric(true);
+    row(&gettext("Refresh interval (hours, 6–168)"), &hours, &body);
+    let actions = line(&body);
+    let cancel = button(&gettext("Cancel"), &actions);
+    let save = button(&gettext("Save"), &actions);
+    body.append(&status);
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    save.connect_clicked(glib::clone!(
+        #[weak]
+        view,
+        #[weak]
+        dialog,
+        move |_| {
+            let selected = consent.is_active();
+            let interval = (hours.value_as_int() as i64) * 3600;
+            let id = source.id.clone();
+            let service = service.clone();
+            dialog.close();
+            spawn(glib::clone!(
+                #[weak]
+                view,
+                async move {
+                    match service.set_source_schedule(&id, selected, interval).await {
+                        Ok(()) => view.source_mutated(),
+                        Err(error) => {
+                            fail(&view, error);
+                            view.refresh_source_manager();
+                        }
+                    }
+                }
+            ));
+        }
+    ));
+    dialog.present(Some(&window));
 }
 
 fn refresh_source(view: &TvStreamsView, id: String) {
@@ -5101,11 +5203,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         body.append(&list);
         let guide_action = gtk::Button::with_label("Programme Guide");
         panel.append(&guide_action);
-        let actions: [gtk::Widget; 9] = std::array::from_fn(|i| {
+        let automatic = gtk::Button::with_label("Automatic Refresh");
+        panel.append(&automatic);
+        let actions: [gtk::Widget; 10] = std::array::from_fn(|i| {
             if i == 0 {
                 enabled.clone().upcast()
             } else if i == 8 {
                 guide_action.clone().upcast()
+            } else if i == 9 {
+                automatic.clone().upcast()
             } else {
                 buttons[i - 1].clone().upcast()
             }

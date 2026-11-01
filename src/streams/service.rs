@@ -17,7 +17,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use adw::{gio, gtk};
+use adw::{gio, glib, gtk};
 use reqwest::Client;
 use tokio::sync::{broadcast, Mutex};
 
@@ -161,7 +161,9 @@ impl StreamsService {
     /// Initialize/migrate SQLite off the GTK thread. Safe to invoke from a
     /// GLib future; all later repository operations use the same worker bridge.
     pub(crate) async fn open() -> Result<Self, ServiceError> {
-        Self::with_storage(Storage::new()).await
+        let service = Self::with_storage(Storage::new()).await?;
+        service.start_opt_in_scheduler();
+        Ok(service)
     }
 
     /// Also used by deterministic tests with a private temporary SQLite path.
@@ -189,6 +191,36 @@ impl StreamsService {
         // Failed cleanup must never prevent opening a valid existing catalogue.
         service.purge_expired_missing_if_due().await;
         Ok(service)
+    }
+
+    /// No daemon: a weak process-lifetime GLib task performs off-main due
+    /// scans and never fetches for an unconsented source.
+    fn start_opt_in_scheduler(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        crate::utils::spawn(async move {
+            loop {
+                let Some(inner) = weak.upgrade() else { break };
+                let service = StreamsService { inner };
+                if let Ok(ids) = service.due_ids(now()).await {
+                    // At most two admissions per scan; neither an unlimited
+                    // queue nor a burst for thousands of upgraded sources.
+                    futures_util::future::join_all(ids.into_iter().map(|id| {
+                        let worker = service.clone();
+                        async move {
+                            let _ = worker.refresh_scheduled(id).await;
+                        }
+                    }))
+                    .await;
+                }
+                drop(service);
+                glib::timeout_future_seconds(60).await;
+            }
+        });
+    }
+
+    async fn due_ids(&self, at: i64) -> Result<Vec<String>, ServiceError> {
+        self.db(move |s| s.due_source_ids(at, 2).map_err(Into::into))
+            .await
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {
@@ -257,6 +289,41 @@ impl StreamsService {
             stage: RefreshStage::Loading,
         });
         (generation, token)
+    }
+
+    // Admission for the scheduled path is coalesced with any outstanding
+    // manual or automatic generation. A manual refresh always supersedes it.
+    async fn begin_if_idle(&self, id: &str) -> Option<(u64, Cancellation)> {
+        let mut map = self.inner.generations.lock().await;
+        if map.get(id).is_some_and(|r| {
+            !matches!(
+                r.stage,
+                RefreshStage::Succeeded | RefreshStage::Failed | RefreshStage::Cancelled
+            )
+        }) {
+            return None;
+        }
+        let generation = self
+            .inner
+            .counter
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let token = Cancellation::new();
+        map.insert(
+            id.to_owned(),
+            Running {
+                generation,
+                token: token.clone(),
+                stage: RefreshStage::Loading,
+            },
+        );
+        drop(map);
+        self.event(ServiceEvent::State {
+            source_id: id.to_owned(),
+            generation,
+            stage: RefreshStage::Loading,
+        });
+        Some((generation, token))
     }
 
     fn event(&self, event: ServiceEvent) {
@@ -526,12 +593,46 @@ impl StreamsService {
 
     pub(crate) async fn refresh(&self, id: &str) -> Result<RefreshOutcome, ServiceError> {
         let id = id.to_owned();
-        let (generation, cancellation) = self.begin(&id).await;
+        let (generation, token) = self.begin(&id).await;
+        self.refresh_started(id, generation, token, false).await
+    }
+
+    pub(super) async fn refresh_scheduled(&self, id: String) -> Result<(), ServiceError> {
+        // A direct call or a stale due-list element cannot create network I/O
+        // without current source-local consent and backoff eligibility.
+        if !source_due(&self.source(&id).await?, now()) {
+            return Ok(());
+        }
+        let Some((generation, token)) = self.begin_if_idle(&id).await else {
+            return Ok(());
+        };
+        match self.refresh_started(id, generation, token, true).await {
+            Err(ServiceError::Cancelled) => Ok(()),
+            Err(error) => Err(error),
+            Ok(RefreshOutcome::Committed(_)) => Ok(()),
+            // The scheduled path consumes and discards a preview, not a
+            // user authorization ticket. This must never manufacture consent.
+            Ok(RefreshOutcome::ConfirmationRequired(_)) => {
+                Err(ServiceError::Storage(StorageError::ApprovalRequired))
+            }
+        }
+    }
+
+    async fn refresh_started(
+        &self,
+        id: String,
+        generation: u64,
+        cancellation: Cancellation,
+        scheduled: bool,
+    ) -> Result<RefreshOutcome, ServiceError> {
         let result = async {
             let key = id.clone();
             let source = self
                 .db(move |store| store.get_source(&key).map_err(Into::into))
                 .await?;
+            if scheduled && !source_due(&source, now()) {
+                return Err(ServiceError::Cancelled);
+            }
             let selection = match source.origin.kind {
                 OriginKind::RemoteUrl => SourceSelection::Remote(source.origin.locator),
                 OriginKind::LocalFile => {
@@ -550,12 +651,42 @@ impl StreamsService {
                 }
                 other => other?,
             };
+            if cancellation.is_cancelled() {
+                return Err(ServiceError::Cancelled);
+            }
             self.preview(id.clone(), generation, bytes, base, None)
                 .await
         }
         .await;
-        if let Err(error) = &result {
-            self.failed(&id, generation, *error).await;
+        match &result {
+            Ok(RefreshOutcome::ConfirmationRequired(_)) if scheduled => {
+                let registry = self.inner.clone();
+                let source_id = id.clone();
+                let _ = self
+                    .db(move |store| {
+                        let map = registry.generations.blocking_lock();
+                        if !map
+                            .get(&source_id)
+                            .is_some_and(|r| r.generation == generation && !r.token.is_cancelled())
+                        {
+                            return Err(ServiceError::Cancelled);
+                        }
+                        store
+                            .record_refresh_failure(&source_id, ErrorCode::ApprovalRequired, now())
+                            .map_err(Into::into)
+                    })
+                    .await;
+                self.finish(
+                    &id,
+                    generation,
+                    &Err(ServiceError::Storage(StorageError::ApprovalRequired)),
+                )
+                .await;
+            }
+            Err(error) => {
+                self.failed(&id, generation, *error).await;
+            }
+            _ => {}
         }
         result
     }
@@ -759,8 +890,36 @@ impl StreamsService {
         self.db(move |s| s.rename_source(&id, &name, now()).map_err(Into::into))
             .await
     }
+    pub(crate) async fn set_source_schedule(
+        &self,
+        id: &str,
+        enabled: bool,
+        interval: i64,
+    ) -> Result<(), ServiceError> {
+        let id = id.to_owned();
+        let mut running = self.inner.generations.lock().await;
+        // An opt-in revision change cancels any pending transfer or preview;
+        // the generation lock serializes it with the commit barrier.
+        if let Some(active) = running.get_mut(&id) {
+            active.token.cancel();
+            active.stage = RefreshStage::Cancelled;
+        }
+        self.db(move |s| {
+            s.set_source_schedule(&id, enabled, interval, now())
+                .map_err(Into::into)
+        })
+        .await
+    }
+
     pub(crate) async fn toggle_source(&self, id: &str, enabled: bool) -> Result<(), ServiceError> {
         let id = id.to_owned();
+        let mut running = self.inner.generations.lock().await;
+        if !enabled {
+            if let Some(active) = running.get_mut(&id) {
+                active.token.cancel();
+                active.stage = RefreshStage::Cancelled;
+            }
+        }
         self.db(move |s| {
             s.set_source_enabled(&id, enabled, now())
                 .map_err(Into::into)
@@ -776,9 +935,18 @@ impl StreamsService {
         &self,
         confirmed: ConfirmedSourceDeletion,
     ) -> Result<(), ServiceError> {
+        let mut running = self.inner.generations.lock().await;
+        // The confirmed deletion includes a source revision CAS; cancel any
+        // in-flight refresh before the row can disappear.
+        let source_id = confirmed.id().to_owned();
+        if let Some(active) = running.get_mut(&source_id) {
+            active.token.cancel();
+            active.stage = RefreshStage::Cancelled;
+        }
         let result = self
             .db(move |s| s.delete_source_confirmed(&confirmed).map_err(Into::into))
             .await;
+        drop(running);
         if result.is_ok() {
             self.prune_unused_logos().await;
         }
@@ -871,4 +1039,17 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Pure scheduler gate: process restarts cannot bypass persisted timestamps.
+fn source_due(source: &Source, at: i64) -> bool {
+    source.enabled
+        && source.auto_refresh
+        && source.last_error_code.as_deref() != Some("approval_required")
+        && source
+            .last_success_at
+            .is_none_or(|last| last <= at.saturating_sub(source.refresh_interval_seconds))
+        && source.last_attempt_at.is_none_or(|last| {
+            last <= at.saturating_sub(source.refresh_interval_seconds.max(21600))
+        })
 }

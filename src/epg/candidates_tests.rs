@@ -215,7 +215,9 @@ fn indexed_20k_repeated_iptv_rows_are_grouped_once_per_original_id() {
 
 #[test]
 fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
-    use crate::streams::storage::{MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004};
+    use crate::streams::storage::{
+        MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
+    };
     use rusqlite::{params, Connection};
     use std::sync::atomic::AtomicBool;
     let mut conn = Connection::open_in_memory().unwrap();
@@ -224,6 +226,7 @@ fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
     conn.execute_batch(MIGRATION_002).unwrap();
     conn.execute_batch(MIGRATION_003).unwrap();
     conn.execute_batch(MIGRATION_004).unwrap();
+    conn.execute_batch(MIGRATION_005).unwrap();
     conn.execute(
         "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
          VALUES ('test','Demo','local_file','/fake',1,1)",

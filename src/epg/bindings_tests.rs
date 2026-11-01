@@ -6,7 +6,9 @@ use super::{
     matching::{MatchDecision, MatchMethod},
     model::{Certainty, EpgError},
 };
-use crate::streams::storage::{MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004};
+use crate::streams::storage::{
+    MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
+};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 
@@ -17,6 +19,7 @@ fn setup() -> Connection {
     c.execute_batch(MIGRATION_002).unwrap();
     c.execute_batch(MIGRATION_003).unwrap();
     c.execute_batch(MIGRATION_004).unwrap();
+    c.execute_batch(MIGRATION_005).unwrap();
     for playlist in ["playlist-a", "playlist-b"] {
         c.execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -643,6 +646,7 @@ fn snapshot_generation_and_locked_mapping_write_do_not_mix_or_partially_commit()
     reader.execute_batch(MIGRATION_002).unwrap();
     reader.execute_batch(MIGRATION_003).unwrap();
     reader.execute_batch(MIGRATION_004).unwrap();
+    reader.execute_batch(MIGRATION_005).unwrap();
     reader
         .execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -1874,7 +1878,13 @@ fn g1_wal_connections() -> (std::path::PathBuf, Connection, Connection) {
     let a = Connection::open(&path).unwrap();
     a.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .unwrap();
-    for migration in [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+    for migration in [
+        MIGRATION_001,
+        MIGRATION_002,
+        MIGRATION_003,
+        MIGRATION_004,
+        MIGRATION_005,
+    ] {
         a.execute_batch(migration).unwrap();
     }
     a.execute(
