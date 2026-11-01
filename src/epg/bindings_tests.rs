@@ -1906,13 +1906,14 @@ fn g1_preview(conn: &Connection, desired: &PlaylistGuideChoice) -> PlaylistGuide
     };
     let target = id.map(|id| {
         conn.query_row(
-            "SELECT id,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
+            "SELECT id,name,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
             [id],
             |r| {
                 Ok(GuideStatePreview {
                     id: r.get(0)?,
-                    enabled: r.get(1)?,
-                    imported: r.get(2)?,
+                    name: r.get(1)?,
+                    enabled: r.get(2)?,
+                    imported: r.get(3)?,
                 })
             },
         )
@@ -2089,6 +2090,81 @@ fn g1_r2_stale_guide_disable_and_removal_require_fresh_confirmation() {
     drop(writer);
     drop(stale);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn g1_r2_stale_displayed_guide_name_requires_new_confirmation() {
+    let (path, mut stale, writer) = g1_wal_connections();
+    let named = PlaylistGuideChoice::Named("guide-a".into());
+    let before = g1_preview(&stale, &named);
+    let old_name = before.target.as_ref().unwrap().name.clone();
+    writer
+        .execute(
+            "UPDATE epg_sources SET name='Renamed while dialog open' WHERE id='guide-a'",
+            [],
+        )
+        .unwrap();
+    // The ID and availability are unchanged. The user did not confirm the
+    // new display label, so the original snapshot must not authorize Apply.
+    let now = g1_preview(&writer, &named);
+    assert_ne!(now.target.as_ref().unwrap().name, old_name);
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            named.clone(),
+            &before,
+            21,
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        named.clone(),
+        &now,
+        22,
+    )
+    .unwrap();
+    assert_eq!(playlist_guide_choice(&writer, "p").unwrap(), named);
+
+    // Inherit is affected by a renamed shared guide too. The old name
+    // cannot be silently applied even if the shared ID did not change.
+    set_shared_guide(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide-b"),
+    )
+    .unwrap();
+    let inherit = PlaylistGuideChoice::Inherit;
+    let old_shared = g1_preview(&stale, &inherit);
+    writer
+        .execute(
+            "UPDATE epg_sources SET name='Other renamed guide' WHERE id='guide-b'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            inherit,
+            &old_shared,
+            23,
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(playlist_guide_choice(&writer, "p").unwrap(), named);
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

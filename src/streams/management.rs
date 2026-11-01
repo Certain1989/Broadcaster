@@ -580,7 +580,7 @@ struct GuideChoiceOption {
 
 struct GuideChoiceDetails {
     choice: crate::epg::bindings::PlaylistGuideChoice,
-    options: Vec<GuideChoiceOption>,
+    options: std::sync::Arc<[GuideChoiceOption]>,
     shared: Option<String>,
     matched: i64,
     total: i64,
@@ -660,6 +660,9 @@ fn read_playlist_guide_details_batch(
         .map_err(|_| "Cannot enumerate programme guides")?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|_| "Cannot enumerate programme guides")?;
+    // Share a single immutable catalogue across all playlist summaries; only
+    // an Arc handle is cloned, not the whole guide list for each playlist.
+    let options: std::sync::Arc<[GuideChoiceOption]> = std::sync::Arc::from(options);
     drop(options_stmt);
     // Prepared once, keyed by the indexed playlist source; the connection and
     // its schema validations are not multiplied by the number of playlists.
@@ -906,6 +909,7 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
                         .find(|option| option.id == id)
                         .map(|option| GuideStatePreview {
                             id: option.id.clone(),
+                            name: option.name.clone(),
                             enabled: option.enabled,
                             imported: option.imported,
                         })

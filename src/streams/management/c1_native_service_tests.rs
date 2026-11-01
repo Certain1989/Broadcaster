@@ -1802,10 +1802,24 @@ fn r07_native_source_file_chooser_negative() {
 fn g1_manager_batch_uses_one_validated_snapshot_for_many_playlists() {
     let fixture = Fixture::new(48);
     let conn = fixture.storage.connect().unwrap();
+    // A nonempty catalogue exposes quadratic allocations from Vec::clone:
+    // all 48 summaries must share one allocation, even with 64 guides.
+    for i in 0..64 {
+        conn.execute(
+            "INSERT INTO epg_sources
+             (id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+             VALUES (?1,?2,'local_file','/synthetic/guide',1,1,1,1000)",
+            params![format!("guide-{i}"), format!("Synthetic Guide {i}")],
+        )
+        .unwrap();
+    }
     let values = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
     assert_eq!(values.len(), fixture.ids.len());
-    for value in values {
-        let value = value.unwrap();
+    let first = &values[0].as_ref().unwrap().options;
+    assert_eq!(first.len(), 64);
+    for value in &values {
+        let value = value.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(first, &value.options));
         assert_eq!(
             value.choice,
             crate::epg::bindings::PlaylistGuideChoice::Inherit

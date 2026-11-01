@@ -216,6 +216,9 @@ pub fn playlist_guide_choice(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuideStatePreview {
     pub id: String,
+    /// Name displayed when the user made this guide choice. A concurrent
+    /// rename invalidates the original on-screen confirmation.
+    pub name: String,
     pub enabled: bool,
     pub imported: bool,
 }
@@ -242,13 +245,14 @@ fn target_guide_state(
     guide_id: &str,
 ) -> Result<Option<GuideStatePreview>, BindingError> {
     conn.query_row(
-        "SELECT id,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
+        "SELECT id,name,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
         [guide_id],
         |r| {
             Ok(GuideStatePreview {
                 id: r.get(0)?,
-                enabled: r.get(1)?,
-                imported: r.get(2)?,
+                name: r.get(1)?,
+                enabled: r.get(2)?,
+                imported: r.get(3)?,
             })
         },
     )
