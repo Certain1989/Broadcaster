@@ -8,18 +8,32 @@
 
 **English | [Deutsch](README.de.md)**
 
-Broadcaster is a lightweight, native Linux application for German public-service live TV, on-demand Mediathek programmes and your own M3U/IPTV channels, all played with mpv. Its GTK4/libadwaita interface works with a mouse and keyboard or a directional television remote, including on Wayland/KDE Plasma Bigscreen.
+Broadcaster is a lightweight, native Linux application for German public-service live TV, on-demand Mediathek programmes and your own M3U/IPTV channels, all played with mpv. Optional XMLTV programme guides add **Now/Next information** to My Channels, while **favourites** make personal channel lists easier to navigate. Its GTK4/libadwaita interface works with a mouse, keyboard or directional television remote, including on Wayland/KDE Plasma Bigscreen.
 
 ## What it does
 
 - **Mediathek:** search German-language broadcaster catalogues through MediathekViewWeb. Filter by channel or duration, sort results, choose stream quality, and open programme details.
 - **Live TV:** browse current programmes from the Zapp service, read programme descriptions, and select which live channels appear and in what order.
 - **My Channels (new in v0.2.0):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
-- **XMLTV guides (v0.2.5):** optionally add and refresh local XMLTV files or explicitly configured HTTP(S) guide sources. **Select a Shared Default guide or bind a guide to a playlist** to use it: adding a guide alone does not activate Now/Next on channels. Matching suggestions are conservative; confirm or manually override uncertain channel matches.
-- **Favourites (v0.2.5):** star My Channels entries and filter to favourites. Remote focus, source/guide managers, editable metadata and on-screen keyboard navigation have received additional fixes.
+- **XMLTV programme guides (v0.2.5):** add and manually refresh multiple XMLTV guide sources from local files or explicitly chosen HTTP(S) URLs. Choose one **Shared Default** for playlists or assign a guide to an individual playlist. Merely adding a guide does not activate it.
+- **Now/Next and channel matching (v0.2.5):** see current and upcoming programme information directly in My Channels when a guide has been selected and channels are matched. Review conservative match suggestions, confirm or change associations, and override regional channel variants manually.
+- **Favourites (v0.2.5):** mark IPTV channels with a star and use the favourites-only filter. Favourites and channel metadata are preserved separately from programme-guide associations.
+- **Remote navigation (v0.2.5):** improved directional focus and remote access to card actions, favourites, source and guide managers, channel editing and the on-screen keyboard.
 - **On-screen keyboard (v0.2.1):** enter text using directional remote keys wherever an editable field offers the keyboard; it is available by default and can be disabled in Settings. Mouse and physical keyboard input still work.
 - **TV controls:** fullscreen startup, remote-friendly navigation, and a dedicated mpv overlay for play/pause, seeking, playback speed, audio tracks and subtitles. Labels reflect available stream metadata.
 - **Desktop integration:** native GTK4 interface, English and German text, optional external player and downloader, and Flatpak builds for x86-64 and ARM64.
+
+## Using XMLTV programme guides
+
+Guides are **optional**. Broadcaster does not automatically download a guide URL suggested by an M3U playlist. To show Now/Next information for your channels:
+
+1. Add a local or HTTP(S) M3U playlist in **My Channels**.
+2. Open the EPG source manager, add an XMLTV file or HTTP(S) guide URL you are permitted to use, then refresh the source.
+3. Select it as the **Shared Default** for your playlists, or choose a guide for a specific playlist. One shared guide can serve multiple playlists. **Adding an EPG source alone is not enough.**
+4. Review the suggested channel matches. Confirm or manually override uncertain matches, especially for regional variants.
+5. Return to **My Channels** to view available Now/Next information and star channels you want in the favourites filter.
+
+A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.2.5 release notes](docs/release-v0.2.5-notes.md) for scope and limitations.
 
 ## Screenshots
 
