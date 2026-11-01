@@ -1185,7 +1185,22 @@ fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
     let guide_id = fixture.ids[0].clone();
     let file = fixture.home.join("fabricated-0.xml");
-    fs::write(&file, "<?xml version=\"1.0\"?><tv><channel id=\"fixture\"><display-name>Fixture</display-name></channel><programme start=\"20261101080000 +0000\" stop=\"20261101090000 +0000\" channel=\"fixture\"><title>Offline Programme</title></programme></tv>").unwrap();
+    // Streaming import requires at least one future programme. Never pin a
+    // native GUI fixture to a calendar date that will eventually expire.
+    let tomorrow = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    let date = format!(
+        "{:04}{:02}{:02}",
+        tomorrow.year(),
+        tomorrow.month() as u8,
+        tomorrow.day()
+    );
+    fs::write(
+        &file,
+        format!(
+            "<?xml version=\"1.0\"?><tv><channel id=\"fixture\"><display-name>Fixture</display-name></channel><programme start=\"{date}080000 +0000\" stop=\"{date}090000 +0000\" channel=\"fixture\"><title>Offline Programme</title></programme></tv>"
+        ),
+    )
+    .unwrap();
     adw::init().expect("native GTK");
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
