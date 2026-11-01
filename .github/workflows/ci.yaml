@@ -37,6 +37,9 @@ permissions:
 jobs:
   rust:
     name: "Rust (fmt, clippy)"
+    timeout-minutes: 100
+    env:
+      BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS: "900"
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -720,11 +723,24 @@ jobs:
           rm -rf "$negative_data_dir"
           echo 'R07 G04 physical painted positive and negative checks passed'
 
+      - name: Native validation failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "CI_NATIVE_DIAGNOSTIC job=${{ github.job }}"
+          df -h .
+          free -h || true
+          ps -eo pid,etime,stat,comm | head -n 40 || true
+
+
   # Independent native matrices run in parallel with Rust/other native gates.
   # Each Actions job has its own Xvfb, temporary GSettings and SQLite fixtures;
   # preserve all positive tests and marker-checked negative controls.
   native-c4:
     name: "R07 native C4 cards, mapping and facets"
+    timeout-minutes: 90
+    env:
+      BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS: "900"
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -892,8 +908,21 @@ jobs:
           rm -rf "$negative_data_dir"
           echo "R07 confirmed playlist-guide negative oracle rejected"
 
+      - name: Native validation failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "CI_NATIVE_DIAGNOSTIC job=${{ github.job }}"
+          df -h .
+          free -h || true
+          ps -eo pid,etime,stat,comm | head -n 40 || true
+
+
   native-integrated:
     name: "R07 native integrated keyboard, managers and scale"
+    timeout-minutes: 90
+    env:
+      BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS: "900"
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -1001,6 +1030,16 @@ jobs:
             rm -rf "$data_dir"
           done
           echo 'R07 integrated native positives and marker-controlled negatives passed'
+
+
+      - name: Native validation failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "CI_NATIVE_DIAGNOSTIC job=${{ github.job }}"
+          df -h .
+          free -h || true
+          ps -eo pid,etime,stat,comm | head -n 40 || true
 
 
   flatpak:

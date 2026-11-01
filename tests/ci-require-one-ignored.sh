@@ -11,9 +11,29 @@ fi
 case_name=$1
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
-if ! cargo test --locked "$case_name" -- --ignored --test-threads=1 >"$log" 2>&1; then
+# Full CI sets an explicit per-case deadline; fast/local callers retain
+# the original unlimited default unless they opt in. Preserve the exact
+# one-test success oracle below regardless of the execution method.
+case_timeout=${BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS:-}
+status=0
+if [[ -n "$case_timeout" ]]; then
+  if [[ ! "$case_timeout" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS" >&2
+    exit 2
+  fi
+  echo "CI native case=$case_name deadline=${case_timeout}s"
+  timeout --signal=TERM --kill-after=15s "${case_timeout}s" \
+    cargo test --locked "$case_name" -- --ignored --test-threads=1 >"$log" 2>&1 || status=$?
+else
+  cargo test --locked "$case_name" -- --ignored --test-threads=1 >"$log" 2>&1 || status=$?
+fi
+if (( status != 0 )); then
   cat "$log"
-  echo "CI positive failed: $case_name" >&2
+  if (( status == 124 || status == 137 )); then
+    echo "CI native case timeout: $case_name deadline=${case_timeout}s status=$status" >&2
+  else
+    echo "CI positive failed: $case_name status=$status" >&2
+  fi
   exit 1
 fi
 cat "$log"
