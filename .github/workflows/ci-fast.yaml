@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+
+name: Fast CI
+
+# Routine PR changes get immediate, inexpensive feedback without launching
+# the exhaustive native and dual-architecture Flatpak matrix.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: fast-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    name: "Fast / Rust + GTK + SQLite"
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-targets: true
+          cache-all-crates: false
+          key: archlinux-container
+      - name: Configure
+        run: meson setup _build -Dprofile=development
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Ordinary Rust tests
+        run: cargo test --locked
+      - name: Real GTK/SQLite/XTest canaries and negative-control marker
+        run: bash tests/ci-fast-smoke.sh

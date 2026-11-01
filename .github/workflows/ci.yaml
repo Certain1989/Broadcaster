@@ -3,10 +3,16 @@
 # SPDX-FileContributor: Claude (Anthropic)
 # SPDX-License-Identifier: CC0-1.0
 
-name: CI
+name: Full CI
 
-# Full CI runs only at integrated source checkpoints, not intermediate staging commits.
-# With checkpoint-only pushes, superseded full runs may be cancelled.
+# Keep the exhaustive Rust/native, REUSE-adjacent and dual-architecture package
+# gates available for integration and release checkpoints. Automatic PR
+# feedback lives in ci-fast.yaml instead.
+# To request an exact-PR-head full check before integration, mark the PR ready
+# or add/reapply its full-ci label. Any other PR label also requests full CI
+# because GitHub cannot filter pull_request.labeled by label name in `on`.
+# workflow_dispatch is for manual branch validation; dispatch-only checks do
+# NOT satisfy required PR status checks on GitHub.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,12 +28,8 @@ on:
       - 'CONTRIBUTING.md'
       - 'SECURITY.md'
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - 'README.md'
-      - 'README.de.md'
-      - 'CONTRIBUTING.md'
-      - 'SECURITY.md'
+    types: [labeled, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -1038,9 +1040,9 @@ jobs:
           run-tests: true
           arch: ${{ matrix.variant.arch }}
           verbose: true
-          # PR builds remain downloadable for manual testing; published releases
-          # already provide installable bundles, so main push uploads are redundant.
-          upload-artifact: ${{ github.event_name == 'pull_request' }}
+          # Checkpoint PR and manually dispatched builds remain downloadable;
+          # main push builds do not duplicate already published release bundles.
+          upload-artifact: ${{ github.event_name != 'push' }}
       - name: Verify exported development desktop metadata and icon
         run: |
           app=io.github.Certain1989.Broadcaster.Devel
