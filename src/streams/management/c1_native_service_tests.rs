@@ -1797,3 +1797,123 @@ fn r07_native_source_file_chooser_1280_800() {
 fn r07_native_source_file_chooser_negative() {
     r07_native_source_file_chooser(640, 480, true);
 }
+
+#[test]
+fn g1_manager_batch_uses_one_validated_snapshot_for_many_playlists() {
+    let fixture = Fixture::new(48);
+    let conn = fixture.storage.connect().unwrap();
+    let values = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(values.len(), fixture.ids.len());
+    for value in values {
+        let value = value.unwrap();
+        assert_eq!(
+            value.choice,
+            crate::epg::bindings::PlaylistGuideChoice::Inherit
+        );
+        assert_eq!((value.total, value.matched), (0, 0));
+    }
+    assert!(
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap()
+            == "ok"
+    );
+}
+
+#[test]
+fn g1_manager_coverage_respects_optout_manual_target_and_other_playlist() {
+    use crate::epg::bindings::{
+        set_playlist_guide_choice, set_row_mapping, set_shared_guide, ConfirmedGuideSelection,
+        ConfirmedRowMapping, PlaylistGuideChoice,
+    };
+    let fixture = Fixture::new(2);
+    let mut conn = fixture.storage.connect().unwrap();
+    let first = &fixture.ids[0];
+    let second = &fixture.ids[1];
+    conn.execute(
+        "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+         VALUES ('guide','Synthetic','local_file','/fabricated/guide',1,1,1,1000)",
+        [],
+    )
+    .unwrap();
+    for target in ["exact", "manual"] {
+        conn.execute(
+            "INSERT INTO epg_channels(source_id,channel_id,display_name)
+             VALUES('guide',?1,'Synthetic')",
+            [target],
+        )
+        .unwrap();
+    }
+    for (row, playlist) in [("first-row", first), ("second-row", second)] {
+        conn.execute(
+            "INSERT INTO iptv_channels(
+                id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+             VALUES (?1,?2,0,'Synthetic','https://invalid.example/stream','exact',1,1)",
+            params![row, playlist],
+        )
+        .unwrap();
+    }
+    set_shared_guide(
+        &mut conn,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide"),
+    )
+    .unwrap();
+    set_playlist_guide_choice(
+        &mut conn,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        first,
+        PlaylistGuideChoice::NoGuide,
+        1001,
+    )
+    .unwrap();
+    set_row_mapping(
+        &mut conn,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "first-row",
+        "guide",
+        "manual",
+        1002,
+    )
+    .unwrap();
+    let counts = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(
+        (
+            counts[0].as_ref().unwrap().total,
+            counts[0].as_ref().unwrap().matched
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        (
+            counts[1].as_ref().unwrap().total,
+            counts[1].as_ref().unwrap().matched
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        counts[0].as_ref().unwrap().choice,
+        PlaylistGuideChoice::NoGuide
+    );
+    assert_eq!(
+        counts[1].as_ref().unwrap().choice,
+        PlaylistGuideChoice::Inherit
+    );
+    conn.execute("UPDATE epg_sources SET enabled=0 WHERE id='guide'", [])
+        .unwrap();
+    let disabled = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(disabled[0].as_ref().unwrap().matched, 0);
+    assert_eq!(disabled[1].as_ref().unwrap().matched, 0);
+    conn.execute("DELETE FROM epg_sources WHERE id='guide'", [])
+        .unwrap();
+    let deleted = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(
+        deleted[0].as_ref().unwrap().choice,
+        PlaylistGuideChoice::NoGuide
+    );
+    assert_eq!(
+        deleted[1].as_ref().unwrap().choice,
+        PlaylistGuideChoice::Inherit
+    );
+    assert_eq!(deleted[0].as_ref().unwrap().matched, 0);
+    assert_eq!(deleted[1].as_ref().unwrap().matched, 0);
+}

@@ -617,3 +617,44 @@ fn g1_invalid_v4_optout_schema_rejected_without_mutation() {
     assert!(Storage::at(&path).initialize().is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
 }
+
+#[cfg(unix)]
+#[test]
+fn g1_reopening_corrupt_dual_selection_is_rejected() {
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    {
+        let conn = storage.connect().unwrap();
+        conn.execute(
+            "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('source','Synthetic','local_file','/fabricated/source',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('guide','Synthetic','local_file','/fabricated/guide',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
+             VALUES('source','guide',5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_playlist_guide_optouts(playlist_source_id,updated_at)
+             VALUES('source',6)",
+            [],
+        )
+        .unwrap();
+    }
+    assert!(
+        storage.connect().is_err(),
+        "dual selection corruption must fail validation"
+    );
+}

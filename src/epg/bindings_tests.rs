@@ -1863,3 +1863,255 @@ fn g1_named_selection_isolated_and_mutually_exclusive_with_optout() {
     );
     fk_ok(&c);
 }
+
+// Reproduce both independent review races with actual WAL reader/writer
+// connections and the production chooser API, not fabricated SQL-only mocks.
+fn g1_wal_connections() -> (std::path::PathBuf, Connection, Connection) {
+    let path = std::env::temp_dir().join(format!(
+        "broadcaster-g1-races-{}.sqlite3",
+        uuid::Uuid::new_v4()
+    ));
+    let a = Connection::open(&path).unwrap();
+    a.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    for migration in [MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+        a.execute_batch(migration).unwrap();
+    }
+    a.execute(
+        "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES('p','Example','local_file','/synthetic',1,1)",
+        [],
+    )
+    .unwrap();
+    add_guide(&a, "guide-a", true);
+    add_guide(&a, "guide-b", true);
+    let b = Connection::open(&path).unwrap();
+    b.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    (path, a, b)
+}
+
+fn g1_preview(conn: &Connection, desired: &PlaylistGuideChoice) -> PlaylistGuidePreview {
+    let choice = playlist_guide_choice(conn, "p").unwrap();
+    let shared: Option<String> = conn
+        .query_row(
+            "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let id = match desired {
+        PlaylistGuideChoice::Named(id) => Some(id.as_str()),
+        PlaylistGuideChoice::Inherit => shared.as_deref(),
+        PlaylistGuideChoice::NoGuide => None,
+    };
+    let target = id.map(|id| {
+        conn.query_row(
+            "SELECT id,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
+            [id],
+            |r| {
+                Ok(GuideStatePreview {
+                    id: r.get(0)?,
+                    enabled: r.get(1)?,
+                    imported: r.get(2)?,
+                })
+            },
+        )
+        .unwrap()
+    });
+    PlaylistGuidePreview {
+        choice,
+        shared,
+        target,
+    }
+}
+
+#[test]
+fn g1_r1_selector_has_single_generation_across_wal_writers() {
+    let (path, mut reader, mut writer) = g1_wal_connections();
+    set_playlist_guide_choice(
+        &mut reader,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::Named("guide-a".into()),
+        10,
+    )
+    .unwrap();
+    // Hold a read snapshot. A second WAL writer commits a complete Named ->
+    // No Guide transition. Neither state is corrupt, and the reader must see
+    // exactly one of them, never a synthetic dual-selection error.
+    let snapshot = reader.unchecked_transaction().unwrap();
+    assert_eq!(
+        playlist_guide_choice(&snapshot, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-a".into())
+    );
+    set_playlist_guide_choice(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::NoGuide,
+        11,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&snapshot, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-a".into())
+    );
+    snapshot.commit().unwrap();
+    assert_eq!(
+        playlist_guide_choice(&reader, "p").unwrap(),
+        PlaylistGuideChoice::NoGuide
+    );
+    drop(writer);
+    drop(reader);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn g1_r2_stale_confirmation_cannot_overwrite_another_owner_choice() {
+    let (path, mut stale, mut writer) = g1_wal_connections();
+    let desired = PlaylistGuideChoice::Inherit;
+    let preview = g1_preview(&stale, &desired);
+    set_playlist_guide_choice(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::Named("guide-b".into()),
+        12,
+    )
+    .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            desired.clone(),
+            &preview,
+            13
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-b".into())
+    );
+    let new_preview = g1_preview(&stale, &desired);
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        desired,
+        &new_preview,
+        14,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+
+    // A shared default affects Inherit's result even if choice is unchanged.
+    let inherit = PlaylistGuideChoice::Inherit;
+    let shared_preview = g1_preview(&stale, &inherit);
+    set_shared_guide(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide-a"),
+    )
+    .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            inherit,
+            &shared_preview,
+            15
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn g1_r2_stale_guide_disable_and_removal_require_fresh_confirmation() {
+    let (path, mut stale, writer) = g1_wal_connections();
+    let named = PlaylistGuideChoice::Named("guide-a".into());
+    let preview = g1_preview(&stale, &named);
+    writer
+        .execute("UPDATE epg_sources SET enabled=0 WHERE id='guide-a'", [])
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            named.clone(),
+            &preview,
+            16
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&stale, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    let fresh = g1_preview(&stale, &named);
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        named.clone(),
+        &fresh,
+        17,
+    )
+    .unwrap();
+    assert_eq!(playlist_guide_choice(&stale, "p").unwrap(), named);
+    writer
+        .execute("DELETE FROM epg_sources WHERE id='guide-a'", [])
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            PlaylistGuideChoice::Named("guide-a".into()),
+            &fresh,
+            18
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&stale, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn g1_corrupt_link_and_optout_is_not_accepted_as_valid_selection() {
+    let c = setup();
+    c.execute(
+        "INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
+         VALUES('playlist-a','g',11)",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO epg_playlist_guide_optouts(playlist_source_id,updated_at)
+         VALUES('playlist-a',12)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a"),
+        Err(BindingError::Storage)
+    );
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-b"),
+        Ok(PlaylistGuideChoice::Inherit)
+    );
+}

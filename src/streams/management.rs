@@ -625,57 +625,121 @@ impl GuideChoiceDetails {
     }
 }
 
-async fn load_playlist_guide_details(playlist: String) -> Result<GuideChoiceDetails, &'static str> {
+// One connection and one read generation for the entire manager list.
+// Avoid one concurrent validated Storage::connect and aggregate per source.
+fn read_playlist_guide_details_batch(
+    conn: &rusqlite::Connection,
+    playlists: &[String],
+) -> Result<Vec<Result<GuideChoiceDetails, &'static str>>, &'static str> {
+    use crate::epg::bindings::playlist_guide_choice;
+    let snapshot = conn
+        .unchecked_transaction()
+        .map_err(|_| "Cannot read programme guide selection")?;
+    let shared: Option<String> = snapshot
+        .query_row(
+            "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| "Cannot read shared guide")?;
+    let mut options_stmt = snapshot
+        .prepare(
+            "SELECT id,name,enabled,last_success_at FROM epg_sources
+             ORDER BY name COLLATE NOCASE,id",
+        )
+        .map_err(|_| "Cannot enumerate programme guides")?;
+    let options = options_stmt
+        .query_map([], |r| {
+            Ok(GuideChoiceOption {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                enabled: r.get(2)?,
+                imported: r.get::<_, Option<i64>>(3)?.is_some(),
+            })
+        })
+        .map_err(|_| "Cannot enumerate programme guides")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| "Cannot enumerate programme guides")?;
+    drop(options_stmt);
+    // Prepared once, keyed by the indexed playlist source; the connection and
+    // its schema validations are not multiplied by the number of playlists.
+    let mut count_stmt = snapshot
+        .prepare(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN gs.enabled=1
+          AND gs.last_success_at IS NOT NULL AND ec.channel_id IS NOT NULL
+          THEN 1 ELSE 0 END),0)
+         FROM iptv_channels c
+         LEFT JOIN epg_channel_overrides o ON o.iptv_channel_id=c.id
+         LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
+         LEFT JOIN epg_playlist_guide_optouts opt ON opt.playlist_source_id=c.source_id
+         JOIN epg_settings s ON s.singleton=1
+         LEFT JOIN epg_sources gs ON gs.id=COALESCE(o.guide_source_id,l.guide_source_id,
+            CASE WHEN opt.playlist_source_id IS NULL THEN s.shared_guide_source_id END)
+         LEFT JOIN epg_global_id_aliases a ON a.guide_source_id=gs.id AND a.iptv_tvg_id=c.tvg_id
+         LEFT JOIN epg_channels ec ON ec.source_id=gs.id
+            AND ec.channel_id=COALESCE(o.guide_channel_id,a.guide_channel_id,c.tvg_id)
+         WHERE c.source_id=?1 AND c.is_present=1",
+        )
+        .map_err(|_| "Cannot calculate programme coverage")?;
+    let results = playlists
+        .iter()
+        .map(|playlist| {
+            let choice = playlist_guide_choice(&snapshot, playlist)
+                .map_err(|_| "Playlist guide selection unavailable")?;
+            let (total, matched): (i64, i64) = count_stmt
+                .query_row([playlist], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|_| "Cannot calculate programme coverage")?;
+            Ok(GuideChoiceDetails {
+                choice,
+                options: options.clone(),
+                shared: shared.clone(),
+                total,
+                matched,
+            })
+        })
+        .collect::<Vec<Result<_, &'static str>>>();
+    drop(count_stmt);
+    snapshot
+        .commit()
+        .map_err(|_| "Cannot finalize programme guide read")?;
+    Ok(results)
+}
+
+async fn load_playlist_guide_details_batch(
+    playlists: Vec<String>,
+) -> Result<Vec<Result<GuideChoiceDetails, &'static str>>, &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
-            use crate::epg::bindings::playlist_guide_choice;
             let storage = crate::streams::storage::Storage::new();
-            let conn = storage.connect().map_err(|_| "Cannot read programme guide selection")?;
-            let choice = playlist_guide_choice(&conn, &playlist)
-                .map_err(|_| "Playlist guide selection unavailable")?;
-            let shared: Option<String> = conn.query_row(
-                "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1", [],
-                |r| r.get(0),
-            ).map_err(|_| "Cannot read shared guide")?;
-            let mut stmt = conn.prepare(
-                "SELECT id,name,enabled,last_success_at FROM epg_sources ORDER BY name COLLATE NOCASE,id"
-            ).map_err(|_| "Cannot enumerate programme guides")?;
-            let options = stmt.query_map([], |r| Ok(GuideChoiceOption {
-                id: r.get(0)?, name: r.get(1)?, enabled: r.get(2)?,
-                imported: r.get::<_, Option<i64>>(3)?.is_some(),
-            })).map_err(|_| "Cannot enumerate programme guides")?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(|_| "Cannot enumerate programme guides")?;
-            // Conservative indexed exact/confirmed coverage, no name guesses or bulk remapping.
-            let (total, matched): (i64, i64) = conn.query_row(
-                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN gs.enabled=1
-                    AND gs.last_success_at IS NOT NULL AND ec.channel_id IS NOT NULL
-                    THEN 1 ELSE 0 END),0)
-                 FROM iptv_channels c
-                 LEFT JOIN epg_channel_overrides o ON o.iptv_channel_id=c.id
-                 LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
-                 LEFT JOIN epg_playlist_guide_optouts opt ON opt.playlist_source_id=c.source_id
-                 JOIN epg_settings s ON s.singleton=1
-                 LEFT JOIN epg_sources gs ON gs.id=COALESCE(o.guide_source_id,l.guide_source_id,
-                    CASE WHEN opt.playlist_source_id IS NULL THEN s.shared_guide_source_id END)
-                 LEFT JOIN epg_global_id_aliases a ON a.guide_source_id=gs.id AND a.iptv_tvg_id=c.tvg_id
-                 LEFT JOIN epg_channels ec ON ec.source_id=gs.id
-                    AND ec.channel_id=COALESCE(o.guide_channel_id,a.guide_channel_id,c.tvg_id)
-                 WHERE c.source_id=?1 AND c.is_present=1",
-                [&playlist], |r| Ok((r.get(0)?, r.get(1)?)),
-            ).map_err(|_| "Cannot calculate programme coverage")?;
-            Ok(GuideChoiceDetails { choice, options, shared, total, matched })
-        }).await.map_err(|_| "Programme guide worker unavailable")?
-    }).await
+            let conn = storage
+                .connect()
+                .map_err(|_| "Cannot read programme guide selection")?;
+            read_playlist_guide_details_batch(&conn, &playlists)
+        })
+        .await
+        .map_err(|_| "Programme guide worker unavailable")?
+    })
+    .await
+}
+
+async fn load_playlist_guide_details(playlist: String) -> Result<GuideChoiceDetails, &'static str> {
+    load_playlist_guide_details_batch(vec![playlist])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("Playlist guide selection unavailable")?
 }
 
 async fn save_playlist_guide_choice(
     playlist: String,
     choice: crate::epg::bindings::PlaylistGuideChoice,
+    preview: crate::epg::bindings::PlaylistGuidePreview,
 ) -> Result<(), &'static str> {
     crate::utils::tokio(async move {
         tokio::task::spawn_blocking(move || {
-            use crate::epg::bindings::{set_playlist_guide_choice, ConfirmedGuideSelection};
+            use crate::epg::bindings::{
+                set_playlist_guide_choice_if_unchanged, BindingError, ConfirmedGuideSelection,
+            };
             let mut conn = crate::streams::storage::Storage::new()
                 .connect()
                 .map_err(|_| "Cannot open programme data")?;
@@ -683,14 +747,20 @@ async fn save_playlist_guide_choice(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|_| "Invalid system clock")?
                 .as_secs() as i64;
-            set_playlist_guide_choice(
+            set_playlist_guide_choice_if_unchanged(
                 &mut conn,
                 ConfirmedGuideSelection::after_user_confirmation(),
                 &playlist,
                 choice,
+                &preview,
                 at,
             )
-            .map_err(|_| "Programme guide selection changed or unavailable")
+            .map_err(|error| match error {
+                BindingError::ApprovalRequired => {
+                    "Guide selection changed; close and reopen to review before applying"
+                }
+                _ => "Programme guide selection changed or unavailable",
+            })
         })
         .await
         .map_err(|_| "Programme guide worker unavailable")?
@@ -795,7 +865,10 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
                 dialog.close();
             }
         ));
-        let options: Vec<String> = data.options.into_iter().map(|option| option.id).collect();
+        use crate::epg::bindings::{GuideStatePreview, PlaylistGuidePreview};
+        let observed_choice = data.choice.clone();
+        let observed_shared = data.shared.clone();
+        let observed_options = data.options;
         apply.connect_clicked(glib::clone!(
             #[weak]
             view,
@@ -812,13 +885,35 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
                 let choice = match index {
                     0 => PlaylistGuideChoice::Inherit,
                     1 => PlaylistGuideChoice::NoGuide,
-                    _ => match options.get(index as usize - 2) {
-                        Some(id) => PlaylistGuideChoice::Named(id.clone()),
+                    _ => match observed_options.get(index as usize - 2) {
+                        Some(option) => PlaylistGuideChoice::Named(option.id.clone()),
                         None => {
                             status.set_text(&gettext("Guide no longer available"));
                             return;
                         }
                     },
+                };
+                // The preview reflects exactly what was shown while the dialog
+                // opened. Verify it under the eventual IMMEDIATE write lock.
+                let target_id = match &choice {
+                    PlaylistGuideChoice::Named(id) => Some(id.as_str()),
+                    PlaylistGuideChoice::Inherit => observed_shared.as_deref(),
+                    PlaylistGuideChoice::NoGuide => None,
+                };
+                let target = target_id.and_then(|id| {
+                    observed_options
+                        .iter()
+                        .find(|option| option.id == id)
+                        .map(|option| GuideStatePreview {
+                            id: option.id.clone(),
+                            enabled: option.enabled,
+                            imported: option.imported,
+                        })
+                });
+                let preview = PlaylistGuidePreview {
+                    choice: observed_choice.clone(),
+                    shared: observed_shared.clone(),
+                    target,
                 };
                 apply.set_sensitive(false);
                 let id = playlist_id.clone();
@@ -832,7 +927,7 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
                     #[weak]
                     apply,
                     async move {
-                        match save_playlist_guide_choice(id, choice).await {
+                        match save_playlist_guide_choice(id, choice, preview).await {
                             Ok(()) => {
                                 dialog.close();
                                 view.epg_changed();
@@ -840,7 +935,9 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
                             }
                             Err(error) => {
                                 status.set_text(&gettext(error));
-                                apply.set_sensitive(true);
+                                // A stale preview is no longer an authorized
+                                // confirmation. Reopen for a fresh summary.
+                                apply.set_sensitive(!error.contains("close and reopen"));
                             }
                         }
                     }
@@ -1269,12 +1366,15 @@ pub(crate) fn load_manager(
                     .map(|source| service.source_counts(&source.id)),
             )
             .await;
-            let guide_details = futures_util::future::join_all(
-                sources
-                    .iter()
-                    .map(|source| load_playlist_guide_details(source.id.clone())),
+            let guide_details = load_playlist_guide_details_batch(
+                sources.iter().map(|source| source.id.clone()).collect(),
             )
-            .await;
+            .await
+            .unwrap_or_else(|_| {
+                (0..sources.len())
+                    .map(|_| Err("Guide status unavailable"))
+                    .collect()
+            });
             if view.manager_generation() != generation {
                 return;
             }
