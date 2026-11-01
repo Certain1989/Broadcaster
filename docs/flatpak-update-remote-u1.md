@@ -107,6 +107,24 @@ at v2. These measurements exclude request/response headers, TLS, CDN caches,
 real WAN overhead, delta compression and historical-retention growth. No
 actual GitHub Pages deployment or cache test was performed; a production
 capacity decision **cannot** be inferred from this loopback baseline.
+At exact commit `d68a6051d2590cc7abf8800fea61d303e66e2dcd`,
+[U1 proof run 41355855869](https://github.com/Certain1989/Broadcaster/actions/runs/41355855869)
+passed including the disposable static-delta experiment. The two-architecture
+v2 repository measured **42,046,829 bytes before** and **46,925,469 bytes
+after** scratch-delta generation: **4,878,640 bytes of total repository
+growth**, with **4,877,586 bytes / eight files** in the delta directory.
+The experiment generated from-empty deltas, **not** an explicitly measured
+v1-to-v2 transfer. Those sizes are local filesystem occupancy, not
+bandwidth savings or GitHub Pages feasibility.
+
+A subsequent isolated CI experiment on the U1 branch adds **explicit
+v1-to-v2 deltas for both application architecture refs** and a real
+x86-64 loopback HTTP update that must request delta objects and verify the
+installed changed-content revision. Its transfer and storage measurements
+are **pending exact-HEAD CI**, not yet accepted evidence. Even if successful,
+the result excludes production hosting, CDN behaviour, TLS, long-lived
+retention and real multi-version release history.
+
 GitHub Release attachments alone are not an immutable path-preserving OSTree
 object service. If Pages exceeds limits or cannot serve valid update semantics,
 choose a suitable separately approved static host or repository service;
