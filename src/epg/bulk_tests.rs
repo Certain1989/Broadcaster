@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 use super::bulk::*;
-use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+use crate::streams::storage::{MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 
@@ -10,6 +10,8 @@ fn connection() -> Connection {
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     c.execute_batch(MIGRATION_001).unwrap();
     c.execute_batch(MIGRATION_002).unwrap();
+    c.execute_batch(MIGRATION_003).unwrap();
+    c.execute_batch(MIGRATION_004).unwrap();
     for src in ["a", "b", "c"] {
         c.execute(
             "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at) VALUES (?1,?1,'local_file','/fabricated',1,1)",

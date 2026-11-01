@@ -179,13 +179,14 @@ fn impact(conn: &Connection, guide: &str, choice: &AliasChoice) -> Result<AliasI
     let (selected, manual, elsewhere): (i64, i64, i64) = conn
         .query_row(
             "SELECT
-               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,e.shared_guide_source_id)=?1 THEN 1 ELSE 0 END),0),
-               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,e.shared_guide_source_id)=?1 AND o.iptv_channel_id IS NOT NULL THEN 1 ELSE 0 END),0),
-               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,e.shared_guide_source_id) IS NOT ?1 THEN 1 ELSE 0 END),0)
+               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,CASE WHEN opt.playlist_source_id IS NULL THEN e.shared_guide_source_id END)=?1 THEN 1 ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,CASE WHEN opt.playlist_source_id IS NULL THEN e.shared_guide_source_id END)=?1 AND o.iptv_channel_id IS NOT NULL THEN 1 ELSE 0 END),0),
+               COALESCE(SUM(CASE WHEN COALESCE(o.guide_source_id,l.guide_source_id,CASE WHEN opt.playlist_source_id IS NULL THEN e.shared_guide_source_id END) IS NOT ?1 THEN 1 ELSE 0 END),0)
              FROM iptv_channels c
              JOIN iptv_sources s ON s.id=c.source_id
              JOIN epg_settings e ON e.singleton=1
              LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
+             LEFT JOIN epg_playlist_guide_optouts opt ON opt.playlist_source_id=c.source_id
              LEFT JOIN epg_channel_overrides o ON o.iptv_channel_id=c.id
              WHERE c.tvg_id=?2 AND s.enabled=1 AND c.is_present=1",
             params![guide, choice.original_tvg_id],
@@ -283,6 +284,7 @@ fn fingerprint(
         ("SELECT id,source_id,tvg_id,tvg_name,imported_name,is_present,last_seen_revision,updated_at,imported_region_code,imported_region_label FROM iptv_channels ORDER BY id", false),
         ("SELECT iptv_channel_id,guide_source_id,guide_channel_id,updated_at FROM epg_channel_overrides ORDER BY iptv_channel_id", false),
         ("SELECT playlist_source_id,guide_source_id,updated_at FROM epg_playlist_links ORDER BY playlist_source_id", false),
+        ("SELECT playlist_source_id,updated_at FROM epg_playlist_guide_optouts ORDER BY playlist_source_id", false),
         ("SELECT singleton,shared_guide_source_id FROM epg_settings ORDER BY singleton", false),
         ("SELECT channel_id,display_name_override,group_mode,group_override,language_mode,country_mode,region_mode,region_code_override,region_label_override,updated_at FROM iptv_channel_overrides ORDER BY channel_id", false),
     ] {

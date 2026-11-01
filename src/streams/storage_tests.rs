@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Disposable on-disk migration fixtures using the actual published v1 SQL.
-use super::storage::{Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, SCHEMA_VERSION};
+use super::storage::{
+    Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
+    SCHEMA_VERSION,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::PathBuf};
 
@@ -70,7 +73,7 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
 }
 
 #[test]
-fn clean_new_database_is_schema_v3_after_reopening() {
+fn clean_new_database_is_schema_v4_after_reopening() {
     let dir = Sandbox::new();
     let storage = Storage::at(dir.path());
     storage.initialize().unwrap();
@@ -532,4 +535,85 @@ fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
         .unwrap(),
         0
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn g1_v3_to_v4_preserves_user_data_and_recovery_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(MIGRATION_002).unwrap();
+        c.execute_batch(MIGRATION_003).unwrap();
+        c.execute(
+            "INSERT INTO iptv_channel_favourites(channel_id) VALUES('stream-one')",
+            [],
+        )
+        .unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    let c = storage.connect().unwrap();
+    let version: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM iptv_channel_favourites", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let backups: Vec<_> = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("-v3-recovery-")
+        })
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let recover = Connection::open(&backups[0]).unwrap();
+    assert_eq!(
+        recover
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    storage.initialize().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn g1_invalid_v4_optout_schema_rejected_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(MIGRATION_002).unwrap();
+        c.execute_batch(MIGRATION_003).unwrap();
+        let invalid = MIGRATION_004.replace(
+            "updated_at INTEGER NOT NULL CHECK (updated_at >= 0)",
+            "updated_at INTEGER NOT NULL",
+        );
+        c.execute_batch(&invalid).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let original = fs::read(&path).unwrap();
+    assert!(Storage::at(&path).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
 }

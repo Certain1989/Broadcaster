@@ -6,7 +6,7 @@ use super::{
     matching::{MatchDecision, MatchMethod},
     model::{Certainty, EpgError},
 };
-use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+use crate::streams::storage::{MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 
@@ -15,6 +15,8 @@ fn setup() -> Connection {
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     c.execute_batch(MIGRATION_001).unwrap();
     c.execute_batch(MIGRATION_002).unwrap();
+    c.execute_batch(MIGRATION_003).unwrap();
+    c.execute_batch(MIGRATION_004).unwrap();
     for playlist in ["playlist-a", "playlist-b"] {
         c.execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -639,6 +641,8 @@ fn snapshot_generation_and_locked_mapping_write_do_not_mix_or_partially_commit()
         .unwrap();
     reader.execute_batch(MIGRATION_001).unwrap();
     reader.execute_batch(MIGRATION_002).unwrap();
+    reader.execute_batch(MIGRATION_003).unwrap();
+    reader.execute_batch(MIGRATION_004).unwrap();
     reader
         .execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -1714,5 +1718,148 @@ fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() 
         }
         other => panic!("explicit one-row mapping must remain usable: {other:?}"),
     }
+    fk_ok(&c);
+}
+
+#[test]
+fn g1_no_guide_blocks_inherited_matching_without_erasing_manual_targets() {
+    let mut c = setup();
+    add_channel(&c, "g", "TVG.EXACT", "Example");
+    selected(&mut c, "g");
+    assert_eq!(
+        selected_guide_for_row(&c, "a1").unwrap().as_deref(),
+        Some("g")
+    );
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::NoGuide,
+        42,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::NoGuide
+    );
+    assert!(matches!(resolve(&c, "a1"), MatchDecision::Unconfigured));
+    assert_eq!(selected_guide_for_row(&c, "a1").unwrap(), None);
+    assert_eq!(
+        selected_guide_for_row(&c, "b1").unwrap().as_deref(),
+        Some("g")
+    );
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1",
+        "g",
+        "TVG.EXACT",
+        43,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::Inherit,
+        44,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    fk_ok(&c);
+}
+
+#[test]
+fn g1_named_selection_isolated_and_mutually_exclusive_with_optout() {
+    let mut c = setup();
+    add_guide(&c, "australia", true);
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::Named("australia".into()),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        selected_guide_for_row(&c, "a1").unwrap().as_deref(),
+        Some("australia")
+    );
+    assert_eq!(selected_guide_for_row(&c, "b1").unwrap(), None);
+    assert_eq!(
+        set_playlist_guide_choice(
+            &mut c,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "playlist-a",
+            PlaylistGuideChoice::Named("not-there".into()),
+            4
+        ),
+        Err(BindingError::NotFound)
+    );
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::Named("australia".into())
+    );
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::NoGuide,
+        5,
+    )
+    .unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM epg_playlist_links WHERE playlist_source_id='playlist-a'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM epg_playlist_guide_optouts WHERE playlist_source_id='playlist-a'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        set_playlist_guide_choice(
+            &mut c,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "playlist-a",
+            PlaylistGuideChoice::NoGuide,
+            -1
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    c.execute("DELETE FROM iptv_sources WHERE id='playlist-a'", [])
+        .unwrap();
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
     fk_ok(&c);
 }

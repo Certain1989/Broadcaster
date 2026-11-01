@@ -173,35 +173,113 @@ pub fn set_shared_guide(
     }
     tx.commit().map_err(db)
 }
-pub fn set_playlist_exception(
+/// The three explicitly approved playlist-level guide policies. Manual channel
+/// overrides are independent and always take precedence over a playlist opt-out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaylistGuideChoice {
+    Inherit,
+    Named(String),
+    NoGuide,
+}
+
+pub fn playlist_guide_choice(
+    conn: &Connection,
+    playlist_source_id: &str,
+) -> Result<PlaylistGuideChoice, BindingError> {
+    playlist_exists(conn, playlist_source_id)?;
+    let named: Option<String> = conn
+        .query_row(
+            "SELECT guide_source_id FROM epg_playlist_links WHERE playlist_source_id=?1",
+            [playlist_source_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db)?;
+    let optout: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1)",
+            [playlist_source_id],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    match (named, optout) {
+        (Some(_), true) => Err(BindingError::Storage),
+        (Some(id), false) => Ok(PlaylistGuideChoice::Named(id)),
+        (None, true) => Ok(PlaylistGuideChoice::NoGuide),
+        (None, false) => Ok(PlaylistGuideChoice::Inherit),
+    }
+}
+
+pub fn set_playlist_guide_choice(
     conn: &mut Connection,
     _: ConfirmedGuideSelection,
+    playlist_source_id: &str,
+    choice: PlaylistGuideChoice,
+    at: i64,
+) -> Result<(), BindingError> {
+    if at < 0 {
+        return Err(BindingError::InvalidInput);
+    }
+    fk(conn)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    playlist_exists(&tx, playlist_source_id)?;
+    if let PlaylistGuideChoice::Named(ref source_id) = choice {
+        guide_exists(&tx, source_id)?;
+    }
+    // IMMEDIATE prevents a second writer observing a temporary ambiguous state.
+    tx.execute(
+        "DELETE FROM epg_playlist_links WHERE playlist_source_id=?1",
+        [playlist_source_id],
+    )
+    .map_err(db)?;
+    tx.execute(
+        "DELETE FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1",
+        [playlist_source_id],
+    )
+    .map_err(db)?;
+    match choice {
+        PlaylistGuideChoice::Named(source_id) => {
+            tx.execute(
+                "INSERT INTO epg_playlist_links (playlist_source_id,guide_source_id,updated_at)
+                VALUES (?1,?2,?3)",
+                params![playlist_source_id, source_id, at],
+            )
+            .map_err(db)?;
+        }
+        PlaylistGuideChoice::NoGuide => {
+            tx.execute(
+                "INSERT INTO epg_playlist_guide_optouts (playlist_source_id,updated_at)
+                VALUES (?1,?2)",
+                params![playlist_source_id, at],
+            )
+            .map_err(db)?;
+        }
+        PlaylistGuideChoice::Inherit => {}
+    }
+    tx.commit().map_err(db)
+}
+
+/// Compatibility API for existing per-channel mapping/editor flows.
+pub fn set_playlist_exception(
+    conn: &mut Connection,
+    confirmation: ConfirmedGuideSelection,
     playlist_source_id: &str,
     guide_source_id: Option<&str>,
     at: i64,
 ) -> Result<(), BindingError> {
-    fk(conn)?;
-    let tx = conn.transaction().map_err(db)?;
-    playlist_exists(&tx, playlist_source_id)?;
-    if let Some(source_id) = guide_source_id {
-        guide_exists(&tx, source_id)?;
-        tx.execute(
-            "INSERT INTO epg_playlist_links (playlist_source_id,guide_source_id,updated_at)
-             VALUES (?1,?2,?3)
-             ON CONFLICT(playlist_source_id) DO UPDATE
-             SET guide_source_id=excluded.guide_source_id,updated_at=excluded.updated_at",
-            params![playlist_source_id, source_id, at],
-        )
-        .map_err(db)?;
-    } else {
-        tx.execute(
-            "DELETE FROM epg_playlist_links WHERE playlist_source_id=?1",
-            [playlist_source_id],
-        )
-        .map_err(db)?;
-    }
-    tx.commit().map_err(db)
+    set_playlist_guide_choice(
+        conn,
+        confirmation,
+        playlist_source_id,
+        guide_source_id.map_or(PlaylistGuideChoice::Inherit, |id| {
+            PlaylistGuideChoice::Named(id.to_owned())
+        }),
+        at,
+    )
 }
+
 pub fn set_row_mapping(
     conn: &mut Connection,
     _: ConfirmedRowMapping,
@@ -570,7 +648,17 @@ fn resolve_source_id(
             |r| r.get(0),
         )
         .map_err(db)?;
-    Ok(manual.or(exception).or(shared))
+    if manual.is_some() || exception.is_some() {
+        return Ok(manual.or(exception));
+    }
+    let opted_out: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1)",
+            [playlist],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    Ok(if opted_out { None } else { shared })
 }
 
 // A SAVEPOINT can be nested under a caller-owned transaction, unlike BEGIN.
@@ -671,7 +759,18 @@ fn resolve_row_inner(
             |r| r.get(0),
         )
         .map_err(|_| EpgError::Storage)?;
-    let chosen = choose_source(manual.as_ref(), exception.as_deref(), shared.as_deref());
+    let opted_out: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1)",
+            [&row.playlist_source_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| EpgError::Storage)?;
+    let chosen = choose_source(
+        manual.as_ref(),
+        exception.as_deref(),
+        if opted_out { None } else { shared.as_deref() },
+    );
     let Some(chosen_source) = chosen.as_ref() else {
         return Ok(MatchDecision::Unconfigured);
     };

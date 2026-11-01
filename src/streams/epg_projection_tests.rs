@@ -183,13 +183,15 @@ async fn cancelling_waiting_row_releases_ticket_without_a_worker_permit() {
 }
 
 fn alias_fixture() -> rusqlite::Connection {
-    use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+    use crate::streams::storage::{MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004};
     use rusqlite::params;
 
     let c = rusqlite::Connection::open_in_memory().expect("fabricated sqlite");
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     c.execute_batch(MIGRATION_001).unwrap();
     c.execute_batch(MIGRATION_002).unwrap();
+    c.execute_batch(MIGRATION_003).unwrap();
+    c.execute_batch(MIGRATION_004).unwrap();
     for playlist in ["playlist-a", "playlist-b"] {
         c.execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)

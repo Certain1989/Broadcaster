@@ -16,10 +16,11 @@ use rusqlite::{
 };
 
 pub const APPLICATION_ID: i64 = 0x42524354;
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 pub const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 pub const MIGRATION_002: &str = include_str!("migrations/002_epg.sql");
 pub const MIGRATION_003: &str = include_str!("migrations/003_favourites.sql");
+pub const MIGRATION_004: &str = include_str!("migrations/004_epg_playlist_optouts.sql");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -136,6 +137,7 @@ impl Storage {
         validate_v1_schema_shape(&conn)?;
         validate_v2_schema_shape(&conn)?;
         validate_v3_schema_shape(&conn)?;
+        validate_v4_schema_shape(&conn)?;
         Ok(conn)
     }
 
@@ -570,8 +572,11 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
     if version >= 2 {
         validate_v2_schema_shape(&probe)?;
     }
-    if version == SCHEMA_VERSION {
+    if version >= 3 {
         validate_v3_schema_shape(&probe)?;
+    }
+    if version == SCHEMA_VERSION {
+        validate_v4_schema_shape(&probe)?;
     }
     validate_integrity(&probe)?;
     drop(probe);
@@ -584,6 +589,7 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
         validate_v1_schema_shape(&reopened)?;
         validate_v2_schema_shape(&reopened)?;
         validate_v3_schema_shape(&reopened)?;
+        validate_v4_schema_shape(&reopened)?;
         validate_integrity(&reopened)?;
         let version: i64 = reopened
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -599,22 +605,26 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
 /// published v1 migration. Preserve an independently reopenable recovery copy.
 /// This function must only run on a blocking worker, never the GTK thread.
 fn upgrade_existing(path: &Path, from_version: i64) -> StorageResult<()> {
-    match from_version {
-        1 => {
-            // Both migrations share ONE transaction. A v3 failure rolls back to v1.
-            let second = MIGRATION_002
-                .trim_end()
-                .strip_suffix("COMMIT;")
-                .ok_or(StorageError::IncompatibleDatabase)?;
-            let third = MIGRATION_003
-                .split_once("BEGIN IMMEDIATE;")
-                .map(|(_, body)| body)
-                .ok_or(StorageError::IncompatibleDatabase)?;
-            upgrade_existing_with(path, 1, &format!("{second}\n{third}"), false)
-        }
-        2 => upgrade_existing_with(path, 2, MIGRATION_003, false),
-        _ => Err(StorageError::IncompatibleDatabase),
+    // One IMMEDIATE transaction for the entire pending version chain.
+    // The unchanged v2/v3 scripts remain historical; v4 is appended only.
+    let chain: Vec<&str> = match from_version {
+        1 => vec![MIGRATION_002, MIGRATION_003, MIGRATION_004],
+        2 => vec![MIGRATION_003, MIGRATION_004],
+        3 => vec![MIGRATION_004],
+        _ => return Err(StorageError::IncompatibleDatabase),
+    };
+    let mut sql = String::from("BEGIN IMMEDIATE;\n");
+    for part in chain {
+        let body = part
+            .split_once("BEGIN IMMEDIATE;")
+            .and_then(|(_, body)| body.rsplit_once("COMMIT;"))
+            .map(|(body, _)| body)
+            .ok_or(StorageError::IncompatibleDatabase)?;
+        sql.push_str(body);
+        sql.push('\n');
     }
+    sql.push_str("COMMIT;");
+    upgrade_existing_with(path, from_version, &sql, false)
 }
 
 fn upgrade_existing_with(
@@ -668,8 +678,11 @@ fn upgrade_existing_with(
             return Err(StorageError::IncompatibleDatabase);
         }
         validate_v1_schema_shape(&dest)?;
-        if from_version == 2 {
+        if from_version >= 2 {
             validate_v2_schema_shape(&dest)?;
+        }
+        if from_version >= 3 {
+            validate_v3_schema_shape(&dest)?;
         }
         validate_integrity(&dest)?;
         dest.close().map_err(|_| StorageError::StorageFailure)?;
@@ -698,8 +711,11 @@ fn upgrade_existing_with(
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&conn)?;
-    if from_version == 2 {
+    if from_version >= 2 {
         validate_v2_schema_shape(&conn)?;
+    }
+    if from_version >= 3 {
+        validate_v3_schema_shape(&conn)?;
     }
     validate_integrity(&conn)?;
     conn.execute_batch(migration_sql).map_err(|_| {
@@ -708,6 +724,7 @@ fn upgrade_existing_with(
     })?;
     validate_v2_schema_shape(&conn)?;
     validate_v3_schema_shape(&conn)?;
+    validate_v4_schema_shape(&conn)?;
     validate_integrity(&conn)?;
     // The recovery copy is intentionally retained, never silently deleted.
     // A failure after commit leaves the copy available for operator recovery.
@@ -805,7 +822,12 @@ fn initialize_new_with(
             })?;
         }
         validate_v2_schema_shape(&connection)?;
+        connection.execute_batch(MIGRATION_004).map_err(|_| {
+            let _ = connection.execute_batch("ROLLBACK");
+            StorageError::StorageFailure
+        })?;
         validate_v3_schema_shape(&connection)?;
+        validate_v4_schema_shape(&connection)?;
         validate_integrity(&connection)?;
         let id: i64 = connection
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -955,6 +977,31 @@ fn validate_v3_schema_shape(conn: &Connection) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_v4_schema_shape(conn: &Connection) -> StorageResult<()> {
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_001).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_002).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_003).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_004).map_err(map_sql)?;
+    if table_shape(conn, "epg_playlist_guide_optouts")?
+        != table_shape(&reference, "epg_playlist_guide_optouts")?
+    {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    let bad: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts o
+                    JOIN epg_playlist_links l USING(playlist_source_id))",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(map_sql)?;
+    if bad != 0 {
+        return Err(StorageError::CorruptDatabase);
+    }
+    Ok(())
+}
+
 fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
     const TABLES: &[&str] = &[
         "epg_channel_overrides",
@@ -986,6 +1033,7 @@ fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
         if !actual
             .iter()
             .map(String::as_str)
+            .filter(|name| *name != "epg_playlist_guide_optouts")
             .eq(expected.iter().copied())
         {
             return Err(StorageError::IncompatibleDatabase);

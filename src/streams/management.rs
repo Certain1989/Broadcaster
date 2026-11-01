@@ -570,6 +570,305 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     dialog.present(Some(&window));
 }
 
+#[derive(Clone)]
+struct GuideChoiceOption {
+    id: String,
+    name: String,
+    enabled: bool,
+    imported: bool,
+}
+
+struct GuideChoiceDetails {
+    choice: crate::epg::bindings::PlaylistGuideChoice,
+    options: Vec<GuideChoiceOption>,
+    shared: Option<String>,
+    matched: i64,
+    total: i64,
+}
+impl GuideChoiceDetails {
+    fn summary(&self) -> String {
+        use crate::epg::bindings::PlaylistGuideChoice;
+        let selected = match &self.choice {
+            PlaylistGuideChoice::NoGuide => gettext("No Guide (manual channel mappings remain)"),
+            PlaylistGuideChoice::Named(id) => self.describe(id),
+            PlaylistGuideChoice::Inherit => self.shared.as_ref().map_or_else(
+                || gettext("Inherit: no shared guide configured"),
+                |id| {
+                    format!(
+                        "{}: {}",
+                        gettext("Inherited shared default"),
+                        self.describe(id)
+                    )
+                },
+            ),
+        };
+        format!(
+            "{} · {}: {} / {} ({})",
+            selected,
+            gettext("Conservative coverage"),
+            self.matched,
+            self.total,
+            gettext("exact IDs / confirmed mappings only")
+        )
+    }
+    fn describe(&self, id: &str) -> String {
+        match self.options.iter().find(|option| option.id == id) {
+            None => gettext("Selected guide unavailable"),
+            Some(option) if !option.enabled => format!("{} ({})", option.name, gettext("disabled")),
+            Some(option) if !option.imported => {
+                format!("{} ({})", option.name, gettext("not refreshed"))
+            }
+            Some(option) => option.name.clone(),
+        }
+    }
+}
+
+async fn load_playlist_guide_details(playlist: String) -> Result<GuideChoiceDetails, &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::bindings::playlist_guide_choice;
+            let storage = crate::streams::storage::Storage::new();
+            let conn = storage.connect().map_err(|_| "Cannot read programme guide selection")?;
+            let choice = playlist_guide_choice(&conn, &playlist)
+                .map_err(|_| "Playlist guide selection unavailable")?;
+            let shared: Option<String> = conn.query_row(
+                "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1", [],
+                |r| r.get(0),
+            ).map_err(|_| "Cannot read shared guide")?;
+            let mut stmt = conn.prepare(
+                "SELECT id,name,enabled,last_success_at FROM epg_sources ORDER BY name COLLATE NOCASE,id"
+            ).map_err(|_| "Cannot enumerate programme guides")?;
+            let options = stmt.query_map([], |r| Ok(GuideChoiceOption {
+                id: r.get(0)?, name: r.get(1)?, enabled: r.get(2)?,
+                imported: r.get::<_, Option<i64>>(3)?.is_some(),
+            })).map_err(|_| "Cannot enumerate programme guides")?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| "Cannot enumerate programme guides")?;
+            // Conservative indexed exact/confirmed coverage, no name guesses or bulk remapping.
+            let (total, matched): (i64, i64) = conn.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN gs.enabled=1
+                    AND gs.last_success_at IS NOT NULL AND ec.channel_id IS NOT NULL
+                    THEN 1 ELSE 0 END),0)
+                 FROM iptv_channels c
+                 LEFT JOIN epg_channel_overrides o ON o.iptv_channel_id=c.id
+                 LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
+                 LEFT JOIN epg_playlist_guide_optouts opt ON opt.playlist_source_id=c.source_id
+                 JOIN epg_settings s ON s.singleton=1
+                 LEFT JOIN epg_sources gs ON gs.id=COALESCE(o.guide_source_id,l.guide_source_id,
+                    CASE WHEN opt.playlist_source_id IS NULL THEN s.shared_guide_source_id END)
+                 LEFT JOIN epg_global_id_aliases a ON a.guide_source_id=gs.id AND a.iptv_tvg_id=c.tvg_id
+                 LEFT JOIN epg_channels ec ON ec.source_id=gs.id
+                    AND ec.channel_id=COALESCE(o.guide_channel_id,a.guide_channel_id,c.tvg_id)
+                 WHERE c.source_id=?1 AND c.is_present=1",
+                [&playlist], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).map_err(|_| "Cannot calculate programme coverage")?;
+            Ok(GuideChoiceDetails { choice, options, shared, total, matched })
+        }).await.map_err(|_| "Programme guide worker unavailable")?
+    }).await
+}
+
+async fn save_playlist_guide_choice(
+    playlist: String,
+    choice: crate::epg::bindings::PlaylistGuideChoice,
+) -> Result<(), &'static str> {
+    crate::utils::tokio(async move {
+        tokio::task::spawn_blocking(move || {
+            use crate::epg::bindings::{set_playlist_guide_choice, ConfirmedGuideSelection};
+            let mut conn = crate::streams::storage::Storage::new()
+                .connect()
+                .map_err(|_| "Cannot open programme data")?;
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| "Invalid system clock")?
+                .as_secs() as i64;
+            set_playlist_guide_choice(
+                &mut conn,
+                ConfirmedGuideSelection::after_user_confirmation(),
+                &playlist,
+                choice,
+                at,
+            )
+            .map_err(|_| "Programme guide selection changed or unavailable")
+        })
+        .await
+        .map_err(|_| "Programme guide worker unavailable")?
+    })
+    .await
+}
+
+fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: &gtk::Button) {
+    let Some(window) = parent(view) else {
+        return;
+    };
+    let playlist_id = playlist_id.to_owned();
+    let origin = origin.downgrade();
+    let weak_view = view.downgrade();
+    spawn(async move {
+        let data = match load_playlist_guide_details(playlist_id.clone()).await {
+            Ok(data) => data,
+            Err(message) => {
+                crate::utils::show_error(message);
+                return;
+            }
+        };
+        let Some(view) = weak_view.upgrade() else {
+            return;
+        };
+        let (dialog, body, status) = sheet(&gettext("Programme Guide for Playlist"));
+        dialog.set_content_height(360);
+        let text = gtk::Label::new(Some(&data.summary()));
+        text.set_xalign(0.0);
+        text.set_wrap(true);
+        body.append(&text);
+        let note = gtk::Label::new(Some(&gettext(
+            "This choice affects only this playlist. Manual channel mappings always win. Applying it may change the displayed programme information; no guide is fetched automatically."
+        )));
+        note.set_wrap(true);
+        note.set_xalign(0.0);
+        body.append(&note);
+        let mut labels = vec![gettext("Inherit Shared Default"), gettext("No Guide")];
+        for option in &data.options {
+            labels.push(data.describe(&option.id));
+        }
+        let items: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let chooser = gtk::DropDown::from_strings(&items);
+        use crate::epg::bindings::PlaylistGuideChoice;
+        let selected = match &data.choice {
+            PlaylistGuideChoice::Inherit => 0,
+            PlaylistGuideChoice::NoGuide => 1,
+            PlaylistGuideChoice::Named(id) => data
+                .options
+                .iter()
+                .position(|option| option.id == *id)
+                .map_or(0, |index| index as u32 + 2),
+        };
+        chooser.set_selected(selected);
+        body.append(&chooser);
+        body.append(&status);
+        let footer = line(&body);
+        let apply = button(&gettext("Apply to This Playlist"), &footer);
+        let cancel = button(&gettext("Cancel"), &footer);
+        // Make D-pad focus routes explicit, including a deterministic escape.
+        for (from, key, to) in [
+            (
+                chooser.clone().upcast::<gtk::Widget>(),
+                gtk::gdk::Key::Down,
+                apply.clone().upcast(),
+            ),
+            (
+                apply.clone().upcast(),
+                gtk::gdk::Key::Up,
+                chooser.clone().upcast(),
+            ),
+            (
+                apply.clone().upcast(),
+                gtk::gdk::Key::Right,
+                cancel.clone().upcast(),
+            ),
+            (
+                cancel.clone().upcast(),
+                gtk::gdk::Key::Left,
+                apply.clone().upcast(),
+            ),
+        ] {
+            let controller = gtk::EventControllerKey::new();
+            controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let next = to.downgrade();
+            controller.connect_key_pressed(move |_, pressed, _, mods| {
+                if pressed == key
+                    && crate::keyboard::unmodified_remote(mods)
+                    && next.upgrade().is_some_and(|widget| widget.grab_focus())
+                {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+            from.add_controller(controller);
+        }
+        cancel.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            move |_| dialog.close()
+        ));
+        let options: Vec<String> = data.options.into_iter().map(|option| option.id).collect();
+        apply.connect_clicked(glib::clone!(
+            #[weak]
+            view,
+            #[weak]
+            dialog,
+            #[weak]
+            chooser,
+            #[weak]
+            apply,
+            #[weak]
+            status,
+            move |_| {
+                let index = chooser.selected();
+                let choice = match index {
+                    0 => PlaylistGuideChoice::Inherit,
+                    1 => PlaylistGuideChoice::NoGuide,
+                    _ => match options.get(index as usize - 2) {
+                        Some(id) => PlaylistGuideChoice::Named(id.clone()),
+                        None => {
+                            status.set_text(&gettext("Guide no longer available"));
+                            return;
+                        }
+                    },
+                };
+                apply.set_sensitive(false);
+                let id = playlist_id.clone();
+                spawn(glib::clone!(
+                    #[weak]
+                    view,
+                    #[weak]
+                    dialog,
+                    #[weak]
+                    status,
+                    #[weak]
+                    apply,
+                    async move {
+                        match save_playlist_guide_choice(id, choice).await {
+                            Ok(()) => {
+                                dialog.close();
+                                view.epg_changed();
+                                view.refresh_source_manager();
+                            }
+                            Err(error) => {
+                                status.set_text(&gettext(error));
+                                apply.set_sensitive(true);
+                            }
+                        }
+                    }
+                ));
+            }
+        ));
+        dialog.connect_closed(move |_| {
+            let weak_button = origin.clone();
+            glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                if let Some(button) = weak_button.upgrade() {
+                    if button.is_mapped() {
+                        button.grab_focus();
+                    }
+                }
+            });
+        });
+        dialog.connect_map(glib::clone!(
+            #[weak]
+            chooser,
+            move |_| {
+                let weak = chooser.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(choice) = weak.upgrade() {
+                        choice.grab_focus();
+                    }
+                });
+            }
+        ));
+        dialog.present(Some(&window));
+    });
+}
+
 pub(crate) fn show_manager(view: &TvStreamsView) {
     let Some(window) = parent(view) else {
         return;
@@ -728,11 +1027,11 @@ fn attach_progress(dialog: &adw::Dialog, status: &gtk::Label, service: StreamsSe
 }
 
 // A row is the non-destructive portal; semantic slots are upper 0..4,
-// lower 4..8. Navigation is explicit because GTK's geometric fallback can
+// lower 4..8, and the full-width Programme Guide action at slot 8. Navigation is explicit because GTK's geometric fallback can
 // leave the two compact rows or land on a disabled edge move button.
-const MANAGER_ROW: usize = 8;
+const MANAGER_ROW: usize = 9;
 
-fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 8], slot: usize) -> Option<gtk::Widget> {
+fn manager_target(controls: &[glib::WeakRef<gtk::Widget>; 9], slot: usize) -> Option<gtk::Widget> {
     controls
         .get(slot)
         .and_then(glib::WeakRef::upgrade)
@@ -776,7 +1075,7 @@ fn bind_manager_navigation(
     view: &TvStreamsView,
     list: &gtk::ListBox,
     row: &gtk::ListBoxRow,
-    controls: &[gtk::Widget; 8],
+    controls: &[gtk::Widget; 9],
     source_id: &str,
     index: i32,
 ) {
@@ -850,6 +1149,8 @@ fn bind_manager_navigation(
                 Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
                     nearest_manager_slot(slot - 4, 0, 4, |i| manager_target(&actions, i).is_some())
                 }
+                Key::Down | Key::KP_Down if (4..8).contains(&slot) => Some(8),
+                Key::Up | Key::KP_Up if slot == 8 => Some(4),
                 _ => None,
             };
             let next = match pressed {
@@ -860,7 +1161,13 @@ fn bind_manager_navigation(
                     manager_target(&actions, 0)
                 }
                 Key::Left | Key::KP_Left if slot != MANAGER_ROW => {
-                    let first = if slot < 4 { 0 } else { 4 };
+                    let first = if slot < 4 {
+                        0
+                    } else if slot < 8 {
+                        4
+                    } else {
+                        8
+                    };
                     if slot == first {
                         Some(row.clone().upcast())
                     } else {
@@ -871,7 +1178,13 @@ fn bind_manager_navigation(
                     }
                 }
                 Key::Right | Key::KP_Right if slot != MANAGER_ROW => {
-                    let end = if slot < 4 { 4 } else { 8 };
+                    let end = if slot < 4 {
+                        4
+                    } else if slot < 8 {
+                        8
+                    } else {
+                        9
+                    };
                     ((slot + 1)..end).find_map(|i| manager_target(&actions, i))
                 }
                 Key::Down | Key::KP_Down if slot < 4 => {
@@ -880,8 +1193,14 @@ fn bind_manager_navigation(
                 Key::Up | Key::KP_Up if (4..8).contains(&slot) => {
                     vertical_slot.and_then(|i| manager_target(&actions, i))
                 }
+                Key::Down | Key::KP_Down if (4..8).contains(&slot) => {
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
+                }
+                Key::Up | Key::KP_Up if slot == 8 => {
+                    vertical_slot.and_then(|i| manager_target(&actions, i))
+                }
                 Key::Up | Key::KP_Up if slot < 4 => Some(row.clone().upcast()),
-                Key::Down | Key::KP_Down if slot == MANAGER_ROW || (4..8).contains(&slot) => {
+                Key::Down | Key::KP_Down if slot == MANAGER_ROW || slot == 8 => {
                     list.row_at_index(index + 1).map(|item| item.upcast())
                 }
                 Key::Up | Key::KP_Up if slot == MANAGER_ROW => {
@@ -946,12 +1265,18 @@ pub(crate) fn load_manager(
                     .map(|source| service.source_counts(&source.id)),
             )
             .await;
+            let guide_details = futures_util::future::join_all(
+                sources
+                    .iter()
+                    .map(|source| load_playlist_guide_details(source.id.clone())),
+            )
+            .await;
             if view.manager_generation() != generation {
                 return;
             }
             let restore = view.manager_focus();
             view.manager_rebuilding(true);
-            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 8])> = Vec::new();
+            let mut focus_rows: Vec<(String, gtk::ListBoxRow, [gtk::Widget; 9])> = Vec::new();
             while let Some(item) = list.row_at_index(0) {
                 list.remove(&item);
             }
@@ -1038,9 +1363,27 @@ pub(crate) fn load_manager(
                 lower_actions.set_homogeneous(true);
                 panel.append(&upper_actions);
                 panel.append(&lower_actions);
+                let guide_action = gtk::Button::with_label(&gettext("Programme Guide"));
+                guide_action.set_hexpand(true);
+                guide_action.set_tooltip_text(Some(&gettext("Choose the guide for this playlist")));
+                panel.append(&guide_action);
+                let guide_summary = gtk::Label::new(None);
+                guide_summary.set_wrap(true);
+                guide_summary.set_xalign(0.0);
+                guide_summary.add_css_class("dim-label");
+                guide_summary.set_text(
+                    &guide_details
+                        .get(index)
+                        .and_then(|value| value.as_ref().ok())
+                        .map_or_else(
+                            || gettext("Guide status unavailable"),
+                            GuideChoiceDetails::summary,
+                        ),
+                );
+                panel.append(&guide_summary);
                 let row = gtk::ListBoxRow::new();
                 row.set_child(Some(&panel));
-                let controls: [gtk::Widget; 8] = [
+                let controls: [gtk::Widget; 9] = [
                     enabled.clone().upcast(),
                     refresh.clone().upcast(),
                     edit.clone().upcast(),
@@ -1049,6 +1392,7 @@ pub(crate) fn load_manager(
                     remove.clone().upcast(),
                     up.clone().upcast(),
                     down.clone().upcast(),
+                    guide_action.clone().upcast(),
                 ];
                 bind_manager_navigation(&view, &list, &row, &controls, &source.id, index as i32);
                 focus_rows.push((source.id.clone(), row.clone(), controls));
@@ -1098,6 +1442,14 @@ pub(crate) fn load_manager(
                     view,
                     move |_| {
                         show_source_form(&view, None, Some(edit_source.clone()));
+                    }
+                ));
+                let playlist_id_for_guide = source.id.clone();
+                guide_action.connect_clicked(glib::clone!(
+                    #[weak]
+                    view,
+                    move |clicked| {
+                        show_playlist_guide_chooser(&view, &playlist_id_for_guide, clicked);
                     }
                 ));
                 let source_for_rename = source.clone();
@@ -4639,9 +4991,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         row.set_child(Some(&panel));
         list.append(&row);
         body.append(&list);
-        let actions: [gtk::Widget; 8] = std::array::from_fn(|i| {
+        let guide_action = gtk::Button::with_label("Programme Guide");
+        panel.append(&guide_action);
+        let actions: [gtk::Widget; 9] = std::array::from_fn(|i| {
             if i == 0 {
                 enabled.clone().upcast()
+            } else if i == 8 {
+                guide_action.clone().upcast()
             } else {
                 buttons[i - 1].clone().upcast()
             }
