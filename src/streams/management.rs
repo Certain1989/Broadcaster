@@ -802,7 +802,7 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
         note.set_xalign(0.0);
         body.append(&note);
         let mut labels = vec![gettext("Inherit Shared Default"), gettext("No Guide")];
-        for option in &data.options {
+        for option in data.options.iter() {
             labels.push(data.describe(&option.id));
         }
         let items: Vec<&str> = labels.iter().map(String::as_str).collect();
