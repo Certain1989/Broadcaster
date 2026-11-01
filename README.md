@@ -14,9 +14,9 @@ Broadcaster is a lightweight, native Linux application for German public-service
 
 - **Mediathek:** search German-language broadcaster catalogues through MediathekViewWeb. Filter by channel or duration, sort results, choose stream quality, and open programme details.
 - **Live TV:** browse current programmes from the Zapp service, read programme descriptions, and select which live channels appear and in what order.
-- **My Channels (new in v0.2.0):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
-- **XMLTV programme guides (v0.2.5):** add and manually refresh multiple XMLTV guide sources from local files or explicitly chosen HTTP(S) URLs. Choose one **Shared Default** for playlists or assign a guide to an individual playlist. Merely adding a guide does not activate it.
-- **Now/Next and channel matching (v0.2.5):** see current and upcoming programme information directly in My Channels when a guide has been selected and channels are matched. Review conservative match suggestions, confirm or change associations, and override regional channel variants manually.
+- **My Channels (new in v0.2.0):** add local M3U files or HTTP(S) playlist addresses, manage multiple sources, manually refresh playlists, filter by group/language/country/region, edit channel metadata without losing it on refresh, and play streams with the same mpv controls. Channel logos are fetched only as needed and may fall back to a generic icon.
+- **XMLTV programme guides (v0.2.5):** add multiple XMLTV guide sources from local files or explicitly chosen HTTP(S) URLs. Refresh them manually or on an optional per-guide schedule (enabled by default when adding a guide). Choose one **Shared Default** for playlists or assign a guide to an individual playlist. Merely adding a guide does not associate it with a playlist.
+- **Now/Next and channel matching (v0.2.5):** see current and upcoming programme information in My Channels when a guide has been selected and a channel match is available. Exact IDs and certain corroborated identity variants match automatically; name-based suggestions require confirmation. Review ambiguous matches and override regional variants manually.
 - **Favourites (v0.2.5):** mark IPTV channels with a star and use the favourites-only filter. Favourites and channel metadata are preserved separately from programme-guide associations.
 - **Remote navigation (v0.2.5):** improved directional focus and remote access to card actions, favourites, source and guide managers, channel editing and the on-screen keyboard.
 - **On-screen keyboard (v0.2.1):** enter text using directional remote keys wherever an editable field offers the keyboard; it is available by default and can be disabled in Settings. Mouse and physical keyboard input still work.
@@ -28,38 +28,48 @@ Broadcaster is a lightweight, native Linux application for German public-service
 Guides are **optional**. Broadcaster does not automatically download a guide URL suggested by an M3U playlist. To show Now/Next information for your channels:
 
 1. Add a local or HTTP(S) M3U playlist in **My Channels**.
-2. Open the EPG source manager, add an XMLTV file or HTTP(S) guide URL you are permitted to use, then refresh the source.
+2. Open the EPG source manager, add an XMLTV file or HTTP(S) guide URL you are permitted to use, then select **Refresh** to import it immediately.
 3. Select it as the **Shared Default** for your playlists, or choose a guide for a specific playlist. One shared guide can serve multiple playlists. **Adding an EPG source alone is not enough.**
-4. Review the suggested channel matches. Confirm or manually override uncertain matches, especially for regional variants.
+4. Check the channel matches. Exact IDs and certain corroborated identity variants can match automatically; confirm name-based suggestions or manually override uncertain matches, especially regional variants.
 5. Return to **My Channels** to view available Now/Next information and star channels you want in the favourites filter.
+
+New guides have **automatic refresh enabled by default** in the Add Guide dialog, with a 24-hour age threshold. You can turn this off when adding a guide or change the interval (6–168 hours) in guide settings. Broadcaster checks due, enabled guides when the guide service starts and approximately once a minute **while the app is running**; it does not update them while closed. Manual guide refresh remains available. **M3U playlists are refreshed manually** from Manage Sources; the guide scheduler does not update them.
 
 A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.2.5 release notes](docs/release-v0.2.5-notes.md) for scope and limitations.
 
 ## Screenshots
 
+The following screenshots show Broadcaster v0.2.5. Programme titles, times and IPTV availability come from third-party sources and can change.
+
 ### Mediathek search
 
-Search the Mediathek with broadcaster, duration and sorting filters.
+Search the Mediathek using a title, broadcaster and duration filters.
 
-<img width="760" alt="Mediathek search field, broadcaster and duration filters, and initial search screen" src="docs/screenshots/v0.2.1/mediathek-search.png" />
-
-### On-screen keyboard
-
-Enter search text using a TV remote without needing a physical keyboard.
-
-<img width="760" alt="Mediathek search with the remote-controlled on-screen keyboard open" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+<img width="960" alt="Mediathek search with Japan results from ARTE, channel and duration filters, and expanded programme actions" src="docs/screenshots/v0.2.5/mediathek-search.png" />
 
 ### Live TV
 
-Browse the programme list, check progress, and expand programme details.
+Browse currently airing programmes with progress indicators and descriptions.
 
-<img width="760" alt="Live TV channel list showing programme progress and expanded programme details" src="docs/screenshots/v0.2.1/live-tv.png" />
+<img width="960" alt="Live TV with broadcaster logos, progress bars and expanded programme descriptions" src="docs/screenshots/v0.2.5/live-tv.png" />
 
-### My Channels
+### On-screen keyboard
 
-Browse imported IPTV channels and filter by source, group, language or country.
+Enter text with a directional remote without needing a physical keyboard.
 
-<img width="760" alt="My Channels IPTV list with source, group, language and country filters" src="docs/screenshots/v0.2.1/my-channels.png" />
+<img width="960" alt="On-screen keyboard opened over the Live TV programme list" src="docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### My Channels with programme information
+
+Browse your IPTV channels, filter your lists and view XMLTV Now/Next information when available.
+
+<img width="960" alt="My Channels playlist filters, favourites stars and Now/Next details with progress indicators" src="docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programme Guides
+
+Manage explicitly selected XMLTV guide sources, refresh a guide or choose the shared default.
+
+<img width="960" alt="Programme Guides dialog showing a cached guide, shared default selection and refresh controls" src="docs/screenshots/v0.2.5/programme-guides.png" />
 
 ### Video playback
 

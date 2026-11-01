@@ -14,9 +14,9 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
-- **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
-- **XMLTV-Programmführer (v0.2.5):** Mehrere XMLTV-Quellen aus lokalen Dateien oder ausdrücklich gewählten HTTP(S)-Adressen hinzufügen und manuell aktualisieren. Einen Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Allein das Hinzufügen aktiviert ihn nicht.
-- **Jetzt/Nächste und Senderzuordnung (v0.2.5):** Laufende und folgende Sendungen für eigene Sender anzeigen, sofern ein Programmführer ausgewählt und der Sender zugeordnet ist. Vorsichtige Zuordnungsvorschläge prüfen, bestätigen oder korrigieren; regionale Varianten können manuell überschrieben werden.
+- **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten und Playlists manuell aktualisieren, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
+- **XMLTV-Programmführer (v0.2.5):** Mehrere XMLTV-Quellen aus lokalen Dateien oder ausdrücklich gewählten HTTP(S)-Adressen hinzufügen. Programmführer manuell oder nach einem optionalen Zeitplan automatisch aktualisieren (beim Hinzufügen standardmäßig aktiviert). Einen Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Allein das Hinzufügen ordnet ihn keiner Playlist zu.
+- **Jetzt/Nächste und Senderzuordnung (v0.2.5):** Laufende und folgende Sendungen anzeigen, wenn ein Programmführer ausgewählt und ein Sender zugeordnet ist. Exakte IDs und bestimmte zusätzlich abgesicherte ID-Varianten werden automatisch zugeordnet; Vorschläge anhand von Sendernamen müssen bestätigt werden. Mehrdeutige Treffer prüfen und regionale Varianten bei Bedarf manuell zuordnen.
 - **Favoriten (v0.2.5):** IPTV-Sender mit einem Stern markieren und den Favoritenfilter verwenden. Favoriten und Sendermetadaten bleiben unabhängig von Programmführer-Zuordnungen erhalten.
 - **Fernbedienungsnavigation (v0.2.5):** Verbesserte Richtungsnavigation und Erreichbarkeit von Kartenaktionen, Favoriten, Quellenverwaltung, Senderbearbeitung und Bildschirmtastatur.
 - **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
@@ -28,38 +28,48 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 Programmführer sind **optional**. Broadcaster lädt eine in einer M3U-Playlist vorgeschlagene EPG-Adresse nicht automatisch herunter. So werden Jetzt/Nächste-Informationen für eigene Sender eingerichtet:
 
 1. Unter **Eigene Sender** eine lokale M3U-Playlist oder eine HTTP(S)-Playlist hinzufügen.
-2. Die EPG-Quellenverwaltung öffnen, eine zulässig nutzbare XMLTV-Datei oder HTTP(S)-Adresse hinzufügen und die Quelle aktualisieren.
+2. Die EPG-Quellenverwaltung öffnen, eine zulässig nutzbare XMLTV-Datei oder HTTP(S)-Adresse hinzufügen und für einen sofortigen Import **Aktualisieren** wählen.
 3. Den Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Ein gemeinsamer Programmführer kann mehrere Playlists versorgen. **Eine EPG-Quelle nur hinzuzufügen reicht nicht aus.**
-4. Die vorgeschlagenen Senderzuordnungen prüfen. Unsichere Zuordnungen bestätigen oder manuell korrigieren, insbesondere bei regionalen Varianten.
+4. Die Senderzuordnungen prüfen. Exakte IDs und bestimmte abgesicherte ID-Varianten können automatisch passen; Vorschläge anhand von Namen bestätigen und unsichere Treffer, insbesondere bei regionalen Varianten, bei Bedarf manuell korrigieren.
 5. Unter **Eigene Sender** verfügbare Jetzt/Nächste-Informationen ansehen und gewünschte Sender für den Favoritenfilter markieren.
+
+Bei neu hinzugefügten Programmführern ist die **automatische Aktualisierung standardmäßig aktiviert** (Voreinstellung: nach 24 Stunden). Sie lässt sich schon beim Hinzufügen ausschalten; das Intervall von 6 bis 168 Stunden ist später in den Programmführer-Einstellungen änderbar. Broadcaster prüft beim Start des Programmführer-Dienstes und ungefähr minütlich **während die Anwendung läuft**, welche aktivierten Quellen aktualisiert werden müssen. Bei geschlossener Anwendung erfolgt keine Aktualisierung. Programmführer lassen sich auch manuell aktualisieren. **M3U-Playlists werden manuell** in der Quellenverwaltung aktualisiert; der Programmführer-Zeitplan aktualisiert sie nicht.
 
 Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Einzelheiten stehen in den [Versionshinweisen zu v0.2.5](docs/release-v0.2.5-notes.md).
 
 ## Screenshots
 
+Die folgenden Screenshots zeigen Broadcaster v0.2.5. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
+
 ### Mediathek-Suche
 
-Sendungen über die Suche sowie Sender-, Dauer- und Sortierfilter finden.
+Sendungen nach Titel suchen sowie Sender- und Dauerfilter verwenden.
 
-<img width="760" alt="Mediathek-Suchfeld mit Sender- und Dauerfiltern sowie leerem Suchzustand" src="docs/screenshots/v0.2.1/mediathek-search.png" />
-
-### Bildschirmtastatur
-
-Suchbegriffe mit einer Fernbedienung eingeben, ohne eine physische Tastatur zu benötigen.
-
-<img width="760" alt="Mediathek-Suche mit geöffneter, per Fernbedienung steuerbarer Bildschirmtastatur" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+<img width="960" alt="Mediathek-Suche nach Japan mit ARTE-Ergebnissen, Sender- und Dauerfilter und aufgeklappten Aktionen" src="docs/screenshots/v0.2.5/mediathek-search.png" />
 
 ### Live-TV
 
-Laufende Sendungen mit Fortschrittsanzeige und aufklappbaren Beschreibungen durchsuchen.
+Laufende Sendungen mit Fortschrittsbalken und Beschreibungen durchsuchen.
 
-<img width="760" alt="Live-TV-Senderliste mit Sendungsfortschritt und ausgeklappter Programmbeschreibung" src="docs/screenshots/v0.2.1/live-tv.png" />
+<img width="960" alt="Live-TV mit Senderlogos, Fortschrittsanzeigen und aufgeklappter Sendungsbeschreibung" src="docs/screenshots/v0.2.5/live-tv.png" />
 
-### Eigene Sender
+### Bildschirmtastatur
 
-Importierte IPTV-Sender anzeigen und nach Quelle, Gruppe, Sprache oder Land filtern.
+Texte ohne physische Tastatur mit der Fernbedienung eingeben.
 
-<img width="760" alt="Eigene Sender mit IPTV-Senderliste sowie Quellen-, Gruppen-, Sprach- und Länderfiltern" src="docs/screenshots/v0.2.1/my-channels.png" />
+<img width="960" alt="Geöffnete Bildschirmtastatur über der Live-TV-Senderliste" src="docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### Eigene Sender mit Programminformationen
+
+IPTV-Sender durchsuchen, Listen filtern und bei vorhandenen XMLTV-Daten Jetzt/Nächste-Informationen anzeigen.
+
+<img width="960" alt="Eigene Sender mit Playlistfiltern, Favoritensternen und Jetzt/Nächste-Informationen mit Fortschrittsbalken" src="docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programmführer
+
+Eigene XMLTV-Quellen verwalten, manuell aktualisieren oder einen gemeinsamen Standard-Programmführer auswählen.
+
+<img width="960" alt="Programmführer-Verwaltung mit zwischengespeichertem EPG, Shared-Default-Auswahl und Aktualisierung" src="docs/screenshots/v0.2.5/programme-guides.png" />
 
 ### Videowiedergabe
 

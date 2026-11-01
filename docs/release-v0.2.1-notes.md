@@ -37,7 +37,28 @@ Broadcaster v0.2.1 refines TV-remote operation and improves the safety and relia
 
 ## Installation and compatibility
 
-Download the production Flatpak bundle for your architecture (`broadcaster-0.2.1-x86_64.flatpak` or `broadcaster-0.2.1-aarch64.flatpak`) and the accompanying `SHA256SUMS` from the published release assets. Verify the downloaded bundle against that checksum file before installation. Refer to the [installation instructions](../README.md) or the [German instructions](../README.de.md) for the commands.
+Download the production Flatpak bundle for your architecture (`broadcaster-0.2.1-x86_64.flatpak` or `broadcaster-0.2.1-aarch64.flatpak`) and the accompanying `SHA256SUMS` from the published release assets. Verify the downloaded bundle against that checksum file before installation. For this **historical v0.2.1 release**, run the following commands from the download directory (x86_64 example; use `aarch64` in both filenames for ARM64):
+
+```bash
+grep 'broadcaster-0.2.1-x86_64.flatpak
+
+The Flatpak uses **GNOME Platform 51** and bundles mpv. Some video formats require the matching `org.freedesktop.Platform.codecs-extra//26.08-extra` extension. Broadcaster is not on Flathub; downloaded Flatpak bundles do not configure automatic application updates.
+
+### Important limitations
+
+- mpv may forward imported User-Agent and Referer values across stream redirects or cross-origin HLS requests; these values are **not origin-confined**. Avoid including sensitive credentials in them.
+- Playlist downloads bypass HTTP proxies by design. Explicitly configured permitted local playlists can still be imported; remote media playback follows the player's own configuration.
+- Imported playlists are user-managed: there is no automatic playlist refresh, IPTV account login, EPG or recording feature in this release. Available streams, rights and regional restrictions depend on their providers.
+- A standalone Flatpak's access to local files uses the normal file chooser/document portal; a prior grant may require reauthorization.
+
+Broadcaster neither hosts television streams nor provides IPTV subscriptions. It is a hobby project distributed as-is with no guarantee of device, compositor or remote-control compatibility.
+ SHA256SUMS | sha256sum -c -
+flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./broadcaster-0.2.1-x86_64.flatpak
+flatpak run io.github.Certain1989.Broadcaster
+```
+
+The [current English README](../README.md) and [German README](../README.de.md) describe the **latest** release; do not copy their version-specific install filenames when installing v0.2.1.
 
 The Flatpak uses **GNOME Platform 51** and bundles mpv. Some video formats require the matching `org.freedesktop.Platform.codecs-extra//26.08-extra` extension. Broadcaster is not on Flathub; downloaded Flatpak bundles do not configure automatic application updates.
 
