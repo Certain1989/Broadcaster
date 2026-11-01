@@ -3,11 +3,8 @@
 
 name: Worker source bundle
 
-# Public source transport only. Does not test application code or authorise integration.
+# On-demand public source transport only. Does not test application code or authorise integration.
 on:
-  push:
-    branches:
-      - '**'
   workflow_dispatch:
     inputs:
       target_sha:
