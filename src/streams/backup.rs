@@ -259,8 +259,14 @@ pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<P
         .ok_or(StorageError::InvalidInput)?;
     #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    #[cfg(unix)]
+    // Linux uses different O_NOFOLLOW values on the two supported Flatpak
+    // architectures.  Do not hard-code the x86_64 value for all Unix targets:
+    // on AArch64 it instead sets O_LARGEFILE, permitting a symlink import.
+    // Fail compilation for other Unix targets until their ABI is audited.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const O_NOFOLLOW: i32 = 0o400000;
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    const O_NOFOLLOW: i32 = 0o100000;
     let mut opts = OpenOptions::new();
     opts.read(true);
     #[cfg(unix)]
