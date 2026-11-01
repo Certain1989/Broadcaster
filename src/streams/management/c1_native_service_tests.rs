@@ -109,8 +109,13 @@ fn controls(list: &gtk::ListBox, index: i32) -> Option<Controls> {
         .collect::<Vec<_>>();
     assert_eq!(
         buttons.len(),
-        8,
-        "eight real row actions, including Programme Guide"
+        9,
+        "seven source actions plus Programme Guide and Automatic Refresh"
+    );
+    assert_eq!(
+        buttons[8].label().as_deref(),
+        Some(gettext("Automatic Refresh").as_str()),
+        "P1 automatic-refresh action follows the existing Guide action"
     );
     Some(Controls {
         row,
