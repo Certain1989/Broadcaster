@@ -603,11 +603,13 @@ impl GuideChoiceDetails {
             ),
         };
         format!(
-            "{} · {}: {} / {} ({})",
+            "{} · {}: {} {} / {} {} ({})",
             selected,
             gettext("Conservative coverage"),
             self.matched,
-            self.total,
+            gettext("matched"),
+            self.total - self.matched,
+            gettext("unmatched"),
             gettext("exact IDs / confirmed mappings only")
         )
     }
@@ -753,22 +755,22 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
             (
                 chooser.clone().upcast::<gtk::Widget>(),
                 gtk::gdk::Key::Down,
-                apply.clone().upcast(),
+                apply.clone().upcast::<gtk::Widget>(),
             ),
             (
-                apply.clone().upcast(),
+                apply.clone().upcast::<gtk::Widget>(),
                 gtk::gdk::Key::Up,
-                chooser.clone().upcast(),
+                chooser.clone().upcast::<gtk::Widget>(),
             ),
             (
-                apply.clone().upcast(),
+                apply.clone().upcast::<gtk::Widget>(),
                 gtk::gdk::Key::Right,
-                cancel.clone().upcast(),
+                cancel.clone().upcast::<gtk::Widget>(),
             ),
             (
-                cancel.clone().upcast(),
+                cancel.clone().upcast::<gtk::Widget>(),
                 gtk::gdk::Key::Left,
-                apply.clone().upcast(),
+                apply.clone().upcast::<gtk::Widget>(),
             ),
         ] {
             let controller = gtk::EventControllerKey::new();
@@ -789,7 +791,9 @@ fn show_playlist_guide_chooser(view: &TvStreamsView, playlist_id: &str, origin: 
         cancel.connect_clicked(glib::clone!(
             #[weak]
             dialog,
-            move |_| dialog.close()
+            move |_| {
+                dialog.close();
+            }
         ));
         let options: Vec<String> = data.options.into_iter().map(|option| option.id).collect();
         apply.connect_clicked(glib::clone!(
