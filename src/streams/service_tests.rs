@@ -684,3 +684,127 @@ async fn p1_opt_out_and_disabled_source_do_not_fetch() {
         None
     );
 }
+
+#[tokio::test]
+async fn p1_busy_manual_confirmations_do_not_starve_third_due_source() {
+    use super::service::RefreshStage;
+    let test = Fixture::new().await;
+    let old = HttpFixture::new(playlist(20)).await;
+    let healthy = HttpFixture::new(playlist(22)).await;
+    let service = &test.service;
+    let mut waiting = Vec::new();
+    for name in ["Busy A", "Busy B"] {
+        let source = service
+            .add_url(name, old.url("/list"), 0, SourceDefaults::default())
+            .await
+            .unwrap();
+        service
+            .set_source_schedule(&source.id, true, 21600)
+            .await
+            .unwrap();
+        waiting.push(source);
+    }
+    let third = service
+        .add_url(
+            "Eligible C",
+            healthy.url("/list"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .set_source_schedule(&third.id, true, 21600)
+        .await
+        .unwrap();
+    old.replace(playlist(3));
+    let mut tickets = Vec::new();
+    for source in &waiting {
+        let ticket = match service.refresh(&source.id).await.unwrap() {
+            RefreshOutcome::ConfirmationRequired(ticket) => ticket,
+            RefreshOutcome::Committed(_) => panic!("manual shrink must await confirmation"),
+        };
+        assert_eq!(
+            service.stage(&source.id).await,
+            RefreshStage::AwaitingConfirmation
+        );
+        tickets.push(ticket);
+    }
+    let db = Storage::at(&test.path);
+    let conn = db.connect().unwrap();
+    for busy in &waiting {
+        conn.execute(
+            "UPDATE iptv_sources SET last_success_at=1,last_attempt_at=1 WHERE id=?1",
+            [&busy.id],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "UPDATE iptv_sources SET last_success_at=1,last_attempt_at=2 WHERE id=?1",
+        [&third.id],
+    )
+    .unwrap();
+    let unfiltered = db.due_source_ids(1_800_000_000, 2).unwrap();
+    assert_eq!(unfiltered.len(), 2);
+    assert!(unfiltered
+        .iter()
+        .all(|id| waiting.iter().any(|w| &w.id == id)));
+    // The unfiltered SQL returns only A and B under LIMIT 2. In contrast
+    // the scheduler must skip those two outstanding manual generations before
+    // filling actual admission slots.
+    let due = service.due_ids(1_800_000_000).await.unwrap();
+    assert_eq!(due, vec![third.id.clone()]);
+    service.refresh_scheduled(due[0].clone()).await.unwrap();
+    assert_eq!(service.stage(&third.id).await, RefreshStage::Succeeded);
+    let state = service.source(&third.id).await.unwrap();
+    assert!(state.last_success_at.unwrap_or_default() > 1);
+    for ticket in tickets {
+        assert!(matches!(
+            service.confirm_refresh(ticket, false).await,
+            Err(ServiceError::Declined)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn p1_disable_cancels_in_flight_scheduled_refresh_and_keeps_last_good() {
+    let test = Fixture::new().await;
+    let server = HttpFixture::new(playlist(2)).await;
+    let service = &test.service;
+    let source = service
+        .add_url(
+            "Slow scheduled",
+            server.url("/slow"),
+            0,
+            SourceDefaults::default(),
+        )
+        .await
+        .unwrap();
+    service
+        .set_source_schedule(&source.id, true, 21600)
+        .await
+        .unwrap();
+    Storage::at(&test.path)
+        .connect()
+        .unwrap()
+        .execute(
+            "UPDATE iptv_sources SET last_attempt_at=1,last_success_at=1 WHERE id=?1",
+            [&source.id],
+        )
+        .unwrap();
+    server.replace(playlist(4));
+    let id = source.id.clone();
+    let scheduled = service.refresh_scheduled(id.clone());
+    let disable = async {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        service.toggle_source(&id, false).await.unwrap();
+    };
+    let (result, ()) = tokio::join!(scheduled, disable);
+    assert!(matches!(result, Ok(())));
+    service.toggle_source(&id, true).await.unwrap();
+    let count = service.query(ChannelQuery::default()).await.unwrap().total;
+    assert_eq!(
+        count, 2,
+        "disabled in-flight scheduled refresh must not commit"
+    );
+}

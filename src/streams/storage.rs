@@ -328,9 +328,21 @@ impl Storage {
         )
     }
 
-    /// A bounded, deterministic due scan. Never return disabled, unconsented or
-    /// attention-paused IDs. The later admission rechecks the state and revision.
-    pub fn due_source_ids(&self, at: i64, limit: i64) -> StorageResult<Vec<String>> {
+    /// Scan in stable due order, filtering busy/manual generations *before*
+    /// applying the two real admission slots. LIMIT before exclusion would
+    /// repeatedly return the same two waiting-for-confirmation sources and
+    /// starve all later due sources. SQLite rows are streamed: no unbounded
+    /// in-memory list or queued refresh tasks are created.
+    pub fn due_source_ids_excluding(
+        &self,
+        at: i64,
+        limit: i64,
+        active: &HashSet<String>,
+    ) -> StorageResult<Vec<String>> {
+        let cap = limit.clamp(0, 2) as usize;
+        if cap == 0 {
+            return Ok(Vec::new());
+        }
         let conn = self.connect()?;
         let mut statement = conn
             .prepare(
@@ -338,15 +350,25 @@ impl Storage {
              AND COALESCE(last_error_code,'') != 'approval_required'
              AND (last_success_at IS NULL OR last_success_at <= ?1-refresh_interval_seconds)
              AND (last_attempt_at IS NULL OR last_attempt_at <= ?1-MAX(21600,refresh_interval_seconds))
-             ORDER BY COALESCE(last_attempt_at,0),id LIMIT ?2",
+             ORDER BY COALESCE(last_attempt_at,0),id",
             )
             .map_err(map_sql)?;
-        let ids = statement
-            .query_map(params![at, limit.clamp(0, 2)], |r| r.get::<_, String>(0))
-            .map_err(map_sql)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(map_sql)?;
+        let mut rows = statement.query(params![at]).map_err(map_sql)?;
+        let mut ids = Vec::with_capacity(cap);
+        while let Some(row) = rows.next().map_err(map_sql)? {
+            let id: String = row.get(0).map_err(map_sql)?;
+            if !active.contains(&id) {
+                ids.push(id);
+                if ids.len() == cap {
+                    break;
+                }
+            }
+        }
         Ok(ids)
+    }
+
+    pub fn due_source_ids(&self, at: i64, limit: i64) -> StorageResult<Vec<String>> {
+        self.due_source_ids_excluding(at, limit, &HashSet::new())
     }
 
     pub fn set_source_enabled(&self, id: &str, enabled: bool, at: i64) -> StorageResult<()> {

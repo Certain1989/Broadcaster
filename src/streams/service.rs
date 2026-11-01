@@ -8,7 +8,7 @@
 //! after it begins the caller receives the authoritative DB result. Never
 //! claim rollback after a committed transaction.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     sync::{
         atomic::{AtomicI64, AtomicU64, Ordering},
@@ -218,9 +218,29 @@ impl StreamsService {
         });
     }
 
-    async fn due_ids(&self, at: i64) -> Result<Vec<String>, ServiceError> {
-        self.db(move |s| s.due_source_ids(at, 2).map_err(Into::into))
+    pub(super) async fn due_ids(&self, at: i64) -> Result<Vec<String>, ServiceError> {
+        // A short lock snapshot is sufficient: begin_if_idle independently
+        // checks admission again after the SQL scan. Busy manual confirmations
+        // are excluded *before* the two-slot cap, so they cannot starve peers.
+        let active: HashSet<String> = self
+            .inner
+            .generations
+            .lock()
             .await
+            .iter()
+            .filter(|(_, running)| {
+                !matches!(
+                    running.stage,
+                    RefreshStage::Succeeded | RefreshStage::Failed | RefreshStage::Cancelled
+                )
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.db(move |s| {
+            s.due_source_ids_excluding(at, 2, &active)
+                .map_err(Into::into)
+        })
+        .await
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<ServiceEvent> {

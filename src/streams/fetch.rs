@@ -5,6 +5,7 @@
 //! or dependency error in Debug, Display, tracing or a UI-facing failure.
 use std::{
     fmt,
+    future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
@@ -403,6 +404,37 @@ pub(crate) async fn fetch_local(
     file: &gio::File,
     cancellation: &Cancellation,
 ) -> Result<Vec<u8>, FetchError> {
+    bounded_local_read(
+        fetch_local_inner(file, cancellation),
+        cancellation,
+        Duration::from_secs(30),
+    )
+    .await
+}
+
+/// Entire local read, including document-portal opening and every chunk, has
+/// one deadline. GioFuture::drop cancels its GIO Cancellable on timeout or
+/// source cancellation; no partial bytes or last-good modifications escape.
+async fn bounded_local_read<F>(
+    read: F,
+    cancellation: &Cancellation,
+    timeout: Duration,
+) -> Result<Vec<u8>, FetchError>
+where
+    F: Future<Output = Result<Vec<u8>, FetchError>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(FetchError::Cancelled),
+        _ = glib::timeout_future(timeout) => Err(FetchError::Timeout),
+        result = read => result,
+    }
+}
+
+async fn fetch_local_inner(
+    file: &gio::File,
+    cancellation: &Cancellation,
+) -> Result<Vec<u8>, FetchError> {
     if cancellation.is_cancelled() {
         return Err(FetchError::Cancelled);
     }
@@ -665,5 +697,62 @@ mod tests {
         .await;
         assert!(matches!(result, Err(FetchError::BodyTooLarge)));
         server.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod p1_local_deadline_tests {
+    use super::*;
+    use std::future::pending;
+
+    #[test]
+    fn p1_never_resolving_gio_read_times_out_and_drops_pending_operation() {
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let token = Cancellation::new();
+                    let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    struct PendingRead(std::sync::Arc<std::sync::atomic::AtomicBool>);
+                    impl Drop for PendingRead {
+                        fn drop(&mut self) {
+                            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    let held = PendingRead(dropped.clone());
+                    let read = async move {
+                        let _held = held;
+                        pending::<Result<Vec<u8>, FetchError>>().await
+                    };
+                    let result = bounded_local_read(read, &token, Duration::from_millis(20)).await;
+                    assert_eq!(result, Err(FetchError::Timeout));
+                    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+                });
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn p1_unresponsive_local_read_is_cancellable_without_waiting_for_deadline() {
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let token = Cancellation::new();
+                    let trigger = token.clone();
+                    let cancelling = async move {
+                        glib::timeout_future(Duration::from_millis(10)).await;
+                        trigger.cancel();
+                    };
+                    let reading = bounded_local_read(
+                        pending::<Result<Vec<u8>, FetchError>>(),
+                        &token,
+                        Duration::from_secs(30),
+                    );
+                    let (result, ()) = futures_util::future::join(reading, cancelling).await;
+                    assert_eq!(result, Err(FetchError::Cancelled));
+                });
+            })
+            .unwrap();
     }
 }
