@@ -111,6 +111,7 @@ template $TvMediathekCard: Gtk.ListBoxRow {
           spacing: 4;
 
           Adw.SplitButton play_button {
+            styles ["tv-medithek-play-focus"]
             icon-name: "play-symbolic";
             tooltip-text: _("Play");
             action-name: "card.play-default";

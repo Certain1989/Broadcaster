@@ -637,7 +637,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
     rows.set_hexpand(true);
     body.append(&rows);
     let selected = Rc::new(Cell::new((0usize, 0usize)));
-    let qwertz = Rc::new(Cell::new(false));
+    let qwertz = Rc::new(Cell::new(crate::settings::TvSettings::get().osk_qwertz()));
     let shifted = Rc::new(Cell::new(false));
     let symbols = Rc::new(Cell::new(false));
     let keys: Rc<RefCell<Vec<Vec<glib::WeakRef<gtk::Button>>>>> = Rc::new(RefCell::new(Vec::new()));
@@ -653,9 +653,18 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
             line.set_margin_top(6);
         }
         rows.append(&line);
+        // The third letter row has ten keys, unlike the eleven-key rows
+        // above. Reserve its missing eleventh slot so the letter keys keep
+        // exactly the same physical width at every remote/TV size. A leading
+        // spacer also gives the customary staggered third-row placement.
+        if r == 3 {
+            let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            spacer.set_hexpand(true);
+            line.append(&spacer);
+        }
         let mut refs = Vec::new();
         for (c, _) in labels.iter().enumerate() {
-            let button = gtk::Button::with_label(&label_for(r, c, false, false, false));
+            let button = gtk::Button::with_label(&label_for(r, c, qwertz.get(), false, false));
             if let Some(name) = caret_action_name(r, c) {
                 button.set_tooltip_text(Some(&name));
                 button.update_property(&[gtk::accessible::Property::Label(&name)]);
@@ -729,6 +738,7 @@ fn show_widget(widget: &gtk::Widget, options: KeyboardOptions) {
                     }
                     (6, 1) => {
                         qwertz.set(!qwertz.get());
+                        crate::settings::TvSettings::get().set_osk_qwertz(qwertz.get());
                         relabel(&keys.borrow(), qwertz.get(), shifted.get(), symbols.get());
                     }
                     (6, 2) => {
@@ -950,4 +960,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod mapped;
+pub(crate) mod mapped;

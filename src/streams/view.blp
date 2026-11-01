@@ -40,6 +40,8 @@ template $TvStreamsView: Adw.Bin {
         spacing: 6;
 
         Gtk.DropDown source_filter {
+          // D38/R07 B07-B09: native text-searchable GTK popup for long facets.
+          enable-search: true;
           hexpand: true;
           tooltip-text: _("Filter by source");
         }
@@ -59,11 +61,15 @@ template $TvStreamsView: Adw.Bin {
         spacing: 6;
 
         Gtk.DropDown language_filter {
+          // D38/R07 B07-B09: native text-searchable GTK popup for long facets.
+          enable-search: true;
           hexpand: true;
           tooltip-text: _("Filter by language");
         }
 
         Gtk.DropDown country_filter {
+          // D38/R07 B07-B09: native text-searchable GTK popup for long facets.
+          enable-search: true;
           hexpand: true;
           tooltip-text: _("Filter by country");
         }
@@ -87,6 +93,13 @@ template $TvStreamsView: Adw.Bin {
 
         Gtk.Button clear_button {
           label: _("Clear Filters");
+        }
+
+        Gtk.Button favourites_button {
+          label: "☆";
+          tooltip-text: _("Show favourites only");
+          width-request: 40;
+          height-request: 40;
         }
 
         Gtk.Button manage_button {
@@ -124,10 +137,19 @@ template $TvStreamsView: Adw.Bin {
 
       Gtk.StackPage {
         name: "empty";
-        child: Adw.StatusPage empty_page {
-          icon-name: "tv-symbolic";
-          title: _("No My Channels Yet");
-          description: _("Add a playlist or manage existing sources");
+        child: Gtk.ScrolledWindow {
+          hscrollbar-policy: never;
+          Adw.StatusPage empty_page {
+            icon-name: "tv-symbolic";
+            title: _("No My Channels Yet");
+            description: _("Add a playlist or manage existing sources");
+            child: Gtk.Button show_all_button {
+              styles ["tv-stream-show-all-focus"]
+              label: _("Show all channels");
+              halign: center;
+              visible: false;
+            };
+          }
         };
       }
 

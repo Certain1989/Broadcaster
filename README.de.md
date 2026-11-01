@@ -15,6 +15,8 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
 - **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
+- **XMLTV-Programmführer (v0.2.5-Kandidat):** Optionale Quellen als lokale XMLTV-Datei oder explizit konfigurierte HTTP(S)-Adresse. Ein Programmführer muss als **Shared Default** ausgewählt oder einer Playlist zugeordnet werden. Allein das Hinzufügen genügt nicht für Jetzt/Nächste. Unsichere Zuordnungen können bestätigt oder manuell überschrieben werden.
+- **Favoriten (v0.2.5-Kandidat):** Sender als Favoriten markieren und filtern. Verbesserte Fernbedienungsnavigation in Karten, Quellenverwaltung und Dialogen.
 - **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
 - **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
@@ -56,6 +58,8 @@ Weitere ältere Screenshots, auch zum Hinzufügen von Playlists, zeigt das [Rele
 Öffentlich verfügbare Wiedergabelisten für **Eigene Sender** bietet [IPTV-org nach Land, Sprache und Kategorie](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). Der Dialog „Wiedergabeliste hinzufügen“ verlinkt dasselbe externe Verzeichnis; Broadcaster abonniert nichts automatisch. Heruntergeladene Senderlogos werden lokal zwischengespeichert (bis zu 2.048 Bilder oder 256 MiB). Nach erfolgreicher Aktualisierung einer Wiedergabeliste oder dem Löschen einer Quelle werden nicht mehr verwendete Logos entfernt; der kleinere Arbeitsspeicher-Cache bleibt für eine flüssige Fernbedienung begrenzt.
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
+
+[Versionshinweise zu v0.2.5](docs/release-v0.2.5-notes.md): **v0.2.5 ist noch nicht veröffentlicht.** Die folgenden Downloadlinks und Prüfbeispiele beziehen sich deshalb weiterhin auf die veröffentlichte v0.2.1.
 
 ## Broadcaster installieren
 

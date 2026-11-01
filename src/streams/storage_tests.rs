@@ -70,7 +70,7 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
 }
 
 #[test]
-fn clean_new_database_is_schema_v2_after_reopening() {
+fn clean_new_database_is_schema_v3_after_reopening() {
     let dir = Sandbox::new();
     let storage = Storage::at(dir.path());
     storage.initialize().unwrap();
@@ -107,7 +107,7 @@ fn upgrade_actual_v1_preserves_iptv_and_separates_shared_guide_cascade() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, SCHEMA_VERSION);
     let retained: (String, String, String, String) = conn
         .query_row(
             "SELECT c.stream_url,c.user_agent,c.http_referer,o.display_name_override
@@ -375,4 +375,161 @@ fn actual_v1_check_with_internal_comment_still_upgrades_and_reopens() {
         .filter(|name| name.contains("-v1-recovery-"))
         .count();
     assert_eq!(backups, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn epg_manual_override_survives_ninety_day_missing_purge_until_real_guide_deletion() {
+    let dir = Sandbox::new();
+    seed_real_v1(&dir.path());
+    let storage = Storage::at(dir.path());
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    conn.execute(
+        "INSERT INTO epg_sources
+         (id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES ('fixture-guide','Synthetic guide','local_file','/fabricated/guide',1,1)",
+        [],
+    )
+    .unwrap();
+    for id in ["epg-mapped", "unmapped"] {
+        conn.execute(
+            "INSERT INTO iptv_channels
+             (id,source_id,playlist_order,imported_name,stream_url,
+              is_present,missing_since,created_at,updated_at)
+             VALUES (?1,'playlist-one',2,'Archived',
+                     'https://invalid.example/archived.m3u8',0,1,1,1)",
+            [id],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO epg_channel_overrides
+         (iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+         VALUES ('epg-mapped','fixture-guide','region',1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    assert_eq!(storage.purge_expired_missing(10_000_000).unwrap(), 1);
+    let conn = storage.connect().unwrap();
+    let mapped: String = conn
+        .query_row(
+            "SELECT stream_url FROM iptv_channels WHERE id='epg-mapped'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(mapped, "https://invalid.example/archived.m3u8");
+    let missing: Option<String> = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='unmapped'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert!(missing.is_none());
+    conn.execute("DELETE FROM epg_sources WHERE id='fixture-guide'", [])
+        .unwrap();
+    let epg_overrides: i64 = conn
+        .query_row("SELECT COUNT(*) FROM epg_channel_overrides", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(epg_overrides, 0);
+    drop(conn);
+    assert_eq!(storage.purge_expired_missing(10_000_000).unwrap(), 1);
+    let conn = storage.connect().unwrap();
+    let remaining: Option<String> = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='epg-mapped'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap();
+    assert!(remaining.is_none());
+    // Existing editor customization remains independently retained.
+    let user_row: String = conn
+        .query_row(
+            "SELECT id FROM iptv_channels WHERE id='stream-one'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(user_row, "stream-one");
+}
+
+#[cfg(unix)]
+#[test]
+fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(MIGRATION_002).unwrap();
+        db.execute(
+            "INSERT INTO epg_sources
+            (id,name,origin_kind,origin_locator,created_at,updated_at)
+            VALUES('v2-guide','Synthetic','local_file','/fabricated/guide',1,1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO epg_global_id_aliases
+            (guide_source_id,iptv_tvg_id,guide_channel_id,updated_at)
+            VALUES('v2-guide','guide.fake','exact.station',2)",
+            [],
+        )
+        .unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let storage = Storage::at(path.clone());
+    storage.initialize().unwrap();
+    assert!(!storage.favourites_only().unwrap());
+    let conn = storage.connect().unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    let alias: String = conn
+        .query_row(
+            "SELECT guide_channel_id FROM epg_global_id_aliases WHERE iptv_tvg_id='guide.fake'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(alias, "exact.station");
+    drop(conn);
+    let backups: Vec<_> = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("-v2-recovery-")
+        })
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let db = Connection::open_with_flags(&backups[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='iptv_channel_favourites'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
 }

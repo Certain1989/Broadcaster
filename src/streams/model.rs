@@ -425,6 +425,7 @@ pub struct ChannelQuery {
     pub country: FacetSelection,
     pub region: FacetSelection,
     pub sort: SortOrder,
+    pub favourites_only: bool,
     pub limit: u32,
     pub offset: u32,
 }
@@ -438,6 +439,7 @@ impl Default for ChannelQuery {
             country: FacetSelection::Any,
             region: FacetSelection::Any,
             sort: SortOrder::PlaylistOrder,
+            favourites_only: false,
             limit: 100,
             offset: 0,
         }
@@ -457,6 +459,7 @@ pub struct ChannelEffective {
     pub logo_url: Option<String>,
     pub channel_number: Option<String>,
     pub has_user_overrides: bool,
+    pub is_favourite: bool,
 }
 #[derive(Clone, Debug)]
 pub struct ChannelPage {

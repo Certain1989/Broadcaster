@@ -11,6 +11,19 @@ use std::{
 
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use gettextrs::gettext;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+use super::epg_projection::{
+    next_projection_deadline, DeliveryKey, ProjectionOutcome, ProjectionService,
+};
+use crate::epg::{
+    bindings::SemanticProgrammeState,
+    cache::{Coverage, Freshness},
+    model::Certainty,
+};
 
 use crate::{
     application::{StreamHeaders, TvApplication, VideoInfo},
@@ -26,6 +39,138 @@ use super::{
     service::StreamsService,
 };
 
+// Only E4 presentation uses these time labels. UTC matching remains in E3.
+// Injecting the zone makes fall-back/repeated-hour cases testable without
+// mutating the process-wide TZ or relying on a CI runner's local timezone.
+#[derive(Clone)]
+struct ProgrammeLocalClock {
+    clock: String,
+    date: String,
+    offset: String,
+}
+
+fn programme_clock_at(at: i64, zone: &glib::TimeZone) -> Option<ProgrammeLocalClock> {
+    let local = glib::DateTime::from_unix_utc(at)
+        .ok()?
+        .to_timezone(zone)
+        .ok()?;
+    Some(ProgrammeLocalClock {
+        clock: local.format(&gettext("%H:%M")).ok()?.to_string(),
+        date: local.format("%Y-%m-%d").ok()?.to_string(),
+        offset: local.format("%z").ok()?.to_string(),
+    })
+}
+
+/// Add both offsets when an interval traverses an offset change; add dates
+/// when local calendar days differ. Stable same-day ranges stay compact.
+pub(super) fn programme_range_in_timezone(
+    start_utc: i64,
+    stop_utc: i64,
+    zone: &glib::TimeZone,
+) -> String {
+    let (Some(start), Some(stop)) = (
+        programme_clock_at(start_utc, zone),
+        programme_clock_at(stop_utc, zone),
+    ) else {
+        return gettext("Unknown time");
+    };
+    let dates_differ = start.date != stop.date;
+    let offsets_differ = start.offset != stop.offset;
+    let label = |point: &ProgrammeLocalClock| {
+        let mut parts = Vec::new();
+        if dates_differ {
+            parts.push(point.date.as_str());
+        }
+        parts.push(point.clock.as_str());
+        if offsets_differ {
+            parts.push(point.offset.as_str());
+        }
+        parts.join(" ")
+    };
+    format!("{} – {}", label(&start), label(&stop))
+}
+
+/// A repeated local clock time must not be mistaken for its other UTC instant.
+/// The neighbouring UTC hour check covers both sides of Berlin's repeated
+/// autumn hour; it does not reinterpret, round, or infer programme duration.
+fn repeated_local_hour(at: i64, point: &ProgrammeLocalClock, zone: &glib::TimeZone) -> bool {
+    [-3600_i64, 3600].into_iter().any(|difference| {
+        at.checked_add(difference)
+            .and_then(|other| programme_clock_at(other, zone))
+            .is_some_and(|other| {
+                other.date == point.date
+                    && other.clock == point.clock
+                    && other.offset != point.offset
+            })
+    })
+}
+
+pub(super) fn programme_next_in_timezone(
+    next_utc: i64,
+    reference_utc: i64,
+    zone: &glib::TimeZone,
+) -> String {
+    let Some(point) = programme_clock_at(next_utc, zone) else {
+        return gettext("Unknown time");
+    };
+    let mut parts = Vec::new();
+    if programme_clock_at(reference_utc, zone).is_some_and(|reference| reference.date != point.date)
+    {
+        parts.push(point.date.clone());
+    }
+    parts.push(point.clock.clone());
+    if repeated_local_hour(next_utc, &point, zone) {
+        parts.push(point.offset);
+    }
+    parts.join(" ")
+}
+
+/// Construct the *final* visible status. In particular, a valid Now time
+/// range must never discard Aging, partial coverage or refresh-failure state.
+pub(super) fn compose_epg_status(
+    freshness: Freshness,
+    coverage: &Coverage,
+    truncated: bool,
+    current_range: Option<&str>,
+    current_ambiguous: bool,
+    refresh_failed: bool,
+) -> String {
+    let qualifier = if truncated {
+        gettext("Guide window incomplete")
+    } else if matches!(coverage, Coverage::Disabled) {
+        gettext("Selected programme guide disabled")
+    } else {
+        match freshness {
+            Freshness::NeverFetched => gettext("Guide not fetched yet"),
+            Freshness::Stale => gettext("Guide stale; current programme unknown"),
+            Freshness::Unknown => gettext("Guide freshness unknown"),
+            Freshness::Aging => gettext("Guide cache aging; coverage unverified"),
+            Freshness::Fresh => match coverage {
+                Coverage::Partial { .. } => gettext("Guide coverage is partial"),
+                Coverage::NoData => gettext("Guide has no programme data"),
+                Coverage::Disabled => unreachable!("disabled coverage handled above"),
+            },
+        }
+    };
+
+    let mut parts = Vec::new();
+    let may_show_current = !truncated
+        && matches!(freshness, Freshness::Fresh | Freshness::Aging)
+        && matches!(coverage, Coverage::Partial { .. });
+    if may_show_current {
+        if current_ambiguous {
+            parts.push(gettext("Overlapping programme entries; now unknown"));
+        } else if let Some(range) = current_range {
+            parts.push(range.to_owned());
+        }
+    }
+    parts.push(qualifier);
+    if refresh_failed {
+        parts.push(gettext("Last refresh failed; cached guide"));
+    }
+    parts.join(" · ")
+}
+
 #[derive(Clone)]
 struct RowUi {
     title: gtk::Label,
@@ -33,14 +178,22 @@ struct RowUi {
     logo: gtk::Picture,
     summary: gtk::Label,
     details: gtk::Label,
+    epg_title: gtk::Label,
+    epg_next: gtk::Label,
+    epg_progress: gtk::ProgressBar,
+    epg_status: gtk::Label,
     reveal: gtk::Revealer,
     play: gtk::Button,
     edit: gtk::Button,
+    mapping: gtk::Button,
+    star: gtk::Button,
 }
 
 struct BoundRow {
     ui: RowUi,
     connection: Option<(StreamSlot, glib::SignalHandlerId)>,
+    request: Option<(DeliveryKey, Arc<AtomicBool>)>,
+    next_update_at: Option<i64>,
 }
 
 // Visible textures have a small pixel-budgeted LRU. Only the currently bound
@@ -118,6 +271,10 @@ mod imp {
         #[template_child]
         pub(super) clear_button: TemplateChild<gtk::Button>,
         #[template_child]
+        pub(super) favourites_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub(super) show_all_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub(super) manage_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub(super) sort_filter: TemplateChild<gtk::DropDown>,
@@ -137,6 +294,7 @@ mod imp {
         pub(super) rows: OnceCell<StreamRows>,
         pub(super) selection: OnceCell<gtk::SingleSelection>,
         pub(super) query: RefCell<ChannelQuery>,
+        pub(super) starred_busy: RefCell<HashSet<ChannelId>>,
         pub(super) generation: Cell<u64>,
         pub(super) play_serial: Cell<u64>,
         pub(super) search_serial: Cell<u64>,
@@ -149,16 +307,30 @@ mod imp {
         pub(super) region_values: RefCell<Vec<FacetSelection>>,
         pub(super) selected_id: RefCell<Option<ChannelId>>,
         pub(super) expanded_id: RefCell<Option<ChannelId>>,
+        pub(super) restore_results_focus: Cell<bool>,
+        pub(super) pending_star_focus: RefCell<Option<ChannelId>>,
         pub(super) last_index: Cell<u32>,
         pub(super) bindings: RefCell<HashMap<usize, BoundRow>>,
+        pub(super) projection: OnceCell<ProjectionService>,
+        pub(super) projection_serial: Cell<u64>,
+        pub(super) epg_generation: Cell<u64>,
+        pub(super) epg_ticks: Cell<u64>,
+        pub(super) epg_poll_busy: Cell<bool>,
         pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
+        pub(super) manager_add: RefCell<Option<glib::WeakRef<gtk::Button>>>,
         pub(super) manager_status: RefCell<Option<glib::WeakRef<gtk::Label>>>,
         pub(super) manager_generation: Cell<u64>,
+        pub(super) manager_focus: RefCell<Option<(String, usize, i32)>>,
+        pub(super) manager_rebuilding: Cell<bool>,
         #[cfg(test)]
         pub(super) fake_player_enabled: Cell<bool>,
         #[cfg(test)]
         pub(super) fake_player_calls: Cell<usize>,
+        #[cfg(test)]
+        pub(super) fake_edit_calls: Cell<usize>,
+        #[cfg(test)]
+        pub(super) fake_mapping_calls: Cell<usize>,
     }
 
     #[glib::object_subclass]
@@ -230,6 +402,9 @@ impl TvStreamsView {
             &imp.search_entry.get(),
             crate::keyboard::KeyboardOptions::default(),
         );
+        imp.projection
+            .set(ProjectionService::new())
+            .expect("EPG projection initialized once");
         let rows = StreamRows::new();
         let selection = gtk::SingleSelection::new(Some(rows.clone()));
         selection.set_autoselect(true);
@@ -362,6 +537,16 @@ impl TvStreamsView {
                 view.reload();
             }
         ));
+        imp.favourites_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| view.switch_favourites_mode()
+        ));
+        imp.show_all_button.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            move |_| view.switch_favourites_mode()
+        ));
         imp.clear_button.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -370,7 +555,11 @@ impl TvStreamsView {
                 view.imp()
                     .search_serial
                     .set(view.imp().search_serial.get().wrapping_add(1));
-                *view.imp().query.borrow_mut() = ChannelQuery::default();
+                let favourites_only = view.imp().query.borrow().favourites_only;
+                *view.imp().query.borrow_mut() = ChannelQuery {
+                    favourites_only,
+                    ..ChannelQuery::default()
+                };
                 view.imp().search_entry.set_text("");
                 view.imp().suppress_controls.set(false);
                 view.reload();
@@ -447,10 +636,96 @@ impl TvStreamsView {
             async move {
                 match StreamsService::open().await {
                     Ok(service) => {
+                        let remembered = service.favourites_only().await;
                         view.imp().service.replace(Some(service));
+                        if let Ok(enabled) = remembered {
+                            view.imp().query.borrow_mut().favourites_only = enabled;
+                        }
+                        view.update_favourites_mode_button();
                         view.reload();
+                        // Initialize the optional EPG scheduler only after the
+                        // shared SQLite catalogue has opened successfully.
+                        // Unconfigured guides cause no network access.
+                        let _ = crate::epg::desktop::ensure_started().await;
+                        view.start_epg_clock();
                     }
                     Err(_) => view.imp().results_stack.set_visible_child_name("error"),
+                }
+            }
+        ));
+    }
+
+    fn update_favourites_mode_button(&self) {
+        let active = self.imp().query.borrow().favourites_only;
+        self.imp()
+            .favourites_button
+            .set_label(if active { "★" } else { "☆" });
+        let tooltip = if active {
+            gettext("Show all channels")
+        } else {
+            gettext("Show favourites only")
+        };
+        self.imp()
+            .favourites_button
+            .set_tooltip_text(Some(&tooltip));
+    }
+
+    fn switch_favourites_mode(&self) {
+        let Some(service) = self.imp().service.borrow().clone() else {
+            return;
+        };
+        let enabled = !self.imp().query.borrow().favourites_only;
+        self.imp().favourites_button.set_sensitive(false);
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let outcome = service.set_favourites_only(enabled).await;
+                view.imp().favourites_button.set_sensitive(true);
+                if outcome.is_ok() {
+                    view.imp().query.borrow_mut().favourites_only = enabled;
+                    view.update_favourites_mode_button();
+                    view.reload();
+                }
+            }
+        ));
+    }
+
+    fn restore_pending_star_focus(&self) {
+        let Some(id) = self.imp().pending_star_focus.borrow().clone() else {
+            return;
+        };
+        if self.imp().selected_id.borrow().as_deref() != Some(id.as_str()) {
+            return;
+        }
+        let star = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+            .then(|| binding.ui.star.clone())
+        });
+        if star.is_some_and(|button| button.grab_focus()) {
+            self.imp().pending_star_focus.replace(None);
+        }
+    }
+
+    fn toggle_row_star(&self, id: ChannelId) {
+        let Some(service) = self.imp().service.borrow().clone() else {
+            return;
+        };
+        if !self.imp().starred_busy.borrow_mut().insert(id.clone()) {
+            return;
+        }
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let result = service.toggle_favourite(&id).await;
+                view.imp().starred_busy.borrow_mut().remove(&id);
+                if result.is_ok() {
+                    view.imp().pending_star_focus.replace(Some(id));
+                    view.reload();
                 }
             }
         ));
@@ -459,6 +734,19 @@ impl TvStreamsView {
     fn update_dropdown(&self, dropdown: &gtk::DropDown, labels: &[String], selected: u32) {
         let references: Vec<&str> = labels.iter().map(String::as_str).collect();
         let model = gtk::StringList::new(&references);
+        // GtkDropDown's search is not automatically text-aware for a
+        // StringList. Bind the visible StringObject.string property so typed
+        // source/country/language fragments filter the *same* item identities
+        // rather than merely opening an unfiltered SearchEntry.
+        if dropdown.enables_search() {
+            let label = gtk::PropertyExpression::new(
+                gtk::StringObject::static_type(),
+                None::<&gtk::Expression>,
+                "string",
+            );
+            dropdown.set_expression(Some(&label));
+            dropdown.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
+        }
         dropdown.set_model(Some(&model));
         dropdown.set_selected(selected);
     }
@@ -468,6 +756,16 @@ impl TvStreamsView {
         let Some(service) = imp.service.borrow().clone() else {
             return;
         };
+        self.invalidate_epg();
+        // A filter/source refresh may recycle the currently focused action.
+        // Restore focus to the new list item, never to a detached button.
+        imp.restore_results_focus
+            .set(imp.bindings.borrow().values().any(|binding| {
+                binding.ui.play.has_focus()
+                    || binding.ui.edit.has_focus()
+                    || binding.ui.mapping.has_focus()
+                    || binding.ui.star.has_focus()
+            }));
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
         imp.in_flight.borrow_mut().clear();
@@ -537,6 +835,66 @@ impl TvStreamsView {
         ));
     }
 
+    /// A compact status page can resize *after* GTK has assigned focus. A
+    /// one-shot idle scroll races the later Adw.Stack transition and can leave
+    /// the focused fallback physically below the display, despite a correct
+    /// GTK focus owner. Check a bounded series of settled frames, and stop
+    /// immediately if the user moves focus elsewhere. The adjustment is local
+    /// to the owning scroller: it never changes action or channel identity.
+    fn scroll_focused_button_into_view(button: &gtk::Button) {
+        let weak = button.downgrade();
+        let attempts = Cell::new(0_u8);
+        glib::timeout_add_local(Duration::from_millis(24), move || {
+            let Some(button) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !button.has_focus() {
+                return glib::ControlFlow::Break;
+            }
+            let attempt = attempts.get() + 1;
+            attempts.set(attempt);
+            let next = if attempt >= 12 {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            };
+            if !button.is_mapped() {
+                return next;
+            }
+            let Some(scroll) = button
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+            else {
+                return glib::ControlFlow::Break;
+            };
+            if scroll.height() <= 0 {
+                return next;
+            }
+            let Some(rect) = button.compute_bounds(scroll.upcast_ref::<gtk::Widget>()) else {
+                return next;
+            };
+            let adjustment = scroll.vadjustment();
+            // Put a newly offscreen action near the top of its scroller,
+            // rather than barely inside the bottom edge: the containing
+            // window's minimum height may exceed a 640x480 physical screen.
+            let delta = if rect.y() < 8.0 {
+                rect.y() - 8.0
+            } else if rect.y() + rect.height() + 8.0 > scroll.height() as f32 {
+                rect.y() - 12.0
+            } else {
+                0.0
+            };
+            if delta.abs() > 0.5 {
+                let max = (adjustment.upper() - adjustment.page_size()).max(0.0);
+                let new_value = (adjustment.value() + f64::from(delta)).clamp(0.0, max);
+                if (new_value - adjustment.value()).abs() > 0.5 {
+                    adjustment.set_value(new_value);
+                }
+            }
+            next
+        });
+    }
+
     fn apply_results(
         &self,
         query: ChannelQuery,
@@ -558,6 +916,8 @@ impl TvStreamsView {
             .set_label(&format!("{total} {}", gettext("channels")));
         if total == 0 {
             imp.expanded_id.replace(None);
+            imp.pending_star_focus.replace(None);
+            imp.show_all_button.set_visible(query.favourites_only);
             let active_filters = query.search.is_some()
                 || query.source_id.is_some()
                 || query.group != FacetSelection::Any
@@ -578,6 +938,7 @@ impl TvStreamsView {
             }));
             imp.results_stack.set_visible_child_name("empty");
         } else {
+            imp.show_all_button.set_visible(false);
             imp.results_stack.set_visible_child_name("results");
             let fallback = previous_index.min(total - 1);
             imp.selection
@@ -586,6 +947,19 @@ impl TvStreamsView {
                 .set_selected(fallback);
         }
         imp.suppress_controls.set(false);
+        if imp.restore_results_focus.replace(false) {
+            if total == 0 {
+                // Removing the last visible favourite must leave a usable
+                // one-key exit rather than focus on a vanished virtual row.
+                if query.favourites_only && imp.show_all_button.grab_focus() {
+                    Self::scroll_focused_button_into_view(&imp.show_all_button);
+                } else {
+                    self.focus_search();
+                }
+            } else {
+                imp.results_list.grab_focus();
+            }
+        }
         if total != 0 {
             if let Some(id) = previously_selected {
                 self.select_channel_id(generation, query, id, previous_index);
@@ -734,7 +1108,10 @@ impl TvStreamsView {
                 }
                 let target = match position {
                     Ok(Some(position)) if position < total as u64 => position as u32,
-                    Ok(None) => fallback.min(total - 1),
+                    Ok(None) => {
+                        view.imp().pending_star_focus.replace(None);
+                        fallback.min(total - 1)
+                    }
                     _ => return,
                 };
                 view.imp()
@@ -746,6 +1123,7 @@ impl TvStreamsView {
                 view.imp()
                     .results_list
                     .scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                view.restore_pending_star_focus();
             }
         ));
     }
@@ -840,7 +1218,31 @@ impl TvStreamsView {
         summary.add_css_class("dim-label");
         summary.add_css_class("tv-stream-channel-summary");
         text.append(&summary);
+        let epg_title = gtk::Label::new(None);
+        epg_title.set_xalign(0.0);
+        epg_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        epg_title.set_max_width_chars(64);
+        epg_title.add_css_class("tv-stream-channel-summary");
+        text.append(&epg_title);
+        let epg_next = gtk::Label::new(None);
+        epg_next.set_xalign(0.0);
+        epg_next.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        epg_next.set_max_width_chars(64);
+        epg_next.add_css_class("dim-label");
+        text.append(&epg_next);
+        let epg_progress = gtk::ProgressBar::new();
+        epg_progress.set_show_text(false);
+        epg_progress.set_visible(false);
+        epg_progress.set_focusable(false);
+        text.append(&epg_progress);
         header.append(&text);
+        let star = gtk::Button::with_label("☆");
+        star.set_tooltip_text(Some(&gettext("Add to favourites")));
+        star.add_css_class("flat");
+        star.add_css_class("circular");
+        star.set_size_request(36, 36);
+        star.set_valign(gtk::Align::Center);
+        header.append(&star);
         root.append(&header);
         let reveal = gtk::Revealer::new();
         let actions = gtk::Box::new(gtk::Orientation::Vertical, 5);
@@ -849,6 +1251,11 @@ impl TvStreamsView {
         details.set_xalign(0.0);
         details.set_selectable(false);
         actions.append(&details);
+        let epg_status = gtk::Label::new(None);
+        epg_status.set_xalign(0.0);
+        epg_status.set_wrap(true);
+        epg_status.add_css_class("dim-label");
+        actions.append(&epg_status);
         let play = gtk::Button::with_label(&gettext("Play"));
         play.add_css_class("suggested-action");
         play.set_halign(gtk::Align::Start);
@@ -856,8 +1263,57 @@ impl TvStreamsView {
         let edit = gtk::Button::with_label(&gettext("Edit Metadata"));
         edit.set_halign(gtk::Align::Start);
         actions.append(&edit);
+        let mapping = gtk::Button::with_label(&gettext("Programme mapping"));
+        mapping.set_halign(gtk::Align::Start);
+        // GTK can move logical focus into the expanded action column while
+        // the bottom action is still clipped by the compact results viewport.
+        // After the focused widget has been allocated, scroll just enough to
+        // expose it; never change the channel selection or focus identity.
+        mapping.connect_notify_local(Some("has-focus"), |button, _| {
+            if button.has_focus() {
+                TvStreamsView::scroll_focused_button_into_view(button);
+            }
+        });
+        actions.append(&mapping);
         reveal.set_child(Some(&actions));
         root.append(&reveal);
+        // Revealed action widgets are not necessarily mapped at the instant
+        // ListView activates a collapsed row. Move focus only after GTK has
+        // completed revealing this *same* bound, selected channel.
+        reveal.connect_child_revealed_notify(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |revealer| {
+                if !revealer.is_child_revealed() {
+                    return;
+                }
+                let Some(id) = item
+                    .item()
+                    .and_downcast::<StreamSlot>()
+                    .and_then(|slot| slot.channel())
+                    .map(|channel| channel.id)
+                else {
+                    return;
+                };
+                let imp = view.imp();
+                if imp.expanded_id.borrow().as_deref() != Some(id.as_str())
+                    || imp.selected_id.borrow().as_deref() != Some(id.as_str())
+                {
+                    return;
+                }
+                let focused = view
+                    .root()
+                    .and_downcast::<gtk::Window>()
+                    .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
+                if focused.is_some_and(|focused| {
+                    view.contains_results_focus(&focused) && !focused.is::<gtk::Button>()
+                }) {
+                    view.focus_row_play(&id);
+                }
+            }
+        ));
         play.connect_clicked(glib::clone!(
             #[weak(rename_to = view)]
             self,
@@ -877,7 +1333,47 @@ impl TvStreamsView {
                     .get()
                     .and_then(|r| r.channel(item.position()))
                 {
+                    #[cfg(test)]
+                    view.imp()
+                        .fake_edit_calls
+                        .set(view.imp().fake_edit_calls.get() + 1);
                     view.edit_selected(channel.id);
+                }
+            }
+        ));
+        star.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|rows| rows.channel(item.position()))
+                {
+                    view.toggle_row_star(channel.id);
+                }
+            }
+        ));
+        mapping.connect_clicked(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            #[weak]
+            item,
+            move |_| {
+                if let Some(channel) = view
+                    .imp()
+                    .rows
+                    .get()
+                    .and_then(|r| r.channel(item.position()))
+                {
+                    #[cfg(test)]
+                    view.imp()
+                        .fake_mapping_calls
+                        .set(view.imp().fake_mapping_calls.get() + 1);
+                    super::editor::show_card_mapping_picker(&view, channel.id);
                 }
             }
         ));
@@ -891,11 +1387,19 @@ impl TvStreamsView {
                     logo,
                     summary,
                     details,
+                    epg_title,
+                    epg_next,
+                    epg_progress,
+                    epg_status,
                     reveal,
                     play,
                     edit,
+                    mapping,
+                    star,
                 },
                 connection: None,
+                request: None,
+                next_update_at: None,
             },
         );
     }
@@ -923,6 +1427,7 @@ impl TvStreamsView {
                     Self::paint_row(&ui, &slot, view.imp().expanded_id.borrow().as_deref());
                     view.refresh_logo(&slot);
                     view.request_logo(&slot);
+                    view.request_epg_for_slot(key, &slot);
                 }
             });
             binding.connection = Some((slot.clone(), handler));
@@ -930,18 +1435,38 @@ impl TvStreamsView {
         self.refresh_logo(&slot);
         self.request_logo(&slot);
         self.request_page(slot.position());
+        self.request_epg_for_slot(key, &slot);
+        // The same recycled slot may now hold a different playlist's row.
+        // Restore by persistent channel identity only, after binding settles.
+        if self.imp().pending_star_focus.borrow().is_some() {
+            let weak = self.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = weak.upgrade() {
+                    view.restore_pending_star_focus();
+                }
+            });
+        }
     }
 
     fn unbind_row(&self, item: &glib::Object) {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        let mut action_had_focus = false;
         if let Some(binding) = self
             .imp()
             .bindings
             .borrow_mut()
             .get_mut(&(item.as_ptr() as usize))
         {
+            action_had_focus = binding.ui.play.has_focus()
+                || binding.ui.edit.has_focus()
+                || binding.ui.mapping.has_focus()
+                || binding.ui.star.has_focus();
+            if let Some((_, token)) = binding.request.take() {
+                token.store(true, Ordering::Release);
+            }
+            binding.next_update_at = None;
             if let Some((slot, handler)) = binding.connection.take() {
                 slot.disconnect(handler);
             }
@@ -951,9 +1476,15 @@ impl TvStreamsView {
             binding.ui.title.set_text("");
             binding.ui.summary.set_text("");
             binding.ui.details.set_text("");
+            Self::clear_epg(&binding.ui);
             binding.ui.reveal.set_reveal_child(false);
             binding.ui.play.set_sensitive(false);
             binding.ui.edit.set_sensitive(false);
+            binding.ui.mapping.set_sensitive(false);
+            binding.ui.star.set_sensitive(false);
+        }
+        if action_had_focus {
+            self.imp().results_list.grab_focus();
         }
     }
 
@@ -976,6 +1507,8 @@ impl TvStreamsView {
             ui.reveal.set_reveal_child(false);
             ui.play.set_sensitive(false);
             ui.edit.set_sensitive(false);
+            ui.mapping.set_sensitive(false);
+            ui.star.set_sensitive(false);
             return;
         };
         ui.title.set_text(&channel.visible_name);
@@ -1026,6 +1559,355 @@ impl TvStreamsView {
             .set_reveal_child(expanded == Some(channel.id.as_str()));
         ui.play.set_sensitive(true);
         ui.edit.set_sensitive(true);
+        ui.mapping.set_sensitive(true);
+        ui.star.set_sensitive(true);
+        ui.star
+            .set_label(if channel.is_favourite { "★" } else { "☆" });
+        ui.star.set_tooltip_text(Some(&if channel.is_favourite {
+            gettext("Remove from favourites")
+        } else {
+            gettext("Add to favourites")
+        }));
+    }
+
+    /// A single view-owned clock; no per-row timers, network polling or work on
+    /// GTK's main thread. One independent persistent SQLite data_version reader
+    /// catches successful commits by scheduled guide refresh and other views.
+    fn start_epg_clock(&self) {
+        let weak = self.downgrade();
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let Some(view) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            view.tick_epg_clock();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn utc_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64)
+    }
+
+    fn tick_epg_clock(&self) {
+        let imp = self.imp();
+        let ticks = imp.epg_ticks.get().wrapping_add(1);
+        imp.epg_ticks.set(ticks);
+        let now = Self::utc_now();
+        let due: Vec<_> = imp
+            .bindings
+            .borrow()
+            .iter()
+            .filter_map(|(key, bound)| {
+                (bound.next_update_at.is_some_and(|deadline| deadline <= now))
+                    .then(|| {
+                        bound
+                            .connection
+                            .as_ref()
+                            .map(|(slot, _)| (*key, slot.clone()))
+                    })
+                    .flatten()
+            })
+            .collect();
+        for (key, slot) in due {
+            self.request_epg_for_slot(key, &slot);
+        }
+        if !ticks.is_multiple_of(5) || imp.epg_poll_busy.replace(true) {
+            return;
+        }
+        let Some(worker) = imp.projection.get().cloned() else {
+            imp.epg_poll_busy.set(false);
+            return;
+        };
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                let changed = worker.check_revision().await;
+                view.imp().epg_poll_busy.set(false);
+                // On observer errors, fail closed: clear any previously painted
+                // information and let ordinary readers show Unavailable.
+                if !matches!(changed, Ok(false)) {
+                    view.epg_changed();
+                }
+            }
+        ));
+    }
+
+    fn epg_deadline(result: &ProjectionOutcome, at: i64) -> i64 {
+        if let ProjectionOutcome::Read(Ok(SemanticProgrammeState::Matched {
+            page, now_next, ..
+        })) = result
+        {
+            return next_projection_deadline(
+                at,
+                now_next
+                    .as_ref()
+                    .is_some_and(|value| value.current.is_some()),
+                page.last_success_at,
+                page.programmes
+                    .iter()
+                    .map(|item| (item.start_utc, item.stop_utc)),
+            );
+        }
+        at.saturating_add(120)
+    }
+
+    /// All invalidations happen on GTK's main context, including results that
+    /// finished their worker query but have not yet reached the paint callback.
+    fn invalidate_epg(&self) {
+        let imp = self.imp();
+        imp.epg_generation
+            .set(imp.epg_generation.get().wrapping_add(1));
+        for binding in imp.bindings.borrow_mut().values_mut() {
+            if let Some((_, cancelled)) = binding.request.take() {
+                cancelled.store(true, Ordering::Release);
+            }
+            binding.next_update_at = None;
+            Self::clear_epg(&binding.ui);
+        }
+    }
+
+    /// Used after confirmation or a source-manager dialog closes; not a
+    /// channel reload, and never changes selection or grabs keyboard focus.
+    pub(crate) fn epg_changed(&self) {
+        self.invalidate_epg();
+        let slots: Vec<_> = self
+            .imp()
+            .bindings
+            .borrow()
+            .iter()
+            .filter_map(|(key, bound)| {
+                bound
+                    .connection
+                    .as_ref()
+                    .map(|(slot, _)| (*key, slot.clone()))
+            })
+            .collect();
+        for (key, slot) in slots {
+            self.request_epg_for_slot(key, &slot);
+        }
+    }
+
+    fn clear_epg(ui: &RowUi) {
+        ui.epg_title.set_text("");
+        ui.epg_title.set_tooltip_text(None);
+        ui.epg_next.set_text("");
+        ui.epg_next.set_tooltip_text(None);
+        ui.epg_status.set_text("");
+        ui.epg_status.set_tooltip_text(None);
+        ui.epg_progress.set_visible(false);
+        ui.epg_progress.set_fraction(0.0);
+    }
+
+    fn request_epg_for_slot(&self, key: usize, slot: &StreamSlot) {
+        let Some(channel) = slot.channel() else {
+            return;
+        };
+        let Some(worker) = self.imp().projection.get().cloned() else {
+            return;
+        };
+        let imp = self.imp();
+        let serial = imp.projection_serial.get().wrapping_add(1);
+        imp.projection_serial.set(serial);
+        let request = DeliveryKey {
+            row_id: channel.id.clone(),
+            view_generation: imp.generation.get(),
+            binding_generation: serial,
+            epg_generation: imp.epg_generation.get(),
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let mut bindings = imp.bindings.borrow_mut();
+            let Some(bound) = bindings.get_mut(&key) else {
+                return;
+            };
+            if bound
+                .connection
+                .as_ref()
+                .is_none_or(|(bound_slot, _)| bound_slot != slot)
+            {
+                return;
+            }
+            if let Some((_, old)) = bound.request.take() {
+                old.store(true, Ordering::Release);
+            }
+            Self::clear_epg(&bound.ui);
+            bound.next_update_at = None;
+            bound.request = Some((request.clone(), cancelled.clone()));
+        }
+        spawn(glib::clone!(
+            #[weak(rename_to = view)]
+            self,
+            async move {
+                // Busy is not admitted and not queued. End this attempt and
+                // let the ONE view timer resubmit only while the slot remains
+                // bound; this creates no unbounded per-row retry coroutine.
+                let at = Self::utc_now();
+                let result = worker
+                    .read(request.row_id.clone(), at, cancelled.clone())
+                    .await;
+                if cancelled.load(Ordering::Acquire)
+                    || view.imp().generation.get() != request.view_generation
+                    || view.imp().epg_generation.get() != request.epg_generation
+                {
+                    return;
+                }
+                if matches!(result, ProjectionOutcome::SourceChanged) {
+                    // A different SQLite connection committed during the read.
+                    // Invalidate all old callbacks before any stale paint.
+                    view.epg_changed();
+                    return;
+                }
+                let deadline = Self::epg_deadline(&result, at);
+                let repaint_at = Self::utc_now();
+                let mut bindings = view.imp().bindings.borrow_mut();
+                let Some(bound) = bindings.get_mut(&key) else {
+                    return;
+                };
+                let matches = bound.request.as_ref().is_some_and(|(current, token)| {
+                    Arc::ptr_eq(token, &cancelled)
+                        && current.current(
+                            &request.row_id,
+                            view.imp().generation.get(),
+                            request.binding_generation,
+                            view.imp().epg_generation.get(),
+                        )
+                }) && bound
+                    .connection
+                    .as_ref()
+                    .and_then(|(slot, _)| slot.channel())
+                    .is_some_and(|ch| ch.id == request.row_id);
+                if matches {
+                    if matches!(result, ProjectionOutcome::Busy) {
+                        // No worker slot was taken. One view-owned tick will
+                        // retry, not one indefinitely waiting future per row.
+                        bound.next_update_at = Some(repaint_at.saturating_add(1));
+                        Self::paint_epg(&bound.ui, result);
+                    } else {
+                        // Do not paint a pre-boundary Now snapshot after its stop.
+                        // The one-second view clock will requery this still-bound
+                        // slot, using a fresh UTC timestamp.
+                        bound.next_update_at = Some(deadline);
+                        if deadline > repaint_at {
+                            Self::paint_epg(&bound.ui, result);
+                        } else {
+                            bound
+                                .ui
+                                .epg_status
+                                .set_text(&gettext("Programme information updating"));
+                        }
+                    }
+                }
+            }
+        ));
+    }
+
+    fn paint_epg(ui: &RowUi, result: ProjectionOutcome) {
+        Self::clear_epg(ui);
+        let status: String;
+        match result {
+            ProjectionOutcome::Busy => status = gettext("Programme lookup busy; retrying"),
+            ProjectionOutcome::Cancelled | ProjectionOutcome::SourceChanged => return,
+            ProjectionOutcome::Read(Err(_)) => {
+                status = gettext("Programme information unavailable")
+            }
+            ProjectionOutcome::Read(Ok(state)) => match state {
+                SemanticProgrammeState::Unconfigured => {
+                    status = gettext("No programme guide selected")
+                }
+                SemanticProgrammeState::Disabled => {
+                    status = gettext("Selected programme guide disabled")
+                }
+                SemanticProgrammeState::Unavailable => {
+                    status = gettext("Guide not fetched or unavailable")
+                }
+                SemanticProgrammeState::Unmatched => {
+                    status = gettext("No matching programme guide channel")
+                }
+                SemanticProgrammeState::AmbiguousMapping => {
+                    status = gettext("Ambiguous channel mapping")
+                }
+                SemanticProgrammeState::MissingTarget => {
+                    status = gettext("Saved guide channel is missing")
+                }
+                SemanticProgrammeState::SuggestionsUnavailable => {
+                    status = gettext("Name suggestions unavailable for this guide");
+                }
+                SemanticProgrammeState::Suggested { .. } => {
+                    status = gettext("Possible name match — not confirmed");
+                }
+                SemanticProgrammeState::Matched {
+                    page,
+                    now_next,
+                    refresh_failed,
+                    ..
+                } => {
+                    let zone = glib::TimeZone::local();
+                    let mut current_range = None;
+                    let mut current_ambiguous = false;
+                    // Never fabricate Now/Next from an incomplete, stale,
+                    // unknown or unproven guide, regardless of a bad projection.
+                    let can_show = !page.truncated
+                        && matches!(page.freshness, Freshness::Fresh | Freshness::Aging)
+                        && matches!(page.coverage, Coverage::Partial { .. });
+                    if can_show {
+                        if let Some(data) = now_next {
+                            if data.certainty == Certainty::Exact {
+                                if let Some(current) = data.current {
+                                    let text = format!("{}: {}", gettext("Now"), current.title);
+                                    let range = programme_range_in_timezone(
+                                        current.start_utc,
+                                        current.stop_utc,
+                                        &zone,
+                                    );
+                                    let row_label = format!("{} · {}", text, range);
+                                    ui.epg_title.set_text(&row_label);
+                                    ui.epg_title.set_tooltip_text(Some(&row_label));
+                                    current_range = Some(range);
+                                    if let Some(progress) = data
+                                        .progress_fraction
+                                        .filter(|p| p.is_finite() && (0.0..=1.0).contains(p))
+                                    {
+                                        ui.epg_progress.set_fraction(progress);
+                                        ui.epg_progress.set_visible(true);
+                                    }
+                                }
+                            } else if data.certainty == Certainty::Ambiguous {
+                                current_ambiguous = true;
+                            }
+                            if !data.next_ambiguous {
+                                if let Some(next) = data.next {
+                                    let label = format!(
+                                        "{}: {} ({})",
+                                        gettext("Next"),
+                                        next.title,
+                                        programme_next_in_timezone(
+                                            next.start_utc,
+                                            page.start_utc.saturating_add(86_400),
+                                            &zone,
+                                        )
+                                    );
+                                    ui.epg_next.set_text(&label);
+                                    ui.epg_next.set_tooltip_text(Some(&label));
+                                }
+                            }
+                        }
+                    }
+                    status = compose_epg_status(
+                        page.freshness,
+                        &page.coverage,
+                        page.truncated,
+                        current_range.as_deref(),
+                        current_ambiguous,
+                        refresh_failed,
+                    );
+                }
+            },
+        }
+        ui.epg_status.set_text(&status);
+        ui.epg_status.set_tooltip_text(Some(&status));
     }
 
     fn refresh_logo(&self, slot: &StreamSlot) {
@@ -1134,6 +2016,60 @@ impl TvStreamsView {
         ));
     }
 
+    /// Return focus to the origin card action after OK/Back/Home/cancel, if
+    /// virtualization has not removed it; otherwise return to the list.
+    /// Snapshot the currently expanded, bound mapping action before an async
+    /// picker load. A recycled row, source switch or reload invalidates it.
+    pub(crate) fn card_mapping_context(&self, id: &str) -> Option<(u64, String)> {
+        let imp = self.imp();
+        if imp.expanded_id.borrow().as_deref() != Some(id)
+            || imp.selected_id.borrow().as_deref() != Some(id)
+        {
+            return None;
+        }
+        let selected = imp.selection.get()?.selected();
+        let channel = imp.rows.get()?.channel(selected)?;
+        if channel.id != id {
+            return None;
+        }
+        let bound = imp.bindings.borrow().values().any(|binding| {
+            binding.connection.as_ref().is_some_and(|(slot, _)| {
+                slot.position() == selected
+                    && slot.channel().is_some_and(|row| {
+                        row.id == channel.id && row.source_id == channel.source_id
+                    })
+                    && binding.ui.mapping.is_mapped()
+                    && binding.ui.reveal.reveals_child()
+            })
+        });
+        bound.then(|| (imp.generation.get(), channel.source_id))
+    }
+
+    pub(crate) fn restore_card_mapping_focus(&self, id: &str) {
+        let imp = self.imp();
+        // A picker can outlive a row or a playlist/source swap. Never return
+        // keyboard focus to a recycled widget with an unrelated current owner.
+        if imp.expanded_id.borrow().as_deref() == Some(id)
+            && imp.selected_id.borrow().as_deref() == Some(id)
+        {
+            let action = imp.bindings.borrow().values().find_map(|bound| {
+                let (slot, _) = bound.connection.as_ref()?;
+                (slot.channel().is_some_and(|channel| channel.id == id)
+                    && bound.ui.reveal.reveals_child()
+                    && bound.ui.mapping.is_mapped())
+                .then(|| bound.ui.mapping.clone())
+            });
+            if action.is_some_and(|button| button.grab_focus()) {
+                return;
+            }
+        }
+        if !imp.results_list.grab_focus()
+            && (!imp.query.borrow().favourites_only || !imp.show_all_button.grab_focus())
+        {
+            self.focus_search();
+        }
+    }
+
     fn repaint_bound_rows(&self) {
         let expanded = self.imp().expanded_id.borrow().clone();
         for binding in self.imp().bindings.borrow().values() {
@@ -1141,6 +2077,20 @@ impl TvStreamsView {
                 Self::paint_row(&binding.ui, slot, expanded.as_deref());
             }
         }
+    }
+
+    /// Only a currently bound, expanded, source-qualified row may receive
+    /// Play focus. Virtualized positions alone are not durable identities.
+    fn focus_row_play(&self, id: &str) -> bool {
+        let play = self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|channel| channel.id == id)
+                && binding.ui.reveal.reveals_child()
+                && binding.ui.play.is_mapped()
+                && binding.ui.play.is_sensitive())
+            .then(|| binding.ui.play.clone())
+        });
+        play.is_some_and(|button| button.grab_focus())
     }
 
     fn activate_position(&self, position: u32) {
@@ -1154,22 +2104,25 @@ impl TvStreamsView {
             return;
         };
         // The explicit Play button owns Return when it has focus.
-        if self
-            .imp()
-            .bindings
-            .borrow()
-            .values()
-            .any(|binding| binding.ui.play.has_focus() || binding.ui.edit.has_focus())
-        {
+        if self.imp().bindings.borrow().values().any(|binding| {
+            binding.ui.play.has_focus()
+                || binding.ui.edit.has_focus()
+                || binding.ui.mapping.has_focus()
+                || binding.ui.star.has_focus()
+        }) {
             return;
         }
-        if self.imp().expanded_id.borrow().as_deref() == Some(channel.id.as_str()) {
-            self.play_position(position);
-        } else {
-            self.imp().expanded_id.replace(Some(channel.id.clone()));
-            self.imp().selected_id.replace(Some(channel.id));
+        // A ListView activation is an entry portal, never a playback command.
+        // Only a separate activation of the focused Play button can start it.
+        let id = channel.id;
+        if self.imp().expanded_id.borrow().as_deref() != Some(id.as_str()) {
+            self.imp().expanded_id.replace(Some(id.clone()));
+            self.imp().selected_id.replace(Some(id.clone()));
             self.repaint_bound_rows();
         }
+        // If mapped already, focus immediately; otherwise the Revealer's
+        // child-revealed signal completes the same-ID focus transition.
+        self.focus_row_play(&id);
     }
 
     fn play_position(&self, position: u32) {
@@ -1255,16 +2208,66 @@ impl TvStreamsView {
         super::management::show_manager(self);
     }
 
-    pub(crate) fn remember_source_manager(&self, list: &gtk::ListBox, status: &gtk::Label) {
+    pub(crate) fn remember_source_manager(
+        &self,
+        list: &gtk::ListBox,
+        status: &gtk::Label,
+        add: &gtk::Button,
+    ) {
         let imp = self.imp();
         imp.manager_list.replace(Some(list.downgrade()));
+        imp.manager_add.replace(Some(add.downgrade()));
         imp.manager_status.replace(Some(status.downgrade()));
+        imp.manager_focus.replace(None);
+    }
+
+    // An action's GTK widget is destroyed on every manager reload. Retain only
+    // its stable source ID, semantic action slot and previous row position.
+    pub(crate) fn set_manager_focus(&self, id: &str, action: usize, index: i32) {
+        if !self.imp().manager_rebuilding.get() {
+            self.imp()
+                .manager_focus
+                .replace(Some((id.to_owned(), action, index)));
+        }
+    }
+
+    pub(crate) fn manager_focus(&self) -> Option<(String, usize, i32)> {
+        self.imp().manager_focus.borrow().clone()
+    }
+
+    pub(crate) fn live_source_manager_list(&self) -> Option<gtk::ListBox> {
+        self.imp()
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+    }
+
+    pub(crate) fn manager_rebuilding(&self, rebuilding: bool) {
+        self.imp().manager_rebuilding.set(rebuilding);
+    }
+
+    pub(crate) fn manager_header_add(&self) -> Option<gtk::Button> {
+        self.imp()
+            .manager_add
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+    }
+
+    pub(crate) fn focus_empty_source_manager(&self) {
+        if let Some(add) = self.manager_header_add() {
+            add.grab_focus();
+        }
     }
 
     pub(crate) fn forget_source_manager(&self) {
         let imp = self.imp();
         imp.manager_list.replace(None);
+        imp.manager_add.replace(None);
         imp.manager_status.replace(None);
+        imp.manager_focus.replace(None);
+        imp.manager_rebuilding.set(false);
         self.next_manager_generation();
     }
 
@@ -1301,6 +2304,25 @@ impl TvStreamsView {
         self.refresh_source_manager();
     }
 
+    #[cfg(test)]
+    pub(crate) fn c1_install_test_service(&self, service: StreamsService) {
+        self.imp().service.replace(Some(service));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn c1_test_manage_button(&self) -> gtk::Button {
+        self.imp().manage_button.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn c1_test_manager_list(&self) -> Option<gtk::ListBox> {
+        self.imp()
+            .manager_list
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+    }
+
     pub(crate) fn service(&self) -> Option<StreamsService> {
         self.imp().service.borrow().clone()
     }
@@ -1334,7 +2356,7 @@ impl TvStreamsView {
         // lazy data model detached from that GTK size-request artifact;
         // real mapped viewport/TV performance still needs device validation.
         let model = StreamRows::new();
-        for count in [100, 1_000, 10_000] {
+        for count in [100, 1_000, 10_000, 15_000] {
             let start = Instant::now();
             model.reset(count);
             assert_eq!(model.n_items(), count);
@@ -1368,6 +2390,7 @@ impl TvStreamsView {
             logo_url: None,
             channel_number: None,
             has_user_overrides: false,
+            is_favourite: false,
         };
         rows.reset(1);
         rows.insert_page(0, vec![channel]);
@@ -1390,17 +2413,17 @@ impl TvStreamsView {
             .emit_by_name::<()>("activate", &[&0u32]);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            1,
-            "second Enter plays once"
+            0,
+            "a second list activation cannot bypass the Play button"
         );
         self.play_position(0); // The explicit Play button's single callback.
-        assert_eq!(self.imp().fake_player_calls.get(), 2);
+        assert_eq!(self.imp().fake_player_calls.get(), 1);
         assert!(self.collapse_expanded());
         assert!(!self.collapse_expanded());
         self.play_position(0);
         assert_eq!(
             self.imp().fake_player_calls.get(),
-            2,
+            1,
             "collapsed row cannot play"
         );
         assert_eq!(
@@ -1409,6 +2432,257 @@ impl TvStreamsView {
         );
         assert!(self.contains_results_focus(self.imp().results_list.upcast_ref()));
         assert!(!self.contains_results_focus(self.imp().search_entry.upcast_ref()));
+    }
+
+    /// Three fabricated rows in the real virtualized ListView, with no provider
+    /// fetch or media process. Window tests must present/map the parent first.
+    #[cfg(test)]
+    pub(crate) fn install_remote_action_test_rows(&self) -> [String; 3] {
+        use super::model::ChannelEffective;
+        use std::collections::BTreeSet;
+
+        let channels: Vec<_> = [
+            "First fabricated channel",
+            "Middle fabricated channel",
+            "Last fabricated channel",
+        ]
+        .into_iter()
+        .map(|name| ChannelEffective {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_id: uuid::Uuid::new_v4().to_string(),
+            source_name: "Fabricated Source".into(),
+            visible_name: name.into(),
+            stream_url: "https://example.invalid/fake.m3u8".into(),
+            group: None,
+            languages: BTreeSet::new(),
+            countries: BTreeSet::new(),
+            region: None,
+            logo_url: None,
+            channel_number: None,
+            has_user_overrides: false,
+            is_favourite: false,
+        })
+        .collect();
+        let ids = [
+            channels[0].id.clone(),
+            channels[1].id.clone(),
+            channels[2].id.clone(),
+        ];
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("rows");
+        rows.reset(3);
+        rows.insert_page(0, channels);
+        imp.results_stack.set_visible_child_name("results");
+        imp.selection.get().expect("selection").set_selected(0);
+        imp.selected_id.replace(Some(ids[0].clone()));
+        imp.expanded_id.replace(None);
+        imp.fake_player_enabled.set(true);
+        imp.fake_player_calls.set(0);
+        imp.fake_edit_calls.set(0);
+        imp.fake_mapping_calls.set(0);
+        self.repaint_bound_rows();
+        ids
+    }
+
+    /// Attach a disposable service-backed SQLite catalogue to this mapped
+    /// view, including the remembered favourites-only preference.
+    #[cfg(test)]
+    pub(crate) fn install_remote_action_test_service(
+        &self,
+        service: StreamsService,
+        favourites_only: bool,
+    ) {
+        self.imp().service.replace(Some(service));
+        self.imp().query.borrow_mut().favourites_only = favourites_only;
+        self.imp().fake_player_enabled.set(true);
+        self.update_favourites_mode_button();
+        self.reload();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_visible_count(&self) -> u32 {
+        self.imp().rows.get().expect("rows").n_items()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_row_star(&self, id: &str) -> Option<gtk::Button> {
+        self.imp().bindings.borrow().values().find_map(|bound| {
+            let (slot, _) = bound.connection.as_ref()?;
+            slot.channel()
+                .filter(|row| row.id == id)
+                .and_then(|_| bound.ui.star.is_mapped().then(|| bound.ui.star.clone()))
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_favourite_buttons(&self) -> (gtk::Button, gtk::Button) {
+        (
+            self.imp().favourites_button.get().clone(),
+            self.imp().show_all_button.get().clone(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_select(&self, position: u32) {
+        let imp = self.imp();
+        assert!(imp
+            .rows
+            .get()
+            .is_some_and(|rows| rows.channel(position).is_some()));
+        self.collapse_expanded();
+        imp.selection
+            .get()
+            .expect("selection")
+            .set_selected(position);
+        if let Some(id) = imp
+            .rows
+            .get()
+            .and_then(|rows| rows.channel(position))
+            .map(|ch| ch.id)
+        {
+            imp.selected_id.replace(Some(id));
+        }
+        imp.results_list
+            .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+        imp.results_list.grab_focus();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_buttons(&self) -> Option<[gtk::Button; 3]> {
+        let position = self.imp().selection.get()?.selected();
+        self.imp().bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.position() == position).then(|| {
+                [
+                    binding.ui.play.clone(),
+                    binding.ui.edit.clone(),
+                    binding.ui.mapping.clone(),
+                ]
+            })
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_activate(&self) {
+        let selected = self.imp().selection.get().expect("selection").selected();
+        self.imp()
+            .results_list
+            .emit_by_name::<()>("activate", &[&selected]);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_state(&self) -> String {
+        let imp = self.imp();
+        let bound: Vec<_> = imp
+            .bindings
+            .borrow()
+            .values()
+            .filter_map(|binding| {
+                let (slot, _) = binding.connection.as_ref()?;
+                Some((
+                    slot.position(),
+                    slot.channel().map(|channel| channel.id),
+                    binding.ui.reveal.reveals_child(),
+                    binding.ui.reveal.is_mapped(),
+                ))
+            })
+            .collect();
+        format!(
+            "selected={:?} expanded={:?} rows0={:?} bound={bound:?}",
+            imp.selection.get().map(|selection| selection.selected()),
+            imp.expanded_id.borrow().as_deref(),
+            imp.rows
+                .get()
+                .and_then(|rows| rows.channel(0))
+                .map(|channel| channel.id),
+        )
+    }
+
+    /// Verify the GTK focus widget really belongs to the source-qualified
+    /// selected row, not merely to some other descendant of the ListView.
+    #[cfg(test)]
+    pub(crate) fn assert_remote_action_focus_owner(&self, focused: &gtk::Widget, id: &str) {
+        let imp = self.imp();
+        let selected = imp.selection.get().expect("selection").selected();
+        let row = imp
+            .rows
+            .get()
+            .expect("rows")
+            .channel(selected)
+            .expect("selected row");
+        assert_eq!(row.id, id, "selected GTK row has another identity");
+        assert_eq!(imp.selected_id.borrow().as_deref(), Some(id));
+        let binding = imp.bindings.borrow();
+        let owner = binding
+            .values()
+            .find(|bound| {
+                bound.connection.as_ref().is_some_and(|(slot, _)| {
+                    slot.position() == selected
+                        && slot.channel().is_some_and(|channel| {
+                            channel.id == id && channel.source_id == row.source_id
+                        })
+                        && bound.ui.star.is_mapped()
+                })
+            })
+            .expect("source-qualified owner must be bound and mapped");
+        let row_root = owner
+            .ui
+            .star
+            .parent()
+            .and_then(|header| header.parent())
+            .expect("bound card root");
+        // GTK can focus the virtual ListItem container rather than its child
+        // after exiting an action. Check that exact owner's item container,
+        // never accept an arbitrary descendant of the entire results list.
+        let item = row_root.parent().expect("bound ListItem widget");
+        let list = imp.results_list.upcast_ref::<gtk::Widget>();
+        assert!(
+            (focused == list && imp.results_list.has_focus())
+                || focused == &row_root
+                || focused.is_ancestor(&row_root)
+                || (item != list.clone() && (focused == &item || focused.is_ancestor(&item))),
+            "focus belongs to another source-qualified GTK row: widget={}",
+            focused.type_().name()
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_selected_id(&self) -> Option<ChannelId> {
+        self.imp().selected_id.borrow().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_counts(&self) -> (usize, usize, usize) {
+        let imp = self.imp();
+        (
+            imp.fake_player_calls.get(),
+            imp.fake_edit_calls.get(),
+            imp.fake_mapping_calls.get(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_status(&self, status: &str) {
+        let position = self.imp().selection.get().expect("selection").selected();
+        for binding in self.imp().bindings.borrow().values() {
+            if binding
+                .connection
+                .as_ref()
+                .is_some_and(|(slot, _)| slot.position() == position)
+            {
+                binding.ui.epg_status.set_text(status);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_action_test_rebind(&self) {
+        let imp = self.imp();
+        let rows = imp.rows.get().expect("rows");
+        let channels: Vec<_> = (0..3).filter_map(|n| rows.channel(n)).collect();
+        assert_eq!(channels.len(), 3);
+        rows.reset(3);
+        rows.insert_page(0, channels);
     }
 
     /// Match the virtualized list and its focused descendants, including
@@ -1475,6 +2749,7 @@ impl TvStreamsView {
             imp.country_filter.get().upcast(),
             imp.region_filter.get().upcast(),
             imp.clear_button.get().upcast(),
+            imp.favourites_button.get().upcast(),
             imp.manage_button.get().upcast(),
             imp.add_button.get().upcast(),
             // Spatial navigation uses mapped geometry, not vector ordering.
@@ -1489,6 +2764,116 @@ impl TvStreamsView {
         } else {
             false
         }
+    }
+
+    /// D-pad path for *only* the selected, bound, expanded My Channels row.
+    /// No action can be focused through a stale/recycled slot or a closed reveal.
+    /// Window capture routes here before its historical Left -> page switcher.
+    pub fn focus_expanded_action_key(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
+        ) || !self.contains_results_focus(focused)
+        {
+            return false;
+        }
+        let imp = self.imp();
+        let Some(position) = imp.selection.get().map(|selection| selection.selected()) else {
+            return false;
+        };
+        let Some(channel) = imp.rows.get().and_then(|rows| rows.channel(position)) else {
+            return false;
+        };
+        // A collapsed channel's star is an explicit Left portal: Right/OK
+        // remains the primary Play entry. Left from the star returns to the
+        // same logical row without toggling its expanded state.
+        let star = imp.bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            (slot.channel().is_some_and(|row| row.id == channel.id)
+                && binding.ui.star.is_mapped()
+                && binding.ui.star.is_sensitive())
+            .then(|| binding.ui.star.clone())
+        });
+        if let Some(star) = star.as_ref() {
+            if focused == star.upcast_ref::<gtk::Widget>()
+                || focused.is_ancestor(star.upcast_ref::<gtk::Widget>())
+            {
+                return match key {
+                    // In an expanded card, the star is one Right from Play;
+                    // the inverse Left must return to that same Play action.
+                    gtk::gdk::Key::Left
+                        if imp.expanded_id.borrow().as_deref() == Some(channel.id.as_str()) =>
+                    {
+                        self.focus_row_play(&channel.id)
+                    }
+                    gtk::gdk::Key::Left | gtk::gdk::Key::Right => imp.results_list.grab_focus(),
+                    _ => false,
+                };
+            }
+        }
+        if imp.expanded_id.borrow().as_deref() != Some(channel.id.as_str()) {
+            if !focused.is::<gtk::Button>() {
+                if key == gtk::gdk::Key::Left {
+                    return star.is_some_and(|button| button.grab_focus());
+                }
+                if key == gtk::gdk::Key::Right {
+                    self.activate_position(position);
+                    return true;
+                }
+            }
+            return false;
+        }
+        // Only the current selection's actually bound widgets may be targeted.
+        // Clone GTK handles before grabbing focus (focus can reenter GTK).
+        let buttons = imp.bindings.borrow().values().find_map(|binding| {
+            let (slot, _) = binding.connection.as_ref()?;
+            if slot.position() != position
+                || slot.channel().as_ref().map(|c| c.id.as_str()) != Some(channel.id.as_str())
+                || !binding.ui.reveal.reveals_child()
+            {
+                return None;
+            }
+            let ui = &binding.ui;
+            let buttons = [ui.play.clone(), ui.edit.clone(), ui.mapping.clone()];
+            buttons
+                .iter()
+                .all(|button| button.is_mapped() && button.is_visible() && button.is_sensitive())
+                .then_some(buttons)
+        });
+        let Some(buttons) = buttons else {
+            return false;
+        };
+        let action = buttons.iter().position(|button| {
+            focused == button.upcast_ref::<gtk::Widget>()
+                || focused.is_ancestor(button.upcast_ref::<gtk::Widget>())
+        });
+        if let Some(index) = action {
+            return match key {
+                gtk::gdk::Key::Left => imp.results_list.grab_focus(),
+                gtk::gdk::Key::Up if index == 0 => imp.results_list.grab_focus(),
+                gtk::gdk::Key::Up => buttons[index - 1].grab_focus(),
+                gtk::gdk::Key::Down if index == buttons.len() - 1 => imp.results_list.grab_focus(),
+                gtk::gdk::Key::Down => buttons[index + 1].grab_focus(),
+                // The primary Play action's Right enters the favourite
+                // star directly, with Star Left restoring Play. Secondary
+                // actions keep their established Right-in-group semantics.
+                gtk::gdk::Key::Right if index == 0 => {
+                    star.is_some_and(|button| button.grab_focus())
+                }
+                gtk::gdk::Key::Right => true,
+                _ => false,
+            };
+        }
+        // The expanded row also needs a *remote* route to its star.
+        // Previously only a Tab loop could reach this mapped button.
+        // Left from Play still returns to the row, and a second Left
+        // reaches the star without toggling Play or changing selection.
+        if key == gtk::gdk::Key::Left && !focused.is::<gtk::Button>() {
+            return star.is_some_and(|button| button.grab_focus());
+        }
+        // Preserve the existing row Up/Down/OK behavior. A single Right on
+        // the selected expanded row enters Play without Tab or a pointer.
+        key == gtk::gdk::Key::Right && buttons[0].grab_focus()
     }
 
     pub fn focus_vertical_navigation(&self, focused: &gtk::Widget, key: gtk::gdk::Key) -> bool {

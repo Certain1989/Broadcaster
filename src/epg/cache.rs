@@ -219,10 +219,32 @@ pub fn read_guide_window(
 /// Validate the WHOLE snapshot before touching cached rows. A failed parse,
 /// validation, cancellation or SQLite write leaves the previous success intact.
 /// All original guide programmes (not just now/next) are stored atomically.
+/// The original E1 import remains strict about equal retrieval times.
 pub fn replace_guide_snapshot(
     conn: &mut Connection,
     snapshot: &GuideSnapshot,
     cancel: &AtomicBool,
+) -> Result<(), EpgError> {
+    replace_snapshot_inner(conn, snapshot, cancel, None)
+}
+
+/// E2's refresher supplies the monotonic metadata revision at admission.
+/// Same-second wall-clock refreshes are allowed only while that exact
+/// revision is still current; a competing write cannot evict newer data.
+pub fn replace_guide_snapshot_if_current(
+    conn: &mut Connection,
+    snapshot: &GuideSnapshot,
+    cancel: &AtomicBool,
+    expected_revision: i64,
+) -> Result<(), EpgError> {
+    replace_snapshot_inner(conn, snapshot, cancel, Some(expected_revision))
+}
+
+fn replace_snapshot_inner(
+    conn: &mut Connection,
+    snapshot: &GuideSnapshot,
+    cancel: &AtomicBool,
+    expected_revision: Option<i64>,
 ) -> Result<(), EpgError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(EpgError::Cancelled);
@@ -245,22 +267,32 @@ pub fn replace_guide_snapshot(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db)?;
-    let persisted: Option<(i64, Option<i64>)> = tx
+    let persisted: Option<(i64, Option<i64>, i64)> = tx
         .query_row(
-            "SELECT enabled,last_success_at FROM epg_sources WHERE id=?1",
+            "SELECT enabled,last_success_at,updated_at FROM epg_sources WHERE id=?1",
             [&snapshot.source_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(db)?;
-    let (enabled, last_success) = persisted.ok_or(EpgError::Unavailable)?;
+    let (enabled, last_success, current_revision) = persisted.ok_or(EpgError::Unavailable)?;
     if enabled != 1 {
         return Err(EpgError::Unavailable);
     }
-    // A refresh completed out of order must never evict a newer cache. Equal
-    // timestamps are conservatively refused, even for otherwise valid snapshots.
-    if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) {
-        return Err(EpgError::InvalidInput);
+    // Preserve E1's original strict success-timestamp policy. E2 instead
+    // checks the exact source revision, including competing same-second
+    // refreshes, without falsifying the real last-success wall-clock time.
+    match expected_revision {
+        None if last_success.is_some_and(|last| snapshot.retrieved_utc <= last) => {
+            return Err(EpgError::InvalidInput);
+        }
+        Some(expected)
+            if current_revision != expected
+                || last_success.is_some_and(|last| snapshot.retrieved_utc < last) =>
+        {
+            return Err(EpgError::InvalidInput);
+        }
+        _ => {}
     }
     tx.execute(
         "DELETE FROM epg_channels WHERE source_id=?1",
@@ -302,9 +334,133 @@ pub fn replace_guide_snapshot(
     }
     tx.execute(
         "UPDATE epg_sources SET last_success_at=?1,last_attempt_at=?1,
-         last_error_code=NULL,updated_at=?1 WHERE id=?2",
+         last_error_code=NULL,updated_at=MAX(updated_at+1,?1) WHERE id=?2",
         params![snapshot.retrieved_utc, snapshot.source_id],
     )
     .map_err(db)?;
     tx.commit().map_err(db)
+}
+
+#[cfg(test)]
+mod e2_revision_tests {
+    use super::super::{
+        model::{GuideChannel, GuideSnapshot, Programme},
+        network::TrustScope,
+        sources::{ConfirmedGuideDeletion, GuideSourceRegistry, RegistryError, SourceOrigin},
+    };
+    use super::*;
+    use crate::streams::storage::Storage;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use uuid::Uuid;
+
+    fn registry() -> (PathBuf, GuideSourceRegistry) {
+        let dir = std::env::temp_dir().join(format!("epg-revision-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let storage = Storage::at(dir.join("db.sqlite3"));
+        storage.initialize().unwrap();
+        (dir, GuideSourceRegistry::new(storage))
+    }
+
+    #[test]
+    fn same_second_replacement_preserves_real_freshness_and_increments_cas() {
+        let (dir, registry) = registry();
+        let source = registry
+            .add(
+                "Clock",
+                &SourceOrigin::entered_remote_url(
+                    "https://example.com/guide".into(),
+                    TrustScope::Public,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let snapshot = |title: &str| GuideSnapshot {
+            source_id: source.id.clone(),
+            channels: vec![GuideChannel {
+                source_id: source.id.clone(),
+                channel_id: "one".to_owned(),
+                display_name: "One".to_owned(),
+            }],
+            programmes: vec![Programme {
+                source_id: source.id.clone(),
+                channel_id: "one".to_owned(),
+                start_utc: now,
+                stop_utc: now + 3600,
+                title: title.to_owned(),
+                subtitle: None,
+                description: None,
+            }],
+            retrieved_utc: now,
+        };
+        let old_approval = ConfirmedGuideDeletion::after_user_confirmation(&source);
+        let cancelled = AtomicBool::new(false);
+        let mut conn = registry.connect_private().unwrap();
+        replace_guide_snapshot_if_current(
+            &mut conn,
+            &snapshot("First"),
+            &cancelled,
+            source.updated_at,
+        )
+        .unwrap();
+        let first = registry.get(&source.id).unwrap();
+        assert_eq!(first.last_success_at, Some(now));
+        assert!(first.updated_at > source.updated_at);
+
+        // The admitted predecessor is still the same real second, but the
+        // second full replacement gets an independent monotonic revision.
+        replace_guide_snapshot_if_current(
+            &mut conn,
+            &snapshot("Second"),
+            &cancelled,
+            first.updated_at,
+        )
+        .unwrap();
+        let second = registry.get(&source.id).unwrap();
+        assert_eq!(second.last_success_at, Some(now));
+        assert!(second.updated_at > first.updated_at);
+        assert_eq!(freshness(second.last_success_at, now), Freshness::Fresh);
+        assert_eq!(
+            registry.delete_confirmed(&old_approval),
+            Err(RegistryError::StaleConfirmation),
+        );
+        let saved: String = conn
+            .query_row(
+                "SELECT title FROM epg_programmes WHERE source_id=?1",
+                [&source.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, "Second");
+        // A stale import cannot evict the last-good payload.
+        assert!(replace_guide_snapshot_if_current(
+            &mut conn,
+            &snapshot("Rejected"),
+            &cancelled,
+            source.updated_at
+        )
+        .is_err());
+        let saved: String = conn
+            .query_row(
+                "SELECT title FROM epg_programmes WHERE source_id=?1",
+                [&source.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, "Second");
+        drop(conn);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }

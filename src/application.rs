@@ -54,6 +54,11 @@ mod imp {
         pub(super) live_channels: AsyncResource<LiveChannels>,
         pub(super) window: RefCell<Option<glib::WeakRef<TvWindow>>>,
         pub(super) playback_requests: PlaybackRequests,
+        // Test-only managed-player failure: never launches mpv or fetches a URI.
+        #[cfg(test)]
+        pub(super) r07_fail_managed_playback: Cell<bool>,
+        #[cfg(test)]
+        pub(super) r07_managed_playback_attempts: Cell<u32>,
     }
 
     #[glib::object_subclass]
@@ -181,6 +186,19 @@ impl TvApplication {
         self.imp().playback_requests.is_current(serial)
     }
 
+    /// Isolated native acceptance hook: fail the managed-player start after
+    /// capturing the real window focus origin. This never ships in production.
+    #[cfg(test)]
+    pub(crate) fn r07_test_managed_player_failure(&self, enabled: bool) {
+        self.imp().r07_fail_managed_playback.set(enabled);
+        self.imp().r07_managed_playback_attempts.set(0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_test_managed_player_attempts(&self) -> u32 {
+        self.imp().r07_managed_playback_attempts.get()
+    }
+
     pub async fn play(&self, video: VideoInfo) {
         let serial = self.begin_playback_request();
         self.play_requested(video, serial).await;
@@ -196,6 +214,21 @@ impl TvApplication {
             show_error(&gettext("No playable video URL is available"));
             return;
         };
+
+        // Deliberate failure only in a native, disposable acceptance fixture.
+        // Exercise the exact request and window return sequence without an
+        // actual mpv process or any network/URI access.
+        #[cfg(test)]
+        if self.imp().r07_fail_managed_playback.get() {
+            self.imp()
+                .r07_managed_playback_attempts
+                .set(self.imp().r07_managed_playback_attempts.get() + 1);
+            let window = self.window();
+            let token = window.begin_playback();
+            window.finish_playback(token);
+            show_error(&gettext("Failed to play video stream"));
+            return;
+        }
 
         let settings = TvSettings::get();
 

@@ -44,7 +44,7 @@ fn normalize_remote_arrow(key: gtk::gdk::Key) -> gtk::gdk::Key {
 
 /// Measured in the same mapped page coordinates. No synthetic tab order:
 /// each remote direction selects an actually visible geometric neighbor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct ToolbarRect {
     left: f32,
     top: f32,
@@ -120,6 +120,50 @@ fn spatial_neighbor(rects: &[ToolbarRect], from: usize, key: gtk::gdk::Key) -> O
     best.map(|(index, _, _)| index)
 }
 
+/// A single spatial transition may be reversed while the same mapped widgets,
+/// geometry, page and navigation generation still exist. Weak references avoid
+/// holding detached toolbar controls alive across a UI rebuild.
+#[derive(Debug)]
+struct ToolbarHop {
+    page: String,
+    generation: u64,
+    key: gtk::gdk::Key,
+    from: glib::WeakRef<gtk::Widget>,
+    to: glib::WeakRef<gtk::Widget>,
+    from_bounds: ToolbarRect,
+    to_bounds: ToolbarRect,
+}
+
+impl ToolbarHop {
+    fn new(
+        page: &str,
+        generation: u64,
+        key: gtk::gdk::Key,
+        from: &(gtk::Widget, ToolbarRect),
+        to: &(gtk::Widget, ToolbarRect),
+    ) -> Self {
+        Self {
+            page: page.to_owned(),
+            generation,
+            key,
+            from: glib::clone::Downgrade::downgrade(&from.0),
+            to: glib::clone::Downgrade::downgrade(&to.0),
+            from_bounds: from.1,
+            to_bounds: to.1,
+        }
+    }
+
+    fn is_reverse_of(&self, key: gtk::gdk::Key) -> bool {
+        matches!(
+            (self.key, key),
+            (gtk::gdk::Key::Up, gtk::gdk::Key::Down)
+                | (gtk::gdk::Key::Down, gtk::gdk::Key::Up)
+                | (gtk::gdk::Key::Left, gtk::gdk::Key::Right)
+                | (gtk::gdk::Key::Right, gtk::gdk::Key::Left)
+        )
+    }
+}
+
 mod imp {
     use super::*;
 
@@ -144,6 +188,7 @@ mod imp {
         pub(super) playback_token: Cell<u64>,
         pub(super) navigation_generation: Cell<u64>,
         pub(super) playback_return: RefCell<Option<PlaybackReturn>>,
+        pub(super) toolbar_hop: RefCell<Option<ToolbarHop>>,
     }
 
     #[glib::object_subclass]
@@ -544,6 +589,7 @@ impl TvWindow {
         if matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::Right) {
             if let Some(entry) = mapped[current].0.downcast_ref::<gtk::SearchEntry>() {
                 if entry.selection_bounds().is_some() {
+                    self.imp().toolbar_hop.borrow_mut().take();
                     return Some(false);
                 }
                 let last = entry.text().chars().count() as i32;
@@ -553,14 +599,53 @@ impl TvWindow {
                 if (key == gtk::gdk::Key::Left && position > 0)
                     || (key == gtk::gdk::Key::Right && position < last)
                 {
+                    self.imp().toolbar_hop.borrow_mut().take();
                     return Some(false);
+                }
+            }
+        }
+
+        let generation = self.imp().navigation_generation.get();
+        // Nearest-neighbor navigation is not mathematically symmetric when
+        // adjacent rows contain differently sized controls. Preserve the last
+        // actual edge for one inverse arrow, without hardcoded toolbar indices.
+        let previous = self.imp().toolbar_hop.borrow_mut().take();
+        if let Some(hop) = previous {
+            if hop.page == page_name && hop.generation == generation && hop.is_reverse_of(key) {
+                if let (Some(from), Some(to)) = (hop.from.upgrade(), hop.to.upgrade()) {
+                    if mapped[current] == (to, hop.to_bounds)
+                        && mapped
+                            .iter()
+                            .any(|(widget, bounds)| widget == &from && *bounds == hop.from_bounds)
+                        && from.grab_focus()
+                    {
+                        let source = (from, hop.from_bounds);
+                        self.imp().toolbar_hop.replace(Some(ToolbarHop::new(
+                            page_name,
+                            generation,
+                            key,
+                            &mapped[current],
+                            &source,
+                        )));
+                        return Some(true);
+                    }
                 }
             }
         }
 
         let geometry: Vec<_> = mapped.iter().map(|(_, rect)| *rect).collect();
         if let Some(index) = spatial_neighbor(&geometry, current, key) {
-            return Some(mapped[index].0.grab_focus());
+            let moved = mapped[index].0.grab_focus();
+            if moved {
+                self.imp().toolbar_hop.replace(Some(ToolbarHop::new(
+                    page_name,
+                    generation,
+                    key,
+                    &mapped[current],
+                    &mapped[index],
+                )));
+            }
+            return Some(moved);
         }
         // Upper and lower boundaries deliberately remain navigable without
         // introducing diagonal/historical Up-Down toolbar chains.
@@ -620,6 +705,15 @@ impl TvWindow {
                 return handled;
             }
             if self.imp().stack.visible_child_name().as_deref() == Some("streams") {
+                // Expanded row actions own their D-pad interior and Left exit.
+                // Route before the historical list -> page switcher boundary.
+                if self
+                    .imp()
+                    .streams_view
+                    .focus_expanded_action_key(&focused, key)
+                {
+                    return true;
+                }
                 // Escape from any virtualized row using one remote key, no
                 // matter where the selection is in a large playlist.
                 // GTK keeps Left/Right ownership in filters and editors.
@@ -654,6 +748,10 @@ impl TvWindow {
                     .imp()
                     .mediathek_view
                     .focus_vertical_navigation(&focused, key);
+            }
+
+            if key == gtk::gdk::Key::Left && self.imp().live_view.focus_play_return(&focused) {
+                return true;
             }
 
             // Live list's first row lies beneath Search, not Keyboard.
@@ -718,7 +816,10 @@ impl TvWindow {
                 .as_ref()
                 .is_some_and(|bar| Self::is_within(&focused, bar))
             {
-                return search.as_ref().is_some_and(|entry| entry.grab_focus());
+                return search
+                    .as_ref()
+                    .filter(|entry| entry.is_mapped() && entry.is_sensitive())
+                    .is_none_or(|entry| entry.grab_focus());
             }
         }
         false
@@ -733,6 +834,28 @@ impl TvWindow {
         // navigation. Without this check Back/Home can change the main view
         // while Preferences, Shortcuts or About stays on screen.
         if let Some(dialog) = self.visible_dialog() {
+            // A source-manager Back key is first a focus-boundary command:
+            // from a concrete row action it returns to the *same* source row.
+            // Once the row itself owns focus, Back retains its existing
+            // modal-dismiss semantics. Restrict this to the tagged manager,
+            // never a nested editor, OSK, guide or unrelated dialog.
+            if dialog.has_css_class("broadcaster-source-manager")
+                && key == gtk::gdk::Key::Back
+                && crate::keyboard::unmodified_remote(modifiers)
+            {
+                if let Some(focused) = self.focused_widget() {
+                    if Self::is_within(&focused, dialog.upcast_ref()) {
+                        if let Some(row) = focused
+                            .ancestor(gtk::ListBoxRow::static_type())
+                            .and_downcast::<gtk::ListBoxRow>()
+                        {
+                            if !row.has_focus() && row.grab_focus() {
+                                return glib::Propagation::Stop;
+                            }
+                        }
+                    }
+                }
+            }
             // A nested keyboard cancels its own draft; Home cannot navigate
             // behind the active modal or dismiss the source editor.
             if dialog.has_css_class("osk-feasibility")
@@ -771,6 +894,12 @@ impl TvWindow {
             return glib::Propagation::Proceed;
         }
         let key = normalize_remote_arrow(key);
+        if !matches!(
+            key,
+            gtk::gdk::Key::Up | gtk::gdk::Key::Down | gtk::gdk::Key::Left | gtk::gdk::Key::Right
+        ) {
+            self.imp().toolbar_hop.borrow_mut().take();
+        }
 
         // A key still held as mpv relinquishes Wayland focus is not a
         // main-application Back/Home command while playback is active.
@@ -786,6 +915,15 @@ impl TvWindow {
 
         match key {
             gtk::gdk::Key::Back => {
+                // Back inside the Live Play action returns to the same row.
+                // Only Back outside this card-level boundary exits Live.
+                if self.imp().stack.visible_child_name().as_deref() == Some("live")
+                    && self
+                        .focused_widget()
+                        .is_some_and(|focused| self.imp().live_view.focus_play_return(&focused))
+                {
+                    return glib::Propagation::Stop;
+                }
                 if self.dismiss_open_popover() {
                     return glib::Propagation::Stop;
                 }
@@ -811,8 +949,13 @@ impl TvWindow {
                 // Give an open GTK popover its native Escape behavior first.
                 // Expanded rows collapse; otherwise Escape exits the list to
                 // the tabs while the remote Back key still goes to Mediathek.
-                if Self::find_mapped_popover(self.upcast_ref()).is_some() {
-                    glib::Propagation::Proceed
+                if let Some(popover) = Self::find_mapped_popover(self.upcast_ref()) {
+                    // Search-enabled GtkDropDown's internal GtkText consumes
+                    // Escape without closing the popup. Explicitly dismiss
+                    // the actual mapped popover, preserving the selected
+                    // filter and returning keyboard focus to its origin.
+                    popover.popdown();
+                    glib::Propagation::Stop
                 } else if self.imp().streams_view.collapse_expanded()
                     || (self.focused_widget().is_some_and(|focused| {
                         self.imp().streams_view.contains_results_focus(&focused)
@@ -870,6 +1013,10 @@ fn modal_remote_action(
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "window/r07_native_focus_tests.rs"]
+pub(crate) mod r07_native_focus_tests;
 
 #[cfg(test)]
 mod remote_dialog_tests {
@@ -983,9 +1130,16 @@ mod playback_navigation_tests {
             .contains_results_focus(&window.focused_widget().expect("toolbar should hold focus")));
         streams.assert_remote_toolbar_focus_styled();
         assert!(streams.show_and_focus_test_results());
+        // Left from a collapsed row enters its always-visible star; another
+        // Left returns to the owning list without crossing the page boundary.
         assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
-        assert!(!streams
-            .contains_results_focus(&window.focused_widget().expect("tabs should hold focus")));
+        let star_focus = window.focused_widget().expect("collapsed star focus");
+        assert!(star_focus.is::<gtk::Button>());
+        assert!(streams.contains_results_focus(&star_focus));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert!(
+            streams.contains_results_focus(&window.focused_widget().expect("same row after star"))
+        );
         assert!(streams.show_and_focus_test_results());
         assert_eq!(
             window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
@@ -1171,6 +1325,217 @@ mod playback_navigation_tests {
             !filters[6].is_mapped(),
             "hidden region must not steal focus"
         );
+
+        // E4 owner regression: the real mapped GtkListView contains two
+        // fabricated My Channels entries. Exercise the same window capture
+        // router as a remote; GTK event synthesis is not claimed here.
+        let ids = streams.install_remote_action_test_rows();
+        window.queue_allocate();
+        spin();
+        assert!(streams.show_and_focus_test_results());
+        assert!(
+            window.focus_boundary_key(gtk::gdk::Key::Right),
+            "Right from a collapsed row must expand and enter Play"
+        );
+        assert_eq!(streams.remote_action_test_counts(), (0, 0, 0));
+        eprintln!(
+            "E4 before activation: {}",
+            streams.remote_action_test_state()
+        );
+        eprintln!(
+            "C4 after Right entry: {}",
+            streams.remote_action_test_state()
+        );
+        spin();
+        eprintln!("E4 after animation: {}", streams.remote_action_test_state());
+        // GtkListView may still retain an unbound/recycled ListItem with the
+        // same *position* as the selected row. Its detached buttons are
+        // correctly unmapped, but are not the actions rendered on screen.
+        // Inspect the actual mapped, expanded row instead of picking the first
+        // cached binding at position zero (HashMap iteration is unordered).
+        let list = TvWindow::find_descendant(streams.upcast_ref(), &|w| w.is::<gtk::ListView>())
+            .expect("mapped My Channels ListView");
+        let mut expanded_rows = Vec::new();
+        fn find_expanded_rows(node: &gtk::Widget, rows: &mut Vec<gtk::Revealer>) {
+            if let Some(revealer) = node.downcast_ref::<gtk::Revealer>() {
+                if revealer.reveals_child() && revealer.is_mapped() {
+                    rows.push(revealer.clone());
+                }
+            }
+            let mut child = node.first_child();
+            while let Some(widget) = child {
+                find_expanded_rows(&widget, rows);
+                child = widget.next_sibling();
+            }
+        }
+        find_expanded_rows(&list, &mut expanded_rows);
+        assert_eq!(
+            expanded_rows.len(),
+            1,
+            "exactly one on-screen selected row must be expanded"
+        );
+        let expanded = &expanded_rows[0];
+        let row = expanded.parent().expect("expanded row container");
+        assert!(
+            TvWindow::find_descendant(&row, &|w| {
+                w.downcast_ref::<gtk::Label>()
+                    .is_some_and(|label| label.label() == "First fabricated channel")
+            })
+            .is_some(),
+            "the expanded actions must belong to the selected fabricated channel"
+        );
+        let mut visible_buttons = Vec::new();
+        fn collect_buttons(node: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
+            if let Some(button) = node.downcast_ref::<gtk::Button>() {
+                buttons.push(button.clone());
+            }
+            let mut child = node.first_child();
+            while let Some(widget) = child {
+                collect_buttons(&widget, buttons);
+                child = widget.next_sibling();
+            }
+        }
+        collect_buttons(expanded.upcast_ref(), &mut visible_buttons);
+        assert_eq!(visible_buttons.len(), 3, "Play, Edit, Mapping must exist");
+        let buttons: [gtk::Button; 3] = visible_buttons.try_into().unwrap();
+        let button_states: Vec<_> = buttons
+            .iter()
+            .map(|button| {
+                let reveal = button
+                    .ancestor(gtk::Revealer::static_type())
+                    .and_downcast::<gtk::Revealer>();
+                (
+                    button.is_mapped(),
+                    button.is_visible(),
+                    button.is_sensitive(),
+                    reveal.as_ref().map(|reveal| reveal.reveals_child()),
+                    reveal.as_ref().map(|reveal| reveal.is_mapped()),
+                )
+            })
+            .collect();
+        assert!(
+            buttons
+                .iter()
+                .all(|button| button.is_mapped() && button.is_sensitive()),
+            "all three actions must be mapped and enabled without a guide; states: {button_states:?}; selected={:?}",
+            streams.remote_action_test_selected_id()
+        );
+        let assert_action = |index: usize| {
+            let focused = window.focused_widget().expect("focused action");
+            assert!(
+                TvWindow::is_within(&focused, buttons[index].upcast_ref()),
+                "the expected expanded-row action must own focus: {index}"
+            );
+            assert!(
+                buttons[index].has_focus(),
+                "GTK focus styling requires focus"
+            );
+        };
+        // First entry focused Play without invoking the player.
+        assert_action(0);
+        let star = streams
+            .remote_action_test_row_star(&ids[0])
+            .expect("mapped favourite Star for the selected expanded row");
+        // G09: Right from Play now deliberately enters the same channel's Star;
+        // Left from Star must return to Play, never a stale recycled row.
+        // Exercise the real window capture router, not direct grab_focus() on Star.
+        for _ in 0..10 {
+            assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+            assert!(star.has_focus(), "Play Right must enter its favourite Star");
+            assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+            assert_action(0);
+        }
+        // Secondary actions retain their prior Right-in-group semantics.
+        // This verifies the routed widget state, not compositor-rendered pixels.
+        for (index, button) in buttons.iter().enumerate().skip(1) {
+            assert!(button.grab_focus(), "action {index} must accept focus");
+            assert_action(index);
+            for _ in 0..10 {
+                assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+                assert_action(index);
+            }
+        }
+        assert!(buttons[0].grab_focus());
+
+        // A disabled or unmatched programme guide must never gate Play/focus.
+        streams.remote_action_test_status("Selected programme guide disabled");
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert!(star.has_focus(), "EPG status must not block Play -> Star");
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert_action(1);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert_action(2);
+        streams.remote_action_test_status("No matching programme guide channel");
+        assert_action(2); // informational EPG paint must not steal focus
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_action(1);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert_action(0);
+        streams.remote_action_test_status("Now: fabricated programme");
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Up));
+        assert!(
+            streams.contains_results_focus(&window.focused_widget().expect("row focus")),
+            "Up from Play must return to the owning row"
+        );
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_action(0);
+        // The focused Play button's callback, not GtkListView activate,
+        // performs the single action; even spurious list activation must not
+        // deliver the historic second-OK playback.
+        buttons[0].emit_clicked();
+        streams.remote_action_test_activate();
+        assert_eq!(streams.remote_action_test_counts(), (1, 0, 0));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        buttons[1].emit_clicked();
+        assert_eq!(streams.remote_action_test_counts(), (1, 1, 0));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        buttons[2].emit_clicked();
+        assert_eq!(streams.remote_action_test_counts(), (1, 1, 1));
+        // Boundary policy: Down from final action exits back to the list.
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Down));
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        assert_action(0);
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Left));
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("row")));
+        // Recycling an action-focused list item must not keep a detached
+        // button as the window's focus target.
+        assert!(window.focus_boundary_key(gtk::gdk::Key::Right));
+        streams.remote_action_test_rebind();
+        spin();
+        assert!(!buttons.iter().any(|button| button.has_focus()));
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("after rebind")));
+        assert!(streams.show_and_focus_test_results());
+        assert_eq!(
+            streams.remote_action_test_selected_id().as_deref(),
+            Some(ids[0].as_str())
+        );
+
+        // Collapse and Back/Escape semantics remain unchanged; Home exits
+        // My Channels, but no action button can hijack a modal's keys.
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Back, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
+        streams.remote_action_test_activate();
+        spin();
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert!(streams.contains_results_focus(&window.focused_widget().expect("Escape row")));
+        assert_eq!(
+            window.handle_remote_key(gtk::gdk::Key::HomePage, gtk::gdk::ModifierType::empty()),
+            glib::Propagation::Stop
+        );
+        assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
     }
 
     /// Checks GTK widget ancestry and list-boundary detection against real

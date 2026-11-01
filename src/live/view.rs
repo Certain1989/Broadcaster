@@ -43,7 +43,7 @@ mod imp {
 
         filter: OnceCell<gtk::CustomFilter>,
         /// Incremented on every reload to discard outdated results.
-        generation: Cell<u64>,
+        pub(super) generation: Cell<u64>,
     }
 
     impl TvLiveView {
@@ -284,6 +284,17 @@ impl TvLiveView {
         self.imp().stack.set_visible_child_name("channels");
     }
 
+    /// Hold the real spinner visible for native boundary testing even when
+    /// the host's asynchronous channel feed returns immediately. Invalidating
+    /// the pending load prevents a background completion from changing the
+    /// page while a physical D-pad assertion is being measured.
+    #[cfg(test)]
+    pub(crate) fn show_spinner_for_test(&self) {
+        let imp = self.imp();
+        imp.generation.set(imp.generation.get().saturating_add(1));
+        imp.stack.set_visible_child_name("spinner");
+    }
+
     /// Exercise the real channel-list-to-toolbar Up boundary without network
     /// requests. A synthetic row is only inserted when the offline fixture
     /// has not loaded a channel model.
@@ -299,6 +310,57 @@ impl TvLiveView {
         imp.channels_list
             .row_at_index(0)
             .is_some_and(|row| row.grab_focus())
+    }
+
+    /// Test-only complete native Live rows backed by actual TvLiveCard and
+    /// ChannelObject widgets. No network requests or player activation.
+    #[cfg(test)]
+    pub(crate) fn install_r07_native_channel_rows(&self) {
+        let imp = self.imp();
+        // Invalidate a pending async production load before installing this
+        // disposable model so its completion cannot rebind the test rows.
+        imp.generation.set(imp.generation.get().saturating_add(1));
+        let model = (0..5)
+            .map(|index| {
+                ChannelObject::new(
+                    &format!("r07-live-{index}"),
+                    &format!("Fixture Live {index}"),
+                    "https://example.invalid/offline",
+                )
+            })
+            .collect::<gio::ListStore>();
+        imp.channels_list.bind_model(Some(&model), |channel| {
+            glib::Object::builder::<TvLiveCard>()
+                .property("channel", channel)
+                .build()
+                .upcast()
+        });
+        imp.results_stack.set_visible_child_name("list");
+        imp.stack.set_visible_child_name("channels");
+    }
+
+    #[cfg(test)]
+    pub(crate) fn r07_native_channel_id(&self, index: i32) -> Option<String> {
+        self.imp()
+            .channels_list
+            .row_at_index(index)?
+            .downcast::<TvLiveCard>()
+            .ok()?
+            .channel()
+            .map(|channel| channel.id())
+    }
+
+    /// Collapse a disposable native Live row between independent E02 portals.
+    /// This only prepares the next physical D-pad route and never plays media.
+    #[cfg(test)]
+    pub(crate) fn r07_collapse_test_channel(&self, index: i32) {
+        self.imp()
+            .channels_list
+            .row_at_index(index)
+            .expect("r07 real Live row")
+            .downcast::<TvLiveCard>()
+            .expect("r07 real Live card")
+            .set_expanded(false);
     }
 
     /// The Live focus style must reach the button actually selected by the
@@ -337,6 +399,26 @@ impl TvLiveView {
         }
     }
 
+    /// D-pad Left and remote Back from the real Play control return to its
+    /// owning row, without activating playback or changing the selected page.
+    /// A rebound model cannot reuse the stale row: ownership is resolved
+    /// exclusively from the current focused widget's actual GTK ancestry.
+    pub fn focus_play_return(&self, focused: &gtk::Widget) -> bool {
+        if !focused.is_ancestor(self.upcast_ref::<gtk::Widget>()) {
+            return false;
+        }
+        let mut ancestor = focused.parent();
+        while let Some(widget) = ancestor {
+            if let Some(row) = widget.downcast_ref::<TvLiveCard>() {
+                return live_play_button(row.upcast_ref())
+                    .is_some_and(|button| focused == button.upcast_ref::<gtk::Widget>())
+                    && row.grab_focus();
+            }
+            ancestor = widget.parent();
+        }
+        false
+    }
+
     /// Only mapped upper controls belong to spatial arrow navigation.
     /// Returning the actual field instance preserves K1's ON/OFF launcher.
     pub fn toolbar_focus_targets(&self) -> Vec<gtk::Widget> {
@@ -360,6 +442,24 @@ impl TvLiveView {
     }
 }
 
+/// Locate the actual Play control without exposing the card template's
+/// private implementation or guessing an action from child order.
+fn live_play_button(widget: &gtk::Widget) -> Option<gtk::Button> {
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        if button.action_name().as_deref() == Some("card.play") {
+            return Some(button.clone());
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if let Some(button) = live_play_button(&current) {
+            return Some(button);
+        }
+        child = current.next_sibling();
+    }
+    None
+}
+
 /// Connect GTK's normal row-activation signal (keyboard/remote OK or mouse)
 /// without intercepting Return globally or interfering with child buttons.
 fn connect_live_row_activation(list: &gtk::ListBox, play: impl Fn(&TvLiveCard) + 'static) {
@@ -371,6 +471,11 @@ fn connect_live_row_activation(list: &gtk::ListBox, play: impl Fn(&TvLiveCard) +
             play(row);
         } else {
             row.set_expanded(true);
+            // Remote OK enters the primary action without starting playback.
+            // It is a real button rather than a synthetic card focus target.
+            if let Some(button) = live_play_button(row.upcast_ref()) {
+                button.grab_focus();
+            }
         }
     });
 }

@@ -135,6 +135,16 @@ impl TvSettings {
         self.0.boolean("osk-enabled")
     }
 
+    pub fn osk_qwertz(&self) -> bool {
+        self.0.boolean("osk-qwertz")
+    }
+
+    pub fn set_osk_qwertz(&self, enabled: bool) {
+        self.0
+            .set_boolean("osk-qwertz", enabled)
+            .expect("Could not update osk-qwertz");
+    }
+
     bind_setting!(bind_osk_enabled, "osk-enabled");
     bind_setting!(bind_use_external_player, "use-external-player");
     bind_setting!(bind_search_everywhere, "search-everywhere");
