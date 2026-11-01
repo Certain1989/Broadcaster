@@ -7,7 +7,7 @@ Broadcaster v0.2.5 adds optional electronic programme-guide information to **My 
 
 ## Changes
 
-- **XMLTV guides:** Add and manually refresh programme guides from local XMLTV files or explicitly configured HTTP(S) addresses. Multiple sources are supported. Guide import failures do not prevent normal playback or Mediathek operations; last-good guide data can remain available where applicable.
+- **XMLTV guides:** Add multiple guides from local XMLTV files or explicitly configured HTTP(S) addresses. Refresh on demand or use automatic per-guide refresh (enabled by default in the Add Guide dialog, with a 24-hour age threshold adjustable to 6–168 hours). Broadcaster checks due guides while running, including when the guide service starts; it does not refresh them after the app closes. Guide import failures do not prevent normal playback or Mediathek operations; last-good guide data can remain available where applicable.
 - **Explicit guide selection:** Choose a guide as the **Shared Default** for playlists or bind a guide individually to a playlist. Merely adding an XMLTV source does not associate it with your playlists. A single shared guide may serve multiple playlists.
 - **Now/Next:** My Channels displays current and upcoming programme information when guide data exists and channel matching is confirmed. Exact IDs and conservative suggestions assist matching, but users may need to confirm, manually set or override a match, especially with regional channel variants.
 - **Favourites:** Star channels and filter to favourites. Playlist stream addresses and playback headers remain separate from programme-guide associations.
@@ -20,6 +20,6 @@ Download only published production Flatpak bundles and the matching `SHA256SUMS`
 
 ## Scope and limitations
 
-Broadcaster does not provide or endorse playlists, guide sources or media. Configure only sources you may lawfully use. Network XMLTV retrieval occurs only for guides deliberately configured by the user; playlist import alone does not authorize guide downloads. External guide providers may observe requests to their services.
+Broadcaster does not provide or endorse playlists, guide sources or media. Configure only sources you may lawfully use. M3U playlist refresh remains manual and independent of guide scheduling. Network XMLTV retrieval occurs only for guides deliberately configured by the user; playlist import alone does not authorize guide downloads. External guide providers may observe requests to their services.
 
 XMLTV and channel metadata can be incomplete or inaccurate. Matching is deliberately conservative and may need manual intervention. Now/Next is not a full schedule-grid EPG. This release does not claim Windows or Android support or promise particular provider availability, maximum dataset performance or universal device compatibility. Existing Televido-derived code, third-party assets and contributors retain their notices and applicable licences.
