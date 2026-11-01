@@ -26,6 +26,7 @@ std::thread_local! {
     // Test-only observation made immediately after SQLite accepts a row.
     static TEST_STAGED_INSERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEST_STAGED_MARKERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_STAGED_OMISSIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -610,6 +611,8 @@ fn import_xmltv_scoped<R: BufRead>(
                     ],
                 )
                 .map_err(storage_error)?;
+                #[cfg(test)]
+                TEST_STAGED_OMISSIONS.with(|count| count.set(count.get() + 1));
             }
             Ok(())
         },
@@ -2217,6 +2220,55 @@ mod tests {
     }
 
     #[test]
+    fn c1_malformed_identity_rolls_back_and_keeps_last_good() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let valid = programme("c", "StillGood", None, None);
+        let bad = programme("ghost", "Bad&#x85;", None, None);
+        let malformed = [
+            bad.replace("20300101000000 +0000", "INVALID"),
+            bad.replace("stop='20300101010000 +0000'", ""),
+            bad.replace("Bad&#x85;", "&#x85;"),
+            bad.replace("Bad&#x85;", "Bad<ignored>&#x85;</ignored>"),
+            bad.replace(
+                "<title>Bad&#x85;</title>",
+                "<title/> <desc>bad&#x85;</desc>",
+            ),
+            bad.replace(
+                "<title>Bad&#x85;</title>",
+                "<title> </title><title>Bad&#x85;</title>",
+            ),
+        ];
+        for bad in malformed {
+            for records in [format!("{bad}{valid}"), format!("{valid}{bad}")] {
+                let mut conn = db();
+                let stable = guide(channels, &programme("c", "LastGood", None, None));
+                import_fixture(&mut conn, &stable, "source", 1, 1).unwrap();
+                let previous: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+                    .query_row("SELECT last_success_at,last_attempt_at,updated_at,last_error_code FROM epg_sources WHERE id='source'", [],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                    .unwrap();
+                let attempted = guide(channels, &records);
+                assert_eq!(
+                    import_fixture(&mut conn, &attempted, "source", 2, 2),
+                    Err(EpgError::InvalidInput)
+                );
+                assert_eq!(
+                    conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                        .get::<_, String>(0))
+                        .unwrap(),
+                    "LastGood"
+                );
+                let after: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+                    .query_row("SELECT last_success_at,last_attempt_at,updated_at,last_error_code FROM epg_sources WHERE id='source'", [],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                    .unwrap();
+                assert_eq!(after, previous);
+                assert_no_temp_marker(&conn);
+            }
+        }
+    }
+
+    #[test]
     fn c1_title_shortened_key_collision_still_fails_closed() {
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         let prefix = "P".repeat(512);
@@ -2441,6 +2493,111 @@ mod tests {
             .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
             .unwrap();
         assert_eq!(previous, "Good");
+        assert_no_temp_marker(&conn);
+    }
+
+    /// Stop after the SQLite TEMP omission insert has returned, not before.
+    struct CancelAfterOmission<'a> {
+        bytes: Vec<u8>,
+        split: usize,
+        position: usize,
+        cancelled: &'a AtomicBool,
+        fired: bool,
+    }
+
+    impl Read for CancelAfterOmission<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            if self.position == self.split && !self.fired {
+                assert_eq!(TEST_STAGED_OMISSIONS.with(|n| n.get()), 1);
+                assert_eq!(TEST_STAGED_INSERTS.with(|n| n.get()), 0);
+                self.cancelled.store(true, Ordering::Release);
+                self.fired = true;
+            }
+            let boundary = if self.position < self.split {
+                self.split
+            } else {
+                self.bytes.len()
+            };
+            let n = output.len().min(boundary - self.position);
+            output[..n].copy_from_slice(&self.bytes[self.position..self.position + n]);
+            self.position += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn cancellation_after_c1_omission_rolls_back_and_retries_on_same_connection() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let previous = guide(channels, &programme("c", "LastGood", None, None));
+        let mut conn = db();
+        import_fixture(&mut conn, &previous, "source", 1, 1).unwrap();
+        let before: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row("SELECT last_success_at,last_attempt_at,updated_at,last_error_code FROM epg_sources WHERE id='source'", [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap();
+        let aborted = guide(
+            channels,
+            &format!(
+                "{}{}",
+                programme("c", "Bad&#x85;", None, None),
+                programme("c", "WouldReplace", None, None)
+            ),
+        );
+        let split = aborted.find("</programme>").unwrap() + "</programme>".len();
+        let cancelled = AtomicBool::new(false);
+        TEST_STAGED_OMISSIONS.with(|n| n.set(0));
+        TEST_STAGED_INSERTS.with(|n| n.set(0));
+        let reader = CancelAfterOmission {
+            bytes: aborted.into_bytes(),
+            split,
+            position: 0,
+            cancelled: &cancelled,
+            fired: false,
+        };
+        assert_eq!(
+            import_xmltv(
+                &mut conn,
+                BufReader::new(reader),
+                "source",
+                2,
+                2,
+                false,
+                &cancelled
+            ),
+            Err(EpgError::Cancelled)
+        );
+        assert_eq!(TEST_STAGED_OMISSIONS.with(|n| n.get()), 1);
+        assert_eq!(
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "LastGood"
+        );
+        let after: (Option<i64>, Option<i64>, i64, Option<String>) = conn
+            .query_row("SELECT last_success_at,last_attempt_at,updated_at,last_error_code FROM epg_sources WHERE id='source'", [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap();
+        assert_eq!(after, before);
+        assert_no_temp_marker(&conn);
+        let fixed = guide(
+            channels,
+            &format!(
+                "{}{}",
+                programme("c", "Bad&#x85;", None, None),
+                programme("c", "Retained", None, None)
+            ),
+        );
+        let stats = import_fixture(&mut conn, &fixed, "source", 3, 3).unwrap();
+        assert_eq!((stats.programmes, stats.omitted_c1_programmes), (1, 1));
+        assert_eq!(
+            conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "Retained"
+        );
         assert_no_temp_marker(&conn);
     }
 

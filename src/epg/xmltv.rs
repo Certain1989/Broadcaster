@@ -519,20 +519,28 @@ impl ParseState {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
             self.last_programme_c1 = p.omit_c1;
             self.last_programme_truncation = ProgrammeTruncation::default();
+            let valid_interval = p
+                .start_utc
+                .zip(p.stop_utc)
+                .is_some_and(|(start, stop)| start < stop && stop.saturating_sub(start) <= 86_400);
+            let valid_title = p.title.as_deref().is_some_and(|title| {
+                bounded_text(title, 512)
+                    // A C1-affected title can enter only the omission ledger.
+                    // Preserve all other title bounds and disallowed controls.
+                    || (p.title_c1
+                        && !title.trim().is_empty()
+                        && title.len() <= 512
+                        && title.chars().all(|c| !forbidden_xml_control(c, true)))
+            });
+            // An ordinary incomplete XMLTV record is still silently skipped.
+            // Once C1 omission has been requested, however, dropping an invalid
+            // identity would evade omitted-key collision and channel-FK checks.
+            // Fail the entire transaction instead of losing the C1 candidate.
+            if p.omit_c1 && (!valid_interval || p.channel.is_empty() || !valid_title) {
+                return Err(EpgError::InvalidInput);
+            }
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
-                if start < stop
-                    && stop.saturating_sub(start) <= 86_400
-                    && !p.channel.is_empty()
-                    && (bounded_text(&title, 512)
-                        // An explicitly C1-affected title is only forwarded to
-                        // the transactional omission ledger. Never admit it as
-                        // a retained title. Recheck all other scalar bounds;
-                        // the streaming parser already rejected C0 and DEL.
-                        || (p.title_c1
-                            && !title.trim().is_empty()
-                            && title.len() <= 512
-                            && title.chars().all(|c| !forbidden_xml_control(c, true))))
-                {
+                if valid_interval && !p.channel.is_empty() && valid_title {
                     self.last_programme_truncation = ProgrammeTruncation {
                         title: p.title_truncated,
                         subtitle: p.subtitle_truncated,
@@ -1703,6 +1711,87 @@ mod formatted_xmltv_regression {
                 Err(EpgError::InvalidInput)
             );
         }
+    }
+
+    #[test]
+    fn c1_invalid_identity_is_not_silently_dropped() {
+        let channels = "<channel id='known'><display-name>Known</display-name></channel>";
+        let valid = "<programme channel='known' start='20300101010000 +0000' stop='20300101020000 +0000'><title>Good</title></programme>";
+        let affected = "<programme channel='ghost' start='20300101000000 +0000' stop='20300101010000 +0000'><title>Bad&#x85;</title></programme>";
+        for bad in [
+            affected.replace("20300101000000 +0000", "INVALID"),
+            affected.replace("stop='20300101010000 +0000'", "stop='INVALID'"),
+            affected.replace("stop='20300101010000 +0000'", ""),
+            affected.replace("20300101010000 +0000", "20290101010000 +0000"),
+            affected.replace("20300101010000 +0000", "20300103010000 +0000"),
+            affected.replace("Bad&#x85;", "&#x85;"),
+            affected.replace(
+                "<title>Bad&#x85;</title>",
+                "<title/> <desc>bad&#x85;</desc>",
+            ),
+            affected.replace(
+                "<title>Bad&#x85;</title>",
+                "<title> </title><title>Bad&#x85;</title>",
+            ),
+        ] {
+            for records in [format!("{bad}{valid}"), format!("{valid}{bad}")] {
+                let source = format!("<tv>{channels}{records}</tv>");
+                assert_eq!(parse_with_c1_omission(&source), Err(EpgError::InvalidInput));
+            }
+        }
+        // No C1: the established safe incomplete-record skip remains valid.
+        let incomplete = affected
+            .replace("Bad&#x85;", "ordinary")
+            .replace("20300101000000 +0000", "INVALID");
+        let source = format!("<tv>{channels}{incomplete}{valid}</tv>");
+        let counts = parse_with_c1_omission(&source).unwrap();
+        assert_eq!((counts.programmes, counts.omitted_c1_programmes), (1, 0));
+    }
+
+    #[test]
+    fn c1_title_fragmentation_repeated_title_and_truncated_tail() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let fixture = format!(
+            "<tv>{channels}<programme channel='c' start='20300101000000 +0000' stop='20300101010000 +0000'><title>X&#x85;<![CDATA[Q]]>Y</title></programme><programme channel='c' start='20300101010000 +0000' stop='20300101020000 +0000'><title>First</title><title>Second&#133;</title></programme><programme channel='c' start='20300101020000 +0000' stop='20300101030000 +0000'><title>{}&#x85;</title></programme><programme channel='c' start='20300101030000 +0000' stop='20300101040000 +0000'><title>Retained</title></programme></tv>",
+            "Z".repeat(512)
+        );
+        let mut emitted = Vec::new();
+        let mut omitted = Vec::new();
+        // Limit the underlying reader to one byte per read (a tiny BufReader
+        // alone could bypass its buffer on large reads). This tests XMLTV
+        // event assembly through split references and CDATA boundaries.
+        struct OneByte<R>(R);
+        impl<R: std::io::Read> std::io::Read for OneByte<R> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                if out.is_empty() {
+                    return Ok(0);
+                }
+                self.0.read(&mut out[..1])
+            }
+        }
+        let output = decode_xmltv_rows_omitting_c1(
+            std::io::BufReader::new(OneByte(Cursor::new(fixture.as_bytes()))),
+            "synthetic",
+            0,
+            false,
+            StreamingLimits::candidate(),
+            &AtomicBool::new(false),
+            |_| Ok(()),
+            |row, _| {
+                emitted.push(row.title);
+                Ok(())
+            },
+            |row, _| {
+                omitted.push(row.title);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!((output.programmes, output.omitted_c1_programmes), (1, 3));
+        assert_eq!(emitted, ["Retained"]);
+        assert_eq!(omitted.len(), 3);
+        assert!(omitted.contains(&"First".to_owned()));
+        assert!(omitted.contains(&"Z".repeat(512)));
     }
 
     #[test]

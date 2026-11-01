@@ -1123,3 +1123,10 @@ msgstr "Suche mit Bildschirmtastatur bearbeiten"
 # Keyboard and remote-control entry
 msgid "Keyboard"
 msgstr "Tastatur"
+
+# C1 XMLTV character omission warning, fixed/safe counts only
+msgid "One programme was omitted because its title or description contains unsupported control characters."
+msgstr "Eine Sendung wurde ausgelassen, weil ihr Titel oder ihre Beschreibung nicht unterstützte Steuerzeichen enthält."
+
+msgid "programmes were omitted because their titles or descriptions contain unsupported control characters."
+msgstr "Sendungen wurden ausgelassen, weil ihre Titel oder Beschreibungen nicht unterstützte Steuerzeichen enthalten."

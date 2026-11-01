@@ -135,13 +135,13 @@ fn truncation_messages(counts: &StreamedRows) -> Vec<String> {
     }
     if counts.omitted_c1_programmes == 1 {
         messages.push(gettext(
-            "One programme was omitted because its description contains unsupported control characters.",
+            "One programme was omitted because its title or description contains unsupported control characters.",
         ));
     } else if counts.omitted_c1_programmes > 1 {
         messages.push(format!(
             "{} {}",
             counts.omitted_c1_programmes,
-            gettext("programmes were omitted because their descriptions contain unsupported control characters."),
+            gettext("programmes were omitted because their titles or descriptions contain unsupported control characters."),
         ));
     }
     messages
@@ -1294,6 +1294,28 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    #[test]
+    fn c1_warning_for_title_only_is_safe_and_correct() {
+        let mut counts = StreamedRows {
+            channels: 0,
+            programmes: 1,
+            truncated_descriptions: 0,
+            truncated_titles: 0,
+            truncated_subtitles: 0,
+            truncated_channel_names: 0,
+            conflicting_duplicate_rows: 0,
+            omitted_c1_programmes: 1,
+        };
+        let single = truncation_messages(&counts);
+        assert_eq!(single.len(), 1);
+        assert!(single[0].contains("title or description"));
+        assert!(!single[0].contains("Bad\u{0085}"));
+        counts.omitted_c1_programmes = 3;
+        let multiple = truncation_messages(&counts);
+        assert_eq!(multiple.len(), 1);
+        assert!(multiple[0].contains("titles or descriptions"));
+    }
 
     #[test]
     fn guide_graph_skips_disabled_and_keeps_first_last_boundaries() {
