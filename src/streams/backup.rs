@@ -196,6 +196,9 @@ fn online_backup(source: &Connection, target: &Path) -> StorageResult<()> {
                 StepResult::More | StepResult::Busy | StepResult::Locked => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
+                // The upstream enum is explicitly non-exhaustive. Never
+                // guess whether a future result means a completed snapshot.
+                _ => return Err(StorageError::StorageFailure),
             }
         }
     }
@@ -450,13 +453,19 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
     checkpoint_old(database)?;
     if fs::symlink_metadata(&recovery).is_err() {
         let old = Storage::at(database).connect()?;
-        let temp = Temporary::new(recovery.clone());
-        online_backup(&old, &recovery)?;
+        // Publish a fully verified recovery snapshot, never a partially
+        // written one. If the application stops halfway through an online
+        // backup, restart can safely retry from the still-intact old DB.
+        let recovery_stage = Temporary::new(random_file(parent, ".broadcaster-d1-recovery-stage-"));
+        online_backup(&old, &recovery_stage.path)?;
         drop(old);
-        let (check, _) = verify_snapshot(&recovery, false)?;
+        let (check, _) = verify_snapshot(&recovery_stage.path, false)?;
         drop(check);
         sync_dir(parent)?;
-        let _ = temp.keep();
+        fs::hard_link(&recovery_stage.path, &recovery).map_err(|_| StorageError::StorageFailure)?;
+        sync_dir(parent)?;
+        drop(recovery_stage);
+        sync_dir(parent)?;
     } else {
         let (check, _) = verify_snapshot(&recovery, false)?;
         drop(check);
@@ -621,6 +630,42 @@ mod tests {
     }
 
     #[test]
+    fn interrupted_after_publish_rolls_back_to_last_good_database() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "before");
+        let export_path = sandbox.0.join("backup.sqlite3");
+        export(&storage, &export_path).unwrap();
+        storage
+            .connect()
+            .unwrap()
+            .execute("UPDATE iptv_sources SET name='last-good'", [])
+            .unwrap();
+        let prepared = prepare_import(&storage, &export_path).unwrap();
+        let candidate = prepared.candidate.path.clone();
+        confirm_import(&storage, prepared).unwrap();
+        let marker = fs::read_to_string(sandbox.0.join(REQUEST)).unwrap();
+        let recovery_name = marker.lines().nth(2).unwrap();
+        let recovery = marker_name(&sandbox.0, recovery_name, RECOVERY_PREFIX).unwrap();
+        checkpoint_old(storage.database_path()).unwrap();
+        let old = storage.connect().unwrap();
+        online_backup(&old, &recovery).unwrap();
+        drop(old);
+        // Simulate a crash immediately after atomic replacement, before the
+        // journal marker can be durably retired. No services hold DB handles.
+        fs::rename(&candidate, storage.database_path()).unwrap();
+        apply_pending(storage.database_path()).unwrap();
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name, "last-good");
+        assert!(!sandbox.0.join(REQUEST).exists());
+    }
+
+    #[test]
     fn no_clobber_foreign_future_corrupt_and_schema_trigger_fail_closed() {
         let sandbox = Sandbox::new();
         let storage = sandbox.storage();
@@ -660,6 +705,44 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn older_v3_v4_imports_migrate_only_in_private_staging() {
+        let sandbox = Sandbox::new();
+        let live = sandbox.storage();
+        live.initialize().unwrap();
+        for old_version in [3, 4] {
+            let path = sandbox.0.join(format!("source-v{old_version}.sqlite3"));
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(storage::MIGRATION_001).unwrap();
+            connection.execute_batch(storage::MIGRATION_002).unwrap();
+            connection.execute_batch(storage::MIGRATION_003).unwrap();
+            if old_version == 4 {
+                connection.execute_batch(storage::MIGRATION_004).unwrap();
+            }
+            connection.close().unwrap();
+            let prepared = prepare_import(&live, &path).unwrap();
+            let (_, actual_version) = verify_snapshot(&prepared.candidate.path, false).unwrap();
+            assert_eq!(actual_version, 5);
+            let source_version: i64 =
+                Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .unwrap()
+                    .query_row("PRAGMA user_version", [], |row| row.get(0))
+                    .unwrap();
+            assert_eq!(
+                source_version, old_version,
+                "original backup must stay unchanged"
+            );
+            drop(prepared);
+            assert_eq!(
+                live.connect()
+                    .unwrap()
+                    .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                5
+            );
+        }
     }
 
     #[cfg(unix)]
