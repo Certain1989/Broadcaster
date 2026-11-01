@@ -175,7 +175,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18389/summary >/dev/null
           flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-u1-test
-          flatpak --user remote-ls --refresh broadcaster-u1-test >/dev/null
+          flatpak --user remote-ls broadcaster-u1-test >/dev/null
           flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
           second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
           test -n "$second" && test "$first" != "$second"
