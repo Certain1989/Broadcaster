@@ -224,33 +224,42 @@ jobs:
           echo "U1 actual packaged file changed and updated on ${{ matrix.variant.arch }}"
           grep -Fx 'u1-disposable-data-preserved' "$user_data/u1-preservation-test.txt"
           echo 'U1 synthetic per-user data survived normal Devel update'
-          # Negative: a valid repository signed by an unrelated key MUST NOT
-          # install when the client pins the original test key. This exercises
-          # commit trust, not merely remote-list cache or summary parsing.
+          # Negative: summary signed by the original trusted test key, but all
+          # commits in this complete repository are signed by another disposable key.
+          # Re-signing a summary does NOT re-sign imported commits.
           bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-forged-key" - \
             "dist/broadcaster-u1-v2-x86_64.flatpak" \
             "dist/broadcaster-u1-v2-aarch64.flatpak" "$RUNNER_TEMP/u1-other-key"
+          trusted_fingerprint=$(cat "$RUNNER_TEMP/u1-key/.u1-disposable-fingerprint")
+          flatpak build-update-repo --gpg-sign="$trusted_fingerprint" \
+            --gpg-homedir="$RUNNER_TEMP/u1-key" "$RUNNER_TEMP/u1-forged-key/repo"
           sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/u1-forged-key/repo#" \
               -e 's#^Name=.*#Name=broadcaster-u1-forged#' \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/forged.flatpakrepo"
-          # Probe a fresh system installation, not the existing user install.
+          # Fresh system scope: accept the trusted summary before testing commit trust.
           if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
             echo 'Expected a clean disposable system installation' >&2
             exit 1
           fi
-          if sudo flatpak --system remote-add --from broadcaster-u1-forged "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1; then
-            if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
-                 broadcaster-u1-forged io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/forged.log" 2>&1; then
-              echo 'Untrusted signing key was accepted for a real installation; trust test FAILED' >&2
-              exit 1
-            fi
+          sudo flatpak --system remote-add --from broadcaster-u1-forged \
+            "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1
+          sudo flatpak --system remote-ls broadcaster-u1-forged | \
+            grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+               broadcaster-u1-forged io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/forged.log" 2>&1; then
+            echo 'Wrong-key-signed commit installed despite trusted summary; trust test FAILED' >&2
+            exit 1
           fi
           if ! grep -Eiq 'gpg|signature|verification|not signed|trusted key|public key' "$RUNNER_TEMP/forged.log"; then
-            echo 'Forged remote failed for an unrelated reason; not a trust PASS' >&2
+            echo 'Forged commit install failed for unrelated reason; not a trust PASS' >&2
             cat "$RUNNER_TEMP/forged.log"
             exit 1
           fi
-          echo 'U1 fresh system installation rejected the wrong-key signed repository (onboarding or commit verification)'
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Wrong-key install left an application installed' >&2
+            exit 1
+          fi
+          echo 'U1 trusted-summary onboarding succeeded; wrong-key commit installation rejected'
           # Positive system-scope counterpart: this uses a separate test remote
           # and the same signed Devel revisions, never the stable application.
           sudo flatpak --system remote-add --from broadcaster-u1-system \
