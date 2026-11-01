@@ -346,3 +346,63 @@ jobs:
           body_bytes=$(awk '/U1_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
             END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/u1-http.log")
           echo "Loopback HTTP response body bytes served (no headers/TLS): $body_bytes"
+
+  # Nonproduction-only hosting feasibility experiment: measured delta storage
+  # without changing either native signed-update integration environment.
+  static-delta-capacity:
+    needs: bundles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: u1-bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Install isolated packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+      - name: Generate and measure signed static deltas for both Devel refs
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/u1-delta-key"
+          bash build-aux/u1/make-test-key.sh "$key"
+          bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-delta-v1" - \
+            dist/broadcaster-u1-x86_64.flatpak dist/broadcaster-u1-aarch64.flatpak "$key"
+          bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-delta-v2" \
+            "$RUNNER_TEMP/u1-delta-v1" \
+            dist/broadcaster-u1-v2-x86_64.flatpak dist/broadcaster-u1-v2-aarch64.flatpak "$key"
+          # Work on a disposable copy. This must never change the signed-update test repo.
+          repo="$RUNNER_TEMP/u1-delta-copy/repo"
+          mkdir -p "$RUNNER_TEMP/u1-delta-copy"
+          cp -a "$RUNNER_TEMP/u1-delta-v2/repo" "$repo"
+          before_bytes=$(du -sb "$repo" | cut -f1)
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            ostree --repo="$repo" rev-parse "$ref" > "$RUNNER_TEMP/u1-delta-$arch.ref"
+          done
+          fingerprint=$(cat "$key/.u1-disposable-fingerprint")
+          # Bounded experiment; failure must not be misreported as a measured capacity result.
+          timeout 240s flatpak build-update-repo --generate-static-deltas \
+            --static-delta-jobs=2 --gpg-sign="$fingerprint" \
+            --gpg-homedir="$key" "$repo"
+          test -s "$repo/summary" && test -s "$repo/summary.sig"
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            test "$(ostree --repo="$repo" rev-parse "$ref")" = "$(cat "$RUNNER_TEMP/u1-delta-$arch.ref")"
+          done
+          test -d "$repo/deltas"
+          delta_files=$(find "$repo/deltas" -type f | wc -l)
+          test "$delta_files" -gt 0
+          after_bytes=$(du -sb "$repo" | cut -f1)
+          delta_bytes=$(du -sb "$repo/deltas" | cut -f1)
+          cat <<EOF
+          U1 NONPRODUCTION static-delta capacity experiment: PASS
+          Baseline dual-arch v2 repository bytes: $before_bytes
+          With generated static deltas repository bytes: $after_bytes
+          Static delta directory bytes (includes filesystem metadata): $delta_bytes
+          Static delta files: $delta_files
+          EOF
+          ostree --repo="$repo" static-delta list
