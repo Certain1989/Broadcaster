@@ -2137,6 +2137,111 @@ mod tests {
     }
 
     #[test]
+    fn c1_direct_title_omission_commits_only_clean_rows() {
+        let mut conn = db();
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let xml = guide(
+            channels,
+            &format!(
+                "{}{}{}",
+                programme("c", "Before", None, Some("original")),
+                programme("c", "Broken&#x85;<![CDATA[\u{0093}]]>Title", None, None),
+                programme("c", "After", Some("untouched"), None),
+            ),
+        );
+        let rows = import_fixture(&mut conn, &xml, "source", 1, 1).unwrap();
+        assert_eq!((rows.programmes, rows.omitted_c1_programmes), (2, 1));
+        let titles: Vec<String> = {
+            let mut q = conn
+                .prepare("SELECT title FROM epg_programmes ORDER BY title")
+                .unwrap();
+            q.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(titles, ["After", "Before"]);
+        assert_no_temp_marker(&conn);
+    }
+
+    #[test]
+    fn c1_title_fatal_errors_and_all_omitted_restore_previous_guide() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let bad_title = programme("c", "Bad&#x85;", None, None);
+        let invalid_cases = [
+            guide(channels, &bad_title),
+            guide(
+                channels,
+                &format!(
+                    "{}{}",
+                    programme("missing", "Bad&#x85;", None, None),
+                    programme("c", "OK", None, None)
+                ),
+            ),
+            guide(
+                channels,
+                &format!("{}{}", bad_title, programme("c", "CLEAN", None, None)),
+            )
+            .replace(
+                "<title>Bad&#x85;</title>",
+                "<title>Bad&#x85;\u{007f}</title>",
+            ),
+            guide(
+                channels,
+                &format!("{}{}", bad_title, programme("c", "CLEAN", None, None)),
+            )
+            .replace(
+                "<title>Bad&#x85;</title>",
+                "<title ignored='&#x85;'>Bad&#x85;</title>",
+            ),
+        ];
+        for (index, candidate) in invalid_cases.iter().enumerate() {
+            let mut conn = db();
+            let previous = guide(channels, &programme("c", "Previous", None, None));
+            import_fixture(&mut conn, &previous, "source", 1, 1).unwrap();
+            let err = import_fixture(&mut conn, candidate, "source", 2, 2).unwrap_err();
+            assert_eq!(
+                err,
+                match index {
+                    0 => EpgError::InvalidSchedule,
+                    1 => EpgError::MissingChannel,
+                    _ => EpgError::InvalidInput,
+                }
+            );
+            let title: String = conn
+                .query_row("SELECT title FROM epg_programmes", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(title, "Previous");
+            assert_no_temp_marker(&conn);
+        }
+    }
+
+    #[test]
+    fn c1_title_shortened_key_collision_still_fails_closed() {
+        let channels = "<channel id='c'><display-name>C</display-name></channel>";
+        let prefix = "P".repeat(512);
+        let omitted = programme("c", &format!("{prefix}&#x85;"), None, None);
+        let retained = programme("c", &format!("{prefix}ordinary"), None, None);
+        for (left, right) in [(&omitted, &retained), (&retained, &omitted)] {
+            let mut conn = db();
+            let previous = guide(channels, &programme("c", "Previous", None, None));
+            import_fixture(&mut conn, &previous, "source", 1, 1).unwrap();
+            let xml = guide(channels, &format!("{left}{right}"));
+            assert_eq!(
+                import_fixture(&mut conn, &xml, "source", 2, 2),
+                Err(EpgError::InvalidSchedule)
+            );
+            assert_eq!(
+                conn.query_row("SELECT title FROM epg_programmes", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "Previous"
+            );
+            assert_no_temp_marker(&conn);
+        }
+    }
+
+    #[test]
     fn c1_direct_description_omits_elements_but_preserves_clean_future_rows() {
         for bad in ["\u{0080}", "\u{0093}", "\u{0094}", "\u{0096}", "\u{009f}"] {
             let mut conn = db();
