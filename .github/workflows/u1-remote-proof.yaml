@@ -413,11 +413,13 @@ jobs:
             old=$(ostree --repo="$RUNNER_TEMP/u1-delta-v1/repo" rev-parse "$ref")
             new=$(ostree --repo="$repo" rev-parse "$ref")
             test -n "$old" && test -n "$new" && test "$old" != "$new"
-            timeout 120s ostree --repo="$repo" static-delta generate               --from="$old" --to="$new"
+            timeout 120s ostree --repo="$repo" static-delta generate \
+              --from="$old" --to="$new"
             ostree --repo="$repo" static-delta show "$old-$new" | grep -F "From: $old"
           done
           # Regenerate the signed summary after adding incremental deltas.
-          flatpak build-update-repo --gpg-sign="$fingerprint"             --gpg-homedir="$key" "$repo"
+          flatpak build-update-repo --gpg-sign="$fingerprint" \
+            --gpg-homedir="$key" "$repo"
           test -s "$repo/summary" && test -s "$repo/summary.sig"
           for arch in x86_64 aarch64; do
             ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
@@ -431,10 +433,13 @@ jobs:
           # loopback HTTP. This is neither CDN hosting nor a stable update.
           export XDG_DATA_HOME="$RUNNER_TEMP/u1-delta-flatpak-data"
           app=io.github.Certain1989.Broadcaster.Devel
-          flatpak --user remote-add --from broadcaster-u1-delta             "$RUNNER_TEMP/u1-delta-v1/u1-test.flatpakrepo"
-          flatpak --user install -y --noninteractive --no-deps --no-related             broadcaster-u1-delta "$app"
+          flatpak --user remote-add --from broadcaster-u1-delta \
+            "$RUNNER_TEMP/u1-delta-v1/u1-test.flatpakrepo"
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-u1-delta "$app"
           old_installed=$(flatpak --user info --show-commit "$app")
-          test "$old_installed" = "$(ostree --repo="$RUNNER_TEMP/u1-delta-v1/repo" rev-parse             app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
+          test "$old_installed" = "$(ostree --repo="$RUNNER_TEMP/u1-delta-v1/repo" rev-parse \
+            app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
           python3 -u build-aux/u1/http-meter.py 18391 "$repo" >"$RUNNER_TEMP/u1-delta-http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -447,9 +452,11 @@ jobs:
           flatpak --user update -y --noninteractive --no-deps "$app"
           new_installed=$(flatpak --user info --show-commit "$app")
           test "$new_installed" != "$old_installed"
-          test "$new_installed" = "$(ostree --repo="$repo" rev-parse             app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
+          test "$new_installed" = "$(ostree --repo="$repo" rev-parse \
+            app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
           installed=$(flatpak --user info --show-location "$app")
-          grep -Fx 'u1-nonproduction-content-revision-2'             "$installed/files/share/broadcaster/u1-transport-test-marker.txt"
+          grep -Fx 'u1-nonproduction-content-revision-2' \
+            "$installed/files/share/broadcaster/u1-transport-test-marker.txt"
           grep -F 'GET /deltas/' "$RUNNER_TEMP/u1-delta-http.log"
           delta_http_bytes=$(awk '/U1_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
             END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/u1-delta-http.log")
