@@ -39,29 +39,37 @@ Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe
 
 ## Screenshots
 
+Die folgenden Screenshots zeigen Broadcaster v0.2.5. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
+
 ### Mediathek-Suche
 
-Sendungen über die Suche sowie Sender-, Dauer- und Sortierfilter finden.
+Sendungen nach Titel suchen sowie Sender- und Dauerfilter verwenden.
 
-<img width="760" alt="Mediathek-Suchfeld mit Sender- und Dauerfiltern sowie leerem Suchzustand" src="docs/screenshots/v0.2.1/mediathek-search.png" />
-
-### Bildschirmtastatur
-
-Suchbegriffe mit einer Fernbedienung eingeben, ohne eine physische Tastatur zu benötigen.
-
-<img width="760" alt="Mediathek-Suche mit geöffneter, per Fernbedienung steuerbarer Bildschirmtastatur" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+<img width="960" alt="Mediathek-Suche nach Japan mit ARTE-Ergebnissen, Sender- und Dauerfilter und aufgeklappten Aktionen" src="docs/screenshots/v0.2.5/mediathek-search.png" />
 
 ### Live-TV
 
-Laufende Sendungen mit Fortschrittsanzeige und aufklappbaren Beschreibungen durchsuchen.
+Laufende Sendungen mit Fortschrittsbalken und Beschreibungen durchsuchen.
 
-<img width="760" alt="Live-TV-Senderliste mit Sendungsfortschritt und ausgeklappter Programmbeschreibung" src="docs/screenshots/v0.2.1/live-tv.png" />
+<img width="960" alt="Live-TV mit Senderlogos, Fortschrittsanzeigen und aufgeklappter Sendungsbeschreibung" src="docs/screenshots/v0.2.5/live-tv.png" />
 
-### Eigene Sender
+### Bildschirmtastatur
 
-Importierte IPTV-Sender anzeigen und nach Quelle, Gruppe, Sprache oder Land filtern.
+Texte ohne physische Tastatur mit der Fernbedienung eingeben.
 
-<img width="760" alt="Eigene Sender mit IPTV-Senderliste sowie Quellen-, Gruppen-, Sprach- und Länderfiltern" src="docs/screenshots/v0.2.1/my-channels.png" />
+<img width="960" alt="Geöffnete Bildschirmtastatur über der Live-TV-Senderliste" src="docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### Eigene Sender mit Programminformationen
+
+IPTV-Sender durchsuchen, Listen filtern und bei vorhandenen XMLTV-Daten Jetzt/Nächste-Informationen anzeigen.
+
+<img width="960" alt="Eigene Sender mit Playlistfiltern, Favoritensternen und Jetzt/Nächste-Informationen mit Fortschrittsbalken" src="docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programmführer
+
+Eigene XMLTV-Quellen verwalten, manuell aktualisieren oder einen gemeinsamen Standard-Programmführer auswählen.
+
+<img width="960" alt="Programmführer-Verwaltung mit zwischengespeichertem EPG, Shared-Default-Auswahl und Aktualisierung" src="docs/screenshots/v0.2.5/programme-guides.png" />
 
 ### Videowiedergabe
 

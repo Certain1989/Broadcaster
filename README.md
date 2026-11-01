@@ -39,29 +39,37 @@ A missing or failed guide import must not stop ordinary channel playback or Medi
 
 ## Screenshots
 
+The following screenshots show Broadcaster v0.2.5. Programme titles, times and IPTV availability come from third-party sources and can change.
+
 ### Mediathek search
 
-Search the Mediathek with broadcaster, duration and sorting filters.
+Search the Mediathek using a title, broadcaster and duration filters.
 
-<img width="760" alt="Mediathek search field, broadcaster and duration filters, and initial search screen" src="docs/screenshots/v0.2.1/mediathek-search.png" />
-
-### On-screen keyboard
-
-Enter search text using a TV remote without needing a physical keyboard.
-
-<img width="760" alt="Mediathek search with the remote-controlled on-screen keyboard open" src="docs/screenshots/v0.2.1/mediathek-onscreen-keyboard.png" />
+<img width="960" alt="Mediathek search with Japan results from ARTE, channel and duration filters, and expanded programme actions" src="docs/screenshots/v0.2.5/mediathek-search.png" />
 
 ### Live TV
 
-Browse the programme list, check progress, and expand programme details.
+Browse currently airing programmes with progress indicators and descriptions.
 
-<img width="760" alt="Live TV channel list showing programme progress and expanded programme details" src="docs/screenshots/v0.2.1/live-tv.png" />
+<img width="960" alt="Live TV with broadcaster logos, progress bars and expanded programme descriptions" src="docs/screenshots/v0.2.5/live-tv.png" />
 
-### My Channels
+### On-screen keyboard
 
-Browse imported IPTV channels and filter by source, group, language or country.
+Enter text with a directional remote without needing a physical keyboard.
 
-<img width="760" alt="My Channels IPTV list with source, group, language and country filters" src="docs/screenshots/v0.2.1/my-channels.png" />
+<img width="960" alt="On-screen keyboard opened over the Live TV programme list" src="docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### My Channels with programme information
+
+Browse your IPTV channels, filter your lists and view XMLTV Now/Next information when available.
+
+<img width="960" alt="My Channels playlist filters, favourites stars and Now/Next details with progress indicators" src="docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programme Guides
+
+Manage explicitly selected XMLTV guide sources, refresh a guide or choose the shared default.
+
+<img width="960" alt="Programme Guides dialog showing a cached guide, shared default selection and refresh controls" src="docs/screenshots/v0.2.5/programme-guides.png" />
 
 ### Video playback
 
