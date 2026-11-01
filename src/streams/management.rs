@@ -989,6 +989,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
     let guides = button(&gettext("Programme Guides"), &actions);
+    let database = button(&gettext("Database Backup / Restore"), &actions);
     let close = button(&gettext("Close"), &actions);
     guides.connect_clicked(glib::clone!(
         #[weak]
@@ -1015,7 +1016,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     // Native GTK spatial fallback can strand a remote in the first source
     // card: the row's Up key has no preceding ListBoxRow. Give every header
     // action a physical Down route back into that first source portal.
-    for header in [&add, &guides, &close] {
+    for header in [&add, &guides, &database, &close] {
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_list = list.downgrade();
@@ -1033,6 +1034,11 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         });
         header.add_controller(key);
     }
+    database.connect_clicked(glib::clone!(
+        #[weak]
+        view,
+        move |_| show_database_actions(&view)
+    ));
     scroll.set_child(Some(&list));
     body.append(&scroll);
     body.append(&status);
@@ -1056,6 +1062,182 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         move |_| view.forget_source_manager()
     ));
     attach_progress(&dialog, &status, service);
+    dialog.present(Some(&window));
+}
+
+/// DB-01 contains source locators, playlist URLs and possibly credentials.
+/// The preview intentionally includes counts only, never titles or paths.
+fn show_database_actions(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let (dialog, body, _) = sheet(&gettext("Database Backup and Restore"));
+    let warning = gtk::Label::new(Some(&gettext(
+        "Database backups contain private source URLs, local paths and possible access tokens. They include cached programmes, channels, favourites, guide links and refresh settings, but NOT GSettings, external playlist/guide files, artwork or portal grants. Keep the backup private. Restoring replaces ALL existing database data and may require reauthorizing local files.",
+    )));
+    warning.set_wrap(true);
+    warning.set_xalign(0.0);
+    body.append(&warning);
+    let export = button(&gettext("Export Complete Database"), &body);
+    let restore = button(&gettext("Import and Replace Database"), &body);
+    let cancel = button(&gettext("Cancel"), &body);
+    export.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        view,
+        move |_| {
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| choose_database_export(&view)
+            ));
+            dialog.close();
+        }
+    ));
+    restore.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        view,
+        move |_| {
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| choose_database_import(&view)
+            ));
+            dialog.close();
+        }
+    ));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
+    dialog.present(Some(&window));
+}
+
+fn choose_database_export(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let Some(service) = view.service() else {
+        return;
+    };
+    let picker = gtk::FileDialog::new();
+    picker.set_initial_name(Some("broadcaster-backup.sqlite3"));
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let Ok(file) = picker.save_future(Some(&window)).await else {
+                return;
+            };
+            let Some(path) = file.path() else {
+                message(
+                    &view,
+                    &gettext("Select a local file destination for the database backup."),
+                );
+                return;
+            };
+            match service.export_database(path).await {
+                Ok(_) => message(
+                    &view,
+                    &gettext("Database backup exported. Keep this private file safe."),
+                ),
+                Err(error) => fail(&view, error),
+            }
+        }
+    ));
+}
+
+fn choose_database_import(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let Some(service) = view.service() else {
+        return;
+    };
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let Ok(file) = gtk::FileDialog::new().open_future(Some(&window)).await else {
+                return;
+            };
+            let Some(path) = file.path() else {
+                message(&view, &gettext("Select a local SQLite backup file."));
+                return;
+            };
+            match service.prepare_database_import(path).await {
+                Ok(prepared) => confirm_database_restore(&view, service, prepared),
+                Err(error) => fail(&view, error),
+            }
+        }
+    ));
+}
+
+fn confirm_database_restore(
+    view: &TvStreamsView,
+    service: StreamsService,
+    prepared: super::backup::PreparedImport,
+) {
+    let Some(window) = parent(view) else { return };
+    let (dialog, body, status) = sheet(&gettext("Confirm Complete Database Replacement"));
+    let summary = gtk::Label::new(Some(&format!(
+        "{}: {}  |  {}: {}  |  {}: {}  |  {}: {}",
+        gettext("Playlists"),
+        prepared.counts.playlists,
+        gettext("Channels"),
+        prepared.counts.channels,
+        gettext("Guides"),
+        prepared.counts.guides,
+        gettext("Cached programmes"),
+        prepared.counts.programmes,
+    )));
+    summary.set_wrap(true);
+    body.append(&summary);
+    let warning = gtk::Label::new(Some(&gettext(
+        "This is a FULL REPLACEMENT, not a merge. Everything currently stored in Broadcaster's database will be replaced after you quit and relaunch the application. The previous database will be kept as a recovery copy. No automatic source or guide refresh will run during the restore startup.",
+    )));
+    warning.set_wrap(true);
+    body.append(&warning);
+    let confirm = button(&gettext("Replace Entire Database After Restart"), &body);
+    let cancel = button(&gettext("Keep Current Database"), &body);
+    let pending = Rc::new(RefCell::new(Some(prepared)));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| dialog.close()
+    ));
+    confirm.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        status,
+        #[weak]
+        confirm,
+        move |_| {
+            let Some(import) = pending.borrow_mut().take() else { return };
+            confirm.set_sensitive(false);
+            let service = service.clone();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                async move {
+                    match service.confirm_database_import(import).await {
+                        Ok(()) => {
+                            status.set_text(&gettext("Restore safely staged. Close Broadcaster and relaunch to complete replacement. Do not start another refresh now."));
+                            let quit = gtk::Button::with_label(&gettext("Close Broadcaster Now"));
+                            if let Some(content) = dialog.child().and_downcast::<gtk::Box>() {
+                                content.append(&quit);
+                            }
+                            quit.connect_clicked(|_| crate::application::TvApplication::get().quit());
+                            quit.grab_focus();
+                        }
+                        Err(_) => status.set_text(&gettext("Could not stage database restore. The current database is unchanged.")),
+                    }
+                }
+            ));
+        }
+    ));
+    body.append(&status);
     dialog.present(Some(&window));
 }
 

@@ -5,6 +5,7 @@
 //! A lazy GTK catalogue is registered alongside the off-main backend.
 #![allow(dead_code)]
 
+pub(crate) mod backup;
 mod editor;
 mod epg_projection;
 mod facet_picker;

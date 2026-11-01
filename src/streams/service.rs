@@ -162,7 +162,9 @@ impl StreamsService {
     /// GLib future; all later repository operations use the same worker bridge.
     pub(crate) async fn open() -> Result<Self, ServiceError> {
         let service = Self::with_storage(Storage::new()).await?;
-        service.start_opt_in_scheduler();
+        if !super::backup::suppress_automatic_refresh_this_startup() {
+            service.start_opt_in_scheduler();
+        }
         Ok(service)
     }
 
@@ -239,6 +241,33 @@ impl StreamsService {
         self.db(move |s| {
             s.due_source_ids_excluding(at, 2, &active)
                 .map_err(Into::into)
+        })
+        .await
+    }
+
+    /// D1 backup/restore is always on a SQLite worker, never GTK or an HTTP worker.
+    pub(crate) async fn export_database(
+        &self,
+        destination: std::path::PathBuf,
+    ) -> Result<super::backup::SnapshotCounts, ServiceError> {
+        self.db(move |storage| super::backup::export(&storage, &destination).map_err(Into::into))
+            .await
+    }
+
+    pub(crate) async fn prepare_database_import(
+        &self,
+        source: std::path::PathBuf,
+    ) -> Result<super::backup::PreparedImport, ServiceError> {
+        self.db(move |storage| super::backup::prepare_import(&storage, &source).map_err(Into::into))
+            .await
+    }
+
+    pub(crate) async fn confirm_database_import(
+        &self,
+        prepared: super::backup::PreparedImport,
+    ) -> Result<(), ServiceError> {
+        self.db(move |storage| {
+            super::backup::confirm_import(&storage, prepared).map_err(Into::into)
         })
         .await
     }

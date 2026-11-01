@@ -107,7 +107,12 @@ impl Storage {
         self.path == Self::new().path
     }
 
+    pub(crate) fn database_path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn initialize(&self) -> StorageResult<()> {
+        super::backup::check_startup_restore(self)?;
         let path = &self.path;
         ensure_private_parent(path)?;
         match fs::symlink_metadata(path) {
@@ -1463,7 +1468,7 @@ fn validate_integrity(conn: &Connection) -> StorageResult<()> {
     }
     Ok(())
 }
-fn ensure_private_parent(path: &Path) -> StorageResult<()> {
+pub(super) fn ensure_private_parent(path: &Path) -> StorageResult<()> {
     let parent = path.parent().ok_or(StorageError::InvalidInput)?;
     if !parent.exists() {
         #[cfg(unix)]
@@ -1497,7 +1502,7 @@ fn ensure_private_parent(path: &Path) -> StorageResult<()> {
 extern "C" {
     fn geteuid() -> u32;
 }
-fn require_private_file(path: &Path) -> StorageResult<()> {
+pub(super) fn require_private_file(path: &Path) -> StorageResult<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -2186,4 +2191,69 @@ mod schema_check_lexer_tests {
             assert!(check_clauses(malformed).is_err(), "{malformed}");
         }
     }
+}
+
+/// Strict, read-only import validation at the actual source format version.
+pub(super) fn validate_snapshot_schema(conn: &Connection, version: i64) -> StorageResult<()> {
+    if !(3..=SCHEMA_VERSION).contains(&version) {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    validate_v1_schema_shape(conn)?;
+    validate_v2_schema_shape(conn)?;
+    validate_v3_schema_shape(conn)?;
+    if version >= 4 {
+        validate_v4_schema_shape(conn)?;
+    }
+    if version >= 5 {
+        validate_v5_schema_shape(conn)?;
+    }
+    validate_integrity(conn)?;
+    // An imported file cannot introduce SQL triggers, views or alternate
+    // shadow objects, even when ordinary table/index names seem correct.
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    for sql in [MIGRATION_001, MIGRATION_002, MIGRATION_003] {
+        reference.execute_batch(sql).map_err(map_sql)?;
+    }
+    if version >= 4 {
+        reference.execute_batch(MIGRATION_004).map_err(map_sql)?;
+    }
+    if version >= 5 {
+        reference.execute_batch(MIGRATION_005).map_err(map_sql)?;
+    }
+    fn object_names(conn: &Connection) -> StorageResult<Vec<(String, String)>> {
+        let mut stmt = conn.prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| StorageError::IncompatibleDatabase)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| StorageError::IncompatibleDatabase)
+    }
+    if object_names(conn)? != object_names(&reference)? {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    Ok(())
+}
+
+/// Migrations on disposable imported staging only. No writes to the selected
+/// original or to the running application's database.
+pub(super) fn upgrade_import_stage(path: &Path, version: i64) -> StorageResult<()> {
+    let migration = match version {
+        3 => [Some(MIGRATION_004), Some(MIGRATION_005)],
+        4 => [Some(MIGRATION_005), None],
+        _ => return Err(StorageError::IncompatibleDatabase),
+    };
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(map_sql)?;
+    configure(&connection)?;
+    for sql in migration.into_iter().flatten() {
+        connection.execute_batch(sql).map_err(map_sql)?;
+    }
+    validate_snapshot_schema(&connection, SCHEMA_VERSION)?;
+    connection
+        .close()
+        .map_err(|_| StorageError::StorageFailure)?;
+    fs::File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| StorageError::StorageFailure)?;
+    Ok(())
 }
