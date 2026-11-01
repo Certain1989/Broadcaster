@@ -227,8 +227,25 @@ jobs:
             cat "$RUNNER_TEMP/forged.log"
             exit 1
           fi
-          echo 'U1 fresh system installation rejected a valid wrong-key signed commit'
-          echo 'U1 dual-architecture signed changed-content update, mixed-arch/key rejection, partial HTTP publication and wrong-key commit oracle: PASS'
+          echo 'U1 fresh system installation rejected the wrong-key signed repository (onboarding or commit verification)'
+          # Positive system-scope counterpart: this uses a separate test remote
+          # and the same signed Devel revisions, never the stable application.
+          sudo flatpak --system remote-add --from broadcaster-u1-system \
+            "$RUNNER_TEMP/u1-v1/u1-test.flatpakrepo"
+          sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+            broadcaster-u1-system io.github.Certain1989.Broadcaster.Devel
+          system_first=$(sudo flatpak --system info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$system_first" && test "$system_first" = "$first"
+          sudo flatpak --system remote-modify --url="http://127.0.0.1:18389" broadcaster-u1-system
+          sudo flatpak --system update -y --noninteractive --no-deps \
+            io.github.Certain1989.Broadcaster.Devel
+          system_second=$(sudo flatpak --system info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$system_second" && test "$system_second" = "$second"
+          system_location=$(sudo flatpak --system info --show-location io.github.Certain1989.Broadcaster.Devel)
+          grep -Fx 'u1-nonproduction-content-revision-2' \
+            "$system_location/files/share/broadcaster/u1-transport-test-marker.txt"
+          echo "U1 system-scope signed changed-content update: PASS on ${{ matrix.variant.arch }}"
+          echo 'U1 dual-architecture user/system signed changed-content update, mixed-arch/key rejection, partial HTTP publication and wrong-key oracle: PASS'
           cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
           cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
           printf 'Loopback HTTP requests (server log entries): '
