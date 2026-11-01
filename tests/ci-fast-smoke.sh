@@ -35,6 +35,9 @@ run_positive() {
 # and *painted* focus, spanning the compact and TV viewport sizes.
 # Every name must match exactly one ignored test, not Cargo's zero-match pass.
 run_positive c1_native_manager_1_640_480 640x480
+# G1: new playlist-level Programme Guide action is D-pad reachable at both sizes.
+run_positive c1_actual_remote_back_trace 640x480
+run_positive c1_actual_remote_back_trace_tv 1280x800
 run_positive c2_native_3_1280_800 1280x800
 run_positive c4_native_favourites_640_480 640x480
 run_positive r07_native_painted_focus_1280_800 1280x800
