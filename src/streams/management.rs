@@ -5080,6 +5080,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             buttons[0].has_focus(),
             "Up after external focus shifts follows fresh Delete -> Refresh"
         );
+        assert!(buttons[4].grab_focus(), "focus lower Delete action");
+        spin();
+        inject("Down");
+        assert!(
+            guide_action.has_focus(),
+            "D-pad Down from lower row reaches new Programme Guide action"
+        );
+        assert_eq!(
+            view.manager_focus().as_ref().map(|(_, slot, _)| *slot),
+            Some(8),
+            "new playlist guide action has stable remote focus slot"
+        );
+        inject("Up");
+        assert!(
+            buttons[4].has_focus(),
+            "D-pad Up reverses to lower action without trapping focus"
+        );
         inject("XF86Back");
         assert!(
             row.has_focus(),

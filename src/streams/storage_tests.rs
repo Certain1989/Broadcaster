@@ -497,7 +497,7 @@ fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        SCHEMA_VERSION
     );
     let alias: String = conn
         .query_row(
