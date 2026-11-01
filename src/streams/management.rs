@@ -2413,7 +2413,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "native XTest mapped synthetic manager, TV viewport; diagnostic only"]
-    fn c1_actual_remote_back_trace_tv() {
+    fn c1_bigscreen_guide_remote_back_trace() {
         run_mapped_manager(1280, 800);
     }
 
