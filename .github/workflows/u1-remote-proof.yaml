@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: U1 isolated signed Flatpak remote proof
+
+on:
+  pull_request:
+    paths:
+      - 'build-aux/u1/**'
+      - '.github/workflows/u1-remote-proof.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No GitHub Pages, deployment, releases, tags, write scopes or stored production key.
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Syntax and negative-path guards
+        run: |
+          bash -n build-aux/u1/*.sh
+          bash build-aux/u1/test-staging-guards.sh
+
+  bundles:
+    needs: guards
+    runs-on: ${{ matrix.variant.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+      volumes:
+        - /usr/local/lib/android:/unused-runner-android
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Reclaim unused Android SDK
+        if: matrix.variant.arch == 'x86_64'
+        run: rm -rf /unused-runner-android/*
+      - name: Build real Devel candidate bundle for U1 (NOT a stable release)
+        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
+        with:
+          manifest-path: build-aux/io.github.Certain1989.Broadcaster.Devel.json
+          bundle: broadcaster-u1-${{ matrix.variant.arch }}.flatpak
+          arch: ${{ matrix.variant.arch }}
+          run-tests: true
+          verbose: true
+          upload-artifact: false
+      - name: Verify bundle and architecture identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch=${{ matrix.variant.arch }}
+          test -s "broadcaster-u1-$arch.flatpak"
+          ostree --repo=u1-verify init --mode=archive-z2
+          flatpak build-import-bundle u1-verify "broadcaster-u1-$arch.flatpak"
+          ostree --repo=u1-verify refs | grep -Fx "app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+          sha256sum "broadcaster-u1-$arch.flatpak"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: u1-bundle-${{ matrix.variant.arch }}
+          path: broadcaster-u1-${{ matrix.variant.arch }}.flatpak
+          if-no-files-found: error
+          retention-days: 2
+
+  isolated-remote:
+    needs: bundles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: u1-bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Install isolated packaging/trust tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+      - name: Stage disposable signed remote containing both real candidate architectures
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/u1-flatpak-data
+        run: |
+          set -euo pipefail
+          dir=$RUNNER_TEMP/u1-key
+          bash build-aux/u1/make-test-key.sh "$dir"
+          bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-v1" - \
+            dist/broadcaster-u1-x86_64.flatpak dist/broadcaster-u1-aarch64.flatpak "$dir"
+          test -s "$RUNNER_TEMP/u1-v1/u1-test.flatpakrepo"
+          test -s "$RUNNER_TEMP/u1-v1/u1-test.flatpakref"
+          test -s "$RUNNER_TEMP/u1-v1/repo/summary.sig"
+          flatpak --user remote-add --from broadcaster-u1-test "$RUNNER_TEMP/u1-v1/u1-test.flatpakrepo"
+          flatpak --user remote-ls broadcaster-u1-test | grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-u1-test io.github.Certain1989.Broadcaster.Devel
+          first=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$first"
+          # A signed, metadata-only second revision proves the update transport.
+          # It is NOT evidence of an application-version update.
+          bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-v2" "$RUNNER_TEMP/u1-v1" \
+            dist/broadcaster-u1-x86_64.flatpak dist/broadcaster-u1-aarch64.flatpak "$dir"
+          for arch in x86_64 aarch64; do
+            flatpak build-commit-from --force --no-update-summary \
+              --subject="U1 signed metadata-only transport revision two" \
+              --gpg-sign=$(cat "$dir/.u1-disposable-fingerprint") --gpg-homedir="$dir" \
+              "$RUNNER_TEMP/u1-v2/repo" \
+              "app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+          done
+          flatpak build-update-repo --gpg-sign=$(cat "$dir/.u1-disposable-fingerprint") \
+            --gpg-homedir="$dir" "$RUNNER_TEMP/u1-v2/repo"
+          flatpak --user remote-modify --url="file://$RUNNER_TEMP/u1-v2/repo" broadcaster-u1-test
+          flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
+          second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$second" && test "$first" != "$second"
+          # Ensure the remote does not accept forged unsigned metadata.
+          mkdir -p "$RUNNER_TEMP/bad-copy"
+          cp -a "$RUNNER_TEMP/u1-v2/repo" "$RUNNER_TEMP/bad-copy/repo"
+          printf 'tampered' >> "$RUNNER_TEMP/bad-copy/repo/summary"
+          flatpak --user remote-modify --url="file://$RUNNER_TEMP/bad-copy/repo" broadcaster-u1-test
+          if flatpak --user remote-ls --refresh broadcaster-u1-test >/dev/null 2>&1; then
+            echo 'Tampered summary was accepted; trust test FAILED' >&2
+            exit 1
+          fi
+          echo 'U1 signed update transport and invalid-summary rejection: PASS'
+          cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
+          cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
