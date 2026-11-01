@@ -176,6 +176,24 @@ jobs:
           curl -fsS http://127.0.0.1:18389/summary >/dev/null
           flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-u1-test
           flatpak --user remote-ls broadcaster-u1-test >/dev/null
+          # Negative: publish the signed v2 summary while withholding its
+          # architecture-specific commit object. A normal update must fail
+          # without replacing the previously installed valid revision.
+          new_ref=$(ostree --repo="$RUNNER_TEMP/u1-v2/repo" rev-parse \
+            "app/io.github.Certain1989.Broadcaster.Devel/${{ matrix.variant.arch }}/master")
+          commit_object="$RUNNER_TEMP/u1-v2/repo/objects/${new_ref:0:2}/${new_ref:2}.commit"
+          test -s "$commit_object"
+          mv "$commit_object" "$RUNNER_TEMP/u1-withheld.commit"
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:18389/objects/${new_ref:0:2}/${new_ref:2}.commit")" = 404
+          if flatpak --user update -y --noninteractive --no-deps \
+               io.github.Certain1989.Broadcaster.Devel >"$RUNNER_TEMP/u1-partial.log" 2>&1; then
+            echo 'Incomplete HTTP publication was accepted as an update' >&2
+            exit 1
+          fi
+          test "$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)" = "$first"
+          mv "$RUNNER_TEMP/u1-withheld.commit" "$commit_object"
+          # Restore the complete object graph; normal update must now work.
           flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
           second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
           test -n "$second" && test "$first" != "$second"
@@ -183,24 +201,16 @@ jobs:
           grep -Fx 'u1-nonproduction-content-revision-2' \
             "$installed/files/share/broadcaster/u1-transport-test-marker.txt"
           echo "U1 actual packaged file changed and updated on ${{ matrix.variant.arch }}"
-          # Use a NEW remote so old cached summaries cannot yield a false PASS.
-          mkdir -p "$RUNNER_TEMP/bad-copy"
-          cp -a "$RUNNER_TEMP/u1-v2/repo" "$RUNNER_TEMP/bad-copy/repo"
-          # Mutate a signed byte; merely appending ignored trailing data is not tampering.
-          python3 - "$RUNNER_TEMP/bad-copy/repo/summary" <<'PY'
-          import pathlib
-          import sys
-          path = pathlib.Path(sys.argv[1])
-          data = bytearray(path.read_bytes())
-          assert len(data) > 64
-          data[len(data) // 2] ^= 1
-          path.write_bytes(data)
-          PY
-          sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/bad-copy/repo#" \
+          # Negative: a valid repository signed by an unrelated key MUST NOT
+          # install when the client pins the original test key. This exercises
+          # commit trust, not merely remote-list cache or summary parsing.
+          bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-forged-key" - \
+            "dist/broadcaster-u1-v2-x86_64.flatpak" \
+            "dist/broadcaster-u1-v2-aarch64.flatpak" "$RUNNER_TEMP/u1-other-key"
+          sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/u1-forged-key/repo#" \
               -e 's#^Name=.*#Name=broadcaster-u1-forged#' \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/forged.flatpakrepo"
-          # Probe a distinct ephemeral system installation: remote listing alone
-          # may use cached appstream metadata and is NOT a signature check.
+          # Probe a fresh system installation, not the existing user install.
           if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
             echo 'Expected a clean disposable system installation' >&2
             exit 1
@@ -208,16 +218,17 @@ jobs:
           if sudo flatpak --system remote-add --from broadcaster-u1-forged "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1; then
             if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
                  broadcaster-u1-forged io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/forged.log" 2>&1; then
-              echo 'Tampered summary was accepted for a real installation; trust test FAILED' >&2
+              echo 'Untrusted signing key was accepted for a real installation; trust test FAILED' >&2
               exit 1
             fi
           fi
-          if ! grep -Eiq 'summary|signature|gpg|verification|invalid|not valid' "$RUNNER_TEMP/forged.log"; then
+          if ! grep -Eiq 'gpg|signature|verification|not signed|trusted key|public key' "$RUNNER_TEMP/forged.log"; then
             echo 'Forged remote failed for an unrelated reason; not a trust PASS' >&2
             cat "$RUNNER_TEMP/forged.log"
             exit 1
           fi
-          echo 'U1 dual-architecture signed changed-content update, mixed-arch/key rejection, HTTP transport and invalid-summary oracle: PASS'
+          echo 'U1 fresh system installation rejected a valid wrong-key signed commit'
+          echo 'U1 dual-architecture signed changed-content update, mixed-arch/key rejection, partial HTTP publication and wrong-key commit oracle: PASS'
           cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
           cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
           printf 'Loopback HTTP requests (server log entries): '
