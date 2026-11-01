@@ -92,8 +92,12 @@ causes many small HTTP requests; static deltas trade additional storage for
 fewer requests. For two architectures, measure staged repo size, file count,
 from-empty and incremental delta bytes, HTTP keep-alive/cache behavior,
 request/transfer totals, deployment churn and retained historical commits.
-The workflow's METRICS.txt gives a first unhosted baseline only; **a hosting
-decision cannot be inferred from the size of one standalone bundle**.
+The workflow's METRICS.txt gives a first unhosted baseline only; the
+loopback-only Python server now logs actual HTTP response-body bytes sent
+(including repeated requests, probes and retries) alongside GET counts. This
+excludes request/response headers, TLS, CDN caches and real WAN overhead;
+it is **not** a GitHub Pages bandwidth measurement. **A hosting decision
+cannot be inferred from the size of one standalone bundle**.
 GitHub Release attachments alone are not an immutable path-preserving OSTree
 object service. If Pages exceeds limits or cannot serve valid update semantics,
 choose a suitable separately approved static host or repository service;
@@ -108,7 +112,14 @@ while preserving the same stable application ID and user data directory.
 Do not silently replace a system installation with a duplicate user install.
 Devel test refs intentionally do not replace an existing stable install.
 Reinstall/uninstall experiments must use disposable installations/data; confirm
-persistent app data survives. Test offline/partial publication, wrong GPG key,
+persistent app data survives. The U1 workflow now seeds a disposable per-user
+Devel data marker before the signed update and verifies it afterward; this is
+**not** proof of migrating an existing stable installation, database, portal
+grant or real user profile. It also points the user-scope remote at an
+unreachable loopback port before the update and requires the installed commit
+to remain unchanged. Flatpak may return an error **or** a cached no-op in this
+offline case; neither is misreported as a signature failure. Test
+offline/partial publication, wrong GPG key,
 tampered and missing signatures, absent ARM64 ref, mixed refs, rollback, key
 rotation, interrupted update, absent runtime, and two **actual** application
 versions on both architectures before claiming the full update objective.
