@@ -5,7 +5,7 @@
 
 v0.2.0 was released on October 18, 2026. Download verified Flatpak bundles and
 `SHA256SUMS` from the [v0.2.0 release](https://github.com/Certain1989/Broadcaster/releases/tag/v0.2.0).
-The README contains the current installation instructions.
+For this historical version, use the **v0.2.0** Flatpak filenames when verifying and installing bundles. The [current README](../README.md) documents the latest release and may use a different version number.
 
 ## My Channels
 
