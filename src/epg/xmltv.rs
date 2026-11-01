@@ -176,6 +176,7 @@ struct PendingProgramme {
     title_truncated: bool,
     subtitle_truncated: bool,
     omit_c1: bool,
+    title_c1: bool,
 }
 
 /// Compact provenance for display fields shortened by the streaming parser.
@@ -385,6 +386,7 @@ impl ParseState {
         if contains_c1 {
             if let Some(programme) = self.programme.as_mut() {
                 programme.omit_c1 = true;
+                programme.title_c1 |= self.tags[2] == "title";
             }
         }
         if self.tags.is_empty() {
@@ -521,7 +523,15 @@ impl ParseState {
                 if start < stop
                     && stop.saturating_sub(start) <= 86_400
                     && !p.channel.is_empty()
-                    && bounded_text(&title, 512)
+                    && (bounded_text(&title, 512)
+                        // An explicitly C1-affected title is only forwarded to
+                        // the transactional omission ledger. Never admit it as
+                        // a retained title. Recheck all other scalar bounds;
+                        // the streaming parser already rejected C0 and DEL.
+                        || (p.title_c1
+                            && !title.trim().is_empty()
+                            && title.len() <= 512
+                            && title.chars().all(|c| !forbidden_xml_control(c, true))))
                 {
                     self.last_programme_truncation = ProgrammeTruncation {
                         title: p.title_truncated,
