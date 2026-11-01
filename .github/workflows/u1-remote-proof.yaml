@@ -112,11 +112,12 @@ jobs:
           bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-v2" "$RUNNER_TEMP/u1-v1" \
             dist/broadcaster-u1-x86_64.flatpak dist/broadcaster-u1-aarch64.flatpak "$dir"
           for arch in x86_64 aarch64; do
-            flatpak build-commit-from --force --no-update-summary \
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            flatpak build-commit-from --force --no-update-summary --timestamp=NOW \
+              --src-ref="$ref" \
               --subject="U1 signed metadata-only transport revision two" \
-              --gpg-sign=$(cat "$dir/.u1-disposable-fingerprint") --gpg-homedir="$dir" \
-              "$RUNNER_TEMP/u1-v2/repo" \
-              "app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+              --gpg-sign="$(cat "$dir/.u1-disposable-fingerprint")" --gpg-homedir="$dir" \
+              "$RUNNER_TEMP/u1-v2/repo" "$ref"
           done
           flatpak build-update-repo --gpg-sign=$(cat "$dir/.u1-disposable-fingerprint") \
             --gpg-homedir="$dir" "$RUNNER_TEMP/u1-v2/repo"
