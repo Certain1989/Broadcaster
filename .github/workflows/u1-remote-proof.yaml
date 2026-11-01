@@ -139,7 +139,7 @@ jobs:
           # This does not simulate an existing stable user's real database.
           user_data="$HOME/.var/app/io.github.Certain1989.Broadcaster.Devel/data"
           mkdir -p "$user_data"
-          printf 'u1-disposable-data-preserved\\n' > "$user_data/u1-preservation-test.txt"
+          echo 'u1-disposable-data-preserved' > "$user_data/u1-preservation-test.txt"
           # Distinct signed content revisions: v2 has a changed /app file.
           bash build-aux/u1/stage-signed-remote.sh "$RUNNER_TEMP/u1-v2" "$RUNNER_TEMP/u1-v1" \
             "dist/broadcaster-u1-v2-x86_64.flatpak" \
