@@ -2338,7 +2338,7 @@ mod tests {
             "<desc>\u{0093}\u{0001}</desc>",
             "<desc>\u{0093}\u{007f}</desc>",
             "<desc>\u{0093}<nested>\u{0094}</nested></desc>",
-            "<desc>\u{0093}</desc><title>\u{0096}</title>",
+            "<desc>\u{0093}</desc><sub-title>\u{0096}</sub-title>",
         ] {
             let mut conn = db();
             let candidate = format!(
