@@ -989,7 +989,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
     let guides = button(&gettext("Programme Guides"), &actions);
-    let database = button(&gettext("Database Backup / Restore"), &actions);
+    let database = button(&gettext("Backup / Restore"), &actions);
     let close = button(&gettext("Close"), &actions);
     guides.connect_clicked(glib::clone!(
         #[weak]

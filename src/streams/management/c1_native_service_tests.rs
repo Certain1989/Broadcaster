@@ -211,6 +211,11 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
         .find(|button| button.label().as_deref() == Some(gettext("Programme Guides").as_str()))
         .expect("manager Programme Guides action");
+    let header_backup = descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(gettext("Backup / Restore").as_str()))
+        .expect("D1 manager backup/restore action");
     let header_close = descendants(dialog.upcast_ref())
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
@@ -219,7 +224,17 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     inject("Right");
     assert!(header_guides.has_focus(), "header Right must reach Guides");
     inject("Right");
+    assert!(
+        header_backup.has_focus(),
+        "header Right must reach the new Backup / Restore action"
+    );
+    inject("Right");
     assert!(header_close.has_focus(), "header Right must reach Close");
+    inject("Left");
+    assert!(
+        header_backup.has_focus(),
+        "header Left must return to Backup / Restore"
+    );
     inject("Left");
     assert!(
         header_guides.has_focus(),
