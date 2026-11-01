@@ -268,6 +268,31 @@ jobs:
           grep -Fx 'u1-nonproduction-content-revision-2' \
             "$system_location/files/share/broadcaster/u1-transport-test-marker.txt"
           echo "U1 system-scope signed changed-content update: PASS on ${{ matrix.variant.arch }}"
+          # Disposable standalone-bundle migration after the independent
+          # positive user/system update tests. Never use a stable app ID or
+          # owner installation. Reinstall explicitly from the signed v1
+          # remote, then verify its origin, normal v2 update, and user data.
+          # This is a Devel simulation, NOT proof of a stable-user migration.
+          app=io.github.Certain1989.Broadcaster.Devel
+          flatpak --user uninstall -y --noninteractive "$app"
+          flatpak --user install -y --noninteractive --no-deps --no-related --bundle \
+            "dist/broadcaster-u1-${{ matrix.variant.arch }}.flatpak"
+          bundle_first=$(flatpak --user info --show-commit "$app")
+          test "$bundle_first" = "$first"
+          grep -Fx 'u1-disposable-data-preserved' "$user_data/u1-preservation-test.txt"
+          flatpak --user remote-add --from broadcaster-u1-migrate \
+            "$RUNNER_TEMP/u1-v1/u1-test.flatpakrepo"
+          flatpak --user install --reinstall -y --noninteractive --no-deps --no-related \
+            broadcaster-u1-migrate "$app"
+          test "$(flatpak --user info --show-origin "$app")" = broadcaster-u1-migrate
+          test "$(flatpak --user info --show-commit "$app")" = "$first"
+          grep -Fx 'u1-disposable-data-preserved' "$user_data/u1-preservation-test.txt"
+          flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-u1-migrate
+          flatpak --user update -y --noninteractive --no-deps "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$second"
+          grep -Fx 'u1-disposable-data-preserved' "$user_data/u1-preservation-test.txt"
+          test "$(sudo flatpak --system info --show-commit "$app")" = "$system_second"
+          echo "U1 disposable standalone bundle-to-signed-remote migration: PASS on ${{ matrix.variant.arch }}"
           echo 'U1 dual-architecture user/system signed changed-content update, mixed-arch/key rejection, partial HTTP publication and wrong-key oracle: PASS'
           cat "$RUNNER_TEMP/u1-v1/METRICS.txt"
           cat "$RUNNER_TEMP/u1-v2/METRICS.txt"
