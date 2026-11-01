@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest U1 PR proof alive; no cross-workstream cancellation.
+concurrency:
+  group: u1-nonproduction-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # No GitHub Pages, deployment, releases, tags, write scopes or stored production key.
 jobs:
   guards:
