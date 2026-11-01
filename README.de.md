@@ -8,18 +8,32 @@
 
 **[English](README.md) | Deutsch**
 
-Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtliches Live-TV, Mediathek-Sendungen und eigene M3U-/IPTV-Sender. Die Wiedergabe erfolgt mit mpv. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus und Tastatur sowie mit Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
+Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtliches Live-TV, Mediathek-Sendungen und eigene M3U-/IPTV-Sender. Die Wiedergabe erfolgt mit mpv. Optionale XMLTV-Programmführer liefern **Jetzt/Nächste-Informationen** für eigene Sender; **Favoriten** erleichtern den Überblick. Die GTK4-/libadwaita-Oberfläche funktioniert mit Maus, Tastatur und Richtungsfernbedienungen, auch unter Wayland/KDE Plasma Bigscreen.
 
 ## Funktionen
 
 - **Mediathek:** Suche über MediathekViewWeb, Sender- und Dauerfilter, Sortierung, Qualitätsauswahl und Sendungsdetails.
 - **Live-TV:** laufende Programme aus dem Zapp-Katalog mit Sendungsbeschreibungen sowie konfigurierbarer Senderauswahl und -reihenfolge.
 - **Eigene Sender (neu in v0.2.0):** Lokale M3U-Dateien oder HTTP(S)-Playlistadressen hinzufügen, mehrere Quellen verwalten, nach Gruppe/Sprache/Land/Region filtern, Sendermetadaten dauerhaft bearbeiten und Streams über die bestehende mpv-Steuerung abspielen. Senderlogos werden nur bei Bedarf geladen und können durch ein Standardsymbol ersetzt werden.
-- **XMLTV-Programmführer (v0.2.5):** Optionale Quellen als lokale XMLTV-Datei oder explizit konfigurierte HTTP(S)-Adresse. Ein Programmführer muss als **Shared Default** ausgewählt oder einer Playlist zugeordnet werden. Allein das Hinzufügen genügt nicht für Jetzt/Nächste. Unsichere Zuordnungen können bestätigt oder manuell überschrieben werden.
-- **Favoriten (v0.2.5):** Sender als Favoriten markieren und filtern. Verbesserte Fernbedienungsnavigation in Karten, Quellenverwaltung und Dialogen.
+- **XMLTV-Programmführer (v0.2.5):** Mehrere XMLTV-Quellen aus lokalen Dateien oder ausdrücklich gewählten HTTP(S)-Adressen hinzufügen und manuell aktualisieren. Einen Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Allein das Hinzufügen aktiviert ihn nicht.
+- **Jetzt/Nächste und Senderzuordnung (v0.2.5):** Laufende und folgende Sendungen für eigene Sender anzeigen, sofern ein Programmführer ausgewählt und der Sender zugeordnet ist. Vorsichtige Zuordnungsvorschläge prüfen, bestätigen oder korrigieren; regionale Varianten können manuell überschrieben werden.
+- **Favoriten (v0.2.5):** IPTV-Sender mit einem Stern markieren und den Favoritenfilter verwenden. Favoriten und Sendermetadaten bleiben unabhängig von Programmführer-Zuordnungen erhalten.
+- **Fernbedienungsnavigation (v0.2.5):** Verbesserte Richtungsnavigation und Erreichbarkeit von Kartenaktionen, Favoriten, Quellenverwaltung, Senderbearbeitung und Bildschirmtastatur.
 - **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
 - **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
+
+## XMLTV-Programmführer für eigene Sender verwenden
+
+Programmführer sind **optional**. Broadcaster lädt eine in einer M3U-Playlist vorgeschlagene EPG-Adresse nicht automatisch herunter. So werden Jetzt/Nächste-Informationen für eigene Sender eingerichtet:
+
+1. Unter **Eigene Sender** eine lokale M3U-Playlist oder eine HTTP(S)-Playlist hinzufügen.
+2. Die EPG-Quellenverwaltung öffnen, eine zulässig nutzbare XMLTV-Datei oder HTTP(S)-Adresse hinzufügen und die Quelle aktualisieren.
+3. Den Programmführer als **Shared Default** für Playlists auswählen oder einer bestimmten Playlist zuordnen. Ein gemeinsamer Programmführer kann mehrere Playlists versorgen. **Eine EPG-Quelle nur hinzuzufügen reicht nicht aus.**
+4. Die vorgeschlagenen Senderzuordnungen prüfen. Unsichere Zuordnungen bestätigen oder manuell korrigieren, insbesondere bei regionalen Varianten.
+5. Unter **Eigene Sender** verfügbare Jetzt/Nächste-Informationen ansehen und gewünschte Sender für den Favoritenfilter markieren.
+
+Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Einzelheiten stehen in den [Versionshinweisen zu v0.2.5](docs/release-v0.2.5-notes.md).
 
 ## Screenshots
 
