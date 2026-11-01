@@ -56,16 +56,19 @@ revision. Clients on **both native architectures** install the first revision
 and use ordinary `flatpak update` to reach the second, checking the changed
 installed marker. The update is served from a loopback static HTTP server, not public hosting.
 Replayed/mismatched architecture refs and unplanned test-key rotation are rejected
-before signing a new summary. The trust-negative oracle uses a **fresh system
-installation** and a complete second repository whose commits and summary are
-signed by an unrelated disposable key while its onboarding descriptor pins the
-original key. Installation must fail for a GPG/signature reason; a remote
-listing or an unrelated failure cannot count as a PASS. A prior experiment
-mutated only a signed `summary` byte and Flatpak still installed the valid
-commit; that result must **not** be presented as a successful summary-signature
-rejection or as proof that an unsigned commit is accepted. OSTree's separate
-`gpg-verify-summary` setting and normal commit GPG verification require
-independent trust-policy review before production onboarding. This proves a
+before signing a new summary. The **exact-HEAD 2026-11-01 proof** (commit
+`ed203427eeee3d9fb178ae34c3a3450e7fcbbe74`, U1 run 41345527157)
+passed on native x86-64 and AArch64: a fresh system-scope remote accepted a
+summary re-signed with the **trusted** disposable key and listed the Devel ref,
+but rejected installation of commits signed only by an **untrusted** key for a
+signature-related reason. No app was left installed by the rejected attempt.
+This isolates **commit trust** from successful remote onboarding; it does not
+independently prove summary-signature enforcement. A prior experiment changed
+only a signed `summary` byte while leaving valid signed commits and Flatpak
+still installed them. Do not describe that experiment as a successful summary
+signature rejection or a commit-signature bypass. OSTree's separate
+`gpg-verify-summary` policy still needs independent distribution/security
+review before production onboarding. This proves a
 normal signed **content update** on both architectures and local HTTP transport
 when the exact-head proof succeeds, not a distinct upstream release-version
 upgrade or GitHub Pages delivery; both remain acceptance requirements.
@@ -93,11 +96,17 @@ fewer requests. For two architectures, measure staged repo size, file count,
 from-empty and incremental delta bytes, HTTP keep-alive/cache behavior,
 request/transfer totals, deployment churn and retained historical commits.
 The workflow's METRICS.txt gives a first unhosted baseline only; the
-loopback-only Python server now logs actual HTTP response-body bytes sent
-(including repeated requests, probes and retries) alongside GET counts. This
-excludes request/response headers, TLS, CDN caches and real WAN overhead;
-it is **not** a GitHub Pages bandwidth measurement. **A hosting decision
-cannot be inferred from the size of one standalone bundle**.
+loopback-only Python server logs actual HTTP response-body bytes sent
+(including repeated requests, probes and retries) alongside GET counts.
+At exact commit `ed203427eeee3d9fb178ae34c3a3450e7fcbbe74`, the native
+x86-64 test served **33,745,755 bytes** and the AArch64 test **39,301,134
+bytes**; each run included several installations, update probes and recovery
+tests, so these are **not** one-user update sizes. The dual-arch repository
+occupied about **20.38 MB / 142 files** at v1 and **42.05 MB / 855 files**
+at v2. These measurements exclude request/response headers, TLS, CDN caches,
+real WAN overhead, delta compression and historical-retention growth. No
+actual GitHub Pages deployment or cache test was performed; a production
+capacity decision **cannot** be inferred from this loopback baseline.
 GitHub Release attachments alone are not an immutable path-preserving OSTree
 object service. If Pages exceeds limits or cannot serve valid update semantics,
 choose a suitable separately approved static host or repository service;
@@ -112,10 +121,15 @@ while preserving the same stable application ID and user data directory.
 Do not silently replace a system installation with a duplicate user install.
 Devel test refs intentionally do not replace an existing stable install.
 Reinstall/uninstall experiments must use disposable installations/data; confirm
-persistent app data survives. The U1 workflow now seeds a disposable per-user
-Devel data marker before the signed update and verifies it afterward; this is
-**not** proof of migrating an existing stable installation, database, portal
-grant or real user profile. It also points the user-scope remote at an
+persistent app data survives. On both native architectures, the
+exact-HEAD U1 proof exercised **user- and system-scope** Devel v1→v2
+changed-content updates, then installed a disposable standalone **Devel**
+bundle, explicitly reinstalled it from a signed v1 remote, verified the
+selected origin and updated normally to signed v2. A synthetic per-user
+data marker survived both transitions and the independent system installation
+was not altered by user-scope migration. This is **not** proof of migrating an
+existing stable installation, SQLite database, GSettings, portal grants or a
+real user profile. It also points the user-scope remote at an
 unreachable loopback port before the update and requires the installed commit
 to remain unchanged. Flatpak may return an error **or** a cached no-op in this
 offline case; neither is misreported as a signature failure. Test
