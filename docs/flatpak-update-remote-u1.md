@@ -56,12 +56,19 @@ revision. Clients on **both native architectures** install the first revision
 and use ordinary `flatpak update` to reach the second, checking the changed
 installed marker. The update is served from a loopback static HTTP server, not public hosting.
 Replayed/mismatched architecture refs and unplanned test-key rotation are rejected
-before signing a new summary. A deliberately mutated summary is tested through
-a fresh, independent system installation rather than a remote listing, which
-can use cached metadata. This proves a normal signed **content update** on
-both architectures and local HTTP transport, not a distinct upstream
-release-version upgrade or GitHub Pages delivery; both remain acceptance
-requirements.
+before signing a new summary. The trust-negative oracle uses a **fresh system
+installation** and a complete second repository whose commits and summary are
+signed by an unrelated disposable key while its onboarding descriptor pins the
+original key. Installation must fail for a GPG/signature reason; a remote
+listing or an unrelated failure cannot count as a PASS. A prior experiment
+mutated only a signed `summary` byte and Flatpak still installed the valid
+commit; that result must **not** be presented as a successful summary-signature
+rejection or as proof that an unsigned commit is accepted. OSTree's separate
+`gpg-verify-summary` setting and normal commit GPG verification require
+independent trust-policy review before production onboarding. This proves a
+normal signed **content update** on both architectures and local HTTP transport
+when the exact-head proof succeeds, not a distinct upstream release-version
+upgrade or GitHub Pages delivery; both remain acceptance requirements.
 
 ## Production path — separate owner decision required
 
