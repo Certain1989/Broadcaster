@@ -175,7 +175,7 @@ struct PendingProgramme {
     description_truncated: bool,
     title_truncated: bool,
     subtitle_truncated: bool,
-    description_source_manager: bool,
+    description_c1: bool,
 }
 
 /// Compact provenance for display fields shortened by the streaming parser.
@@ -221,7 +221,7 @@ struct ParseState {
     truncated_subtitles: usize,
     truncated_channel_names: usize,
     last_programme_truncation: ProgrammeTruncation,
-    last_programme_source_manager: bool,
+    last_programme_c1: bool,
     allow_c1_omission: bool,
     allow_description_truncation: bool,
     allow_display_truncation: bool,
@@ -231,7 +231,7 @@ struct ParseState {
 }
 
 // Uniform decoded-scalar rule for element text and *every* attribute value.
-// Only direct programme-description text can opt into XMLTV_CONTROL_OMISSION's SOURCE_MANAGER omission.
+// Only direct programme-description text can opt into XMLTV_CONTROL_OMISSION's C1 omission.
 fn forbidden_xml_control(c: char, direct_desc: bool) -> bool {
     let u = c as u32;
     (u < 0x20 && c != '\n' && c != '\t' && c != '\r')
@@ -252,7 +252,7 @@ fn attributes(tag: &BytesStart<'_>) -> Result<BTreeMap<String, String>, EpgError
         let value =
             quick_xml::escape::unescape(item.value.as_ref()).map_err(|_| EpgError::InvalidInput)?;
         // Validate decoded values even when the attribute is not interpreted.
-        // An XML attribute is never eligible for direct-desc SOURCE_MANAGER omission.
+        // An XML attribute is never eligible for direct-desc C1 omission.
         if value.chars().any(|c| forbidden_xml_control(c, false)) {
             return Err(EpgError::InvalidInput);
         }
@@ -374,16 +374,16 @@ impl ParseState {
             && self.tags[0] == "tv"
             && self.tags[1] == "programme"
             && self.tags[2] == "desc";
-        let mut contains_source_manager = false;
+        let mut contains_c1 = false;
         for c in text.chars() {
             if forbidden_xml_control(c, direct_desc) {
                 return Err(EpgError::InvalidInput);
             }
-            contains_source_manager |= (0x80..=0x9f).contains(&(c as u32));
+            contains_c1 |= (0x80..=0x9f).contains(&(c as u32));
         }
-        if contains_source_manager {
+        if contains_c1 {
             if let Some(programme) = self.programme.as_mut() {
-                programme.description_source_manager = true;
+                programme.description_c1 = true;
             }
         }
         if self.tags.is_empty() {
@@ -514,7 +514,7 @@ impl ParseState {
         }
         if tag == "programme" && self.tags == ["tv"] {
             let p = self.programme.take().ok_or(EpgError::InvalidInput)?;
-            self.last_programme_source_manager = p.description_source_manager;
+            self.last_programme_c1 = p.description_c1;
             self.last_programme_truncation = ProgrammeTruncation::default();
             if let (Some(start), Some(stop), Some(title)) = (p.start_utc, p.stop_utc, p.title) {
                 if start < stop
@@ -728,7 +728,7 @@ pub struct StreamedRows {
     pub truncated_channel_names: usize,
     /// Conflicting repeated-row occurrences, not unique programme identities.
     pub conflicting_duplicate_rows: usize,
-    /// Otherwise-valid programme elements omitted for SOURCE_MANAGER in a direct description.
+    /// Otherwise-valid programme elements omitted for C1 in a direct description.
     pub omitted_c1_programmes: usize,
 }
 
@@ -805,12 +805,12 @@ pub fn decode_xmltv_rows<R: BufRead>(
     )
 }
 
-/// Only the transactional importer opts in to validated SOURCE_MANAGER omission events.
+/// Only the transactional importer opts in to validated C1 omission events.
 #[expect(
     clippy::too_many_arguments,
     reason = "streaming parser with a separate validation sink"
 )]
-pub(crate) fn decode_xmltv_rows_omitting_source_manager<R: BufRead>(
+pub(crate) fn decode_xmltv_rows_omitting_c1<R: BufRead>(
     input: R,
     source_id: &str,
     retrieved_utc: i64,
@@ -952,7 +952,7 @@ where
         "programme" if state.tags == ["tv"] => {
             if let Some(row) = state.programmes.pop() {
                 let truncated = std::mem::take(&mut state.last_programme_truncation);
-                if std::mem::take(&mut state.last_programme_source_manager) {
+                if std::mem::take(&mut state.last_programme_c1) {
                     on_omitted(
                         OmittedProgrammeIdentity {
                             source_id: row.source_id,
@@ -1117,8 +1117,8 @@ where
 #[cfg(test)]
 mod formatted_xmltv_regression {
     use super::{
-        decode_xmltv_rows, decode_xmltv_rows_omitting_source_manager, EpgError, LimitKind,
-        StreamedRows, StreamingLimits,
+        decode_xmltv_rows, decode_xmltv_rows_omitting_c1, EpgError, LimitKind, StreamedRows,
+        StreamingLimits,
     };
     use std::{fmt::Write as _, io::Cursor, sync::atomic::AtomicBool};
 
@@ -1554,7 +1554,7 @@ mod formatted_xmltv_regression {
     // Only the direct programme <desc> element's text is eligible for XMLTV_CONTROL_OMISSION
     // omission. Parsed/ignored attributes must all obey the strict text rule.
     fn parse_with_c1_omission(input: &str) -> Result<StreamedRows, EpgError> {
-        decode_xmltv_rows_omitting_source_manager(
+        decode_xmltv_rows_omitting_c1(
             Cursor::new(input.as_bytes()),
             "synthetic",
             0,
