@@ -709,7 +709,7 @@ impl FacetPicker {
                         let mut next = index as i32 + direction;
                         while next >= 0 && (next as usize) < items.len() {
                             let target = &items[next as usize].1;
-                            if target.parent().is_some_and(|row| row.is_visible())
+                            if target.parent().is_some_and(|row| row.is_mapped())
                                 && target.grab_focus()
                             {
                                 return gtk::glib::Propagation::Stop;
@@ -773,7 +773,7 @@ impl FacetPicker {
                     if let Some((_, first)) = checks
                         .borrow()
                         .iter()
-                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_visible()))
+                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_mapped()))
                     {
                         if first.grab_focus() {
                             return gtk::glib::Propagation::Stop;
@@ -802,7 +802,7 @@ impl FacetPicker {
                         .borrow()
                         .iter()
                         .rev()
-                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_visible()))
+                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_mapped()))
                     {
                         if last.grab_focus() {
                             return gtk::glib::Propagation::Stop;

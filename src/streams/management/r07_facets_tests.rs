@@ -1393,7 +1393,7 @@ fn r07_native_editor_facet_boundaries(width: i32, height: i32, negative: bool) {
     assert!(removed.is_empty());
     let focus = gtk::prelude::GtkWindowExt::focus(&win).expect("focus after last removal");
     assert!(
-        focus.is_mapped() && focus.is_sensitive() && language.root.is_ancestor(&focus),
+        focus.is_mapped() && focus.is_sensitive() && focus.is_ancestor(&language.root),
         "last removed chip must leave focus on live language control"
     );
 
@@ -1411,7 +1411,7 @@ fn r07_native_editor_facet_boundaries(width: i32, height: i32, negative: bool) {
     inject("Up");
     let owner = gtk::prelude::GtkWindowExt::focus(&win).unwrap();
     assert!(
-        owner.is_ancestor(&language.root) || language.root.is_ancestor(&owner),
+        owner.is_ancestor(&language.root),
         "first checkbox Up stays in editor chooser"
     );
     assert!(check.grab_focus());
@@ -1454,7 +1454,7 @@ fn r07_native_editor_facet_boundaries(width: i32, height: i32, negative: bool) {
     inject("Return");
     let focus = gtk::prelude::GtkWindowExt::focus(&win).expect("country last remove focus");
     assert!(
-        country.root.is_ancestor(&focus) && focus.is_mapped(),
+        focus.is_ancestor(&country.root) && focus.is_mapped() && focus.is_sensitive(),
         "country last chip retains a live focus owner"
     );
     let mut country_done = Vec::new();
