@@ -77,7 +77,7 @@ fn sweep_stale_with_hook<F: FnMut(&Path, &Path)>(
     now: SystemTime,
     before_unlink: F,
 ) -> SweepStats {
-    sweep_stale_with_ops(parent, now, before_unlink, fs::remove_file)
+    sweep_stale_with_ops(parent, now, before_unlink, |path| fs::remove_file(path))
 }
 
 #[cfg(target_os = "linux")]
