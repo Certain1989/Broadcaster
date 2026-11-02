@@ -230,6 +230,51 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         named_button(guide.upcast_ref(), "Add URL").is_some(),
         "real Add URL action"
     );
+    // Owner-reported regression: Clear Shared Default and Close on the
+    // second header row were unreachable because top-header Down jumped
+    // directly to the first guide. Traverse every header action by real
+    // remote key events at both geometries, including zero-guide state.
+    let header = |label| named_button(guide.upcast_ref(), label).unwrap();
+    assert!(header("Add URL").grab_focus());
+    inject("Right");
+    assert_remote_focus(&win, &header("Choose Local XMLTV"), "header right to local");
+    inject("Down");
+    assert_remote_focus(&win, &header("Close"), "local down to Close");
+    inject("Left");
+    assert_remote_focus(
+        &win,
+        &header("Clear Shared Default"),
+        "Close left to Clear Shared Default",
+    );
+    inject("Up");
+    assert_remote_focus(
+        &win,
+        &header("Add URL"),
+        "Clear Shared Default up to Add URL",
+    );
+    inject("Down");
+    assert_remote_focus(
+        &win,
+        &header("Clear Shared Default"),
+        "Add URL down to Clear Shared Default",
+    );
+    inject("Right");
+    assert_remote_focus(
+        &win,
+        &header("Close"),
+        "Clear Shared Default right to Close",
+    );
+    inject("Up");
+    assert_remote_focus(&win, &header("Choose Local XMLTV"), "Close up to local");
+    if count == 0 {
+        assert!(header("Close").grab_focus());
+        inject("Down");
+        assert_remote_focus(
+            &win,
+            &header("Close"),
+            "empty guide list does not trap header",
+        );
+    }
     if count == 0 {
         let add = named_button(guide.upcast_ref(), "Add URL").unwrap();
         assert!(add.grab_focus());
@@ -258,20 +303,27 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             first_default.grab_focus(),
             "enter first source via real widget"
         );
-        // G09: a populated Guide Manager must not consume Up forever at
-        // the first row. Reach the real header, then return by physical Down.
+        // G09: the first guide returns to the adjacent lower header, then
+        // its Up edge reaches the top header. Both rows have inverse routes.
         inject("Up");
         assert_remote_focus(
             &win,
-            &named_button(guide.upcast_ref(), "Add URL").unwrap(),
-            "first guide Up enters manager header",
+            &named_button(guide.upcast_ref(), "Clear Shared Default").unwrap(),
+            "first guide Up enters lower manager header",
         );
-        for label in [
-            "Add URL",
-            "Choose Local XMLTV",
-            "Clear Shared Default",
-            "Close",
-        ] {
+        inject("Up");
+        assert_remote_focus(
+            &win,
+            &header("Add URL"),
+            "lower header Up reaches top header",
+        );
+        inject("Down");
+        assert_remote_focus(
+            &win,
+            &header("Clear Shared Default"),
+            "top header Down reaches lower header",
+        );
+        for label in ["Clear Shared Default", "Close"] {
             let header = named_button(guide.upcast_ref(), label).unwrap();
             assert!(header.grab_focus(), "G09 header {label} exists");
             inject("Down");

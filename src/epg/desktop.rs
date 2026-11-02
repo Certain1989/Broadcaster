@@ -711,7 +711,7 @@ fn guide_neighbor(
     }
 }
 
-// Find the real manager header in its enclosing mapped AdwDialog.
+// Find the lower manager header row, immediately above the guide list.
 // A CSS marker, not translated button text or child order, identifies it.
 fn guide_header_button(list: &gtk::Box) -> Option<gtk::Button> {
     let dialog = list.ancestor(adw::Dialog::static_type())?;
@@ -779,9 +779,9 @@ fn wire_guide_rows(rows: &[(String, [gtk::Button; 4])], header: Option<gtk::Butt
                 ) {
                     return glib::Propagation::Proceed;
                 }
-                // A first-row Up must be able to leave the row action grid.
-                // Otherwise every key is swallowed at the first guide, and
-                // Add URL / Choose Local / Close become remote-inaccessible.
+                // First-row Up enters the lower header row. From there, Up
+                // leads to the Add URL / Choose Local row; all four actions
+                // must remain reachable without mouse or Tab.
                 if index == 0
                     && slot <= 1
                     && matches!(pressed, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
@@ -1201,29 +1201,41 @@ pub fn show_guide_manager_with_close(parent: &gtk::Window, on_close: impl Fn() +
         body.append(&intro);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let add_remote = command(&gettext("Add URL"), &actions);
-        add_remote.add_css_class("broadcaster-guide-header-entry");
         let add_local = command(&gettext("Choose Local XMLTV"), &actions);
         body.append(&actions);
         let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let clear_default = command(&gettext("Clear Shared Default"), &more_actions);
+        // The first guide row's Up target is the immediately adjacent lower
+        // header row, not the top row that would skip two remote actions.
+        clear_default.add_css_class("broadcaster-guide-header-entry");
         let close = command(&gettext("Close"), &more_actions);
         body.append(&more_actions);
+        horizontal_link(&add_remote, &add_local);
+        horizontal_link(&clear_default, &close);
+        vertical_link(&add_remote, &clear_default);
+        vertical_link(&add_local, &close);
         let scroller = guide_list_scroller();
         let list = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        // From every upper action Down re-enters the first current guide.
-        // Resolve its widget at key time: async repaint replaces all rows.
-        for header in [&add_remote, &add_local, &clear_default, &close] {
+        // The lower header is the only gateway into the guide grid. Resolve
+        // its first row at key time because each async repaint replaces rows.
+        // With no guides, consume Down to remain within the header instead of
+        // allowing GTK to jump behind the modal or into the empty viewport.
+        for header in [&clear_default, &close] {
             let key = gtk::EventControllerKey::new();
             key.set_propagation_phase(gtk::PropagationPhase::Capture);
             let weak_list = list.downgrade();
             key.connect_key_pressed(move |_, pressed, _, modifiers| {
                 if crate::keyboard::unmodified_remote(modifiers)
                     && matches!(pressed, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
-                    && weak_list
+                {
+                    if let Some(button) = weak_list
                         .upgrade()
                         .and_then(|list| guide_first_row_button(&list))
-                        .is_some_and(|button| button.is_mapped() && button.grab_focus())
-                {
+                    {
+                        if button.is_mapped() && button.is_sensitive() {
+                            button.grab_focus();
+                        }
+                    }
                     return glib::Propagation::Stop;
                 }
                 glib::Propagation::Proceed
