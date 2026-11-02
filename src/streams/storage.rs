@@ -1905,7 +1905,7 @@ mod staged_database_tests {
         db.execute_batch(MIGRATION_001).unwrap();
         db.execute(
             "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
-             VALUES('mpv_http','Fictional','local_file','/fake',1,1)",
+             VALUES('p1','Fictional','local_file','/fake',1,1)",
             [],
         )
         .unwrap();
@@ -1937,7 +1937,7 @@ mod staged_database_tests {
         assert_eq!(version, 1);
         let preserved: String = reopened
             .query_row(
-                "SELECT name FROM iptv_sources WHERE id='mpv_http'",
+                "SELECT name FROM iptv_sources WHERE id='p1'",
                 [],
                 |r| r.get(0),
             )
