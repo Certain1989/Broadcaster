@@ -119,6 +119,16 @@ impl Storage {
         }
     }
 
+    /// Best-effort EPG orphan recovery; only for the single production database.
+    /// Do not sweep test/import paths or arbitrary neighbouring files.
+    pub(crate) fn reclaim_epg_orphans(&self) {
+        if self.uses_default_database() {
+            if let Some(parent) = self.path.parent() {
+                let _ = super::epg_spool::sweep_stale(parent, std::time::SystemTime::now());
+            }
+        }
+    }
+
     /// Does not initialize or create a missing database: callers must initialize
     /// from a blocking worker first.
     pub(crate) fn connect(&self) -> StorageResult<Connection> {

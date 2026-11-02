@@ -15,7 +15,7 @@ use super::{
     },
     xmltv::StreamedRows,
 };
-use crate::streams::storage::Storage;
+use crate::streams::{epg_spool::AttemptSpool, storage::Storage};
 use adw::{gio, glib, prelude::*};
 use std::{
     collections::HashMap,
@@ -95,12 +95,6 @@ impl From<GuideFetchError> for GuideServiceError {
         }
     }
 }
-struct AttemptSpool(PathBuf);
-impl Drop for AttemptSpool {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
 
 fn clock() -> i64 {
     SystemTime::now()
@@ -140,10 +134,14 @@ impl GlobalGuideManager {
     pub async fn with_storage(storage: Storage) -> Result<Self, GuideServiceError> {
         let init = storage.clone();
         crate::utils::tokio(async move {
-            tokio::task::spawn_blocking(move || init.initialize())
-                .await
-                .map_err(|_| GuideServiceError::WorkerFailed)?
-                .map_err(|_| GuideServiceError::Storage)
+            tokio::task::spawn_blocking(move || {
+                init.initialize()?;
+                init.reclaim_epg_orphans();
+                Ok::<(), crate::streams::storage::StorageError>(())
+            })
+            .await
+            .map_err(|_| GuideServiceError::WorkerFailed)?
+            .map_err(|_| GuideServiceError::Storage)
         })
         .await?;
         let service = Self {
@@ -471,7 +469,7 @@ impl GlobalGuideManager {
             .try_acquire_owned()
             .map_err(|_| GuideServiceError::AlreadyRunning)?;
         let path = self.inner.registry.spool_path();
-        let _cleanup = AttemptSpool(path.clone());
+        let _cleanup = AttemptSpool::new(path.clone()).map_err(local_spool_error)?;
         let expected_revision = source.view.updated_at;
         let gzip = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
@@ -702,7 +700,7 @@ mod e2_admission_tests {
         fs::create_dir(&dir).unwrap();
         let path = dir.join("partial.xmltv");
         {
-            let _cleanup = AttemptSpool(path.clone());
+            let _cleanup = AttemptSpool::new(path.clone()).unwrap();
             let mut file = std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -720,7 +718,7 @@ mod e2_admission_tests {
         }
         assert!(!path.exists(), "failure must remove the partial stage");
         {
-            let _cleanup = AttemptSpool(path.clone());
+            let _cleanup = AttemptSpool::new(path.clone()).unwrap();
             let mut file = std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)

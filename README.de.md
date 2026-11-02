@@ -37,6 +37,8 @@ Bei neu hinzugefügten Programmführern ist die **automatische Aktualisierung st
 
 Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Einzelheiten stehen in den [Versionshinweisen zu v0.2.5](docs/release-v0.2.5-notes.md).
 
+Hinweise zu privaten Wiederherstellungskopien, Speichergrenzen und verbliebenen EPG-Zwischendateien stehen unter [EPG-/SQLite-Speicherbetrieb](docs/epg-sqlite-storage.de.md).
+
 ## Screenshots
 
 Die folgenden Screenshots zeigen Broadcaster v0.2.5. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.

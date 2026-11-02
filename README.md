@@ -37,6 +37,8 @@ New guides have **automatic refresh enabled by default** in the Add Guide dialog
 
 A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.2.5 release notes](docs/release-v0.2.5-notes.md) for scope and limitations.
 
+For details on private recovery snapshots, disk limits and abandoned guide downloads, see [EPG/SQLite storage operations](docs/epg-sqlite-storage.md).
+
 ## Screenshots
 
 The following screenshots show Broadcaster v0.2.5. Programme titles, times and IPTV availability come from third-party sources and can change.

@@ -7,6 +7,7 @@
 
 mod editor;
 mod epg_projection;
+pub(crate) mod epg_spool;
 mod facet_picker;
 mod fetch;
 mod logo;
