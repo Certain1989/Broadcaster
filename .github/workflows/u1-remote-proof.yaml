@@ -339,9 +339,17 @@ jobs:
               echo 'U1 unsigned-summary remote onboarding lacked summary verification' >&2
               exit 1
             fi
-            if XDG_DATA_HOME="$summary_negative_client" flatpak --user remote-ls \
-                 broadcaster-u1-unsigned-summary >>"$summary_log" 2>&1; then
-              echo 'U1 fresh client accepted missing summary signature' >&2
+            # Enumeration alone is not an installation trust oracle: some
+            # Flatpak/OSTree versions can list refs without fetching a commit.
+            # Require rejection at the actual installation boundary.
+            XDG_DATA_HOME="$summary_negative_client" flatpak --user remote-ls \
+              broadcaster-u1-unsigned-summary >>"$summary_log" 2>&1 || true
+            if XDG_DATA_HOME="$summary_negative_client" flatpak --user install \
+                 -y --noninteractive --no-deps --no-related \
+                 broadcaster-u1-unsigned-summary io.github.Certain1989.Broadcaster.Devel \
+                 >>"$summary_log" 2>&1; then
+              echo 'U1 SECURITY FAILURE: missing-summary-signature repository installed application' >&2
+              cat "$summary_log" >&2
               exit 1
             fi
           fi
