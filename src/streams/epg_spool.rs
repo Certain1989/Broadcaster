@@ -75,8 +75,22 @@ pub(crate) fn sweep_stale(parent: &Path, now: SystemTime) -> SweepStats {
 fn sweep_stale_with_hook<F: FnMut(&Path, &Path)>(
     parent: &Path,
     now: SystemTime,
-    mut before_unlink: F,
+    before_unlink: F,
 ) -> SweepStats {
+    sweep_stale_with_ops(parent, now, before_unlink, fs::remove_file)
+}
+
+#[cfg(target_os = "linux")]
+fn sweep_stale_with_ops<F, U>(
+    parent: &Path,
+    now: SystemTime,
+    mut before_unlink: F,
+    mut unlink: U,
+) -> SweepStats
+where
+    F: FnMut(&Path, &Path),
+    U: FnMut(&Path) -> io::Result<()>,
+{
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     const O_NOFOLLOW: i32 = 0o400000;
@@ -212,9 +226,9 @@ fn sweep_stale_with_hook<F: FnMut(&Path, &Path)>(
         }
         drop(spool);
         // Failure to remove the stage leaves the lock marker for a later pass.
-        if fs::remove_file(&spool_path).is_ok() {
+        if unlink(&spool_path).is_ok() {
             stats.removed += 1;
-            let _ = fs::remove_file(&lock_path);
+            let _ = unlink(&lock_path);
         }
     }
     stats
@@ -447,6 +461,38 @@ mod tests {
         assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
         assert!(future.exists());
         assert!(lockless.exists());
+    }
+
+    #[test]
+    fn injected_unlink_denial_keeps_spool_and_lock_for_retry() {
+        let dir = PrivateDir::new();
+        let stage = orphan(&dir, true);
+        let lock = stage.with_extension("lock");
+        let now = SystemTime::now();
+        let stats = sweep_stale_with_ops(&dir.0, now, |_, _| {}, |_| {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        });
+        assert_eq!(stats.removed, 0);
+        assert!(stage.exists());
+        assert!(lock.exists());
+        assert_eq!(sweep_stale(&dir.0, now).removed, 1);
+    }
+
+    #[test]
+    fn injected_lock_unlink_failure_leaves_conservative_marker() {
+        let dir = PrivateDir::new();
+        let stage = orphan(&dir, true);
+        let lock = stage.with_extension("lock");
+        let stats = sweep_stale_with_ops(&dir.0, SystemTime::now(), |_, _| {}, |path| {
+            if path.extension() == Some(std::ffi::OsStr::new("lock")) {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            } else {
+                fs::remove_file(path)
+            }
+        });
+        assert_eq!(stats.removed, 1);
+        assert!(!stage.exists());
+        assert!(lock.exists());
     }
 
     #[test]
