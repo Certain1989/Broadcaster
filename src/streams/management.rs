@@ -1075,7 +1075,7 @@ fn show_database_actions(view: &TvStreamsView) {
     let Some(window) = parent(view) else { return };
     let (dialog, body, _) = sheet(&gettext("Database Backup and Restore"));
     let warning = gtk::Label::new(Some(&gettext(
-        "Database backups contain private source URLs, local paths and possible access tokens. They include cached programmes, channels, favourites, guide links and refresh settings, but NOT GSettings, external playlist/guide files, artwork or portal grants. Keep the backup private. Restoring replaces ALL existing database data and may require reauthorizing local files.",
+        "Database backups contain private source URLs, local paths and possible access tokens. They include cached programmes, channels, favourites, guide links and refresh settings, but NOT GSettings, external playlist/guide files, artwork or portal grants. Keep the backup private. Export asks you to select a writable folder (not a single file), giving Broadcaster access to that folder so it can atomically save a unique backup. Restoring replaces ALL existing database data and may require reauthorizing local files.",
     )));
     warning.set_wrap(true);
     warning.set_xalign(0.0);
@@ -1126,23 +1126,31 @@ fn choose_database_export(view: &TvStreamsView) {
     let Some(service) = view.service() else {
         return;
     };
+    // A SaveFile grant can expose only the selected file via the document
+    // portal. D1 requires a sibling private staging file and an atomic,
+    // no-clobber hard-link publish. Ask the user explicitly for a directory
+    // grant; never broaden the Flatpak manifest's filesystem permissions.
+    // Use an unguessable filename so repeated exports never overwrite others.
     let picker = gtk::FileDialog::new();
-    picker.set_initial_name(Some("broadcaster-backup.sqlite3"));
+    picker.set_title("Choose Backup Folder");
     spawn(glib::clone!(
         #[weak]
         view,
         async move {
-            let Ok(file) = picker.save_future(Some(&window)).await else {
+            let Ok(folder) = picker.select_folder_future(Some(&window)).await else {
                 return;
             };
-            let Some(path) = file.path() else {
+            let Some(folder_path) = folder.path() else {
                 message(
                     &view,
-                    &gettext("Select a local file destination for the database backup."),
+                    &gettext("Choose a local writable folder for the database backup."),
                 );
                 return;
             };
+            let filename = format!("broadcaster-backup-{}.sqlite3", uuid::Uuid::new_v4());
+            let path = folder_path.join(&filename);
             let cancelled = Arc::new(AtomicBool::new(false));
+            let active = Arc::new(AtomicBool::new(true));
             let (progress, body, status) = sheet(&gettext("Exporting Complete Database"));
             status.set_text(&gettext("Creating a private, consistent SQLite backup..."));
             body.append(&status);
@@ -1160,21 +1168,35 @@ fn choose_database_export(view: &TvStreamsView) {
             });
             progress.connect_closed({
                 let cancelled = cancelled.clone();
-                move |_| cancelled.store(true, Ordering::Relaxed)
+                let active = active.clone();
+                move |_| {
+                    // Closing the dialog programmatically after successful
+                    // worker completion is NOT a user cancellation.
+                    if active.load(Ordering::Relaxed) {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
             });
             progress.present(Some(&window));
             let result = service.export_database(path, cancelled.clone()).await;
+            active.store(false, Ordering::Relaxed);
             progress.close();
-            if cancelled.load(Ordering::Relaxed) {
-                message(&view, &gettext("Database backup operation finished or was cancelled; check the selected file before retrying."));
-            } else {
-                match result {
-                    Ok(_) => message(
-                        &view,
-                        &gettext("Database backup exported. Keep this private file safe."),
+            match result {
+                Ok(_) => message(
+                    &view,
+                    &format!(
+                        "{} {filename}",
+                        gettext("Private database backup exported:")
                     ),
-                    Err(error) => fail(&view, error),
-                }
+                ),
+                Err(_) if cancelled.load(Ordering::Relaxed) => message(
+                    &view,
+                    &gettext("Database backup cancelled; no finished backup was published."),
+                ),
+                Err(error) => message(
+                    &view,
+                    &format!("{}: {error}", gettext("Database backup export failed")),
+                ),
             }
         }
     ));
@@ -1197,6 +1219,7 @@ fn choose_database_import(view: &TvStreamsView) {
                 return;
             };
             let cancelled = Arc::new(AtomicBool::new(false));
+            let active = Arc::new(AtomicBool::new(true));
             let (progress, body, status) = sheet(&gettext("Validating Database Backup"));
             status.set_text(&gettext(
                 "Copying and validating the selected file privately...",
@@ -1214,23 +1237,26 @@ fn choose_database_import(view: &TvStreamsView) {
             });
             progress.connect_closed({
                 let cancelled = cancelled.clone();
-                move |_| cancelled.store(true, Ordering::Relaxed)
+                let active = active.clone();
+                move |_| {
+                    if active.load(Ordering::Relaxed) {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
             });
             progress.present(Some(&window));
             let result = service
                 .prepare_database_import(path, cancelled.clone())
                 .await;
+            active.store(false, Ordering::Relaxed);
             progress.close();
-            if cancelled.load(Ordering::Relaxed) {
-                message(
+            match result {
+                Ok(prepared) => confirm_database_restore(&view, service, prepared),
+                Err(_) if cancelled.load(Ordering::Relaxed) => message(
                     &view,
                     &gettext("Database import cancelled; the current database is unchanged."),
-                );
-            } else {
-                match result {
-                    Ok(prepared) => confirm_database_restore(&view, service, prepared),
-                    Err(error) => fail(&view, error),
-                }
+                ),
+                Err(error) => fail(&view, error),
             }
         }
     ));
