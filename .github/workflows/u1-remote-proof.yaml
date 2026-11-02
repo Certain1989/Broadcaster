@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual=$(git rev-parse HEAD)
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
           if [ "$actual" != "$U1_EXPECTED_SOURCE_SHA" ]; then
             echo "U1 source mismatch: checkout=$actual expected=$U1_EXPECTED_SOURCE_SHA" >&2
             exit 1
@@ -79,7 +79,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual=$(git rev-parse HEAD)
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
           if [ "$actual" != "$U1_EXPECTED_SOURCE_SHA" ]; then
             echo "U1 source mismatch: checkout=$actual expected=$U1_EXPECTED_SOURCE_SHA" >&2
             exit 1
@@ -158,7 +158,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual=$(git rev-parse HEAD)
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
           if [ "$actual" != "$U1_EXPECTED_SOURCE_SHA" ]; then
             echo "U1 source mismatch: checkout=$actual expected=$U1_EXPECTED_SOURCE_SHA" >&2
             exit 1
@@ -425,7 +425,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual=$(git rev-parse HEAD)
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
           if [ "$actual" != "$U1_EXPECTED_SOURCE_SHA" ]; then
             echo "U1 source mismatch: checkout=$actual expected=$U1_EXPECTED_SOURCE_SHA" >&2
             exit 1
