@@ -809,6 +809,17 @@ mod e2_admission_tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn make_attempt_stale(path: &Path) {
+        let old = SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old))
+            .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn dropped_download_waiter_keeps_kernel_lock_until_detached_worker_exits() {
         use tokio::sync::oneshot;
@@ -817,6 +828,7 @@ mod e2_admission_tests {
         let lock_path = path.with_extension("lock");
         let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
         fs::write(&path, b"active").unwrap();
+        make_attempt_stale(&path);
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel::<()>();
         let (finished_tx, finished_rx) = oneshot::channel();
@@ -835,6 +847,10 @@ mod e2_admission_tests {
         drop(owner);
         assert!(path.exists());
         assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        assert_eq!(
+            crate::streams::epg_spool::sweep_stale(&dir, SystemTime::now()).removed,
+            0
+        );
         release_tx.send(()).unwrap();
         finished_rx.await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -856,6 +872,7 @@ mod e2_admission_tests {
         let lock_path = path.with_extension("lock");
         let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
         fs::write(&path, b"parsing").unwrap();
+        make_attempt_stale(&path);
         let (started_tx, started_rx) = oneshot::channel();
         let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(0);
         let (finished_tx, finished_rx) = oneshot::channel();
@@ -878,6 +895,10 @@ mod e2_admission_tests {
         drop(owner);
         assert!(path.exists());
         assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        assert_eq!(
+            crate::streams::epg_spool::sweep_stale(&dir, SystemTime::now()).removed,
+            0
+        );
         release_tx.send(()).unwrap();
         finished_rx.await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
