@@ -670,7 +670,7 @@ async fn read_local_spooled_inner(
 }
 
 #[cfg(test)]
-mod e2_admission_tests {
+mod epg_cache_admission_tests {
     use super::*;
     use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};

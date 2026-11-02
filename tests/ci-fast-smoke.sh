@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Fast smoke is deliberately a subset, not an alternative to full R07 CI.
+# Fast smoke is deliberately a subset, not an alternative to full native-focus CI.
 set -euo pipefail
 
 schema_dir=$(mktemp -d)
@@ -14,10 +14,10 @@ glib-compile-schemas "$schema_dir"
 
 run_positive() {
   local case_name=$1 geometry=$2 data_dir
-  # C4's real-SQLite safety guard requires its established fixture prefix.
+  # GUIDE_MAPPING's real-SQLite safety guard requires its established fixture prefix.
   # Preserve that guard; never relax production or test storage protections.
   case "$case_name" in
-    c4_native_*) data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX) ;;
+    native_channel_*) data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX) ;;
     *) data_dir=$(mktemp -d -t broadcaster-fast-ci-XXXXXXXX) ;;
   esac
   if ! xvfb-run -a -s "-screen 0 ${geometry}x24" \
@@ -34,10 +34,10 @@ run_positive() {
 # Positive: real source and guide management, persisted IPTV favourites,
 # and *painted* focus, spanning the compact and TV viewport sizes.
 # Every name must match exactly one ignored test, not Cargo's zero-match pass.
-run_positive c1_native_manager_1_640_480 640x480
-run_positive c2_native_3_1280_800 1280x800
-run_positive c4_native_favourites_640_480 640x480
-run_positive r07_native_painted_focus_1280_800 1280x800
+run_positive native_source_manager_1_640_480 640x480
+run_positive native_epg_manager_3_1280_800 1280x800
+run_positive native_channel_favourites_640_480 640x480
+run_positive native_painted_focus_1280_800 1280x800
 
 # Negative: prove the real GTK oracle still rejects a deliberately wrong
 # source-manager focus assertion for its exact marker, not for an X11/setup
@@ -46,14 +46,14 @@ data_dir=$(mktemp -d -t broadcaster-fast-ci-negative-XXXXXXXX)
 if xvfb-run -a -s '-screen 0 640x480x24' \
   env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
     XDG_DATA_HOME="$data_dir" \
-    cargo test --locked c1_native_negative_oracle -- --ignored --test-threads=1 \
+    cargo test --locked source_manager_native_negative_oracle -- --ignored --test-threads=1 \
     >"$negative_log" 2>&1; then
   cat "$negative_log"
   rm -rf "$data_dir"
   echo 'Fast CI negative focus oracle unexpectedly passed' >&2
   exit 1
 fi
-if ! grep -Fq 'C1_EXPECTED_NEGATIVE_ORACLE' "$negative_log"; then
+if ! grep -Fq 'SOURCE_MANAGER_EXPECTED_NEGATIVE_ORACLE' "$negative_log"; then
   cat "$negative_log"
   rm -rf "$data_dir"
   echo 'Fast CI negative oracle failed for an unrelated reason' >&2

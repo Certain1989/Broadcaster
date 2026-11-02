@@ -56,9 +56,9 @@ mod imp {
         pub(super) playback_requests: PlaybackRequests,
         // Test-only managed-player failure: never launches mpv or fetches a URI.
         #[cfg(test)]
-        pub(super) r07_fail_managed_playback: Cell<bool>,
+        pub(super) focus_navigation_fail_managed_playback: Cell<bool>,
         #[cfg(test)]
-        pub(super) r07_managed_playback_attempts: Cell<u32>,
+        pub(super) focus_navigation_managed_playback_attempts: Cell<u32>,
     }
 
     #[glib::object_subclass]
@@ -189,14 +189,16 @@ impl TvApplication {
     /// Isolated native acceptance hook: fail the managed-player start after
     /// capturing the real window focus origin. This never ships in production.
     #[cfg(test)]
-    pub(crate) fn r07_test_managed_player_failure(&self, enabled: bool) {
-        self.imp().r07_fail_managed_playback.set(enabled);
-        self.imp().r07_managed_playback_attempts.set(0);
+    pub(crate) fn focus_navigation_test_managed_player_failure(&self, enabled: bool) {
+        self.imp()
+            .focus_navigation_fail_managed_playback
+            .set(enabled);
+        self.imp().focus_navigation_managed_playback_attempts.set(0);
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_test_managed_player_attempts(&self) -> u32 {
-        self.imp().r07_managed_playback_attempts.get()
+    pub(crate) fn focus_navigation_test_managed_player_attempts(&self) -> u32 {
+        self.imp().focus_navigation_managed_playback_attempts.get()
     }
 
     pub async fn play(&self, video: VideoInfo) {
@@ -219,10 +221,10 @@ impl TvApplication {
         // Exercise the exact request and window return sequence without an
         // actual mpv process or any network/URI access.
         #[cfg(test)]
-        if self.imp().r07_fail_managed_playback.get() {
+        if self.imp().focus_navigation_fail_managed_playback.get() {
             self.imp()
-                .r07_managed_playback_attempts
-                .set(self.imp().r07_managed_playback_attempts.get() + 1);
+                .focus_navigation_managed_playback_attempts
+                .set(self.imp().focus_navigation_managed_playback_attempts.get() + 1);
             let window = self.window();
             let token = window.begin_playback();
             window.finish_playback(token);

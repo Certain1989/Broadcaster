@@ -942,28 +942,28 @@ fn confirm_epg_mapping(
 // source swap can be injected before presentation; no production shortcut.
 #[cfg(test)]
 thread_local! {
-    static C4_PICKER_DIALOG: std::cell::RefCell<Option<glib::WeakRef<adw::Dialog>>> =
+    static GUIDE_MAPPING_PICKER_DIALOG: std::cell::RefCell<Option<glib::WeakRef<adw::Dialog>>> =
         const { std::cell::RefCell::new(None) };
-    static C4_PICKER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static C4_PICKER_LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static GUIDE_MAPPING_PICKER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static GUIDE_MAPPING_PICKER_LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 #[cfg(test)]
-pub(crate) fn c4_test_picker_dialog() -> Option<adw::Dialog> {
-    C4_PICKER_DIALOG.with(|slot| slot.borrow().as_ref().and_then(glib::WeakRef::upgrade))
+pub(crate) fn guide_mapping_test_picker_dialog() -> Option<adw::Dialog> {
+    GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.borrow().as_ref().and_then(glib::WeakRef::upgrade))
 }
 #[cfg(test)]
-pub(crate) fn c4_test_pause_picker(paused: bool) {
-    C4_PICKER_PAUSED.with(|state| state.set(paused));
+pub(crate) fn guide_mapping_test_pause_picker(paused: bool) {
+    GUIDE_MAPPING_PICKER_PAUSED.with(|state| state.set(paused));
     if paused {
-        C4_PICKER_LOADED.with(|state| state.set(false));
+        GUIDE_MAPPING_PICKER_LOADED.with(|state| state.set(false));
     }
 }
 #[cfg(test)]
-pub(crate) fn c4_test_picker_loaded() -> bool {
-    C4_PICKER_LOADED.with(std::cell::Cell::get)
+pub(crate) fn guide_mapping_test_picker_loaded() -> bool {
+    GUIDE_MAPPING_PICKER_LOADED.with(std::cell::Cell::get)
 }
 
-// D35 compact on-card mapper. The fuller manager is retained for the other
+// GUIDE_PICKER compact on-card mapper. The fuller manager is retained for the other
 // explicit guide management workflows; the card action uses only this picker.
 #[derive(Clone)]
 struct CardMappingData {
@@ -1375,8 +1375,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             };
             #[cfg(test)]
             {
-                C4_PICKER_LOADED.with(|state| state.set(true));
-                while C4_PICKER_PAUSED.with(std::cell::Cell::get) {
+                GUIDE_MAPPING_PICKER_LOADED.with(|state| state.set(true));
+                while GUIDE_MAPPING_PICKER_PAUSED.with(std::cell::Cell::get) {
                     glib::timeout_future(std::time::Duration::from_millis(10)).await;
                 }
             }
@@ -1456,7 +1456,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             search_area.append(&pager);
             advanced.set_child(Some(&search_area));
             body.append(&advanced);
-            // The compact D35 row picker deliberately only confirms a single
+            // The compact GUIDE_PICKER row picker deliberately only confirms a single
             // exact channel identity. Route explicit playlist-guide overrides
             // to the pre-existing, separately confirmed full mapping editor;
             // never change a playlist binding merely by opening this control.
@@ -1635,7 +1635,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 view,
                 move |_| {
                     #[cfg(test)]
-                    C4_PICKER_DIALOG.with(|slot| slot.replace(None));
+                    GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.replace(None));
                     view.restore_card_mapping_focus(&restore_id);
                 }
             ));
@@ -1657,7 +1657,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             }
             dialog.present(Some(&parent));
             #[cfg(test)]
-            C4_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
+            GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
         }
     ));
 }
@@ -2084,7 +2084,7 @@ mod editor_tests {
     }
 }
 
-// M1's candidate assistant never mutates an inferred mapping directly. It
+// GUIDE_MATCHING's candidate assistant never mutates an inferred mapping directly. It
 // exposes at most one small page of controls, uses background SQLite snapshots,
 // and requires a second explicit impact confirmation before the atomic write.
 const GUIDE_REVIEW_PAGE_SIZE: usize = 16;

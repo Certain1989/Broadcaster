@@ -463,7 +463,7 @@ fn epg_manual_override_survives_ninety_day_missing_purge_until_real_guide_deleti
 
 #[cfg(unix)]
 #[test]
-fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
+fn guide_picker_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();

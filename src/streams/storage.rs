@@ -1905,7 +1905,7 @@ mod staged_database_tests {
         db.execute_batch(MIGRATION_001).unwrap();
         db.execute(
             "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
-             VALUES('p1','Fictional','local_file','/fake',1,1)",
+             VALUES('mpv_http','Fictional','local_file','/fake',1,1)",
             [],
         )
         .unwrap();
@@ -1936,9 +1936,11 @@ mod staged_database_tests {
             .unwrap();
         assert_eq!(version, 1);
         let preserved: String = reopened
-            .query_row("SELECT name FROM iptv_sources WHERE id='p1'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT name FROM iptv_sources WHERE id='mpv_http'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(preserved, "Fictional");
         let epg_exists: i64 = reopened

@@ -424,7 +424,7 @@ fn now_next_half_open_gap_overlap_stale_and_cancellation() {
 
 #[test]
 fn large_guide_indexed_targets_and_bounded_suggestions() {
-    // These sizes cover the original boundary and both E2 capacity scenarios.
+    // These sizes cover the original boundary and both EPG_CACHE capacity scenarios.
     for size in [10_000_usize, 10_001, 12_511, 16_796] {
         let mut c = setup();
         selected(&mut c, "g");
@@ -957,7 +957,8 @@ fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
 }
 
 #[test]
-fn d35_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feeds_now_next() {
+fn guide_picker_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feeds_now_next(
+) {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1014,7 +1015,7 @@ fn d35_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feed
 }
 
 #[test]
-fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
+fn guide_picker_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "first", "Synthetic ABC Station");
@@ -1070,7 +1071,7 @@ fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
 // successful full-import transaction can replace same-ID metadata and
 // programme rows within a single second while increasing the source revision.
 #[test]
-fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
+fn guide_revision_picker_rejects_same_second_reimport_with_same_target_id() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Old station display");
@@ -1157,9 +1158,9 @@ fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
     fk_ok(&c);
 }
 
-// R07 B12/B13: negative transactional controls complement the mapped picker
+// NATIVE_FOCUS GUIDE_PICKER/GUIDE_PICKER: negative transactional controls complement the mapped picker
 // XTest journeys. They do not alone establish the whole modal/async clauses.
-fn r07_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
+fn focus_navigation_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
     let playlist_revision: i64 = conn
         .query_row(
             "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
@@ -1182,11 +1183,11 @@ fn r07_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
 }
 
 #[test]
-fn r07_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
+fn focus_navigation_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");
-    let snapshot = r07_picker_snapshot(&conn);
+    let snapshot = focus_navigation_picker_snapshot(&conn);
     // A real source deletion cascades its IPTV rows while a stale picker can
     // still hold a snapshot. It must never resurrect that row or write an
     // override for another playlist's same-name channel.
@@ -1212,11 +1213,11 @@ fn r07_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
 }
 
 #[test]
-fn r07_b13_picker_rejects_guide_removed_and_other_guide_selected() {
+fn focus_navigation_b13_picker_rejects_guide_removed_and_other_guide_selected() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");
-    let snapshot = r07_picker_snapshot(&conn);
+    let snapshot = focus_navigation_picker_snapshot(&conn);
     // A manager-confirmed guide removal cascades guide data and clears the
     // shared selection. A different guide with the *same channel ID* must
     // not silently capture the stale old-guide choice.
@@ -1245,7 +1246,7 @@ fn r07_b13_picker_rejects_guide_removed_and_other_guide_selected() {
 }
 
 #[test]
-fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
+fn guide_revision_hint_rejects_same_second_reimport_with_same_target_id() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Old station display");
@@ -1281,7 +1282,7 @@ fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
 }
 
 #[test]
-fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
+fn guide_revision_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Station");
@@ -1335,7 +1336,7 @@ fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
 }
 
 #[test]
-fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
+fn quality_guide_de_neg_01_sqlite_abstains_until_manual_override() {
     // The guide's contradictory broadcaster label must not populate Now/Next.
     // A separate deliberate one-row override may still select this exact ID.
     let mut c = setup();
@@ -1398,7 +1399,7 @@ fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
 }
 
 #[test]
-fn m1_019_colliding_quality_target_can_only_be_suggested_by_name() {
+fn quality_guide_colliding_quality_target_can_only_be_suggested_by_name() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1428,7 +1429,7 @@ fn m1_019_colliding_quality_target_can_only_be_suggested_by_name() {
 }
 
 #[test]
-fn m1_019_sqlite_quality_collision_vetoes_derived_target() {
+fn quality_guide_sqlite_quality_collision_vetoes_derived_target() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1448,25 +1449,25 @@ fn m1_019_sqlite_quality_collision_vetoes_derived_target() {
 }
 
 // Minimal public-safe inline reproductions derived from the fabricated
-// M1-019 archive (SHA-256 7330418b5cc55e2e404f8cb52cbf513ab80c4eba38b7985bb1db793bac99f666).
+// GUIDE_MATCHING-019 archive (SHA-256 7330418b5cc55e2e404f8cb52cbf513ab80c4eba38b7985bb1db793bac99f666).
 // Production streaming importer -> SQLite -> actual Now/Next; no network inputs.
-const M1_019_VALID_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_VALID_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>3sat</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
   <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>3SAT NEXT [synthetic]</title></programme>
 </tv>"#;
-const M1_019_POISONED_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_POISONED_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>ZDF - deliberately inconsistent</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>WRONG ZDF NOW [synthetic]</title></programme>
   <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>WRONG ZDF NEXT [synthetic]</title></programme>
 </tv>"#;
-const M1_019_DUPLICATE_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_DUPLICATE_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>3sat</display-name></channel>
   <channel id="3sat.de"><display-name>ZDF - contradictory duplicate</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
 </tv>"#;
 
-fn m1_019_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), EpgError> {
+fn quality_guide_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), EpgError> {
     let rev: i64 = c
         .query_row("SELECT updated_at FROM epg_sources WHERE id='g'", [], |r| {
             r.get(0)
@@ -1485,7 +1486,7 @@ fn m1_019_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), Ep
 }
 
 #[test]
-fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
+fn quality_guide_actual_stream_import_to_now_next_and_poisoned_projection() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1494,7 +1495,7 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
     )
     .unwrap();
     let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
-    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_VALID_XMLTV, now).unwrap();
     match read_semantic_now_next(&c, "a1", now, &AtomicBool::new(false)).unwrap() {
         SemanticProgrammeState::Matched {
             method: MatchMethod::AutomaticIdentity,
@@ -1507,7 +1508,7 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
         other => panic!("synthetic good guide should project the real fixture titles: {other:?}"),
     }
     // A successful poisoned refresh cannot silently project another station.
-    m1_019_import_inline(&mut c, M1_019_POISONED_XMLTV, now + 1).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_POISONED_XMLTV, now + 1).unwrap();
     assert!(matches!(
         read_semantic_now_next(&c, "a1", now + 1, &AtomicBool::new(false)).unwrap(),
         SemanticProgrammeState::Unmatched
@@ -1516,13 +1517,13 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
 }
 
 #[test]
-fn m1_019_duplicate_channel_import_refused_and_last_good_retained() {
+fn quality_guide_duplicate_channel_import_refused_and_last_good_retained() {
     let mut c = setup();
     selected(&mut c, "g");
     let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
-    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_VALID_XMLTV, now).unwrap();
     assert_eq!(
-        m1_019_import_inline(&mut c, M1_019_DUPLICATE_XMLTV, now + 1),
+        quality_guide_import_inline(&mut c, QUALITY_GUIDE_DUPLICATE_XMLTV, now + 1),
         Err(EpgError::DuplicateChannel)
     );
     assert_eq!(
@@ -1547,7 +1548,7 @@ fn m1_019_duplicate_channel_import_refused_and_last_good_retained() {
 }
 
 #[test]
-fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
+fn quality_guide_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
     let first = super::xmltv::parse_timestamp("20261025020000 +0200").unwrap();
     let second = super::xmltv::parse_timestamp("20261025020000 +0100").unwrap();
     assert_eq!(second - first, 3600);
@@ -1562,7 +1563,7 @@ fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
 }
 
 #[test]
-fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
+fn matching_guard_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
     for stem in ["ABC[1]", "ABC*1", "ABC?1"] {
         let mut c = setup();
         selected(&mut c, "g");
@@ -1605,7 +1606,7 @@ fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
 }
 
 #[test]
-fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() {
+fn matching_guard_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(

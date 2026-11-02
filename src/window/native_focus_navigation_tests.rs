@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Integrated R07 physical XTest regressions for the real Live/Mediathek
+//! Integrated NATIVE_FOCUS physical XTest regressions for the real Live/Mediathek
 //! toolbar entry and reverse route. Deliberately isolated GTK processes.
 use super::*;
 use std::{thread, time::Duration};
@@ -59,14 +59,14 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 fn focused_inside(win: &TvWindow, target: &gtk::Widget, label: &str) {
     let owner = win
         .focused_widget()
-        .expect("R07 actual GTK window focus owner");
+        .expect("NATIVE_FOCUS actual GTK window focus owner");
     assert!(
         owner.is_mapped() && owner.is_visible() && owner.is_sensitive(),
-        "R07 {label}: focused widget must be mapped, visible and sensitive"
+        "NATIVE_FOCUS {label}: focused widget must be mapped, visible and sensitive"
     );
     assert!(
         TvWindow::is_within(&owner, target),
-        "R07 {label}: unexpected focused widget type {}",
+        "NATIVE_FOCUS {label}: unexpected focused widget type {}",
         owner.type_().name()
     );
 }
@@ -86,7 +86,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
     win.imp().stack.set_visible_child_name(page);
     if page == "live" {
         win.imp().live_view.show_toolbar_for_test();
-        win.imp().live_view.install_r07_native_channel_rows();
+        win.imp().live_view.install_native_channel_rows();
     }
     settle();
 
@@ -101,19 +101,22 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
         win.imp().mediathek_view.toolbar_focus_targets()
     };
     let search = &targets[0];
-    assert!(search.is_mapped(), "R07 mapped Search");
-    assert!(search.grab_focus(), "R07 seed focus on real Search");
+    assert!(search.is_mapped(), "NATIVE_FOCUS mapped Search");
+    assert!(
+        search.grab_focus(),
+        "NATIVE_FOCUS seed focus on real Search"
+    );
     settle();
     focused_inside(&win, search, "initial search");
 
     inject("Down", true);
-    let after_down = win.focused_widget().expect("R07 Down focus owner");
+    let after_down = win.focused_widget().expect("NATIVE_FOCUS Down focus owner");
     if negative {
         assert!(
             TvWindow::is_within(&after_down, search),
-            "R07_EXPECTED_NEGATIVE_ORACLE: successful Down must leave Search"
+            "NATIVE_FOCUS_EXPECTED_NEGATIVE_ORACLE: successful Down must leave Search"
         );
-        unreachable!("R07 deliberately wrong focus assertion did not fail");
+        unreachable!("NATIVE_FOCUS deliberately wrong focus assertion did not fail");
     }
     if page == "live" {
         let list = TvWindow::find_descendant(page_widget, &|widget| widget.is::<gtk::ListBox>())
@@ -123,24 +126,24 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
         focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
         assert!(
             first.has_focus(),
-            "R07 E01: first Live card row itself must own focus"
+            "NATIVE_FOCUS E01: first Live card row itself must own focus"
         );
         assert_eq!(
-            win.imp().live_view.r07_native_channel_id(0).as_deref(),
-            Some("r07-live-0")
+            win.imp().live_view.native_channel_id(0).as_deref(),
+            Some("focus-navigation-live-0")
         );
         for index in 1..5 {
             inject("Down", false);
             let next = list.row_at_index(index).expect("native mapped Live row");
             assert_eq!(
-                win.imp().live_view.r07_native_channel_id(index),
-                Some(format!("r07-live-{index}")),
-                "R07 must focus the correctly identified real Live channel card"
+                win.imp().live_view.native_channel_id(index),
+                Some(format!("focus-navigation-live-{index}")),
+                "NATIVE_FOCUS must focus the correctly identified real Live channel card"
             );
             focused_inside(&win, next.upcast_ref(), "Live real next row");
             assert!(
                 next.has_focus(),
-                "R07 E01: Down must focus the Live row, not an inner button"
+                "NATIVE_FOCUS E01: Down must focus the Live row, not an inner button"
             );
         }
         for index in (0..4).rev() {
@@ -149,7 +152,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
             focused_inside(&win, previous.upcast_ref(), "Live real previous row");
             assert!(
                 previous.has_focus(),
-                "R07 E01: Up must focus the previous Live row directly"
+                "NATIVE_FOCUS E01: Up must focus the previous Live row directly"
             );
         }
     } else {
@@ -158,7 +161,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
                 .iter()
                 .skip(1)
                 .any(|target| TvWindow::is_within(&after_down, target)),
-            "R07 Mediathek Search Down must reach a different mapped toolbar control"
+            "NATIVE_FOCUS Mediathek Search Down must reach a different mapped toolbar control"
         );
     }
     inject("Up", false);
@@ -173,31 +176,31 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
 
 #[test]
 #[ignore = "mapped GTK/XTest with isolated display and GSettings"]
-fn r07_native_live_search_640_480() {
+fn native_live_search_640_480() {
     run("live", 640, 480, false);
 }
 #[test]
 #[ignore = "mapped GTK/XTest with isolated display and GSettings"]
-fn r07_native_live_search_1280_800() {
+fn native_live_search_1280_800() {
     run("live", 1280, 800, false);
 }
 #[test]
 #[ignore = "mapped GTK/XTest with isolated display and GSettings"]
-fn r07_native_mediathek_search_640_480() {
+fn native_mediathek_search_640_480() {
     run("mediathek", 640, 480, false);
 }
 #[test]
 #[ignore = "mapped GTK/XTest with isolated display and GSettings"]
-fn r07_native_mediathek_search_1280_800() {
+fn native_mediathek_search_1280_800() {
     run("mediathek", 1280, 800, false);
 }
 #[test]
 #[ignore = "deliberately wrong focus owner must fail via XTest"]
-fn r07_native_negative_live_search_stuck() {
+fn native_negative_live_search_stuck() {
     run("live", 640, 480, true);
 }
 
-// E02: use the real Live card model and a physical key to enter Play.
+// LIVE_PLAY_IDENTITY: use the real Live card model and a physical key to enter Play.
 // The Play button is never activated: pressing OK *again* would start mpv.
 fn run_live_play_portals(width: i32, height: i32, entry_key: &str, negative: bool) {
     adw::init().expect("native GTK display");
@@ -214,7 +217,7 @@ fn run_live_play_portals(width: i32, height: i32, entry_key: &str, negative: boo
     win.imp().stack.set_visible_child_name("live");
     let live = &win.imp().live_view;
     live.show_toolbar_for_test();
-    live.install_r07_native_channel_rows();
+    live.install_native_channel_rows();
     settle();
     let page: &gtk::Widget = live.upcast_ref();
     let list = TvWindow::find_descendant(page, &|w| w.is::<gtk::ListBox>())
@@ -233,86 +236,91 @@ fn run_live_play_portals(width: i32, height: i32, entry_key: &str, negative: boo
         let row = list.row_at_index(index).expect("mapped real LiveCard");
         assert!(
             row.has_focus(),
-            "E02 source row must own native focus before entry"
+            "LIVE_PLAY_IDENTITY source row must own native focus before entry"
         );
         assert_eq!(
-            live.r07_native_channel_id(index),
-            Some(format!("r07-live-{index}")),
-            "E02 wrong channel before entry"
+            live.native_channel_id(index),
+            Some(format!("focus-navigation-live-{index}")),
+            "LIVE_PLAY_IDENTITY wrong channel before entry"
         );
         inject(entry_key, false);
-        let owner = win.focused_widget().expect("E02 actual window focus owner");
+        let owner = win
+            .focused_widget()
+            .expect("LIVE_PLAY_IDENTITY actual window focus owner");
         assert!(
             owner.is_mapped() && owner.is_sensitive() && owner.is_visible(),
-            "E02 Play owner must be mapped, sensitive, visible"
+            "LIVE_PLAY_IDENTITY Play owner must be mapped, sensitive, visible"
         );
         let play = owner
             .clone()
             .downcast::<gtk::Button>()
-            .expect("E02 Play Button");
+            .expect("LIVE_PLAY_IDENTITY Play Button");
         assert_eq!(
             play.action_name().as_deref(),
             Some("card.play"),
-            "E02 {entry_key} must focus primary Play, not a row or unrelated control"
+            "LIVE_PLAY_IDENTITY {entry_key} must focus primary Play, not a row or unrelated control"
         );
         assert_eq!(
             owner.ancestor(gtk::ListBoxRow::static_type()),
             Some(row.clone().upcast::<gtk::Widget>()),
-            "E02 focus must belong to the current source-qualified card"
+            "LIVE_PLAY_IDENTITY focus must belong to the current source-qualified card"
         );
         if negative {
             assert_eq!(
-                live.r07_native_channel_id(index),
-                Some("r07-live-wrong".to_owned()),
-                "R07_E02_EXPECTED_NEGATIVE_ORACLE: Play cannot be attributed to another source"
+                live.native_channel_id(index),
+                Some("focus-navigation-live-wrong".to_owned()),
+                "NATIVE_FOCUS_LIVE_PLAY_IDENTITY_EXPECTED_NEGATIVE_ORACLE: Play cannot be attributed to another source"
             );
-            unreachable!("E02 wrong-source identity oracle unexpectedly survived");
+            unreachable!("LIVE_PLAY_IDENTITY wrong-source identity oracle unexpectedly survived");
         }
         inject("Left", false);
         assert!(
             row.has_focus(),
-            "E02 native Left must return to same LiveCard"
+            "LIVE_PLAY_IDENTITY native Left must return to same LiveCard"
         );
         // Reset this disposable row's reveal state without starting playback;
         // subsequent movement must be a genuine injected Down key.
-        live.r07_collapse_test_channel(index);
+        live.focus_navigation_collapse_test_channel(index);
         settle();
-        assert!(row.has_focus(), "E02 reset must preserve current row focus");
+        assert!(
+            row.has_focus(),
+            "LIVE_PLAY_IDENTITY reset must preserve current row focus"
+        );
     }
     win.destroy();
 }
 
 #[test]
 #[ignore = "mapped real Live cards/XTest: native OK Play entry at 640x480"]
-fn r07_native_live_play_ok_640_480() {
+fn native_live_play_ok_640_480() {
     run_live_play_portals(640, 480, "Return", false);
 }
 
 #[test]
 #[ignore = "mapped real Live cards/XTest: native OK Play entry at 1280x800"]
-fn r07_native_live_play_ok_1280_800() {
+fn native_live_play_ok_1280_800() {
     run_live_play_portals(1280, 800, "Return", false);
 }
 
 #[test]
 #[ignore = "mapped real Live cards/XTest: native Right Play entry at 640x480"]
-fn r07_native_live_play_right_640_480() {
+fn native_live_play_right_640_480() {
     run_live_play_portals(640, 480, "Right", false);
 }
 
 #[test]
 #[ignore = "mapped real Live cards/XTest: native Right Play entry at 1280x800"]
-fn r07_native_live_play_right_1280_800() {
+fn native_live_play_right_1280_800() {
     run_live_play_portals(1280, 800, "Right", false);
 }
 
 #[test]
-#[ignore = "E02 wrong source identity must be rejected after real Play entry"]
-fn r07_native_live_play_negative_source_identity() {
+#[ignore = "LIVE_PLAY_IDENTITY wrong source identity must be rejected after real Play entry"]
+fn native_live_play_negative_source_identity() {
     run_live_play_portals(640, 480, "Return", true);
 }
 
-// D01/D02/D07: combine the Live controls, first/middle/last real rows,
+// D01/D02/PAGE_SWITCHER: combine the Live controls, first/middle/last real rows,
 // expanded Play, real category switcher and Home in one physical journey.
 // This deliberately tests the complete navigation connection rather than
 // giving PASS credit for isolated toolbar-only or row-only fixtures.
@@ -331,7 +339,7 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     win.imp().stack.set_visible_child_name("live");
     let live = &win.imp().live_view;
     live.show_toolbar_for_test();
-    live.install_r07_native_channel_rows();
+    live.install_native_channel_rows();
     settle();
     let list = TvWindow::find_descendant(live.upcast_ref(), &|w| w.is::<gtk::ListBox>())
         .and_then(|w| w.downcast::<gtk::ListBox>().ok())
@@ -354,14 +362,14 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
         let row = list.row_at_index(index).expect("complete five-card list");
         assert!(row.has_focus() && row.is_mapped());
         assert_eq!(
-            live.r07_native_channel_id(index),
-            Some(format!("r07-live-{index}"))
+            live.native_channel_id(index),
+            Some(format!("focus-navigation-live-{index}"))
         );
         if index == 4 && wrong_row {
             assert_eq!(
-                live.r07_native_channel_id(index).as_deref(),
-                Some("r07-live-wrong"),
-                "R07_D01_D02_EXPECTED_NEGATIVE_ORACLE: last Live row source identity",
+                live.native_channel_id(index).as_deref(),
+                Some("focus-navigation-live-wrong"),
+                "NATIVE_FOCUS_LIVE_FULL_GRAPH_EXPECTED_NEGATIVE_ORACLE: last Live row source identity",
             );
         }
     }
@@ -378,7 +386,7 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     );
     inject("Left", false);
     assert!(last.has_focus(), "D01/D02 Play Left returns last Live row");
-    live.r07_collapse_test_channel(4);
+    live.focus_navigation_collapse_test_channel(4);
     settle();
     for index in (0..4).rev() {
         inject("Up", false);
@@ -393,11 +401,11 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     })
     .expect("mapped real responsive switcher");
     let selected = win.focused_widget().expect("focused Live switcher");
-    focused_inside(&win, &switcher, "D07 Live Search Up to switcher");
+    focused_inside(&win, &switcher, "PAGE_SWITCHER Live Search Up to switcher");
     assert!(selected.is_mapped());
     // An actual Home event from the focused switcher returns to Mediathek.
     // GTK may keep focus on the newly selected mapped switcher tab; the
-    // existing D07 gate independently covers Down into Mediathek Search.
+    // existing PAGE_SWITCHER gate independently covers Down into Mediathek Search.
     inject("XF86HomePage", false);
     assert_eq!(
         win.imp().stack.visible_child_name().as_deref(),
@@ -416,24 +424,24 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
 }
 
 #[test]
-#[ignore = "R07 physical full loaded Live Search, rows, Play, categories and Home at 640x480"]
-fn r07_native_live_full_graph_640_480() {
+#[ignore = "NATIVE_FOCUS physical full loaded Live Search, rows, Play, categories and Home at 640x480"]
+fn native_live_full_graph_640_480() {
     run_live_complete_graph(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 physical full loaded Live Search, rows, Play, categories and Home at 1280x800"]
-fn r07_native_live_full_graph_1280_800() {
+#[ignore = "NATIVE_FOCUS physical full loaded Live Search, rows, Play, categories and Home at 1280x800"]
+fn native_live_full_graph_1280_800() {
     run_live_complete_graph(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberate wrong last real Live-card identity"]
-fn r07_native_live_full_graph_negative_identity() {
+#[ignore = "NATIVE_FOCUS deliberate wrong last real Live-card identity"]
+fn native_live_full_graph_negative_identity() {
     run_live_complete_graph(640, 480, true);
 }
 
-// Test-only native cross-component evidence; retained as one R07 module.
-include!("r07_mediathek_batch_tests.rs");
+// Test-only native cross-component evidence; retained as one NATIVE_FOCUS module.
+include!("native_mediathek_navigation_tests.rs");
 
-include!("r07_painted_focus_tests.rs");
+include!("painted_focus_tests.rs");

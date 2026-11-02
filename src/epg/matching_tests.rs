@@ -196,7 +196,7 @@ fn full_fold_handles_greek_sigma_and_expansions_without_stripping_variants() {
 }
 
 #[test]
-fn d35_quality_region_and_us_station_auto_are_restricted_to_proven_identity() {
+fn guide_picker_quality_region_and_us_station_auto_are_restricted_to_proven_identity() {
     let cases = [
         ("3sat.de@SD", "3sat.de", "DE - 3sat"),
         (
@@ -268,7 +268,7 @@ fn d35_quality_region_and_us_station_auto_are_restricted_to_proven_identity() {
 }
 
 #[test]
-fn d35_no_false_automatic_links_in_critical_negative_matrix() {
+fn guide_picker_no_false_automatic_links_in_critical_negative_matrix() {
     let negatives = [
         ("ARTE.de@SD", "ZDF.de", "DE - ZDF"),
         ("CBN.us@HD", "CNN.us", "US - CNN"),
@@ -314,7 +314,7 @@ fn d35_no_false_automatic_links_in_critical_negative_matrix() {
 }
 
 #[test]
-fn m1_019_de_ctrl_01_valid_quality_name_and_selected_guide() {
+fn quality_guide_de_ctrl_01_valid_quality_name_and_selected_guide() {
     let imported = row("R12", "synthetic", Some("3sat.de@HD"), "3sat");
     let guide_channels = [
         ch("guide", "3sat.de", "DE - 3sat"),
@@ -331,7 +331,7 @@ fn m1_019_de_ctrl_01_valid_quality_name_and_selected_guide() {
 }
 
 #[test]
-fn m1_019_name_01_exact_name_only_remains_nonbinding_suggestion() {
+fn quality_guide_name_01_exact_name_only_remains_nonbinding_suggestion() {
     // Corrected NAME-01 oracle: the original guide lacks a matching name and
     // therefore cannot test a genuine name-only suggestion.
     let mut imported = row(
@@ -351,7 +351,7 @@ fn m1_019_name_01_exact_name_only_remains_nonbinding_suggestion() {
 }
 
 #[test]
-fn m1_019_regional_language_and_multiple_suffixes_never_auto_bind() {
+fn quality_guide_regional_language_and_multiple_suffixes_never_auto_bind() {
     let cases = [
         (
             "NDRFernsehen.de@Niedersachsen",
@@ -383,7 +383,7 @@ fn m1_019_regional_language_and_multiple_suffixes_never_auto_bind() {
 }
 
 #[test]
-fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
+fn quality_guide_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
     // An uncorroborated quality-ID target must never attach its programme.
     let imported = row("R11", "synthetic", Some("3sat.de@HD"), "3sat");
     let contradictory = [ch("guide", "3sat.de", "ZDF - deliberately inconsistent")];
@@ -400,7 +400,7 @@ fn m1_019_de_neg_01_poisoned_quality_should_abstain_policy_gate() {
 }
 
 #[test]
-fn r02_quality_label_corroboration_is_conservative_and_guide_scoped() {
+fn matching_guard_quality_label_corroboration_is_conservative_and_guide_scoped() {
     for label in ["3sat", "DE - 3sat", "3sat HD", "DE - 3sat FHD"] {
         assert!(
             matches!(
@@ -458,7 +458,7 @@ fn r02_quality_label_corroboration_is_conservative_and_guide_scoped() {
 }
 
 #[test]
-fn r02_unicode_quality_qualifiers_abstain_but_explicit_identity_survives() {
+fn matching_guard_unicode_quality_qualifiers_abstain_but_explicit_identity_survives() {
     for (original, display) in [
         ("ARTE.de@HD", "ARTE 日本語"),
         ("ARTE.de@HD", "日本語 ARTE"),

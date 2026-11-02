@@ -1091,7 +1091,7 @@ fn osk_mapped_gtk_all_keys_fit_without_scrolling() {
     let x_width = x.compute_bounds(&dialog).expect("mapped x").width();
     assert!(
         (q_width - x_width).abs() <= 1.0,
-        "G09 OSK character rows have uneven key widths: q={q_width}, x={x_width}"
+        "FOCUS_GRAPH OSK character rows have uneven key widths: q={q_width}, x={x_width}"
     );
     let assert_inside = || {
         for button in &buttons {
@@ -1314,7 +1314,7 @@ fn osk_mapped_gtk_dropped_origin_cancel_nonretention() {
     win.destroy();
 }
 
-// R07 C01/C02/C03/C05: physical remote input traverses the actual *mapped*
+// NATIVE_FOCUS C01/C02/C03/C05: physical remote input traverses the actual *mapped*
 // seven-row keyboard. This is not a call to `next_key` or synthetic GTK focus
 // movement: only the initial control is seeded, every subsequent focus hop
 // is delivered with XTest on an isolated X11 server.
@@ -1358,21 +1358,21 @@ unsafe extern "C" {
     ) -> std::ffi::c_int;
 }
 
-struct R07X11(*mut std::ffi::c_void);
-impl Drop for R07X11 {
+struct NativeFocusX11(*mut std::ffi::c_void);
+impl Drop for NativeFocusX11 {
     fn drop(&mut self) {
         unsafe { XCloseDisplay(self.0) };
     }
 }
 thread_local! {
-    static R07_OSK_DISPLAY: RefCell<Option<R07X11>> = const { RefCell::new(None) };
+    static NATIVE_FOCUS_OSK_DISPLAY: RefCell<Option<NativeFocusX11>> = const { RefCell::new(None) };
 }
-pub(crate) fn r07_osk_press(key: &str) {
-    R07_OSK_DISPLAY.with_borrow_mut(|display| {
+pub(crate) fn focus_navigation_osk_press(key: &str) {
+    NATIVE_FOCUS_OSK_DISPLAY.with_borrow_mut(|display| {
         let pointer = display.get_or_insert_with(|| {
             let p = unsafe { XOpenDisplay(std::ptr::null()) };
             assert!(!p.is_null(), "real X11 session for XTest");
-            R07X11(p)
+            NativeFocusX11(p)
         });
         let p = pointer.0;
         let name = std::ffi::CString::new(key).expect("valid X11 key name");
@@ -1412,7 +1412,7 @@ pub(crate) fn r07_osk_press(key: &str) {
     }
 }
 
-fn r07_osk_button_rows(dialog: &adw::Dialog) -> Vec<Vec<gtk::Button>> {
+fn focus_navigation_osk_button_rows(dialog: &adw::Dialog) -> Vec<Vec<gtk::Button>> {
     fn collect(root: &gtk::Widget, buttons: &mut Vec<gtk::Button>) {
         if let Some(button) = root.downcast_ref::<gtk::Button>() {
             if button.has_css_class("osk-key") {
@@ -1442,8 +1442,9 @@ fn r07_osk_button_rows(dialog: &adw::Dialog) -> Vec<Vec<gtk::Button>> {
     rows
 }
 
-fn r07_osk_focus(win: &adw::Window, rows: &[Vec<gtk::Button>]) -> (usize, usize) {
-    let focus = gtk::prelude::GtkWindowExt::focus(win).expect("R07 actual GTK focus owner");
+fn focus_navigation_osk_focus(win: &adw::Window, rows: &[Vec<gtk::Button>]) -> (usize, usize) {
+    let focus =
+        gtk::prelude::GtkWindowExt::focus(win).expect("NATIVE_FOCUS actual GTK focus owner");
     assert!(focus.is_mapped() && focus.is_visible() && focus.is_sensitive());
     rows.iter()
         .enumerate()
@@ -1452,82 +1453,87 @@ fn r07_osk_focus(win: &adw::Window, rows: &[Vec<gtk::Button>]) -> (usize, usize)
                 .position(|button| focus == *button)
                 .map(|col| (r, col))
         })
-        .expect("R07 current owner is a mapped OSK key")
+        .expect("NATIVE_FOCUS current owner is a mapped OSK key")
 }
 
-fn r07_osk_move_to(win: &adw::Window, rows: &[Vec<gtk::Button>], row: usize, text: &str) {
+fn focus_navigation_osk_move_to(
+    win: &adw::Window,
+    rows: &[Vec<gtk::Button>],
+    row: usize,
+    text: &str,
+) {
     for _ in 0..rows.len() {
-        if r07_osk_focus(win, rows).0 == row {
+        if focus_navigation_osk_focus(win, rows).0 == row {
             break;
         }
-        r07_osk_press("Down");
+        focus_navigation_osk_press("Down");
     }
-    assert_eq!(r07_osk_focus(win, rows).0, row);
+    assert_eq!(focus_navigation_osk_focus(win, rows).0, row);
     for _ in 0..rows[row].len() {
-        let (_, c) = r07_osk_focus(win, rows);
+        let (_, c) = focus_navigation_osk_focus(win, rows);
         if rows[row][c].label().as_deref() == Some(text) {
             return;
         }
-        r07_osk_press("Right");
+        focus_navigation_osk_press("Right");
     }
-    panic!("R07 OSK cell {text} not reachable via native Right on row {row}");
+    panic!("NATIVE_FOCUS OSK cell {text} not reachable via native Right on row {row}");
 }
 
-fn r07_osk_complete_graph(width: i32, height: i32, negative: bool) {
+fn focus_navigation_osk_complete_graph(width: i32, height: i32, negative: bool) {
     let (win, body) = host_at(width, height);
     let origin = gtk::Entry::new();
     body.append(&origin);
     spin();
     show(&origin);
     let dialog = keyboard(&win, &origin);
-    let rows = r07_osk_button_rows(&dialog);
+    let rows = focus_navigation_osk_button_rows(&dialog);
     assert!(rows[0][0].grab_focus(), "initial real mapped OSK cell");
     spin();
-    assert_eq!(r07_osk_focus(&win, &rows), (0, 0));
-    r07_osk_press("Right");
+    assert_eq!(focus_navigation_osk_focus(&win, &rows), (0, 0));
+    focus_navigation_osk_press("Right");
     if negative {
         assert_eq!(
-            r07_osk_focus(&win, &rows),
+            focus_navigation_osk_focus(&win, &rows),
             (0, 0),
-            "R07_OSK_EXPECTED_NEGATIVE_ORACLE: Right may not remain at first key"
+            "NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_ORACLE: Right may not remain at first key"
         );
-        unreachable!("R07 OSK deliberately false focus oracle escaped");
+        unreachable!("NATIVE_FOCUS OSK deliberately false focus oracle escaped");
     }
-    assert_eq!(r07_osk_focus(&win, &rows), (0, 1));
-    r07_osk_press("Left");
+    assert_eq!(focus_navigation_osk_focus(&win, &rows), (0, 1));
+    focus_navigation_osk_press("Left");
     // Every actual key in every row must be visited in both directions,
     // including the unequal-length alphabet/symbol rows and wrapping edges.
     for row in 0..rows.len() {
-        eprintln!("R07_OSK row {row} start");
-        assert_eq!(r07_osk_focus(&win, &rows).0, row);
-        let start = r07_osk_focus(&win, &rows).1;
+        eprintln!("NATIVE_FOCUS_OSK row {row} start");
+        assert_eq!(focus_navigation_osk_focus(&win, &rows).0, row);
+        let start = focus_navigation_osk_focus(&win, &rows).1;
         let mut visited = std::collections::BTreeSet::new();
         for _ in 0..rows[row].len() {
-            let (r, c) = r07_osk_focus(&win, &rows);
+            let (r, c) = focus_navigation_osk_focus(&win, &rows);
             assert_eq!(r, row);
             assert!(
                 visited.insert(c),
-                "R07 OSK physical Right revisited a key before wrapping"
+                "NATIVE_FOCUS OSK physical Right revisited a key before wrapping"
             );
-            r07_osk_press("Right");
+            focus_navigation_osk_press("Right");
         }
         assert_eq!(visited.len(), rows[row].len());
-        assert_eq!(r07_osk_focus(&win, &rows), (row, start));
+        assert_eq!(focus_navigation_osk_focus(&win, &rows), (row, start));
         for _ in 0..rows[row].len() {
-            r07_osk_press("Left");
+            focus_navigation_osk_press("Left");
         }
-        assert_eq!(r07_osk_focus(&win, &rows), (row, start));
-        r07_osk_press("Down");
+        assert_eq!(focus_navigation_osk_focus(&win, &rows), (row, start));
+        focus_navigation_osk_press("Down");
     }
     assert_eq!(
-        r07_osk_focus(&win, &rows).0,
+        focus_navigation_osk_focus(&win, &rows).0,
         0,
         "Down from final action row returns to digits"
     );
-    eprintln!("R07_OSK full grid complete");
+    eprintln!("NATIVE_FOCUS_OSK full grid complete");
     // Real Return activates a digit in the independent draft only.
-    r07_osk_move_to(&win, &rows, 0, "1");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 0, "1");
+    focus_navigation_osk_press("Return");
     let draft = find_entry(dialog.upcast_ref()).expect("real independent GTK draft");
     assert_eq!(draft.text().as_str(), "1");
     assert_eq!(
@@ -1535,42 +1541,42 @@ fn r07_osk_complete_graph(width: i32, height: i32, negative: bool) {
         "",
         "draft must never leak before Done"
     );
-    r07_osk_move_to(&win, &rows, 5, "Space");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 5, "Space");
+    focus_navigation_osk_press("Return");
     assert_eq!(draft.text().as_str(), "1 ");
-    r07_osk_move_to(&win, &rows, 5, "←");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 5, "←");
+    focus_navigation_osk_press("Return");
     assert_eq!(draft.position(), 1);
-    r07_osk_move_to(&win, &rows, 5, "→");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 5, "→");
+    focus_navigation_osk_press("Return");
     assert_eq!(draft.position(), 2);
-    r07_osk_move_to(&win, &rows, 5, "Backspace");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 5, "Backspace");
+    focus_navigation_osk_press("Return");
     assert_eq!(draft.text().as_str(), "1");
-    eprintln!("R07_OSK editing complete");
+    eprintln!("NATIVE_FOCUS_OSK editing complete");
     // QWERTY -> QWERTZ, Shift, Symbols and their inverses alter *real*
     // rendered key labels without making any origin change.
-    r07_osk_move_to(&win, &rows, 6, "QWERTZ");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "QWERTZ");
+    focus_navigation_osk_press("Return");
     assert_eq!(rows[1][5].label().as_deref(), Some("z"));
     assert_eq!(rows[3][0].label().as_deref(), Some("y"));
-    r07_osk_move_to(&win, &rows, 6, "Shift");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "Shift");
+    focus_navigation_osk_press("Return");
     assert_eq!(rows[1][5].label().as_deref(), Some("Z"));
-    r07_osk_move_to(&win, &rows, 6, "Symbols");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "Symbols");
+    focus_navigation_osk_press("Return");
     assert_eq!(rows[1][0].label().as_deref(), Some("!"));
-    r07_osk_move_to(&win, &rows, 6, "Letters");
-    r07_osk_press("Return");
-    r07_osk_move_to(&win, &rows, 6, "Shift on");
-    r07_osk_press("Return");
-    r07_osk_move_to(&win, &rows, 6, "QWERTY");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "Letters");
+    focus_navigation_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "Shift on");
+    focus_navigation_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "QWERTY");
+    focus_navigation_osk_press("Return");
     assert_eq!(rows[1][5].label().as_deref(), Some("y"));
     assert_eq!(origin.text().as_str(), "");
-    eprintln!("R07_OSK modifiers complete");
-    r07_osk_move_to(&win, &rows, 6, "Cancel");
-    r07_osk_press("Return");
+    eprintln!("NATIVE_FOCUS_OSK modifiers complete");
+    focus_navigation_osk_move_to(&win, &rows, 6, "Cancel");
+    focus_navigation_osk_press("Return");
     spin();
     assert!(!dialog.is_mapped(), "physical Cancel closed the keyboard");
     assert_eq!(origin.text().as_str(), "", "cancel must preserve origin");
@@ -1578,29 +1584,29 @@ fn r07_osk_complete_graph(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "R07 full mapped XTest keyboard grid, 640x480"]
-fn r07_osk_native_grid_640_480() {
-    r07_osk_complete_graph(640, 480, false);
+#[ignore = "NATIVE_FOCUS full mapped XTest keyboard grid, 640x480"]
+fn focus_navigation_osk_native_grid_640_480() {
+    focus_navigation_osk_complete_graph(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 full mapped XTest keyboard grid, 1280x800"]
-fn r07_osk_native_grid_1280_800() {
-    r07_osk_complete_graph(1280, 800, false);
+#[ignore = "NATIVE_FOCUS full mapped XTest keyboard grid, 1280x800"]
+fn focus_navigation_osk_native_grid_1280_800() {
+    focus_navigation_osk_complete_graph(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberately false OSK focus ownership control"]
-fn r07_osk_native_grid_negative_owner() {
-    r07_osk_complete_graph(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately false OSK focus ownership control"]
+fn focus_navigation_osk_native_grid_negative_owner() {
+    focus_navigation_osk_complete_graph(640, 480, true);
 }
 
 // C04: reopen the *actual* keyboard from a second process using a keyfile
 // backend. Reading the preference twice within the same process is not a
 // persistence oracle and must never count as a cold application restart.
 #[test]
-#[ignore = "R07 C04 native OSK QWERTZ persisted across independent process"]
-fn r07_osk_native_persist_qwertz_restart() {
+#[ignore = "NATIVE_FOCUS C04 native OSK QWERTZ persisted across independent process"]
+fn focus_navigation_osk_native_persist_qwertz_restart() {
     let config_home = std::env::temp_dir().join(format!(
         "broadcaster-osk-qwertz-process-{}",
         std::process::id()
@@ -1614,20 +1620,20 @@ fn r07_osk_native_persist_qwertz_restart() {
     spin();
     show(&origin);
     let dialog = keyboard(&win, &origin);
-    let rows = r07_osk_button_rows(&dialog);
+    let rows = focus_navigation_osk_button_rows(&dialog);
     assert_eq!(rows[1][5].label().as_deref(), Some("y"));
     assert!(rows[0][0].grab_focus());
-    r07_osk_move_to(&win, &rows, 6, "QWERTZ");
-    r07_osk_press("Return");
+    focus_navigation_osk_move_to(&win, &rows, 6, "QWERTZ");
+    focus_navigation_osk_press("Return");
     assert_eq!(rows[1][5].label().as_deref(), Some("z"));
     assert!(crate::settings::TvSettings::get().osk_qwertz());
     adw::gio::Settings::sync();
     dialog.close();
     spin();
 
-    let mut child = if let Ok(loader) = std::env::var("R07_FOCUS_LOCAL_LOADER") {
-        let libs = std::env::var("R07_FOCUS_LOCAL_LIBS").expect("local loader libs");
-        let binary = std::env::var("R07_FOCUS_LOCAL_BINARY").expect("local test binary");
+    let mut child = if let Ok(loader) = std::env::var("BROADCASTER_NATIVE_TEST_LOADER") {
+        let libs = std::env::var("BROADCASTER_NATIVE_TEST_LIBS").expect("local loader libs");
+        let binary = std::env::var("BROADCASTER_NATIVE_TEST_BINARY").expect("local test binary");
         let mut process = std::process::Command::new(loader);
         process.args(["--library-path", &libs, &binary]);
         process
@@ -1636,11 +1642,11 @@ fn r07_osk_native_persist_qwertz_restart() {
     };
     let output = child
         .args([
-            "r07_osk_qwertz_process_child",
+            "focus_navigation_osk_qwertz_process_child",
             "--ignored",
             "--test-threads=1",
         ])
-        .env("R07_OSK_PERSIST_CHILD", "1")
+        .env("NATIVE_FOCUS_OSK_PERSIST_CHILD", "1")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("GSETTINGS_BACKEND", "keyfile")
         .output()
@@ -1658,9 +1664,12 @@ fn r07_osk_native_persist_qwertz_restart() {
 }
 
 #[test]
-#[ignore = "R07 child-only real OSK cold QWERTZ layout verification"]
-fn r07_osk_qwertz_process_child() {
-    assert_eq!(std::env::var("R07_OSK_PERSIST_CHILD").as_deref(), Ok("1"));
+#[ignore = "NATIVE_FOCUS child-only real OSK cold QWERTZ layout verification"]
+fn focus_navigation_osk_qwertz_process_child() {
+    assert_eq!(
+        std::env::var("NATIVE_FOCUS_OSK_PERSIST_CHILD").as_deref(),
+        Ok("1")
+    );
     assert!(crate::settings::TvSettings::get().osk_qwertz());
     let (win, body) = host_at(640, 480);
     let origin = gtk::Entry::new();
@@ -1668,26 +1677,26 @@ fn r07_osk_qwertz_process_child() {
     spin();
     show(&origin);
     let dialog = keyboard(&win, &origin);
-    let rows = r07_osk_button_rows(&dialog);
+    let rows = focus_navigation_osk_button_rows(&dialog);
     assert_eq!(rows[1][5].label().as_deref(), Some("z"));
     assert_eq!(rows[3][0].label().as_deref(), Some("y"));
     dialog.close();
     win.destroy();
 }
 
-// R07 C05 / G06 (OSK portion): actual Xvfb RGB pixels around the focused
+// NATIVE_FOCUS C05 / GUIDE_PICKER_PAINTED_FOCUS (OSK portion): actual Xvfb RGB pixels around the focused
 // keyboard cell must change when only its outline is suppressed. A logical
 // :focus bit without a painted cue does not satisfy this oracle.
-fn r07_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
+fn focus_navigation_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
     let (win, body) = host_at(width, height);
     let origin = gtk::Entry::new();
     body.append(&origin);
     spin();
     show(&origin);
     let dialog = keyboard(&win, &origin);
-    let rows = r07_osk_button_rows(&dialog);
+    let rows = focus_navigation_osk_button_rows(&dialog);
     assert!(rows[0][0].grab_focus());
-    r07_osk_press("Right");
+    focus_navigation_osk_press("Right");
     let button = &rows[0][1];
     assert!(button.has_focus() && button.is_mapped() && button.is_visible());
     let rect = button.compute_bounds(&win).expect("mapped drawn OSK cell");
@@ -1702,7 +1711,7 @@ fn r07_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
         let proc = std::process::Command::new("python3")
             .args([
                 "-c",
-                crate::window::r07_native_focus_tests::R07_CAPTURE_X11,
+                crate::window::native_focus_navigation_tests::NATIVE_FOCUS_CAPTURE_X11,
                 &x.to_string(),
                 &y.to_string(),
                 &w.to_string(),
@@ -1723,21 +1732,21 @@ fn r07_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
     }
     let focused = capture();
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(".r07-osk-paint-off, .r07-osk-paint-off:focus, .r07-osk-paint-off:focus-visible, .r07-osk-paint-off:focus-within, .r07-osk-paint-off * { outline: none; outline-width: 0; box-shadow: none; }");
+    provider.load_from_string(".focus-navigation-osk-paint-off, .focus-navigation-osk-paint-off:focus, .focus-navigation-osk-paint-off:focus-visible, .focus-navigation-osk-paint-off:focus-within, .focus-navigation-osk-paint-off * { outline: none; outline-width: 0; box-shadow: none; }");
     let display = button.display();
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_USER + 100,
     );
-    button.add_css_class("r07-osk-paint-off");
+    button.add_css_class("focus-navigation-osk-paint-off");
     spin();
     assert!(
         button.has_focus(),
         "test-only painted suppression must not move focus"
     );
     let suppressed = capture();
-    button.remove_css_class("r07-osk-paint-off");
+    button.remove_css_class("focus-navigation-osk-paint-off");
     gtk::style_context_remove_provider_for_display(&display, &provider);
     for _ in 0..4 {
         spin();
@@ -1768,11 +1777,11 @@ fn r07_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
     };
     let pixels = compare(&focused, &suppressed);
     let inverse = compare(&focused, &restored);
-    eprintln!("R07_OSK_PAINT viewport={width}x{height} changed={pixels} restored_delta={inverse}");
+    eprintln!("NATIVE_FOCUS_OSK_PAINT viewport={width}x{height} changed={pixels} restored_delta={inverse}");
     if negative {
         assert_eq!(pixels, 0,
-            "R07_OSK_EXPECTED_NEGATIVE_PAINT: logically focused cell must visibly differ under suppression");
-        unreachable!("R07 OSK deliberately false paint oracle survived");
+            "NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_PAINT: logically focused cell must visibly differ under suppression");
+        unreachable!("NATIVE_FOCUS OSK deliberately false paint oracle survived");
     }
     assert!(pixels >= 15, "no actual painted OSK focus outline");
     assert!(
@@ -1782,17 +1791,17 @@ fn r07_osk_native_painted_cell(width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 #[test]
-#[ignore = "R07 OSK drawn native X11 focus, compact"]
-fn r07_osk_native_paint_640_480() {
-    r07_osk_native_painted_cell(640, 480, false);
+#[ignore = "NATIVE_FOCUS OSK drawn native X11 focus, compact"]
+fn focus_navigation_osk_native_paint_640_480() {
+    focus_navigation_osk_native_painted_cell(640, 480, false);
 }
 #[test]
-#[ignore = "R07 OSK drawn native X11 focus, TV"]
-fn r07_osk_native_paint_1280_800() {
-    r07_osk_native_painted_cell(1280, 800, false);
+#[ignore = "NATIVE_FOCUS OSK drawn native X11 focus, TV"]
+fn focus_navigation_osk_native_paint_1280_800() {
+    focus_navigation_osk_native_painted_cell(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 deliberately false OSK painted-focus oracle"]
-fn r07_osk_native_paint_negative() {
-    r07_osk_native_painted_cell(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately false OSK painted-focus oracle"]
+fn focus_navigation_osk_native_paint_negative() {
+    focus_navigation_osk_native_painted_cell(640, 480, true);
 }

@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Opt-in local mpv 0.41 probe; never uses live media or authentic credentials.
 
-Run: python3 tests/player/p1_mpv_http_probe.py [--mpv /path/to/mpv]
+Run: python3 tests/player/mpv_http_mpv_http_probe.py [--mpv /path/to/mpv]
 A fake mpv executable argv check runs in Rust CI separately. This probe
-tests actual mpv HTTP behavior and MUST be executed before P1 sign-off.
+tests actual mpv HTTP behavior and MUST be executed before MPV_HTTP sign-off.
 """
 import argparse
 import io
@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-AGENT = "Broadcaster-P1-Probe/1"
+AGENT = "Broadcaster-MpvHttpProbe/1"
 
 
 def synthetic_wav():
@@ -124,7 +124,7 @@ def main():
     ).stdout
     if not re.search(r"\bmpv 0\.41(?:\.|\b)", version):
         raise SystemExit("NOT RUN: this fixture requires mpv 0.41")
-    with tempfile.TemporaryDirectory(prefix="broadcaster-p1-http-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="broadcaster-mpv_http-http-") as tmp:
         observations = []
         wav_data = synthetic_wav()
         segment = make_segment(Path(tmp))

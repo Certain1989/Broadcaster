@@ -2305,17 +2305,17 @@ impl TvStreamsView {
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_install_test_service(&self, service: StreamsService) {
+    pub(crate) fn source_manager_install_test_service(&self, service: StreamsService) {
         self.imp().service.replace(Some(service));
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_test_manage_button(&self) -> gtk::Button {
+    pub(crate) fn source_manager_test_manage_button(&self) -> gtk::Button {
         self.imp().manage_button.get()
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_test_manager_list(&self) -> Option<gtk::ListBox> {
+    pub(crate) fn source_manager_test_manager_list(&self) -> Option<gtk::ListBox> {
         self.imp()
             .manager_list
             .borrow()

@@ -8,7 +8,7 @@ use super::{
     headroom::ImportHeadroom,
     limits,
     model::{EpgError, LimitKind},
-    xmltv::{decode_xmltv_rows_omitting_c1, StreamedRows, StreamingLimits},
+    xmltv::{decode_xmltv_rows_omitting_source_manager, StreamedRows, StreamingLimits},
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
@@ -416,7 +416,7 @@ fn import_xmltv_scoped<R: BufRead>(
         }
         Ok(())
     };
-    let mut rows = decode_xmltv_rows_omitting_c1(
+    let mut rows = decode_xmltv_rows_omitting_source_manager(
         input,
         source_id,
         retrieved_utc,
@@ -718,7 +718,7 @@ mod tests {
         conn
     }
     #[test]
-    fn d29_actual_bundled_sqlite_temp_page_limit_probe() {
+    fn sqlite_temp_capacity_actual_bundled_sqlite_temp_page_limit_probe() {
         // Run against Cargo.lock's bundled SQLite, not host sqlite3.
         let mut conn = db();
         let other = db();
@@ -739,10 +739,10 @@ mod tests {
             let set = scalar(&tx, "PRAGMA temp.max_page_count = 4");
             assert_eq!(set, 4, "bundled SQLite must support the TEMP page limit");
             assert_eq!(scalar(&tx, "PRAGMA temp.max_page_count"), 4);
-            tx.execute_batch("CREATE TEMP TABLE d29_page_probe (payload BLOB);")
+            tx.execute_batch("CREATE TEMP TABLE sqlite_temp_capacity_page_probe (payload BLOB);")
                 .unwrap();
             let result = tx.execute(
-                "INSERT INTO temp.d29_page_probe(payload) VALUES (zeroblob(?1))",
+                "INSERT INTO temp.sqlite_temp_capacity_page_probe(payload) VALUES (zeroblob(?1))",
                 [page_size * 16],
             );
             assert!(
@@ -761,7 +761,7 @@ mod tests {
         }
         let stale: i64 = scalar(
             &conn,
-            "SELECT count(*) FROM sqlite_temp_master WHERE name='d29_page_probe'",
+            "SELECT count(*) FROM sqlite_temp_master WHERE name='sqlite_temp_capacity_page_probe'",
         );
         assert_eq!(
             stale, 0,
@@ -774,14 +774,15 @@ mod tests {
 
         {
             let tx = conn.transaction().unwrap();
-            tx.execute_batch("CREATE TEMP TABLE d29_page_probe (payload BLOB);")
+            tx.execute_batch("CREATE TEMP TABLE sqlite_temp_capacity_page_probe (payload BLOB);")
                 .unwrap();
             tx.execute(
-                "INSERT INTO temp.d29_page_probe(payload) VALUES (zeroblob(?1))",
+                "INSERT INTO temp.sqlite_temp_capacity_page_probe(payload) VALUES (zeroblob(?1))",
                 [page_size * 16],
             )
             .unwrap();
-            tx.execute_batch("DROP TABLE temp.d29_page_probe;").unwrap();
+            tx.execute_batch("DROP TABLE temp.sqlite_temp_capacity_page_probe;")
+                .unwrap();
             // Locked bundled SQLite must accept restoration and readback while
             // the transaction is still active, not only after COMMIT.
             assert!(!tx.is_autocommit());
@@ -1363,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn decoded_attribute_control_after_c1_omission_rolls_back_last_good() {
+    fn decoded_attribute_control_after_source_manager_omission_rolls_back_last_good() {
         let mut conn = db();
         let cancelled = AtomicBool::new(false);
         import_xmltv(
@@ -2137,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_direct_description_omits_elements_but_preserves_clean_future_rows() {
+    fn source_manager_direct_description_omits_elements_but_preserves_clean_future_rows() {
         for bad in ["\u{0080}", "\u{0093}", "\u{0094}", "\u{0096}", "\u{009f}"] {
             let mut conn = db();
             let xml = guide(
@@ -2175,7 +2176,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_multiple_elements_fragments_and_second_direct_description() {
+    fn source_manager_multiple_elements_fragments_and_second_direct_description() {
         let mut conn = db();
         let head = "<channel id='c'><display-name>C</display-name></channel>";
         let bad1 = programme("c", "Ignored", None, Some("\u{0093}\u{0094}"));
@@ -2197,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_skipped_unknown_channel_and_fatal_independent_text_rollback() {
+    fn source_manager_skipped_unknown_channel_and_fatal_independent_text_rollback() {
         for invalid_programme in [
             programme("missing", "Omitted", None, Some("\u{0093}")),
             programme("missing", "Omitted", None, Some("\u{0096}")),
@@ -2253,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_shortened_key_and_metadata_collisions_fail_both_orders() {
+    fn source_manager_shortened_key_and_metadata_collisions_fail_both_orders() {
         let prefix = "Q".repeat(512);
         let omitted = programme("c", &format!("{prefix}A"), None, Some("\u{0093}"));
         let retained = programme("c", &format!("{prefix}B"), None, Some("safe"));
@@ -2295,7 +2296,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_all_omitted_does_not_satisfy_minimum_schedule_or_change_last_good() {
+    fn source_manager_all_omitted_does_not_satisfy_minimum_schedule_or_change_last_good() {
         let mut conn = db();
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         import_fixture(
@@ -2321,7 +2322,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_all_omitted_unknown_channel_still_fails_as_missing_channel() {
+    fn source_manager_all_omitted_unknown_channel_still_fails_as_missing_channel() {
         let mut conn = db();
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         let good = guide(channels, &programme("c", "Good", None, None));
@@ -2340,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn c1_temp_quota_full_restores_stricter_connection_limit_and_allows_retry() {
+    fn source_manager_temp_quota_full_restores_stricter_connection_limit_and_allows_retry() {
         let mut conn = db();
         let original: i64 = conn
             .query_row("PRAGMA temp.max_page_count=12", [], |r| r.get(0))

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Connected R07 source/group/language/country focus and filter intersection.
+//! Connected NATIVE_FOCUS source/group/language/country focus and filter intersection.
 //! Use real SQLite and XTest; source locators remain reserved `.invalid` URLs.
-use super::c1_mapped_native_diagnostic::{find_view, inject, spin};
+use super::native_navigation_test_support::{find_view, inject, spin};
 use crate::{
     application::TvApplication,
     streams::{
@@ -22,8 +22,8 @@ fn row(order: u32, name: &str, group: &str, lang: &str, country: &str) -> Incomi
     IncomingChannel {
         order,
         imported_name: name.to_owned(),
-        stream_url: format!("https://example.invalid/r07-facet/{order}-{name}.m3u8"),
-        tvg_id: Some(format!("r07-{name}-{order}")),
+        stream_url: format!("https://example.invalid/focus-navigation-facet/{order}-{name}.m3u8"),
+        tvg_id: Some(format!("focus-navigation-{name}-{order}")),
         tvg_name: None,
         group_title: Some(group.to_owned()),
         logo_url: None,
@@ -47,7 +47,7 @@ fn fixture_source(
         name: name.to_owned(),
         origin: SourceOrigin {
             kind: OriginKind::RemoteUrl,
-            locator: format!("https://example.invalid/r07-facets-{order}.m3u"),
+            locator: format!("https://example.invalid/focus-navigation-facets-{order}.m3u"),
         },
         enabled: true,
         order,
@@ -72,7 +72,7 @@ fn filter_choice(drop: &gtk::DropDown, term: &str) -> u32 {
                 .and_then(|obj| obj.downcast::<gtk::StringObject>().ok())
                 .is_some_and(|obj| obj.string().contains(term))
         })
-        .unwrap_or_else(|| panic!("R07 filter option not found: {term}"))
+        .unwrap_or_else(|| panic!("NATIVE_FOCUS filter option not found: {term}"))
 }
 
 fn choose_by_keys(drop: &gtk::DropDown, item: u32) {
@@ -104,10 +104,14 @@ fn choose_by_keys(drop: &gtk::DropDown, item: u32) {
     );
 }
 
-// B07-B09: open the actual GTK searchable DropDown popup and type into its
+// FILTER_POPUP-FILTER_POPUP: open the actual GTK searchable DropDown popup and type into its
 // native SearchEntry with XTest. Do not confuse the main channels SearchEntry
 // or the global OSK with the popup's focused local search.
-fn r07_popup_search_and_cancel(drop: &gtk::DropDown, win: &crate::window::TvWindow, keys: &[&str]) {
+fn focus_navigation_popup_search_and_cancel(
+    drop: &gtk::DropDown,
+    win: &crate::window::TvWindow,
+    keys: &[&str],
+) {
     assert!(
         drop.enables_search(),
         "this production selector must expose a searchable popup"
@@ -175,12 +179,12 @@ fn r07_popup_search_and_cancel(drop: &gtk::DropDown, win: &crate::window::TvWind
 
 fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: bool) {
     let home = std::env::var("XDG_DATA_HOME").expect("isolated native facet data dir");
-    assert!(home.contains("broadcaster-c4-fixture-"));
+    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
     let store = Storage::new();
     store.initialize().expect("disposable SQLite database");
     let a = fixture_source(
         &store,
-        "R07 Source A",
+        "NATIVE_FOCUS Source A",
         0,
         vec![
             row(0, "A News", "News", "de", "DE"),
@@ -189,7 +193,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     );
     let b = fixture_source(
         &store,
-        "R07 Source B",
+        "NATIVE_FOCUS Source B",
         1,
         vec![
             row(0, "B French News", "News", "fr", "FR"),
@@ -245,7 +249,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
                 return;
             }
         }
-        panic!("R07 facet {reason}: expected {expected} GTK rows");
+        panic!("NATIVE_FOCUS facet {reason}: expected {expected} GTK rows");
     };
     wait_count(5, "loaded all source-qualified SQLite channels");
     let targets = view.toolbar_focus_targets();
@@ -262,14 +266,14 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     ] {
         assert!(
             control.enables_search(),
-            "B07-B09 {name} must have native popup search enabled"
+            "FILTER_POPUP-FILTER_POPUP {name} must have native popup search enabled"
         );
     }
     if popup_only {
-        r07_popup_search_and_cancel(source, &win, &["e", "x", "t", "r", "a"]);
-        r07_popup_search_and_cancel(country, &win, &["f", "r"]);
-        r07_popup_search_and_cancel(language, &win, &["d", "e"]);
-        // B08/B09: select actual country/language popup results, not only
+        focus_navigation_popup_search_and_cancel(source, &win, &["e", "x", "t", "r", "a"]);
+        focus_navigation_popup_search_and_cancel(country, &win, &["f", "r"]);
+        focus_navigation_popup_search_and_cancel(language, &win, &["d", "e"]);
+        // FILTER_POPUP/FILTER_POPUP: select actual country/language popup results, not only
         // cancel their search or manipulate DropDown selected properties.
         // These two facets are native searchable GTK selectors, not OSK inputs.
         fn choose_popup_search(
@@ -314,9 +318,12 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
             );
         }
         choose_popup_search(country, &win, &["f", "r"], "FR");
-        wait_count(2, "B08 physical searched French country");
+        wait_count(2, "FILTER_POPUP physical searched French country");
         choose_popup_search(language, &win, &["f", "r"], "fr");
-        wait_count(2, "B09 physical searched French language intersection");
+        wait_count(
+            2,
+            "FILTER_POPUP physical searched French language intersection",
+        );
         let french = store
             .query_channels(&ChannelQuery {
                 source_id: Some(b.clone()),
@@ -332,30 +339,33 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
             assert_eq!(
                 selected_id.as_deref(),
                 Some(target.as_str()),
-                "R07_POPUP_FACET_EXPECTED_NEGATIVE: German source UUID cannot satisfy FR/fr"
+                "NATIVE_FOCUS_POPUP_FACET_EXPECTED_NEGATIVE: German source UUID cannot satisfy FR/fr"
             );
         }
         assert_eq!(
             selected_id.as_deref(),
             Some(french.id.as_str()),
-            "B08/B09 real selected French country and language must retain SQLite UUID"
+            "FILTER_POPUP/FILTER_POPUP real selected French country and language must retain SQLite UUID"
         );
         choose_by_keys(language, 0);
-        wait_count(2, "B09 native language inverse leaves French country");
+        wait_count(
+            2,
+            "FILTER_POPUP native language inverse leaves French country",
+        );
         choose_by_keys(country, 0);
         wait_count(
             5,
-            "B08 native country inverse returns complete SQLite catalogue",
+            "FILTER_POPUP native country inverse returns complete SQLite catalogue",
         );
-        // Now exercise B07 over the expanded catalogue with no lingering facets.
-        // B07 requires selecting a *middle* source using a substring that
+        // Now exercise FILTER_POPUP over the expanded catalogue with no lingering facets.
+        // FILTER_POPUP requires selecting a *middle* source using a substring that
         // does not begin its visible label. The two-source fixture used by
         // popup cancellation alone cannot demonstrate real search filtering.
         let mut extra = Vec::new();
         for index in 0..8_u32 {
             let id = fixture_source(
                 &store,
-                &format!("R07 Extra Source {index:02}"),
+                &format!("NATIVE_FOCUS Extra Source {index:02}"),
                 index + 2,
                 vec![row(index, &format!("Extra {index}"), "News", "de", "DE")],
             );
@@ -363,8 +373,11 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         }
         view.source_mutated();
         wait_count(13, "searchable middle-source catalogue loaded");
-        let middle_index = filter_choice(source, "R07 Extra Source 03");
-        assert!(source.grab_focus(), "B07 physical source search origin");
+        let middle_index = filter_choice(source, "NATIVE_FOCUS Extra Source 03");
+        assert!(
+            source.grab_focus(),
+            "FILTER_POPUP physical source search origin"
+        );
         inject("space");
         fn popup_entry(root: &gtk::Widget) -> Option<gtk::SearchEntry> {
             if let Ok(entry) = root.clone().downcast::<gtk::SearchEntry>() {
@@ -386,7 +399,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
                 spin();
                 popup_entry(win.upcast_ref()).or_else(|| popup_entry(source.upcast_ref()))
             })
-            .expect("B07 native popup search entry is mapped");
+            .expect("FILTER_POPUP native popup search entry is mapped");
         for key in [
             "t", "r", "a", "space", "S", "o", "u", "r", "c", "e", "space", "0", "3",
         ] {
@@ -408,9 +421,12 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         assert_eq!(
             source.selected(),
             middle_index,
-            "B07 searched middle source index"
+            "FILTER_POPUP searched middle source index"
         );
-        wait_count(1, "B07 searched middle source maps exactly one channel");
+        wait_count(
+            1,
+            "FILTER_POPUP searched middle source maps exactly one channel",
+        );
         let middle_row = store
             .query_channels(&ChannelQuery {
                 source_id: Some(extra[3].clone()),
@@ -423,7 +439,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(middle_row.as_str()),
-            "B07 searchable popup must commit the middle source's SQLite UUID"
+            "FILTER_POPUP searchable popup must commit the middle source's SQLite UUID"
         );
         let foreign_row = store
             .query_channels(&ChannelQuery {
@@ -437,27 +453,27 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         if wrong_id {
             assert_eq!(
                 middle_row, foreign_row,
-                "R07_POPUP_MIDDLE_EXPECTED_NEGATIVE: foreign Source B UUID cannot own searched source"
+                "NATIVE_FOCUS_POPUP_MIDDLE_EXPECTED_NEGATIVE: foreign Source B UUID cannot own searched source"
             );
         }
         let clear = targets[7].clone().downcast::<gtk::Button>().unwrap();
         assert!(clear.grab_focus());
         inject("space");
-        wait_count(13, "B07 physical Clear restores all source rows");
+        wait_count(13, "FILTER_POPUP physical Clear restores all source rows");
         assert_eq!(
             source.selected(),
             0,
-            "B07 physical Clear restores All sources"
+            "FILTER_POPUP physical Clear restores All sources"
         );
-        choose_by_keys(source, filter_choice(source, "R07 Source B"));
-        wait_count(3, "B07 physical inverse selects distinct Source B");
+        choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
+        wait_count(3, "FILTER_POPUP physical inverse selects distinct Source B");
         choose_by_keys(source, 0);
-        wait_count(13, "B07 inverse restores every source");
+        wait_count(13, "FILTER_POPUP inverse restores every source");
         win.destroy();
         return;
     }
-    // B07: real source menu and reverse, preserving the loaded source identity.
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    // FILTER_POPUP: real source menu and reverse, preserving the loaded source identity.
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     wait_count(3, "source B");
     let only_b = store
         .query_channels(&ChannelQuery {
@@ -468,7 +484,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     assert_eq!(only_b.total, 3);
     choose_by_keys(source, 0);
     wait_count(5, "restore all sources");
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     wait_count(3, "return to source B");
     // B10: intersect group + language + country through real GTK controls.
     choose_by_keys(group, filter_choice(group, "News"));
@@ -482,7 +498,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         assert_eq!(
             selected.as_deref(),
             Some(a.as_str()),
-            "R07_FACETS_EXPECTED_NEGATIVE_ORACLE: unrelated playlist UUID cannot own filtered row",
+            "NATIVE_FOCUS_FACETS_EXPECTED_NEGATIVE_ORACLE: unrelated playlist UUID cannot own filtered row",
         );
     }
     assert_eq!(
@@ -508,7 +524,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     }
     // Then reapply and undo individual facets via physical keys as a
     // separate reversible path, rather than relying on Clear alone.
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     wait_count(3, "source B after Clear");
     choose_by_keys(group, filter_choice(group, "News"));
     wait_count(2, "group after Clear");
@@ -531,13 +547,13 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     );
     assert_eq!(view.remote_action_test_visible_count(), 5);
 
-    // B07/D05: expand the source picker beyond the initial two-source
+    // FILTER_POPUP/D05: expand the source picker beyond the initial two-source
     // boundary. Every new source owns a different SQLite UUID; physical
     // keyboard selection must still resolve the final mapped source and
     // return to the preceding source on the same focused dropdown.
     let mut extra = Vec::new();
     for index in 0..8_u32 {
-        let label = format!("R07 Extra Source {index:02}");
+        let label = format!("NATIVE_FOCUS Extra Source {index:02}");
         let id = fixture_source(
             &store,
             &label,
@@ -551,11 +567,11 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     assert_eq!(
         source.model().expect("source popup model").n_items(),
         11,
-        "B07 all + two base + eight extra source choices",
+        "FILTER_POPUP all + two base + eight extra source choices",
     );
-    let last = filter_choice(source, "R07 Extra Source 07");
+    let last = filter_choice(source, "NATIVE_FOCUS Extra Source 07");
     choose_by_keys(source, last);
-    wait_count(1, "B07 last source only");
+    wait_count(1, "FILTER_POPUP last source only");
     assert_eq!(
         view.remote_action_test_selected_id(),
         store
@@ -567,15 +583,15 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
             .items
             .first()
             .map(|row| row.id.clone()),
-        "B07 final source dropdown preserves identity",
+        "FILTER_POPUP final source dropdown preserves identity",
     );
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
-    wait_count(3, "B07 source return from last bounded item");
-    let owner =
-        gtk::prelude::GtkWindowExt::focus(&win).expect("B07 mapped focus after source return");
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
+    wait_count(3, "FILTER_POPUP source return from last bounded item");
+    let owner = gtk::prelude::GtkWindowExt::focus(&win)
+        .expect("FILTER_POPUP mapped focus after source return");
     assert!(
         source.has_focus() || owner.is_ancestor(source.upcast_ref::<gtk::Widget>()),
-        "B07 focus must remain inside source dropdown after async return: {}",
+        "FILTER_POPUP focus must remain inside source dropdown after async return: {}",
         owner.type_().name()
     );
 
@@ -623,7 +639,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     // language intersection is active, then mutate the real SQLite source
     // catalogue and reload before the pending search commits. It must not
     // resurrect a stale result or switch UUID across independent sources.
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     choose_by_keys(group, filter_choice(group, "News"));
     choose_by_keys(country, filter_choice(country, "DE"));
     choose_by_keys(language, filter_choice(language, "de"));
@@ -646,7 +662,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     // Search debounce and prior async filter generations are pending.
     let concurrent = fixture_source(
         &store,
-        "R07 Concurrent Source",
+        "NATIVE_FOCUS Concurrent Source",
         20,
         vec![row(0, "Concurrent German News", "News", "de", "DE")],
     );
@@ -682,12 +698,12 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         "F05 no channel deletions or cross-source writes",
     );
     // Repeat a filter after the rebind to detect stale GtkDropDown handles.
-    choose_by_keys(source, filter_choice(source, "R07 Source B"));
+    choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     wait_count(3, "F05 source dropdown remains actionable after rebind");
     choose_by_keys(source, 0);
     wait_count(14, "F05 final inverse");
 
-    // B08/B09 adjacent OSK integration: these two dimensions are GTK
+    // FILTER_POPUP/FILTER_POPUP adjacent OSK integration: these two dimensions are GTK
     // DropDown selectors, not editable fields. Test their physical
     // keyboard inverses above and verify that the actual shared My Channels
     // search OSK does not mutate either selector when Back cancels.
@@ -727,7 +743,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     }
     assert!(
         opened,
-        "B08/B09 shared search OSK opens from mapped launcher"
+        "FILTER_POPUP/FILTER_POPUP shared search OSK opens from mapped launcher"
     );
     inject("XF86Back");
     for _ in 0..15 {
@@ -760,37 +776,38 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
 }
 
 #[test]
-#[ignore = "R07 native source and facet XTest with two real playlists, 640x480"]
-fn r07_native_facets_640_480() {
+#[ignore = "NATIVE_FOCUS native source and facet XTest with two real playlists, 640x480"]
+fn native_facets_640_480() {
     run(640, 480, false, false, false);
 }
 
 #[test]
-#[ignore = "R07 native source and facet XTest with two real playlists, 1280x800"]
-fn r07_native_facets_1280_800() {
+#[ignore = "NATIVE_FOCUS native source and facet XTest with two real playlists, 1280x800"]
+fn native_facets_1280_800() {
     run(1280, 800, false, false, false);
 }
 
 #[test]
-#[ignore = "R07 negative foreign source UUID in real faceted results"]
-fn r07_native_facets_negative() {
+#[ignore = "NATIVE_FOCUS negative foreign source UUID in real faceted results"]
+fn native_facets_negative() {
     run(640, 480, true, false, false);
 }
 
-// R07 F06–F11: large real SQLite catalogue through the production virtual
+// NATIVE_FOCUS F06–F11: large real SQLite catalogue through the production virtual
 // GtkListView, with mapped XTest boundary travel and page recycling. Each
 // size runs in a fresh test subprocess with an isolated application data dir.
 // A model count or test-helper-selected card alone never constitutes a
 // physical remote focus PASS.
-fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: bool) {
-    let home = std::env::var("XDG_DATA_HOME").expect("R07 isolated scaling data directory");
-    assert!(home.contains("broadcaster-c4-fixture-"));
+fn native_large_catalogue(total: u32, width: i32, height: i32, negative: bool) {
+    let home =
+        std::env::var("XDG_DATA_HOME").expect("NATIVE_FOCUS isolated scaling data directory");
+    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
     let storage = Storage::new();
     storage.initialize().expect("real scale SQLite schema");
     let start_seed = std::time::Instant::now();
     let source_id = fixture_source(
         &storage,
-        "R07 scale source",
+        "NATIVE_FOCUS scale source",
         0,
         (0..total)
             .map(|n| row(n, &format!("Scale channel {n:05}"), "Long", "de", "DE"))
@@ -824,7 +841,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     if total >= 10_000 {
         assert!(
             seed_elapsed < std::time::Duration::from_secs(30),
-            "R07 large SQLite seed exceeds 30s fixture boundary"
+            "NATIVE_FOCUS large SQLite seed exceeds 30s fixture boundary"
         );
     }
     let service = glib::MainContext::default()
@@ -836,7 +853,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     );
     let app = TvApplication::new();
     app.register(None::<&gio::Cancellable>)
-        .expect("R07 registered app");
+        .expect("NATIVE_FOCUS registered app");
     let win = crate::window::TvWindow::new(&app);
     win.set_default_size(width, height);
     win.present();
@@ -903,7 +920,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     );
     // Physical PageDown from first to middle, using physical Up correction.
     // No test-only programmatic selection substitutes for remote navigation.
-    use crate::keyboard::mapped::r07_osk_press;
+    use crate::keyboard::mapped::focus_navigation_osk_press;
     let mut all_ids = Vec::with_capacity(total as usize);
     for offset in (0..total).step_by(500) {
         let page = storage
@@ -932,7 +949,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     let mut jump_count = 0;
     while selected_position() < total / 2 {
         let previous = selected_position();
-        r07_osk_press("Next");
+        focus_navigation_osk_press("Next");
         jump_count += 1;
         // Large GtkListView jumps can schedule asynchronous page hydration.
         // Keep asserting the *real selected SQLite UUID* after a bounded
@@ -951,7 +968,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     }
     let mut up_count = 0;
     while selected_position() > total / 2 {
-        r07_osk_press("Up");
+        focus_navigation_osk_press("Up");
         up_count += 1;
         assert!(up_count < 100, "bounded native middle correction");
     }
@@ -960,15 +977,15 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
         Some(middle_id.as_str()),
         "physical PageDown/Up must reach exact middle source UUID"
     );
-    r07_osk_press("Down");
-    r07_osk_press("Up");
+    focus_navigation_osk_press("Down");
+    focus_navigation_osk_press("Up");
     assert_eq!(
         view.remote_action_test_selected_id().as_deref(),
         Some(middle_id.as_str()),
         "physical middle inverse must preserve UUID"
     );
-    eprintln!("R07_SCALE_PHYSICAL_PATH total={total} pages={jump_count} up={up_count}");
-    r07_osk_press("End");
+    eprintln!("NATIVE_FOCUS_SCALE_PHYSICAL_PATH total={total} pages={jump_count} up={up_count}");
+    focus_navigation_osk_press("End");
     for _ in 0..65 {
         if view.remote_action_test_selected_id().as_deref() == Some(last_id.as_str()) {
             break;
@@ -980,7 +997,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
         Some(last_id.as_str()),
         "physical End from middle must hydrate last UUID"
     );
-    r07_osk_press("Home");
+    focus_navigation_osk_press("Home");
     for _ in 0..65 {
         if view.remote_action_test_selected_id().as_deref() == Some(first_id.as_str()) {
             break;
@@ -1006,7 +1023,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
     if total >= 10_000 {
         assert!(
             elapsed < std::time::Duration::from_secs(240),
-            "R07 10k/15k physical navigation exceeded the 240s latency ceiling"
+            "NATIVE_FOCUS 10k/15k physical navigation exceeded the 240s latency ceiling"
         );
     }
     let rss_kib = std::fs::read_to_string("/proc/self/status")
@@ -1019,7 +1036,7 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
         .and_then(|line| line.split_whitespace().nth(1)?.parse::<u64>().ok())
         .expect("Linux process RSS");
     eprintln!(
-        "R07_SCALE_MEASURE total={total} source={source_id} seed_ms={} nav_ms={} rss_kib={rss_kib}",
+        "NATIVE_FOCUS_SCALE_MEASURE total={total} source={source_id} seed_ms={} nav_ms={} rss_kib={rss_kib}",
         seed_elapsed.as_millis(),
         elapsed.as_millis()
     );
@@ -1031,51 +1048,51 @@ fn r07_native_large_catalogue(total: u32, width: i32, height: i32, negative: boo
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(last_id.as_str()),
-            "R07_SCALE_EXPECTED_NEGATIVE_ORACLE: a physical Up must preserve middle UUID"
+            "NATIVE_FOCUS_SCALE_EXPECTED_NEGATIVE_ORACLE: a physical Up must preserve middle UUID"
         );
     }
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 284 real SQLite rows, mapped X11 navigation"]
-fn r07_native_scale_284() {
-    r07_native_large_catalogue(284, 640, 480, false);
+#[ignore = "NATIVE_FOCUS 284 real SQLite rows, mapped X11 navigation"]
+fn native_scale_284() {
+    native_large_catalogue(284, 640, 480, false);
 }
 #[test]
-#[ignore = "R07 1484 real SQLite rows, mapped X11 navigation"]
-fn r07_native_scale_1484() {
-    r07_native_large_catalogue(1484, 1280, 800, false);
+#[ignore = "NATIVE_FOCUS 1484 real SQLite rows, mapped X11 navigation"]
+fn native_scale_1484() {
+    native_large_catalogue(1484, 1280, 800, false);
 }
 #[test]
-#[ignore = "R07 10000 real SQLite rows, mapped X11 navigation"]
-fn r07_native_scale_10000() {
-    r07_native_large_catalogue(10_000, 640, 480, false);
+#[ignore = "NATIVE_FOCUS 10000 real SQLite rows, mapped X11 navigation"]
+fn native_scale_10000() {
+    native_large_catalogue(10_000, 640, 480, false);
 }
 #[test]
-#[ignore = "R07 15000 real SQLite rows, mapped X11 navigation"]
-fn r07_native_scale_15000() {
-    r07_native_large_catalogue(15_000, 1280, 800, false);
+#[ignore = "NATIVE_FOCUS 15000 real SQLite rows, mapped X11 navigation"]
+fn native_scale_15000() {
+    native_large_catalogue(15_000, 1280, 800, false);
 }
 #[test]
-#[ignore = "R07 intentional false large-catalogue selected identity"]
-fn r07_native_scale_negative() {
-    r07_native_large_catalogue(284, 640, 480, true);
+#[ignore = "NATIVE_FOCUS intentional false large-catalogue selected identity"]
+fn native_scale_negative() {
+    native_large_catalogue(284, 640, 480, true);
 }
 
-// R07 F10/E10: a real recycled row disappears while its focused Play
+// NATIVE_FOCUS F10/E10: a real recycled row disappears while its focused Play
 // descendant is active.  The source is removed using the same revision-bound
 // confirmed deletion contract as Source Manager, then the live view reloads
 // asynchronously.  No fake list model or test-only rebind replaces SQLite.
-fn r07_native_recycle_removed_source(width: i32, height: i32, negative: bool) {
+fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     use crate::streams::storage::ConfirmedSourceDeletion;
     let home = std::env::var("XDG_DATA_HOME").expect("isolated native recycled-row data dir");
-    assert!(home.contains("broadcaster-c4-fixture-"));
+    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
     let store = Storage::new();
     store.initialize().expect("real disposable SQLite database");
     let surviving = fixture_source(
         &store,
-        "R07 surviving source",
+        "NATIVE_FOCUS surviving source",
         0,
         (0..144)
             .map(|index| row(index, &format!("Survivor {index:03}"), "Keep", "de", "DE"))
@@ -1083,7 +1100,7 @@ fn r07_native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     );
     let disappearing = fixture_source(
         &store,
-        "R07 vanishing source",
+        "NATIVE_FOCUS vanishing source",
         1,
         (0..140)
             .map(|index| row(index, &format!("Vanishing {index:03}"), "Gone", "en", "GB"))
@@ -1248,50 +1265,50 @@ fn r07_native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     if negative {
         assert_eq!(
             selected, disappearing_last,
-            "R07_F10_EXPECTED_NEGATIVE_ORACLE: removed source UUID cannot retain selected focus"
+            "NATIVE_FOCUS_F10_EXPECTED_NEGATIVE_ORACLE: removed source UUID cannot retain selected focus"
         );
         unreachable!("wrong removed-source owner oracle unexpectedly survived");
     }
     eprintln!(
-        "R07_F10_REBIND_PASS viewport={width}x{height} initial=284 after=144 selected={selected}"
+        "NATIVE_FOCUS_F10_REBIND_PASS viewport={width}x{height} initial=284 after=144 selected={selected}"
     );
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 B07-B09 searchable native GtkDropDown popup compact"]
-fn r07_native_popup_search_640_480() {
+#[ignore = "NATIVE_FOCUS FILTER_POPUP-FILTER_POPUP searchable native GtkDropDown popup compact"]
+fn native_popup_search_640_480() {
     run(640, 480, false, true, false);
 }
 #[test]
-#[ignore = "R07 B07-B09 searchable native GtkDropDown popup TV"]
-fn r07_native_popup_search_1280_800() {
+#[ignore = "NATIVE_FOCUS FILTER_POPUP-FILTER_POPUP searchable native GtkDropDown popup TV"]
+fn native_popup_search_1280_800() {
     run(1280, 800, false, true, false);
 }
 #[test]
-#[ignore = "R07 deliberately false searchable popup selection oracle"]
-fn r07_native_popup_search_negative() {
+#[ignore = "NATIVE_FOCUS deliberately false searchable popup selection oracle"]
+fn native_popup_search_negative() {
     run(640, 480, true, true, false);
 }
 
 #[test]
-#[ignore = "R07 B08/B09 intentionally false French country/language source UUID"]
-fn r07_native_popup_facet_negative() {
+#[ignore = "NATIVE_FOCUS FILTER_POPUP/FILTER_POPUP intentionally false French country/language source UUID"]
+fn native_popup_facet_negative() {
     run(640, 480, false, true, true);
 }
 
 #[test]
-#[ignore = "R07 F10 native real source removal, focused 284-row rebind compact"]
-fn r07_native_recycle_removed_source_640_480() {
-    r07_native_recycle_removed_source(640, 480, false);
+#[ignore = "NATIVE_FOCUS F10 native real source removal, focused 284-row rebind compact"]
+fn native_recycle_removed_source_640_480() {
+    native_recycle_removed_source(640, 480, false);
 }
 #[test]
-#[ignore = "R07 F10 native real source removal, focused 284-row rebind TV"]
-fn r07_native_recycle_removed_source_1280_800() {
-    r07_native_recycle_removed_source(1280, 800, false);
+#[ignore = "NATIVE_FOCUS F10 native real source removal, focused 284-row rebind TV"]
+fn native_recycle_removed_source_1280_800() {
+    native_recycle_removed_source(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 F10 deliberately wrong deleted-source focus identity"]
-fn r07_native_recycle_removed_source_negative() {
-    r07_native_recycle_removed_source(640, 480, true);
+#[ignore = "NATIVE_FOCUS F10 deliberately wrong deleted-source focus identity"]
+fn native_recycle_removed_source_negative() {
+    native_recycle_removed_source(640, 480, true);
 }

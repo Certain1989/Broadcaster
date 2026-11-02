@@ -1015,8 +1015,8 @@ fn modal_remote_action(
 }
 
 #[cfg(test)]
-#[path = "window/r07_native_focus_tests.rs"]
-pub(crate) mod r07_native_focus_tests;
+#[path = "window/native_focus_navigation_tests.rs"]
+pub(crate) mod native_focus_navigation_tests;
 
 #[cfg(test)]
 mod remote_dialog_tests {
@@ -1343,7 +1343,7 @@ mod playback_navigation_tests {
             streams.remote_action_test_state()
         );
         eprintln!(
-            "C4 after Right entry: {}",
+            "GUIDE_MAPPING after Right entry: {}",
             streams.remote_action_test_state()
         );
         spin();
@@ -1436,7 +1436,7 @@ mod playback_navigation_tests {
         let star = streams
             .remote_action_test_row_star(&ids[0])
             .expect("mapped favourite Star for the selected expanded row");
-        // G09: Right from Play now deliberately enters the same channel's Star;
+        // FOCUS_GRAPH: Right from Play now deliberately enters the same channel's Star;
         // Left from Star must return to Play, never a stale recycled row.
         // Exercise the real window capture router, not direct grab_focus() on Star.
         for _ in 0..10 {

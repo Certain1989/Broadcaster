@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Opt-in native C2 GUI probes: real toolbar launch, disposable SQLite and
+//! Opt-in native EPG_MANAGER GUI probes: real toolbar launch, disposable SQLite and
 //! physical XTest keys. Each named case runs in its own process.
 use super::*;
 use crate::{
@@ -70,7 +70,7 @@ fn until(name: &str, mut ready: impl FnMut() -> bool) {
             return;
         }
     }
-    panic!("C2 native deadline: {name}");
+    panic!("EPG_MANAGER native deadline: {name}");
 }
 fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
     fn visit(w: &gtk::Widget, result: &mut Vec<gtk::Widget>) {
@@ -149,7 +149,8 @@ struct Fixture {
 }
 impl Fixture {
     fn new(count: usize) -> Self {
-        let home = std::env::temp_dir().join(format!("broadcaster-c2-{}", uuid::Uuid::new_v4()));
+        let home =
+            std::env::temp_dir().join(format!("broadcaster-epg_manager-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&home).unwrap();
         std::env::set_var("XDG_DATA_HOME", &home);
         let storage = Storage::new();
@@ -193,9 +194,9 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real My Channels page");
-    view.c1_install_test_service(stream_service);
+    view.source_manager_install_test_service(stream_service);
     assert!(
-        view.c1_test_manage_button().grab_focus(),
+        view.source_manager_test_manage_button().grab_focus(),
         "real Manage Sources toolbar"
     );
     inject("Return");
@@ -258,7 +259,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             first_default.grab_focus(),
             "enter first source via real widget"
         );
-        // G09: a populated Guide Manager must not consume Up forever at
+        // FOCUS_GRAPH: a populated Guide Manager must not consume Up forever at
         // the first row. Reach the real header, then return by physical Down.
         inject("Up");
         assert_remote_focus(
@@ -273,7 +274,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             "Close",
         ] {
             let header = named_button(guide.upcast_ref(), label).unwrap();
-            assert!(header.grab_focus(), "G09 header {label} exists");
+            assert!(header.grab_focus(), "FOCUS_GRAPH header {label} exists");
             inject("Down");
             assert_remote_focus(
                 &win,
@@ -281,7 +282,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
                 "guide header Down reenters first UUID",
             );
         }
-        // AG09: first enabled row, physical boundary and complete enabled grid.
+        // GUIDE_LIST_BOUNDARY: first enabled row, physical boundary and complete enabled grid.
         inject("Left");
         assert_remote_focus(&win, &first_default, "first guide Left stays inside grid");
         inject("Right");
@@ -356,7 +357,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         assert_remote_focus(
             &win,
             &guide_action(&guide, "Guide 2", "Remove"),
-            "AG09 last enabled guide Right boundary stays on UUID",
+            "GUIDE_LIST_BOUNDARY last enabled guide Right boundary stays on UUID",
         );
         inject("Up");
         assert_remote_focus(
@@ -403,17 +404,20 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         );
         // The production OSK deliberately returns focus to the editable Entry,
         // not to the launcher. Follow the native Tab path back to the launcher.
-        until("AG09 nested Home restores editable origin", || {
-            gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
-                w.is_ancestor(name.upcast_ref::<gtk::Widget>())
-                    || w == name.clone().upcast::<gtk::Widget>()
-            })
-        });
+        until(
+            "GUIDE_LIST_BOUNDARY nested Home restores editable origin",
+            || {
+                gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
+                    w.is_ancestor(name.upcast_ref::<gtk::Widget>())
+                        || w == name.clone().upcast::<gtk::Widget>()
+                })
+            },
+        );
         inject("Tab");
         assert_remote_focus(
             &win,
             &launcher,
-            "AG09 Home Entry -> launcher with native Tab",
+            "GUIDE_LIST_BOUNDARY Home Entry -> launcher with native Tab",
         );
         inject("Return");
         until("reopened OSK", || {
@@ -435,17 +439,20 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             editor.is_mapped() && guide.is_mapped(),
             "Cancel cannot act on background page"
         );
-        until("AG09 OSK Cancel restores editable origin", || {
-            gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
-                w.is_ancestor(name.upcast_ref::<gtk::Widget>())
-                    || w == name.clone().upcast::<gtk::Widget>()
-            })
-        });
+        until(
+            "GUIDE_LIST_BOUNDARY OSK Cancel restores editable origin",
+            || {
+                gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
+                    w.is_ancestor(name.upcast_ref::<gtk::Widget>())
+                        || w == name.clone().upcast::<gtk::Widget>()
+                })
+            },
+        );
         inject("Tab");
         assert_remote_focus(
             &win,
             &launcher,
-            "AG09 Cancel Entry -> launcher with native Tab",
+            "GUIDE_LIST_BOUNDARY Cancel Entry -> launcher with native Tab",
         );
         inject("Return");
         until("OSK reopens after cancel", || {
@@ -532,7 +539,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             assert_remote_focus(
                 &win,
                 &guide_action(&guide, "Updated Guide 1", "Refresh"),
-                "C2_EXPECTED_NEGATIVE_ORACLE: disabled Refresh would incorrectly own focus",
+                "EPG_MANAGER_EXPECTED_NEGATIVE_ORACLE: disabled Refresh would incorrectly own focus",
             );
             unreachable!("incorrect disabled-target oracle unexpectedly passed");
         }
@@ -591,14 +598,15 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
                 .is_sensitive(),
             "disabled guide must skip Refresh"
         );
-        // AG02: reverse enabled state through the genuine editor. The live row
+        // GUIDE_ENABLE_REOPEN: reverse enabled state through the genuine editor. The live row
         // must be rebuilt and its original UUID / semantic Edit focus restored.
         let edit_again = guide_action(&guide, "Updated Guide 1", "Edit");
         assert!(edit_again.grab_focus());
         inject("Return");
-        until("AG02 reopen persisted disabled guide editor", || {
-            named_button(win.upcast_ref(), "Apply").is_some()
-        });
+        until(
+            "GUIDE_ENABLE_REOPEN reopen persisted disabled guide editor",
+            || named_button(win.upcast_ref(), "Apply").is_some(),
+        );
         let apply_again = named_button(win.upcast_ref(), "Apply").unwrap();
         let editor_again = apply_again
             .ancestor(adw::Dialog::static_type())
@@ -609,25 +617,31 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             .into_iter()
             .find_map(|w| w.downcast::<gtk::CheckButton>().ok())
             .expect("persisted disabled guide Enabled checkbox");
-        assert!(!enabled_again.is_active(), "AG02 disabled state reopened");
+        assert!(
+            !enabled_again.is_active(),
+            "GUIDE_ENABLE_REOPEN disabled state reopened"
+        );
         assert!(enabled_again.grab_focus());
         inject("space");
         assert!(
             enabled_again.is_active(),
-            "AG02 reenable via physical Space"
+            "GUIDE_ENABLE_REOPEN reenable via physical Space"
         );
         assert!(apply_again.grab_focus());
         inject("Return");
-        until("AG02 source registry and list reenabled", || {
-            !editor_again.is_mapped()
-                && source_enabled(&fixture.storage, &source_id)
-                && row(&guide, "Updated Guide 1").is_some()
-        });
+        until(
+            "GUIDE_ENABLE_REOPEN source registry and list reenabled",
+            || {
+                !editor_again.is_mapped()
+                    && source_enabled(&fixture.storage, &source_id)
+                    && row(&guide, "Updated Guide 1").is_some()
+            },
+        );
         let restored_edit = guide_action(&guide, "Updated Guide 1", "Edit");
         assert_remote_focus(
             &win,
             &restored_edit,
-            "AG02 reenabled UUID Edit after rebuild",
+            "GUIDE_ENABLE_REOPEN reenabled UUID Edit after rebuild",
         );
         assert_eq!(
             GuideSourceRegistry::new(fixture.storage.clone())
@@ -635,11 +649,11 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
                 .unwrap()
                 .id,
             source_id,
-            "AG02 persisted enabled inverse retains guide identity"
+            "GUIDE_ENABLE_REOPEN persisted enabled inverse retains guide identity"
         );
         assert!(
             guide_action(&guide, "Updated Guide 1", "Refresh").is_sensitive(),
-            "AG02 enabled guide restores Refresh action"
+            "GUIDE_ENABLE_REOPEN enabled guide restores Refresh action"
         );
         // Shared default is an explicit confirmation and must be reversible.
         let original = row(&guide, "Guide 0").expect("surviving first guide");
@@ -662,7 +676,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             .unwrap()
                 == Some(fixture.ids[0].clone())
         });
-        // AG01: set must survive closing this *real GTK manager*, then
+        // APAINTED_FOCUS: set must survive closing this *real GTK manager*, then
         // re-opening a newly constructed manager backed by the same SQLite.
         let close_for_reload = named_button(guide.upcast_ref(), "Close").unwrap();
         assert!(close_for_reload.grab_focus());
@@ -733,7 +747,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
             .unwrap()
             .is_none()
         });
-        // R07 AG01: repeat real default->confirmation->SQLite persistence
+        // NATIVE_FOCUS APAINTED_FOCUS: repeat real default->confirmation->SQLite persistence
         // on the *last* guide, not only the first. Both edges must support
         // Set/Clear with no stale default after guide-list rebuilding.
         let last = guide_action(&guide, "Guide 2", "Use as Shared Default");
@@ -912,9 +926,10 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         manager.is_mapped(),
         "source manager must remain under guide modal"
     );
-    until("AG08 Back restores actual source launcher focus", || {
-        guides.has_focus()
-    });
+    until(
+        "GUIDE_RETURN_FOCUS Back restores actual source launcher focus",
+        || guides.has_focus(),
+    );
     assert_remote_focus(&win, &guides, "guide Back returns to source origin");
     drop(manager_list);
     drop(guide);
@@ -945,18 +960,19 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         || !reopened.is_mapped(),
     );
     assert!(manager.is_mapped());
-    until("AG08 reopened Back restores source origin", || {
-        guides.has_focus()
-    });
+    until(
+        "GUIDE_RETURN_FOCUS reopened Back restores source origin",
+        || guides.has_focus(),
+    );
     assert_remote_focus(&win, &guides, "reopened guide Back restores origin");
     drop(reopened);
 
-    // R07 AG08: a real GTK Escape dismisses just the nested guide modal;
+    // NATIVE_FOCUS GUIDE_RETURN_FOCUS: a real GTK Escape dismisses just the nested guide modal;
     // remote Home closes the guide and selects the Mediathek home page.
     // Keep real SQLite-backed source manager as the modal's origin.
     assert!(guides.grab_focus(), "guide launcher after native Back");
     inject("Return");
-    until("AG08 guide modal for Escape", || {
+    until("GUIDE_RETURN_FOCUS guide modal for Escape", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
     });
     let escape_guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
@@ -964,14 +980,15 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         .expect("real guide Close")
         .grab_focus());
     inject("Escape");
-    until("AG08 Escape dismisses nested guide", || {
+    until("GUIDE_RETURN_FOCUS Escape dismisses nested guide", || {
         !escape_guide.is_mapped()
     });
     assert!(manager.is_mapped(), "Escape cannot dismiss source origin");
     assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
-    until("AG08 Escape restores real origin focus", || {
-        guides.has_focus()
-    });
+    until(
+        "GUIDE_RETURN_FOCUS Escape restores real origin focus",
+        || guides.has_focus(),
+    );
     assert_remote_focus(&win, &guides, "Escape returns to source launcher");
     if wrong_origin {
         let wrong = named_button(manager.upcast_ref(), "Close")
@@ -979,16 +996,16 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         assert_remote_focus(
             &win,
             &wrong,
-            "R07_AG08_EXPECTED_NEGATIVE_ORACLE: closed guide would restore wrong source button",
+            "NATIVE_FOCUS_GUIDE_RETURN_FOCUS_EXPECTED_NEGATIVE_ORACLE: closed guide would restore wrong source button",
         );
-        unreachable!("deliberately wrong AG08 source origin unexpectedly focused");
+        unreachable!("deliberately wrong GUIDE_RETURN_FOCUS source origin unexpectedly focused");
     }
 
     // The next Return is delivered to the physically restored launcher.
     // No test-only grab_focus() may mask a broken modal return.
 
     inject("Return");
-    until("AG08 guide modal for remote Home", || {
+    until("GUIDE_RETURN_FOCUS guide modal for remote Home", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
     });
     let home_guide = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
@@ -996,9 +1013,10 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
         .expect("real guide Close")
         .grab_focus());
     inject("XF86HomePage");
-    until("AG08 Home dismisses active guide modal", || {
-        !home_guide.is_mapped()
-    });
+    until(
+        "GUIDE_RETURN_FOCUS Home dismisses active guide modal",
+        || !home_guide.is_mapped(),
+    );
     assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
     // The underlying source manager remains a separate modal and should not
     // be mistaken for a closed picker, nor can a hidden guide action fire.
@@ -1011,41 +1029,41 @@ fn run(count: usize, width: i32, height: i32, negative: bool, wrong_origin: bool
 
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
-fn c2_native_0_640_480() {
+fn native_epg_manager_0_640_480() {
     run(0, 640, 480, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
-fn c2_native_3_640_480() {
+fn native_epg_manager_3_640_480() {
     run(3, 640, 480, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
-fn c2_native_0_1280_800() {
+fn native_epg_manager_0_1280_800() {
     run(0, 1280, 800, false, false);
 }
 #[test]
 #[ignore = "native GTK/XTest and isolated SQLite"]
-fn c2_native_3_1280_800() {
+fn native_epg_manager_3_1280_800() {
     run(3, 1280, 800, false, false);
 }
 #[test]
 #[ignore = "expected-RED negative focus oracle"]
-fn c2_native_negative_oracle() {
+fn native_epg_manager_negative_oracle() {
     run(3, 640, 480, true, false);
 }
 
 #[test]
-#[ignore = "R07 AG08 deliberately wrong focus owner after real guide Escape"]
-fn c2_native_negative_origin_focus() {
+#[ignore = "NATIVE_FOCUS GUIDE_RETURN_FOCUS deliberately wrong focus owner after real guide Escape"]
+fn native_epg_manager_negative_origin_focus() {
     run(3, 640, 480, false, true);
 }
 
-// R07 AG06: the real mapped Guide Manager Add URL editor saves a fully
+// NATIVE_FOCUS GUIDE_ADD_URL: the real mapped Guide Manager Add URL editor saves a fully
 // synthetic remote origin while automatic refresh is physically disabled.
 // All source persistence is via disposable SQLite and the normal production
 // manager service; no HTTP, provider playlist, or XMLTV fetch occurs.
-fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
+fn native_guide_add_url(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(0);
     adw::init().expect("native GTK display");
     let resources =
@@ -1068,8 +1086,8 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real source page");
-    view.c1_install_test_service(service);
-    assert!(view.c1_test_manage_button().grab_focus());
+    view.source_manager_install_test_service(service);
+    assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
     until("real source manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
@@ -1100,8 +1118,8 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
         .filter_map(|widget| widget.downcast::<gtk::Entry>().ok())
         .collect();
     assert_eq!(entries.len(), 2, "real guide name + remote origin entries");
-    entries[0].set_text("R07 Synthetic Offline Guide");
-    let sentinel = "https://r07-guide.example.invalid/never-retrieve.xml";
+    entries[0].set_text("NATIVE_FOCUS Synthetic Offline Guide");
+    let sentinel = "https://focus-navigation-guide.example.invalid/never-retrieve.xml";
     entries[1].set_text(sentinel);
     let automatic = descendants(dialog.upcast_ref())
         .into_iter()
@@ -1119,12 +1137,12 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
     inject("Return");
     until(
         "asynchronous real Add persisted and manager repainted",
-        || !dialog.is_mapped() && row(&manager, "R07 Synthetic Offline Guide").is_some(),
+        || !dialog.is_mapped() && row(&manager, "NATIVE_FOCUS Synthetic Offline Guide").is_some(),
     );
     let catalog = GuideSourceRegistry::new(fixture.storage.clone());
     let guides = catalog.list().expect("new SQLite guide registry");
     assert_eq!(guides.len(), 1, "newly saved guide only");
-    assert_eq!(guides[0].name, "R07 Synthetic Offline Guide");
+    assert_eq!(guides[0].name, "NATIVE_FOCUS Synthetic Offline Guide");
     assert!(!guides[0].auto_refresh, "no scheduled HTTP request");
     let conn = fixture.storage.connect().unwrap();
     let (kind, locator): (String, String) = conn
@@ -1136,12 +1154,13 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
         .expect("persisted source-qualified guide origin");
     assert_eq!(kind, "remote_url");
     assert_eq!(locator, sentinel, "exact source not silently normalized");
-    let added_row = row(&manager, "R07 Synthetic Offline Guide").expect("new mapped guide visible");
+    let added_row =
+        row(&manager, "NATIVE_FOCUS Synthetic Offline Guide").expect("new mapped guide visible");
     assert!(added_row.is_mapped());
     // The guide list rebuild creates a mapped row before its weak idle
     // focus-restoration callback fires. Wait for the *correct* action owner,
     // not merely for a row to appear on the screen.
-    let edit = guide_action(&manager, "R07 Synthetic Offline Guide", "Edit");
+    let edit = guide_action(&manager, "NATIVE_FOCUS Synthetic Offline Guide", "Edit");
     until(
         "added guide Edit gains native focus after async repaint",
         || edit.has_focus(),
@@ -1149,13 +1168,13 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
     assert_remote_focus(&win, &edit, "new guide source-qualified Edit return");
     if negative {
         assert_ne!(
-            guides[0].name, "R07 Synthetic Offline Guide",
-            "R07_AG06_EXPECTED_NEGATIVE_ORACLE: wrong guide identity must be rejected"
+            guides[0].name, "NATIVE_FOCUS Synthetic Offline Guide",
+            "NATIVE_FOCUS_GUIDE_ADD_URL_EXPECTED_NEGATIVE_ORACLE: wrong guide identity must be rejected"
         );
         unreachable!("invalid source UUID/name oracle survived");
     }
     eprintln!(
-        "R07_AG06 native Add URL {width}x{height} id={} auto_refresh=false",
+        "NATIVE_FOCUS_GUIDE_ADD_URL native Add URL {width}x{height} id={} auto_refresh=false",
         guides[0].id
     );
     manager.close();
@@ -1164,24 +1183,24 @@ fn r07_native_guide_add_url(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "R07 AG06 actual native Add URL SQLite 640x480"]
-fn r07_native_guide_add_url_640_480() {
-    r07_native_guide_add_url(640, 480, false);
+#[ignore = "NATIVE_FOCUS GUIDE_ADD_URL actual native Add URL SQLite 640x480"]
+fn native_guide_add_url_640_480() {
+    native_guide_add_url(640, 480, false);
 }
 #[test]
-#[ignore = "R07 AG06 actual native Add URL SQLite 1280x800"]
-fn r07_native_guide_add_url_1280_800() {
-    r07_native_guide_add_url(1280, 800, false);
+#[ignore = "NATIVE_FOCUS GUIDE_ADD_URL actual native Add URL SQLite 1280x800"]
+fn native_guide_add_url_1280_800() {
+    native_guide_add_url(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 AG06 expected wrong-source control"]
-fn r07_native_guide_add_url_negative() {
-    r07_native_guide_add_url(640, 480, true);
+#[ignore = "NATIVE_FOCUS GUIDE_ADD_URL expected wrong-source control"]
+fn native_guide_add_url_negative() {
+    native_guide_add_url(640, 480, true);
 }
 
-// R07 AG03: native guide Refresh success/failure + focus return, all local
+// NATIVE_FOCUS APAINTED_CARDS: native guide Refresh success/failure + focus return, all local
 // synthetic XMLTV. The saved registry remains real disposable SQLite.
-fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
+fn native_guide_refresh(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
     let guide_id = fixture.ids[0].clone();
     let file = fixture.home.join("fabricated-0.xml");
@@ -1206,8 +1225,8 @@ fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("My Channels actual view");
-    view.c1_install_test_service(stream_service);
-    assert!(view.c1_test_manage_button().grab_focus());
+    view.source_manager_install_test_service(stream_service);
+    assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
     until("Source Manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
@@ -1235,13 +1254,13 @@ fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
     assert_remote_focus(
         &win,
         &guide_action(&manager, "Guide 0", "Refresh"),
-        "AG03 refresh success native focus",
+        "APAINTED_CARDS refresh success native focus",
     );
     if negative {
         assert!(GuideSourceRegistry::new(fixture.storage.clone())
             .get(&guide_id).unwrap().last_success_at.is_none(),
-            "R07_AG03_EXPECTED_NEGATIVE_ORACLE: a successful local XMLTV refresh must persist success");
-        unreachable!("AG03 false success evidence was accepted");
+            "NATIVE_FOCUS_APAINTED_CARDS_EXPECTED_NEGATIVE_ORACLE: a successful local XMLTV refresh must persist success");
+        unreachable!("APAINTED_CARDS false success evidence was accepted");
     }
     fs::write(&file, "<invalid broken xml").unwrap();
     assert!(guide_action(&manager, "Guide 0", "Refresh").grab_focus());
@@ -1257,7 +1276,7 @@ fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
     assert_remote_focus(
         &win,
         &guide_action(&manager, "Guide 0", "Refresh"),
-        "AG03 refresh failure native focus",
+        "APAINTED_CARDS refresh failure native focus",
     );
     let persisted = GuideSourceRegistry::new(fixture.storage.clone())
         .get(&guide_id)
@@ -1280,30 +1299,30 @@ fn r07_native_guide_refresh(width: i32, height: i32, negative: bool) {
                 .is_some_and(|l| l.text().contains("Last refresh failed"))),
         "real warning must be rendered on the same guide's row"
     );
-    eprintln!("R07_AG03 native local guide refresh {width}x{height}: success, failure, same-ID focus, cache retained");
+    eprintln!("NATIVE_FOCUS_APAINTED_CARDS native local guide refresh {width}x{height}: success, failure, same-ID focus, cache retained");
     manager.close();
     source.close();
     win.destroy();
 }
 #[test]
-#[ignore = "R07 AG03 native nonnetwork XMLTV success/failure compact"]
-fn r07_native_guide_refresh_640_480() {
-    r07_native_guide_refresh(640, 480, false);
+#[ignore = "NATIVE_FOCUS APAINTED_CARDS native nonnetwork XMLTV success/failure compact"]
+fn native_guide_refresh_640_480() {
+    native_guide_refresh(640, 480, false);
 }
 #[test]
-#[ignore = "R07 AG03 native nonnetwork XMLTV success/failure TV"]
-fn r07_native_guide_refresh_1280_800() {
-    r07_native_guide_refresh(1280, 800, false);
+#[ignore = "NATIVE_FOCUS APAINTED_CARDS native nonnetwork XMLTV success/failure TV"]
+fn native_guide_refresh_1280_800() {
+    native_guide_refresh(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 AG03 invalid local XMLTV refresh success oracle"]
-fn r07_native_guide_refresh_negative() {
-    r07_native_guide_refresh(640, 480, true);
+#[ignore = "NATIVE_FOCUS APAINTED_CARDS invalid local XMLTV refresh success oracle"]
+fn native_guide_refresh_negative() {
+    native_guide_refresh(640, 480, true);
 }
 
-// R07 C07/C09: actual Guide Edit on-screen keyboard, physical Back versus
+// NATIVE_FOCUS C07/C09: actual Guide Edit on-screen keyboard, physical Back versus
 // Home while nested, cancellation and preserved guide editor identity.
-fn r07_native_nested_guide_osk(width: i32, height: i32, negative: bool) {
+fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
     let guide_id = fixture.ids[0].clone();
     adw::init().expect("native GTK display");
@@ -1326,8 +1345,8 @@ fn r07_native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).unwrap();
-    view.c1_install_test_service(stream_service);
-    assert!(view.c1_test_manage_button().grab_focus());
+    view.source_manager_install_test_service(stream_service);
+    assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
     until("C09 source manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
@@ -1410,7 +1429,7 @@ fn r07_native_nested_guide_osk(width: i32, height: i32, negative: bool) {
         assert_eq!(
             name.text().as_str(),
             "Unsaved C09 draft 1",
-            "R07_C09_EXPECTED_NEGATIVE_ORACLE: nested Home must never save draft"
+            "NATIVE_FOCUS_C09_EXPECTED_NEGATIVE_ORACLE: nested Home must never save draft"
         );
     }
     // A subsequent Home at the parent editor, unlike Home inside the nested
@@ -1427,25 +1446,25 @@ fn r07_native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 #[test]
-#[ignore = "R07 C07/C09 nested Guide OSK actual Back and Home 640x480"]
-fn r07_native_nested_guide_osk_640_480() {
-    r07_native_nested_guide_osk(640, 480, false);
+#[ignore = "NATIVE_FOCUS C07/C09 nested Guide OSK actual Back and Home 640x480"]
+fn native_nested_guide_osk_640_480() {
+    native_nested_guide_osk(640, 480, false);
 }
 #[test]
-#[ignore = "R07 C07/C09 nested Guide OSK actual Back and Home 1280x800"]
-fn r07_native_nested_guide_osk_1280_800() {
-    r07_native_nested_guide_osk(1280, 800, false);
+#[ignore = "NATIVE_FOCUS C07/C09 nested Guide OSK actual Back and Home 1280x800"]
+fn native_nested_guide_osk_1280_800() {
+    native_nested_guide_osk(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 C09 deliberately false OSK unsaved-draft persistence oracle"]
-fn r07_native_nested_guide_osk_negative() {
-    r07_native_nested_guide_osk(640, 480, true);
+#[ignore = "NATIVE_FOCUS C09 deliberately false OSK unsaved-draft persistence oracle"]
+fn native_nested_guide_osk_negative() {
+    native_nested_guide_osk(640, 480, true);
 }
 
-// R07 AG07: the real GTK local-file chooser, physically driven with XTest,
+// NATIVE_FOCUS GUIDE_LOCAL_CHOOSER: the real GTK local-file chooser, physically driven with XTest,
 // must create a selected-local-file guide and return to the same guide row.
 // No network request or synthetic GFile injection is permitted.
-fn r07_native_guide_local_chooser(width: i32, height: i32, negative: bool) {
+fn native_guide_local_chooser(width: i32, height: i32, negative: bool) {
     const PHYSICAL_CHOOSER: &str = r#"
 import ctypes as c,sys,time
 x=c.CDLL('libX11.so.6');t=c.CDLL('libXtst.so.6')
@@ -1478,11 +1497,11 @@ for char in sys.argv[1]:
 x.XFlush(d);time.sleep(.15)
 press('Return');x.XFlush(d);time.sleep(.6)
 press('Return');x.XFlush(d)
-print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
+print('NATIVE_FOCUS_GUIDE_LOCAL_CHOOSER_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 "#;
     let fixture = Fixture::new(0);
     let file = fixture.home.join("ag07-local-safe.xml");
-    fs::write(&file, "<?xml version=\"1.0\"?><tv><channel id=\"ag07.test\"><display-name>Test Channel</display-name></channel></tv>").unwrap();
+    fs::write(&file, "<?xml version=\"1.0\"?><tv><channel id=\"selected.local-guide.test\"><display-name>Test Channel</display-name></channel></tv>").unwrap();
     adw::init().expect("native GTK display");
     gio::resources_register(
         &gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap(),
@@ -1503,17 +1522,17 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).unwrap();
-    view.c1_install_test_service(service);
-    assert!(view.c1_test_manage_button().grab_focus());
+    view.source_manager_install_test_service(service);
+    assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
-    until("AG07 source manager", || {
+    until("GUIDE_LOCAL_CHOOSER source manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
     });
     let source = find_dialog(win.upcast_ref(), "broadcaster-source-manager").unwrap();
     let guides = named_button(source.upcast_ref(), "Programme Guides").unwrap();
     assert!(guides.grab_focus());
     inject("Return");
-    until("AG07 guide manager", || {
+    until("GUIDE_LOCAL_CHOOSER guide manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
     });
     let manager = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
@@ -1524,10 +1543,13 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
         .args(["-c", PHYSICAL_CHOOSER, file.to_str().unwrap()])
         .spawn()
         .expect("genuine XTest local XMLTV file chooser");
-    until("AG07 selected local XMLTV opens real Add form", || {
-        let _ = driver.try_wait();
-        named_button(win.upcast_ref(), "Save Guide").is_some()
-    });
+    until(
+        "GUIDE_LOCAL_CHOOSER selected local XMLTV opens real Add form",
+        || {
+            let _ = driver.try_wait();
+            named_button(win.upcast_ref(), "Save Guide").is_some()
+        },
+    );
     assert!(
         driver.wait().unwrap().success(),
         "physical GTK chooser selection"
@@ -1547,7 +1569,7 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
         1,
         "local XMLTV selection never requests a URL"
     );
-    fields[0].set_text("R07 Selected Local Guide");
+    fields[0].set_text("NATIVE_FOCUS Selected Local Guide");
     let automatic = descendants(editor.upcast_ref())
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::CheckButton>().ok())
@@ -1569,8 +1591,8 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
     assert!(save.grab_focus());
     inject("Return");
     until(
-        "AG07 saved genuine local guide and repainted source row",
-        || !editor.is_mapped() && row(&manager, "R07 Selected Local Guide").is_some(),
+        "GUIDE_LOCAL_CHOOSER saved genuine local guide and repainted source row",
+        || !editor.is_mapped() && row(&manager, "NATIVE_FOCUS Selected Local Guide").is_some(),
     );
     let catalog = GuideSourceRegistry::new(fixture.storage.clone());
     let guides = catalog.list().unwrap();
@@ -1595,15 +1617,19 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
         "the source cannot trigger network checks"
     );
     until(
-        "AG07 return to same guide Edit after native chooser",
-        || guide_action(&manager, "R07 Selected Local Guide", "Edit").has_focus(),
+        "GUIDE_LOCAL_CHOOSER return to same guide Edit after native chooser",
+        || guide_action(&manager, "NATIVE_FOCUS Selected Local Guide", "Edit").has_focus(),
     );
-    let edit = guide_action(&manager, "R07 Selected Local Guide", "Edit");
-    assert_remote_focus(&win, &edit, "AG07 local guide selected source focus return");
+    let edit = guide_action(&manager, "NATIVE_FOCUS Selected Local Guide", "Edit");
+    assert_remote_focus(
+        &win,
+        &edit,
+        "GUIDE_LOCAL_CHOOSER local guide selected source focus return",
+    );
     if negative {
         assert_eq!(
             kind, "remote_url",
-            "R07_AG07_EXPECTED_NEGATIVE_ORACLE: local chooser cannot persist a remote origin"
+            "NATIVE_FOCUS_GUIDE_LOCAL_CHOOSER_EXPECTED_NEGATIVE_ORACLE: local chooser cannot persist a remote origin"
         );
     }
     manager.close();
@@ -1612,25 +1638,25 @@ print('R07_AG07_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 }
 
 #[test]
-#[ignore = "R07 AG07 real local XMLTV file chooser 640x480"]
-fn r07_native_guide_local_chooser_640_480() {
-    r07_native_guide_local_chooser(640, 480, false);
+#[ignore = "NATIVE_FOCUS GUIDE_LOCAL_CHOOSER real local XMLTV file chooser 640x480"]
+fn native_guide_local_chooser_640_480() {
+    native_guide_local_chooser(640, 480, false);
 }
 #[test]
-#[ignore = "R07 AG07 real local XMLTV file chooser 1280x800"]
-fn r07_native_guide_local_chooser_1280_800() {
-    r07_native_guide_local_chooser(1280, 800, false);
+#[ignore = "NATIVE_FOCUS GUIDE_LOCAL_CHOOSER real local XMLTV file chooser 1280x800"]
+fn native_guide_local_chooser_1280_800() {
+    native_guide_local_chooser(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 AG07 deliberately wrong local-source origin negative oracle"]
-fn r07_native_guide_local_chooser_negative() {
-    r07_native_guide_local_chooser(640, 480, true);
+#[ignore = "NATIVE_FOCUS GUIDE_LOCAL_CHOOSER deliberately wrong local-source origin negative oracle"]
+fn native_guide_local_chooser_negative() {
+    native_guide_local_chooser(640, 480, true);
 }
 
-// G06: rendered (not only logical) focus on a real enabled Guide Manager
+// GUIDE_PICKER_PAINTED_FOCUS: rendered (not only logical) focus on a real enabled Guide Manager
 // action under physical D-pad inverse, with the canonical app stylesheet.
 // The picker/OSK paint components are separately tested and are not inferred.
-fn r07_guide_manager_paint(width: i32, height: i32, negative: bool) {
+fn focus_navigation_guide_manager_paint(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(3);
     adw::init().expect("real native GTK X11 display");
     let resource =
@@ -1660,8 +1686,8 @@ fn r07_guide_manager_paint(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real My Channels");
-    view.c1_install_test_service(service);
-    assert!(view.c1_test_manage_button().grab_focus());
+    view.source_manager_install_test_service(service);
+    assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
     until("actual Source Manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
@@ -1686,49 +1712,51 @@ fn r07_guide_manager_paint(width: i32, height: i32, negative: bool) {
     inject("Left");
     assert!(
         !refresh.has_focus(),
-        "G06 priming Left must physically leave Refresh"
+        "GUIDE_PICKER_PAINTED_FOCUS priming Left must physically leave Refresh"
     );
     inject("Right");
     assert!(
         refresh.has_focus(),
-        "G06 priming Right must physically restore Refresh"
+        "GUIDE_PICKER_PAINTED_FOCUS priming Right must physically restore Refresh"
     );
-    let pixels = crate::window::r07_native_focus_tests::r07_painted_probe_physical_inverse(
+    let pixels = crate::window::native_focus_navigation_tests::focus_navigation_painted_probe_physical_inverse(
         &win,
         refresh.upcast_ref(),
-        "G06 guide manager Refresh",
+        "GUIDE_PICKER_PAINTED_FOCUS guide manager Refresh",
         || inject("Left"),
         || inject("Right"),
     );
     if negative {
         assert_eq!(
             pixels, 0,
-            "R07_G06_EXPECTED_NEGATIVE_PAINT: real guide action has visible outline"
+            "NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT: real guide action has visible outline"
         );
-        unreachable!("G06 false painted focus oracle unexpectedly succeeded");
+        unreachable!(
+            "GUIDE_PICKER_PAINTED_FOCUS false painted focus oracle unexpectedly succeeded"
+        );
     }
     assert!(
         pixels >= 15,
-        "G06 must observe actual painted focus changes"
+        "GUIDE_PICKER_PAINTED_FOCUS must observe actual painted focus changes"
     );
-    eprintln!("R07_G06_NATIVE {width}x{height} guide Refresh physically reversible painted pixels={pixels}");
+    eprintln!("NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_NATIVE {width}x{height} guide Refresh physically reversible painted pixels={pixels}");
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 real guide manager native painted focus compact"]
-fn r07_native_guide_manager_paint_640_480() {
-    r07_guide_manager_paint(640, 480, false);
+#[ignore = "NATIVE_FOCUS real guide manager native painted focus compact"]
+fn native_guide_manager_paint_640_480() {
+    focus_navigation_guide_manager_paint(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 real guide manager native painted focus TV"]
-fn r07_native_guide_manager_paint_1280_800() {
-    r07_guide_manager_paint(1280, 800, false);
+#[ignore = "NATIVE_FOCUS real guide manager native painted focus TV"]
+fn native_guide_manager_paint_1280_800() {
+    focus_navigation_guide_manager_paint(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberately wrong guide manager painted focus oracle"]
-fn r07_native_guide_manager_paint_negative() {
-    r07_guide_manager_paint(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately wrong guide manager painted focus oracle"]
+fn native_guide_manager_paint_negative() {
+    focus_navigation_guide_manager_paint(640, 480, true);
 }

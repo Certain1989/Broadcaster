@@ -1344,5 +1344,5 @@ mod focus_tests {
 }
 
 #[cfg(test)]
-#[path = "desktop/c2_native_tests.rs"]
-mod c2_native_tests;
+#[path = "desktop/native_epg_manager_tests.rs"]
+mod native_epg_manager_tests;
