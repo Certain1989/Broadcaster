@@ -1936,11 +1936,9 @@ mod staged_database_tests {
             .unwrap();
         assert_eq!(version, 1);
         let preserved: String = reopened
-            .query_row(
-                "SELECT name FROM iptv_sources WHERE id='p1'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT name FROM iptv_sources WHERE id='p1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(preserved, "Fictional");
         let epg_exists: i64 = reopened
