@@ -93,14 +93,15 @@ where
 {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    const O_NOFOLLOW: i32 = 0o400000;
-    const O_DIRECTORY: i32 = 0o200000;
+    // Linux open(2) flags differ between x86-64 and AArch64.
+    // Use target-specific libc definitions; hardcoded x86 values fail closed
+    // on AArch64 (and silently disable orphan recovery).
     let mut stats = SweepStats::default();
     // Keep the verified directory inode open through enumeration AND unlink.
     // /proc/self/fd is Linux-only; if procfs is not accessible, fail closed.
     let Ok(parent_fd) = OpenOptions::new()
         .read(true)
-        .custom_flags(O_NOFOLLOW | O_DIRECTORY)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
         .open(parent)
     else {
         return stats;
@@ -170,7 +171,7 @@ where
         // a concurrent ancestor rename cannot redirect the unlink.
         let Ok(lock) = OpenOptions::new()
             .read(true)
-            .custom_flags(O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&lock_path)
         else {
             continue;
@@ -186,7 +187,7 @@ where
         }
         let Ok(spool) = OpenOptions::new()
             .read(true)
-            .custom_flags(O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&spool_path)
         else {
             continue;
@@ -280,6 +281,38 @@ mod tests {
         File::create(lock).unwrap();
         path
     }
+    #[test]
+    fn native_directory_open_flags_enforce_nofollow_and_directory_only() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let dir = PrivateDir::new();
+        let opened = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+            .open(&dir.0)
+            .expect("native Linux flags must open a private directory");
+        let anchored = format!("/proc/self/fd/{}", opened.as_raw_fd());
+        fs::read_dir(anchored).expect("the opened directory must be enumerable by fd");
+
+        let symlink_parent = dir.0.with_extension("symlink");
+        symlink(&dir.0, &symlink_parent).unwrap();
+        assert!(OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+            .open(&symlink_parent)
+            .is_err());
+        let ordinary_file = dir.0.with_extension("ordinary");
+        fs::write(&ordinary_file, b"not a directory").unwrap();
+        assert!(OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+            .open(&ordinary_file)
+            .is_err());
+        fs::remove_file(symlink_parent).unwrap();
+        fs::remove_file(ordinary_file).unwrap();
+    }
+
     #[test]
     fn orphan_restart_and_idempotence() {
         let dir = PrivateDir::new();
