@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   scoped-rename:
-    if: github.repository == 'Certain1989/Broadcaster' && github.event.head_commit.message == 'chore: run source-only rename with isolated commit permissions'
+    if: >-
+      github.repository == 'Certain1989/Broadcaster' &&
+      github.event.head_commit.message == 'chore: run source-only rename with isolated commit permissions'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
