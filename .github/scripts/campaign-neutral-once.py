@@ -15,6 +15,8 @@ for section in ("src", "tests", "data", "build-aux", ".github", "po"):
     paths.extend(p for p in (root / section).rglob("*") if p.is_file() and
                  p.suffix.lower() in (".rs",".blp",".sh",".py",".yaml",".yml",".xml",".in",".css",".md",".toml",".sql",".lua",".txt"))
 paths.extend(root / p for p in ("build.rs","Cargo.toml","meson.build","justfile") if (root/p).is_file())
+# The regression scanner must retain its deliberately forbidden-name self-tests.
+paths = [p for p in paths if p.relative_to(root).as_posix() != "tests/check_campaign_neutral_names.py"]
 
 exact = {
     "r07_native_focus_tests":"native_focus_navigation_tests",
