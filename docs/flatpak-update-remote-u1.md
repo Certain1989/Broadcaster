@@ -73,6 +73,36 @@ normal signed **content update** on both architectures and local HTTP transport
 when the exact-head proof succeeds, not a distinct upstream release-version
 upgrade or GitHub Pages delivery; both remain acceptance requirements.
 
+## Exact-source provenance and CI evidence
+
+The U1 proof must build and test the **actual authorized PR head**, not just
+report the PR head SHA attached to a workflow run. During the successful
+2026-11-02 U1 proof run 41474285724, the default `actions/checkout`
+behavior checked out GitHub's synthetic PR merge commit
+`a62b31ef700369ffa6ccf7743690610eeb5b0ad7` (merging feature head
+`8dfd986fba2d760a9d6277cde30ad4e6b712a61e` into base
+`326ff67bef597f424ceec8ca62417efc244f19b9`). Thus its dual-arch
+signature/update results are **merge-checkout evidence**, not literal
+feature-HEAD source execution, despite the workflow run's associated head SHA.
+There is no demonstrated source-content discrepancy, but equality of source
+trees was not established by that run.
+
+From feature commit `f5cb65bec04fa77ed10eacbdcf523f02e78be842`,
+all four U1 jobs explicitly checkout the pull-request head SHA (or the
+dispatch SHA) and assert `git rev-parse HEAD` matches that exact expected
+40-character SHA. Checkout credentials are not persisted. Only subsequent
+successful native runs can establish exact-source proof under this policy;
+prior green merge-checkout results remain useful but are not relabeled.
+
+The latest pre-provenance-correction native run 41474285724 passed both
+architectures' real changed-content user/system updates, negative missing and
+corrupted root/nested indexed summary signatures, wrong-key and unsigned-commit
+rejection, partial-publication checks and disposable Devel migration. Its
+remaining gaps are separate-actor review, stable user-data migration, production
+source/tag release binding, key rotation/recovery, hosted HTTP/CDN/retention
+feasibility and recurrent Flatpak/OSTree critical diagnostics. This prototype
+still provides no stable update service.
+
 ## Production path — separate owner decision required
 
 A future release pipeline must bind signing to a separately accepted source
