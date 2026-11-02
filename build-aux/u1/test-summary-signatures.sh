@@ -23,7 +23,7 @@ client_flatpak() {
 print_summary_requests() {
   local label=$1 log=$2
   echo "U1 diagnostic: HTTP metadata requests for $label:"
-  grep -E '"(GET|HEAD) /(summary|summary.idx|summary.sig|summary.idx.sig)' "$log" || true
+  grep -E '"(GET|HEAD) /(summary|summaries/)' "$log" || true
 }
 print_remote_trust() {
   local root=$1 remote=$2
@@ -46,16 +46,18 @@ unsigned_summary_repo="$RUNNER_TEMP/u1-unsigned-summary/repo"
 mkdir -p "$(dirname "$unsigned_summary_repo")"
 cp -a "$RUNNER_TEMP/u1-v2/repo" "$unsigned_summary_repo"
 test -s "$unsigned_summary_repo/summary" && test -s "$unsigned_summary_repo/summary.sig"
-# Remove BOTH the legacy and indexed summary signatures. A modern
-# client can verify the index and install despite absent summary.sig.
-if [ -s "$unsigned_summary_repo/summary.idx.sig" ]; then
-  echo 'U1 negative: signed summary.idx.sig present; removing it too'
-else
-  echo 'U1 negative: summary.idx.sig absent; legacy-only signature path'
-fi
+# Indexed OSTree summaries are signed under summaries/<digest>.idx.sig,
+# not only at the repository root. Earlier negatives mutated root files
+# while the client fetched and trusted the untouched nested signature.
+test -d "$unsigned_summary_repo/summaries"
+indexed_unsigned=$(find "$unsigned_summary_repo/summaries" -type f -name '*.idx.sig' -print -quit)
+test -n "$indexed_unsigned"
+echo 'U1 negative: removing legacy and nested indexed summary signatures'
 rm -f "$unsigned_summary_repo/summary.sig" "$unsigned_summary_repo/summary.idx.sig"
+find "$unsigned_summary_repo/summaries" -type f -name '*.idx.sig' -delete
 test ! -e "$unsigned_summary_repo/summary.sig"
 test ! -e "$unsigned_summary_repo/summary.idx.sig"
+test -z "$(find "$unsigned_summary_repo/summaries" -type f -name '*.idx.sig' -print -quit)"
 # Exercise the intended HTTP transport, not file://, to distinguish
 # local-repository semantics from remote summary verification.
 python3 -u build-aux/u1/http-meter.py 18391 \
@@ -67,7 +69,13 @@ for try in 1 2 3 4 5 6 7 8 9 10; do
 done
 curl -fsS http://127.0.0.1:18391/summary >/dev/null
 if curl -fsS http://127.0.0.1:18391/summary.sig >/dev/null 2>&1 || curl -fsS http://127.0.0.1:18391/summary.idx.sig >/dev/null 2>&1; then
-  echo 'U1 negative HTTP fixture unexpectedly serves a summary signature' >&2
+  echo 'U1 negative HTTP fixture unexpectedly serves a root summary signature' >&2
+  exit 1
+fi
+# Check the exact nested path originally advertised by the signed index.
+unsigned_index_path=${indexed_unsigned#"$unsigned_summary_repo"/}
+if curl -fsS "http://127.0.0.1:18391/$unsigned_index_path" >/dev/null 2>&1; then
+  echo 'U1 negative HTTP fixture unexpectedly serves indexed signature' >&2
   exit 1
 fi
 sed -e 's#^Name=.*#Name=broadcaster-u1-summary-positive#' \
@@ -87,8 +95,8 @@ if [ "$summary_default" != true ]; then
   exit 1
 fi
 # Negative: corrupt *all* advertised summary signature entry points.
-# Modern Flatpak may verify summary.idx.sig and never consult the
-# legacy summary.sig, so changing only the latter is not a negative.
+# Flatpak fetches summaries/<digest>.idx.sig referenced by summary.idx.
+# Corrupting only root summary.sig or summary.idx.sig is insufficient.
 invalid_summary_repo="$RUNNER_TEMP/u1-invalid-summary/repo"
 mkdir -p "$(dirname "$invalid_summary_repo")"
 cp -a "$RUNNER_TEMP/u1-v2/repo" "$invalid_summary_repo"
@@ -96,10 +104,14 @@ test -s "$invalid_summary_repo/summary.sig"
 printf 'invalid-U1-summary-signature\n' > "$invalid_summary_repo/summary.sig"
 if [ -f "$invalid_summary_repo/summary.idx.sig" ]; then
   printf 'invalid-U1-index-signature\n' > "$invalid_summary_repo/summary.idx.sig"
-  echo 'U1 negative: corrupted both legacy and index summary signatures'
-else
-  echo 'U1 negative: no modern summary.idx.sig; corrupted legacy signature'
 fi
+test -d "$invalid_summary_repo/summaries"
+indexed_invalid=$(find "$invalid_summary_repo/summaries" -type f -name '*.idx.sig' -print -quit)
+test -n "$indexed_invalid"
+while IFS= read -r -d '' indexed_sig; do
+  printf 'invalid-U1-nested-index-signature\n' > "$indexed_sig"
+done < <(find "$invalid_summary_repo/summaries" -type f -name '*.idx.sig' -print0)
+echo 'U1 negative: corrupted legacy and nested indexed summary signatures'
 python3 -u build-aux/u1/http-meter.py 18392 "$invalid_summary_repo" >"$RUNNER_TEMP/u1-invalid-summary-http.log" 2>&1 &
 invalid_summary_server_pid=$!
 for try in 1 2 3 4 5 6 7 8 9 10; do
@@ -113,6 +125,12 @@ cmp -s <(curl -fsS http://127.0.0.1:18392/summary.sig) "$invalid_summary_repo/su
 if [ -f "$invalid_summary_repo/summary.idx.sig" ]; then
   cmp -s <(curl -fsS http://127.0.0.1:18392/summary.idx.sig) "$invalid_summary_repo/summary.idx.sig"
 fi
+# Verify HTTP really serves the corrupt signature at the nested URL used
+# by Flatpak, not merely a corrupt unused root file.
+while IFS= read -r -d '' indexed_sig; do
+  indexed_path=${indexed_sig#"$invalid_summary_repo"/}
+  cmp -s <(curl -fsS "http://127.0.0.1:18392/$indexed_path") "$indexed_sig"
+done < <(find "$invalid_summary_repo/summaries" -type f -name '*.idx.sig' -print0)
 sed -e 's#^Name=.*#Name=broadcaster-u1-invalid-summary#' -e "s#^Url=.*#Url=http://127.0.0.1:18392#" "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/invalid-summary.flatpakrepo"
 invalid_summary_client="$RUNNER_TEMP/u1-invalid-summary-client"
 invalid_summary_log="$RUNNER_TEMP/u1-invalid-summary.log"
