@@ -28,6 +28,10 @@ const CANDIDATE_PREFIX: &str = ".broadcaster-d1-import-";
 const RECOVERY_PREFIX: &str = ".broadcaster-d1-recovery-";
 static STARTUP_ARMED: AtomicBool = AtomicBool::new(false);
 static STARTUP_RESTORE_LOCK: Mutex<()> = Mutex::new(());
+// Once pre-open recovery fails, every initializer must refuse the database
+// for the remainder of this process, even when the primary startup flag was
+// consumed by the first attempt. Restart is required before retrying recovery.
+static STARTUP_RESTORE_FAILED: AtomicBool = AtomicBool::new(false);
 static RESTORE_PROCESSED: AtomicBool = AtomicBool::new(false);
 
 /// Set only on the primary GtkApplication's startup signal (not a second
@@ -41,20 +45,40 @@ pub(crate) fn suppress_automatic_refresh_this_startup() -> bool {
 }
 
 pub(super) fn check_startup_restore(storage: &Storage) -> StorageResult<()> {
-    // Multiple async initializers can race at first startup. Serialize the
-    // entire pre-open restore, not just the ownership flag, so none can open
-    // the previous database while its bytes are being replaced.
-    let _guard = STARTUP_RESTORE_LOCK
-        .lock()
-        .map_err(|_| StorageError::StorageFailure)?;
-    if STARTUP_ARMED.swap(false, Ordering::SeqCst) {
-        // If an old DB exists, the first service's initialization must complete
-        // the replacement before any other connection is opened.
-        let result = apply_pending(storage.database_path());
-        if result.is_err() {
-            RESTORE_PROCESSED.store(true, Ordering::SeqCst);
+    check_startup_restore_with(
+        storage,
+        &STARTUP_RESTORE_LOCK,
+        &STARTUP_ARMED,
+        &STARTUP_RESTORE_FAILED,
+        &RESTORE_PROCESSED,
+        apply_pending,
+    )
+}
+
+// The injected pre-open action lets tests prove the real serialized gate
+// remains closed after a failure without poisoning process-global test state.
+fn check_startup_restore_with(
+    storage: &Storage,
+    lock: &Mutex<()>,
+    armed: &AtomicBool,
+    failed: &AtomicBool,
+    processed: &AtomicBool,
+    restore: impl FnOnce(&Path) -> StorageResult<()>,
+) -> StorageResult<()> {
+    // Serialize the *decision* and the entire restore: no racing initializer
+    // may open old or partially restored SQLite bytes while this runs.
+    let _guard = lock.lock().map_err(|_| StorageError::StorageFailure)?;
+    if failed.load(Ordering::SeqCst) {
+        return Err(StorageError::StorageFailure);
+    }
+    if armed.swap(false, Ordering::SeqCst) {
+        // Consuming the one-time flag must NOT grant the next initializer
+        // success when the attempted recovery returned an error.
+        if let Err(error) = restore(storage.database_path()) {
+            failed.store(true, Ordering::SeqCst);
+            processed.store(true, Ordering::SeqCst);
+            return Err(error);
         }
-        result?;
     }
     Ok(())
 }
@@ -749,6 +773,96 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn failed_startup_recovery_never_allows_later_initializer_to_open_database() {
+        use std::sync::{atomic::AtomicUsize, mpsc};
+
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        let lock = Mutex::new(());
+        let armed = AtomicBool::new(true);
+        let failed = AtomicBool::new(false);
+        let processed = AtomicBool::new(false);
+        let restore_attempts = AtomicUsize::new(0);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        // The first initializer is paused inside the actual pre-open gate.
+        // A second initializer starts while the first owns the mutex and must
+        // then observe the durable error instead of opening SQLite.
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                check_startup_restore_with(&storage, &lock, &armed, &failed, &processed, |_| {
+                    restore_attempts.fetch_add(1, Ordering::SeqCst);
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Err(StorageError::StorageFailure)
+                })
+            });
+            entered_rx.recv().unwrap();
+            let second = scope.spawn(|| {
+                let result = check_startup_restore_with(
+                    &storage,
+                    &lock,
+                    &armed,
+                    &failed,
+                    &processed,
+                    |_| panic!("second initializer must not retry failed recovery"),
+                );
+                // Storage::initialize cannot reach its database-opening code
+                // unless this exact pre-open gate succeeds.
+                if result.is_ok() {
+                    storage.initialize().unwrap();
+                }
+                result
+            });
+            release_tx.send(()).unwrap();
+            assert!(first.join().unwrap().is_err());
+            assert!(second.join().unwrap().is_err());
+        });
+        assert!(failed.load(Ordering::SeqCst));
+        assert!(processed.load(Ordering::SeqCst));
+        assert_eq!(restore_attempts.load(Ordering::SeqCst), 1);
+        assert!(!storage.database_path().exists(), "no live DB may open");
+
+        // Even a repeated primary-startup arm in the same process cannot
+        // bypass the sticky failure. A fresh process starts with fresh state.
+        armed.store(true, Ordering::SeqCst);
+        assert!(check_startup_restore_with(
+            &storage,
+            &lock,
+            &armed,
+            &failed,
+            &processed,
+            |_| panic!("rearming must not trigger recovery after failure"),
+        )
+        .is_err());
+        assert!(!storage.database_path().exists());
+
+        let fresh_lock = Mutex::new(());
+        let fresh_armed = AtomicBool::new(true);
+        let fresh_failed = AtomicBool::new(false);
+        let fresh_processed = AtomicBool::new(false);
+        let fresh_attempts = AtomicUsize::new(0);
+        for _ in 0..2 {
+            check_startup_restore_with(
+                &storage,
+                &fresh_lock,
+                &fresh_armed,
+                &fresh_failed,
+                &fresh_processed,
+                |_| {
+                    fresh_attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(fresh_attempts.load(Ordering::SeqCst), 1);
+        assert!(!fresh_failed.load(Ordering::SeqCst));
+        assert!(!fresh_processed.load(Ordering::SeqCst));
     }
 
     #[test]
