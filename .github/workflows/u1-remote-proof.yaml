@@ -297,7 +297,7 @@ jobs:
           fi
           echo 'U1 trusted-summary onboarding succeeded; unsigned commit installation rejected'
           # Negative: a complete repository with signed commits and summary
-          # but no summary.sig must not be accepted by a NEW .flatpakrepo
+          # but no summary.sig must not be accepted over HTTP by a NEW .flatpakrepo
           # client. Use a distinct XDG_DATA_HOME to avoid stale summary and
           # appstream metadata after a remote URL switch. A remote-ls on the
           # already-enumerated positive client is not a valid negative oracle.
@@ -307,6 +307,21 @@ jobs:
           test -s "$unsigned_summary_repo/summary" && test -s "$unsigned_summary_repo/summary.sig"
           rm "$unsigned_summary_repo/summary.sig"
           test ! -e "$unsigned_summary_repo/summary.sig"
+          # Exercise the intended HTTP transport, not file://, to distinguish
+          # local-repository semantics from remote summary verification.
+          python3 -u build-aux/u1/http-meter.py 18391 \
+            "$unsigned_summary_repo" >"$RUNNER_TEMP/u1-unsigned-summary-http.log" 2>&1 &
+          unsigned_summary_server_pid=$!
+          trap 'kill "$server_pid" "$unsigned_summary_server_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18391/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18391/summary >/dev/null
+          if curl -fsS http://127.0.0.1:18391/summary.sig >/dev/null 2>&1; then
+            echo 'U1 negative HTTP fixture unexpectedly serves summary.sig' >&2
+            exit 1
+          fi
           sed -e 's#^Name=.*#Name=broadcaster-u1-summary-positive#' \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/summary-positive.flatpakrepo"
           summary_positive_client="$RUNNER_TEMP/u1-summary-positive-client"
@@ -327,7 +342,7 @@ jobs:
           # and a genuinely fresh user installation. A signature-specific
           # rejection may happen at remote-add or at first remote-ls.
           sed -e 's#^Name=.*#Name=broadcaster-u1-unsigned-summary#' \
-              -e "s#^Url=.*#Url=file://$unsigned_summary_repo#" \
+              -e "s#^Url=.*#Url=http://127.0.0.1:18391#" \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/unsigned-summary.flatpakrepo"
           summary_negative_client="$RUNNER_TEMP/u1-unsigned-summary-negative-client"
           summary_log="$RUNNER_TEMP/u1-unsigned-summary.log"
