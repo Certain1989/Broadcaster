@@ -421,39 +421,117 @@ mod tests {
         fs::remove_dir_all(relocated).unwrap();
     }
 
+    // Every synchronization boundary in this test is timed: a failed-closed
+    // scanner or a stuck contender must produce a test failure, not a hung CI.
     #[test]
     fn concurrent_sweepers_respect_a_busy_lock_and_remove_once() {
         use std::sync::mpsc;
+        use std::thread;
+
+        const RENDEZVOUS_LIMIT: Duration = Duration::from_secs(20);
         let dir = PrivateDir::new();
         let stage = orphan(&dir, true);
         let (arrived_tx, arrived_rx) = mpsc::channel();
-        let (proceed_tx, proceed_rx) = mpsc::channel();
-        let (finished_tx, finished_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (first_tx, first_rx) = mpsc::channel();
         let parent = dir.0.clone();
         let now = SystemTime::now();
-        let worker = std::thread::spawn(move || {
+
+        let first = thread::spawn(move || {
             let result = sweep_stale_with_hook(&parent, now, |_, _| {
-                arrived_tx.send(()).expect("sweeper arrival receiver dropped");
-                proceed_rx
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("sweeper release timed out");
+                let _ = arrived_tx.send(());
+                release_rx
+                    .recv_timeout(RENDEZVOUS_LIMIT)
+                    .expect("first sweeper was not released within the deadline");
             });
-            finished_tx.send(result).expect("sweeper result receiver dropped");
+            let _ = first_tx.send(result);
         });
-        let arrival = arrived_rx.recv_timeout(Duration::from_secs(10));
+
+        // An early fail-closed return closes the arrival channel. Do not
+        // assume the hook is always called or wait on an unbounded barrier.
+        let arrival = arrived_rx.recv_timeout(RENDEZVOUS_LIMIT);
+        let mut contender = None;
+        let mut contender_result = None;
+        let mut stage_held = false;
         if arrival.is_ok() {
-            assert_eq!(sweep_stale(&dir.0, now).removed, 0);
-            assert!(stage.exists());
+            stage_held = stage.exists();
+            let (second_tx, second_rx) = mpsc::channel();
+            let second_parent = dir.0.clone();
+            contender = Some(thread::spawn(move || {
+                let _ = second_tx.send(sweep_stale(&second_parent, now));
+            }));
+            contender_result = Some(second_rx.recv_timeout(RENDEZVOUS_LIMIT));
         }
-        // Always release a worker that reached the hook, including on assertion failure.
-        let _ = proceed_tx.send(());
-        let result = finished_rx.recv_timeout(Duration::from_secs(10));
-        if result.is_ok() {
-            worker.join().expect("sweeper panicked");
+
+        // Release the first worker *before* any assertion, even if the
+        // contender times out or the scanner never reached the hook.
+        let _ = release_tx.send(());
+        let first_result = first_rx.recv_timeout(RENDEZVOUS_LIMIT);
+        // Join only completed threads: an indefinite worker must never turn
+        // a timeout assertion into a second unbounded wait.
+        if !matches!(first_result, Err(mpsc::RecvTimeoutError::Timeout)) {
+            // A delivered result or a disconnected sender guarantees the
+            // worker cannot still be blocked in its hook.
+            first.join().expect("first sweeper panicked");
         }
-        arrival.expect("first sweeper never reached the before-unlink hook");
-        assert_eq!(result.expect("first sweeper did not complete").removed, 1);
+        if let Some(second) = contender {
+            if !matches!(contender_result, Some(Err(mpsc::RecvTimeoutError::Timeout))) {
+                second.join().expect("contending sweeper panicked");
+            }
+        }
+
+        assert!(
+            arrival.is_ok(),
+            "first sweeper never reached before_unlink (arrival={arrival:?}, result={first_result:?}); investigate scanner/lock fail-closed paths"
+        );
+        assert!(
+            stage_held,
+            "active spool disappeared while first lock was held"
+        );
+        assert_eq!(
+            contender_result
+                .expect("second sweeper not started")
+                .expect("contending sweep blocked or failed to complete")
+                .removed,
+            0,
+            "contending sweeper must not remove a locked spool"
+        );
+        assert_eq!(
+            first_result
+                .expect("first sweeper blocked or failed to complete")
+                .removed,
+            1,
+            "first sweeper must remove the orphan exactly once"
+        );
         assert!(!stage.exists());
+    }
+
+    #[test]
+    fn scanner_without_a_companion_lock_fails_closed_without_entering_unlink_hook() {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let dir = PrivateDir::new();
+        let lockless = dir.stage(true);
+        let (hook_tx, hook_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let parent = dir.0.clone();
+        let worker = thread::spawn(move || {
+            let stats = sweep_stale_with_hook(&parent, SystemTime::now(), |_, _| {
+                let _ = hook_tx.send(());
+            });
+            let _ = done_tx.send(stats);
+        });
+        let result = done_rx.recv_timeout(Duration::from_secs(20));
+        if !matches!(result, Err(mpsc::RecvTimeoutError::Timeout)) {
+            worker.join().expect("lockless sweep panicked");
+        }
+        assert_eq!(result.expect("lockless sweep stalled").removed, 0);
+        assert!(matches!(
+            hook_rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(lockless.exists());
     }
 
     #[test]
