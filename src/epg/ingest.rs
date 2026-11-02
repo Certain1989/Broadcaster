@@ -8,7 +8,7 @@ use super::{
     headroom::ImportHeadroom,
     limits,
     model::{EpgError, LimitKind},
-    xmltv::{decode_xmltv_rows_omitting_source_manager, StreamedRows, StreamingLimits},
+    xmltv::{decode_xmltv_rows_omitting_c1, StreamedRows, StreamingLimits},
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
@@ -416,7 +416,7 @@ fn import_xmltv_scoped<R: BufRead>(
         }
         Ok(())
     };
-    let mut rows = decode_xmltv_rows_omitting_source_manager(
+    let mut rows = decode_xmltv_rows_omitting_c1(
         input,
         source_id,
         retrieved_utc,
@@ -1364,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn decoded_attribute_control_after_source_manager_omission_rolls_back_last_good() {
+    fn decoded_attribute_control_after_unicode_control_omission_rolls_back_last_good() {
         let mut conn = db();
         let cancelled = AtomicBool::new(false);
         import_xmltv(
@@ -2138,7 +2138,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_direct_description_omits_elements_but_preserves_clean_future_rows() {
+    fn unicode_control_direct_description_omits_elements_but_preserves_clean_future_rows() {
         for bad in ["\u{0080}", "\u{0093}", "\u{0094}", "\u{0096}", "\u{009f}"] {
             let mut conn = db();
             let xml = guide(
@@ -2176,7 +2176,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_multiple_elements_fragments_and_second_direct_description() {
+    fn unicode_control_multiple_elements_fragments_and_second_direct_description() {
         let mut conn = db();
         let head = "<channel id='c'><display-name>C</display-name></channel>";
         let bad1 = programme("c", "Ignored", None, Some("\u{0093}\u{0094}"));
@@ -2198,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_skipped_unknown_channel_and_fatal_independent_text_rollback() {
+    fn unicode_control_skipped_unknown_channel_and_fatal_independent_text_rollback() {
         for invalid_programme in [
             programme("missing", "Omitted", None, Some("\u{0093}")),
             programme("missing", "Omitted", None, Some("\u{0096}")),
@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_shortened_key_and_metadata_collisions_fail_both_orders() {
+    fn unicode_control_shortened_key_and_metadata_collisions_fail_both_orders() {
         let prefix = "Q".repeat(512);
         let omitted = programme("c", &format!("{prefix}A"), None, Some("\u{0093}"));
         let retained = programme("c", &format!("{prefix}B"), None, Some("safe"));
@@ -2296,7 +2296,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_all_omitted_does_not_satisfy_minimum_schedule_or_change_last_good() {
+    fn unicode_control_all_omitted_does_not_satisfy_minimum_schedule_or_change_last_good() {
         let mut conn = db();
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         import_fixture(
@@ -2322,7 +2322,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_all_omitted_unknown_channel_still_fails_as_missing_channel() {
+    fn unicode_control_all_omitted_unknown_channel_still_fails_as_missing_channel() {
         let mut conn = db();
         let channels = "<channel id='c'><display-name>C</display-name></channel>";
         let good = guide(channels, &programme("c", "Good", None, None));
@@ -2341,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn source_manager_temp_quota_full_restores_stricter_connection_limit_and_allows_retry() {
+    fn unicode_control_temp_quota_full_restores_stricter_connection_limit_and_allows_retry() {
         let mut conn = db();
         let original: i64 = conn
             .query_row("PRAGMA temp.max_page_count=12", [], |r| r.get(0))
