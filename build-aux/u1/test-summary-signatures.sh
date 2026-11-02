@@ -12,9 +12,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Negative: a complete repository with signed commits and summary
-# but no summary.sig must not be accepted over HTTP by a NEW .flatpakrepo
-# client. Use a distinct XDG_DATA_HOME to avoid stale summary and
+# XDG_DATA_HOME alone does not isolate XDG cache/config. Keep all three
+# independent for each disposable client, preventing cross-fixture cache reuse.
+client_flatpak() {
+  local root=$1
+  shift
+  XDG_DATA_HOME="$root" XDG_CACHE_HOME="$root/cache" XDG_CONFIG_HOME="$root/config" \
+    flatpak --user "$@"
+}
+print_summary_requests() {
+  local label=$1 log=$2
+  echo "U1 diagnostic: HTTP metadata requests for $label:"
+  grep -E '"(GET|HEAD) /(summary|summary.idx|summary.sig|summary.idx.sig)' "$log" || true
+}
+print_remote_trust() {
+  local root=$1 remote=$2
+  local repo="$root/flatpak/repo" option
+  if [ ! -f "$repo/config" ]; then
+    echo "U1 diagnostic: no OSTree config for $remote"
+    return
+  fi
+  for option in gpg-verify gpg-verify-summary collection-id url; do
+    echo "U1 diagnostic: $remote $option=$(ostree --repo="$repo" config get "remote \"$remote\".$option" 2>/dev/null || echo unset)"
+  done
+}
+
+# Negative: a complete repository with signed commits and summary,
+# but neither legacy nor indexed summary signature, must not be accepted
+# over HTTP by a fresh .flatpakrepo client. Use a distinct XDG_DATA_HOME to avoid stale summary and
 # appstream metadata after a remote URL switch. A remote-ls on the
 # already-enumerated positive client is not a valid negative oracle.
 unsigned_summary_repo="$RUNNER_TEMP/u1-unsigned-summary/repo"
@@ -48,9 +73,9 @@ fi
 sed -e 's#^Name=.*#Name=broadcaster-u1-summary-positive#' \
     "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/summary-positive.flatpakrepo"
 summary_positive_client="$RUNNER_TEMP/u1-summary-positive-client"
-XDG_DATA_HOME="$summary_positive_client" flatpak --user remote-add --from \
+client_flatpak "$summary_positive_client" remote-add --from \
   broadcaster-u1-summary-positive "$RUNNER_TEMP/summary-positive.flatpakrepo"
-XDG_DATA_HOME="$summary_positive_client" flatpak --user remote-ls \
+client_flatpak "$summary_positive_client" remote-ls \
   broadcaster-u1-summary-positive | grep -F 'io.github.Certain1989.Broadcaster.Devel'
 summary_positive_repo="$summary_positive_client/flatpak/repo"
 test -f "$summary_positive_repo/config"
@@ -82,22 +107,31 @@ for try in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.3
 done
 curl -fsS http://127.0.0.1:18392/summary.sig >/dev/null
+# Assert that the client-visible HTTP bytes really are the corrupted fixture,
+# rather than a stale server or the original signed repository.
+cmp -s <(curl -fsS http://127.0.0.1:18392/summary.sig) "$invalid_summary_repo/summary.sig"
+if [ -f "$invalid_summary_repo/summary.idx.sig" ]; then
+  cmp -s <(curl -fsS http://127.0.0.1:18392/summary.idx.sig) "$invalid_summary_repo/summary.idx.sig"
+fi
 sed -e 's#^Name=.*#Name=broadcaster-u1-invalid-summary#' -e "s#^Url=.*#Url=http://127.0.0.1:18392#" "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/invalid-summary.flatpakrepo"
 invalid_summary_client="$RUNNER_TEMP/u1-invalid-summary-client"
 invalid_summary_log="$RUNNER_TEMP/u1-invalid-summary.log"
-if XDG_DATA_HOME="$invalid_summary_client" flatpak --user remote-add --from broadcaster-u1-invalid-summary "$RUNNER_TEMP/invalid-summary.flatpakrepo" >"$invalid_summary_log" 2>&1; then
-  if XDG_DATA_HOME="$invalid_summary_client" flatpak --user install -y --noninteractive --no-deps --no-related broadcaster-u1-invalid-summary io.github.Certain1989.Broadcaster.Devel >>"$invalid_summary_log" 2>&1; then
+if client_flatpak "$invalid_summary_client" remote-add --from broadcaster-u1-invalid-summary "$RUNNER_TEMP/invalid-summary.flatpakrepo" >"$invalid_summary_log" 2>&1; then
+  print_remote_trust "$invalid_summary_client" broadcaster-u1-invalid-summary
+  if client_flatpak "$invalid_summary_client" --verbose install -y --noninteractive --no-deps --no-related broadcaster-u1-invalid-summary io.github.Certain1989.Broadcaster.Devel >>"$invalid_summary_log" 2>&1; then
     echo 'U1 SECURITY FAILURE: corrupt summary signatures allowed application installation' >&2
     cat "$invalid_summary_log" >&2
+    print_summary_requests corrupt "$RUNNER_TEMP/u1-invalid-summary-http.log"
     exit 1
   fi
 fi
+print_summary_requests corrupt "$RUNNER_TEMP/u1-invalid-summary-http.log"
 if ! grep -Eiq 'gpg|signature|verification|not signed|summary\.sig|summary\.idx\.sig' "$invalid_summary_log"; then
   echo 'U1 corrupt-summary rejection lacked a signature-specific error' >&2
   cat "$invalid_summary_log" >&2
   exit 1
 fi
-if XDG_DATA_HOME="$invalid_summary_client" flatpak --user info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+if client_flatpak "$invalid_summary_client" info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
   echo 'U1 corrupt-summary negative left an app installed' >&2
   exit 1
 fi
@@ -110,8 +144,9 @@ sed -e 's#^Name=.*#Name=broadcaster-u1-unsigned-summary#' \
     "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/unsigned-summary.flatpakrepo"
 summary_negative_client="$RUNNER_TEMP/u1-unsigned-summary-negative-client"
 summary_log="$RUNNER_TEMP/u1-unsigned-summary.log"
-if XDG_DATA_HOME="$summary_negative_client" flatpak --user remote-add --from \
+if client_flatpak "$summary_negative_client" remote-add --from \
      broadcaster-u1-unsigned-summary "$RUNNER_TEMP/unsigned-summary.flatpakrepo" >"$summary_log" 2>&1; then
+  print_remote_trust "$summary_negative_client" broadcaster-u1-unsigned-summary
   summary_negative_repo="$summary_negative_client/flatpak/repo"
   summary_negative_option='remote "broadcaster-u1-unsigned-summary".gpg-verify-summary'
   if [ "$(ostree --repo="$summary_negative_repo" config get "$summary_negative_option" 2>/dev/null || true)" != true ]; then
@@ -121,14 +156,15 @@ if XDG_DATA_HOME="$summary_negative_client" flatpak --user remote-add --from \
   # Enumeration alone is not an installation trust oracle: some
   # Flatpak/OSTree versions can list refs without fetching a commit.
   # Require rejection at the actual installation boundary.
-  XDG_DATA_HOME="$summary_negative_client" flatpak --user remote-ls \
+  client_flatpak "$summary_negative_client" remote-ls \
     broadcaster-u1-unsigned-summary >>"$summary_log" 2>&1 || true
-  if XDG_DATA_HOME="$summary_negative_client" flatpak --user install \
+  if client_flatpak "$summary_negative_client" install \
        -y --noninteractive --no-deps --no-related \
        broadcaster-u1-unsigned-summary io.github.Certain1989.Broadcaster.Devel \
        >>"$summary_log" 2>&1; then
     echo 'U1 SECURITY FAILURE: missing-summary-signature repository installed application' >&2
     cat "$summary_log" >&2
+    print_summary_requests missing "$RUNNER_TEMP/u1-unsigned-summary-http.log"
     exit 1
   fi
 fi
@@ -137,9 +173,10 @@ if ! grep -Eiq 'gpg|signature|verification|not signed|summary\.sig' "$summary_lo
   cat "$summary_log" >&2
   exit 1
 fi
-if XDG_DATA_HOME="$summary_negative_client" flatpak --user info \
+if client_flatpak "$summary_negative_client" info \
      io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
   echo 'U1 unsigned-summary negative left an app installed' >&2
   exit 1
 fi
+print_summary_requests missing "$RUNNER_TEMP/u1-unsigned-summary-http.log"
 echo 'U1 fresh normal .flatpakrepo client rejected missing summary signature'
