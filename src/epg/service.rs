@@ -126,6 +126,29 @@ impl fmt::Debug for GlobalGuideManager {
         f.write_str("GlobalGuideManager(<private>)")
     }
 }
+// The GLib caller may disappear while Tokio's independently spawned task is
+// still running. Retain spool ownership *inside* that task, not in its waiter.
+async fn hold_spool_for_async<T>(
+    spool: Arc<AttemptSpool>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    let _spool = spool;
+    future.await
+}
+
+// spawn_blocking keeps running after its JoinHandle is dropped. The guard must
+// therefore live in the blocking closure, not just in its Tokio adapter.
+async fn hold_spool_for_blocking<T: Send + 'static>(
+    spool: Arc<AttemptSpool>,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || {
+        let _spool = spool;
+        task()
+    })
+    .await
+}
+
 impl GlobalGuideManager {
     /// Shared service must be instantiated once by the application.
     pub async fn open() -> Result<Self, GuideServiceError> {
@@ -469,15 +492,15 @@ impl GlobalGuideManager {
             .try_acquire_owned()
             .map_err(|_| GuideServiceError::AlreadyRunning)?;
         let path = self.inner.registry.spool_path();
-        let _cleanup = AttemptSpool::new(path.clone()).map_err(local_spool_error)?;
+        let cleanup = Arc::new(AttemptSpool::new(path.clone()).map_err(local_spool_error)?);
         let expected_revision = source.view.updated_at;
         let gzip = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
                 let cancellation = transfer.clone();
                 let target = path.clone();
-                crate::utils::tokio(async move {
+                crate::utils::tokio(hold_spool_for_async(cleanup.clone(), async move {
                     network::fetch_guide_spooled(&locator, trust, &cancellation, &target).await
-                })
+                }))
                 .await?
             }
             SourceOrigin::LocalFile(locator) => {
@@ -493,7 +516,7 @@ impl GlobalGuideManager {
         let source_id = id.to_owned();
         let cancelled = parser_cancel.clone();
         let rows = crate::utils::tokio(async move {
-            tokio::task::spawn_blocking(move || {
+            hold_spool_for_blocking(cleanup, move || {
                 let file =
                     std::fs::File::open(&path).map_err(|_| GuideServiceError::LocalAccess)?;
                 let staged_size = file.metadata().map_err(local_spool_error)?.len();
@@ -783,6 +806,88 @@ mod e2_admission_tests {
             )
             .await
             .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropped_download_waiter_keeps_kernel_lock_until_detached_worker_exits() {
+        use tokio::sync::oneshot;
+        let (dir, _) = manager();
+        let path = dir.join(format!(".epg-{}.part", Uuid::new_v4()));
+        let lock_path = path.with_extension("lock");
+        let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
+        fs::write(&path, b"active").unwrap();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let task_owner = owner.clone();
+        let caller = tokio::spawn(async move {
+            crate::utils::tokio(hold_spool_for_async(task_owner, async move {
+                let _ = started_tx.send(());
+                let _ = release_rx.await;
+                let _ = finished_tx.send(());
+            }))
+            .await;
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.is_err());
+        drop(owner);
+        assert!(path.exists());
+        assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        release_tx.send(()).unwrap();
+        finished_rx.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while path.exists() || lock_path.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropped_parser_waiter_keeps_kernel_lock_until_blocking_worker_exits() {
+        use tokio::sync::oneshot;
+        let (dir, _) = manager();
+        let path = dir.join(format!(".epg-{}.part", Uuid::new_v4()));
+        let lock_path = path.with_extension("lock");
+        let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
+        fs::write(&path, b"parsing").unwrap();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(0);
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let task_owner = owner.clone();
+        let caller = tokio::spawn(async move {
+            crate::utils::tokio(async move {
+                hold_spool_for_blocking(task_owner, move || {
+                    let _ = started_tx.send(());
+                    release_rx.recv().unwrap();
+                    let _ = finished_tx.send(());
+                })
+                .await
+                .unwrap();
+            })
+            .await;
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.is_err());
+        drop(owner);
+        assert!(path.exists());
+        assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        release_tx.send(()).unwrap();
+        finished_rx.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while path.exists() || lock_path.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
