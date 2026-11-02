@@ -469,9 +469,12 @@ mod tests {
         let stage = orphan(&dir, true);
         let lock = stage.with_extension("lock");
         let now = SystemTime::now();
-        let stats = sweep_stale_with_ops(&dir.0, now, |_, _| {}, |_| {
-            Err(io::Error::from(io::ErrorKind::PermissionDenied))
-        });
+        let stats = sweep_stale_with_ops(
+            &dir.0,
+            now,
+            |_, _| {},
+            |_| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        );
         assert_eq!(stats.removed, 0);
         assert!(stage.exists());
         assert!(lock.exists());
@@ -483,13 +486,18 @@ mod tests {
         let dir = PrivateDir::new();
         let stage = orphan(&dir, true);
         let lock = stage.with_extension("lock");
-        let stats = sweep_stale_with_ops(&dir.0, SystemTime::now(), |_, _| {}, |path| {
-            if path.extension() == Some(std::ffi::OsStr::new("lock")) {
-                Err(io::Error::from(io::ErrorKind::PermissionDenied))
-            } else {
-                fs::remove_file(path)
-            }
-        });
+        let stats = sweep_stale_with_ops(
+            &dir.0,
+            SystemTime::now(),
+            |_, _| {},
+            |path| {
+                if path.extension() == Some(std::ffi::OsStr::new("lock")) {
+                    Err(io::Error::from(io::ErrorKind::PermissionDenied))
+                } else {
+                    fs::remove_file(path)
+                }
+            },
+        );
         assert_eq!(stats.removed, 1);
         assert!(!stage.exists());
         assert!(lock.exists());
