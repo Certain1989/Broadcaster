@@ -282,6 +282,41 @@ mod tests {
         assert!(other.exists());
     }
     #[test]
+    fn hardlinks_and_unsafe_directory_are_not_reclaimed() {
+        let dir = PrivateDir::new();
+        let linked = orphan(&dir, true);
+        let other = dir.0.join("other-user-file");
+        fs::hard_link(&linked, &other).unwrap();
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+        assert!(linked.exists());
+        assert!(other.exists());
+        fs::remove_file(&other).unwrap();
+        // Even a candidate with a released lock must remain untouched if
+        // its containing directory is no longer private.
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+        assert!(linked.exists());
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 1);
+        assert!(!linked.exists());
+    }
+
+    #[test]
+    fn removal_budget_allows_progress_on_repeated_launches() {
+        let dir = PrivateDir::new();
+        let stages: Vec<_> = (0..MAX_REMOVED + 8)
+            .map(|_| orphan(&dir, true))
+            .collect();
+        let now = SystemTime::now();
+        let first = sweep_stale(&dir.0, now);
+        assert!(first.scanned <= MAX_SCANNED);
+        assert_eq!(first.removed, MAX_REMOVED);
+        assert_eq!(stages.iter().filter(|stage| stage.exists()).count(), 8);
+        assert_eq!(sweep_stale(&dir.0, now).removed, 8);
+        assert!(stages.iter().all(|stage| !stage.exists()));
+    }
+
+    #[test]
     fn ordinary_success_and_failure_drop_both_artifacts() {
         let dir = PrivateDir::new();
         for _ in 0..2 {

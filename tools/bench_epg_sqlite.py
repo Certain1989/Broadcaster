@@ -5,6 +5,8 @@
 
 Measures SQLite primitives, NOT GTK application startup or Rust schema validation.
 For bounded comparison: --rows 1000 8000 24000 (default); --modes delete wal.
+Large, explicitly requested runs may populate up to two million rows and can
+consume several GiB of disk in rollback journaling; run only with headroom.
 The first reading is not a provably cold OS filesystem cache.
 """
 import argparse
@@ -130,8 +132,8 @@ def main():
     parser.add_argument('--rows', nargs='+', type=int, default=[1000, 8000, 24000])
     parser.add_argument('--modes', nargs='+', choices=('delete', 'wal'), default=['delete', 'wal'])
     args = parser.parse_args()
-    if any(not 1 <= rows <= 100000 for rows in args.rows):
-        parser.error('each synthetic population must contain 1..100000 rows')
+    if any(not 1 <= rows <= 2000000 for rows in args.rows):
+        parser.error('each synthetic population must contain 1..2000000 rows')
     with tempfile.TemporaryDirectory(prefix='broadcaster-v5-bench-') as name:
         root = Path(name)
         result = {'python_sqlite': sqlite3.sqlite_version, 'python': __import__('sys').version.split()[0],
