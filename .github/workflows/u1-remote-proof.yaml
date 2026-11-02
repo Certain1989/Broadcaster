@@ -463,3 +463,37 @@ jobs:
           echo "U1 x86-64 incremental static delta HTTP update: PASS"
           echo "U1 x86-64 incremental update HTTP body bytes (includes readiness probes): $delta_http_bytes"
           echo "U1 x86-64 incremental update HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-delta-http.log")"
+          # Compare the same x86-64 v1 -> v2 update with ordinary loose objects,
+          # using a separate Flatpak user installation and the unmodified v2 repo.
+          # This is a loopback transport comparison, not a Pages/CDN benchmark.
+          export XDG_DATA_HOME="$RUNNER_TEMP/u1-nodelta-flatpak-data"
+          flatpak --user remote-add --from broadcaster-u1-nodelta \
+            "$RUNNER_TEMP/u1-delta-v1/u1-test.flatpakrepo"
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-u1-nodelta "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$old_installed"
+          python3 -u build-aux/u1/http-meter.py 18392 \
+            "$RUNNER_TEMP/u1-delta-v2/repo" >"$RUNNER_TEMP/u1-nodelta-http.log" 2>&1 &
+          baseline_pid=$!
+          trap 'kill "$server_pid" "$baseline_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18392/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18392/summary >/dev/null
+          flatpak --user remote-modify --url="http://127.0.0.1:18392" broadcaster-u1-nodelta
+          flatpak --user update -y --noninteractive --no-deps "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$new_installed"
+          installed=$(flatpak --user info --show-location "$app")
+          grep -Fx 'u1-nonproduction-content-revision-2' \
+            "$installed/files/share/broadcaster/u1-transport-test-marker.txt"
+          if grep -Fq 'GET /deltas/' "$RUNNER_TEMP/u1-nodelta-http.log"; then
+            echo 'Unexpected static delta request in no-delta control' >&2
+            exit 1
+          fi
+          no_delta_http_bytes=$(awk '/U1_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
+            END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/u1-nodelta-http.log")
+          echo 'U1 x86-64 no-delta loose-object HTTP update: PASS'
+          echo "U1 x86-64 no-delta HTTP body bytes (includes readiness probes): $no_delta_http_bytes"
+          echo "U1 x86-64 no-delta HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-nodelta-http.log")"
+          echo "U1 x86-64 measured delta vs no-delta HTTP body bytes: $delta_http_bytes vs $no_delta_http_bytes"
