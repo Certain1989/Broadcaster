@@ -349,6 +349,8 @@ jobs:
           echo 'U1 trusted-summary onboarding succeeded; unsigned commit installation rejected'
           # Keep the native proof step below the Actions run-script size ceiling.
           bash build-aux/u1/test-summary-signatures.sh
+          # Observational same-origin old-valid-signed-summary replay; no anti-rollback claim.
+          bash build-aux/u1/test-signed-replay.sh
           # Positive system-scope counterpart: this uses a separate test remote
           # and the same signed Devel revisions, never the stable application.
           sudo flatpak --system remote-add --from broadcaster-u1-system \
