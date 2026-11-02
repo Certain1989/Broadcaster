@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Isolated one-time source-only publish.
 """One-shot, behavior-preserving source hygiene on an isolated maintenance branch.
 
 The script and its workflow remove themselves from the final source revision.
