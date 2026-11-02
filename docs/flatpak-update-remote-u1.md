@@ -119,20 +119,38 @@ bandwidth savings or GitHub Pages feasibility.
 
 At exact commit `26c970e57f8888f06bb457b3dfc5a21726371398`,
 [U1 proof run 41362213853](https://github.com/Certain1989/Broadcaster/actions/runs/41362213853)
-and Fast CI both **passed**. Explicit v1-to-v2 static deltas were generated
-for both architecture refs. The dual-architecture repository occupied
-**58,197,992 bytes** with from-empty and incremental deltas; the delta
-directory occupied **16,149,405 bytes across 12 files** (including
-filesystem metadata). A real x86-64 client requested two delta objects
-during a normal loopback HTTP update, verified the new commit and the
-changed installed file, and received **10,278,094 response-body bytes
-across 12 GETs** (including readiness probes). The experiment did not run
-an AArch64 incremental-delta client or measure a matched no-delta update;
-delta **use** is proven on x86-64, but bandwidth **savings** are not.
-A separate no-delta x86-64 control is being added to compare like-for-like
-client update traffic; its outcome remains **pending exact-HEAD CI**.
-These figures exclude production hosting, CDN behaviour, TLS, long-lived
-retention and real multi-version release history.
+and Fast CI passed. Explicit v1-to-v2 static deltas were generated
+for both architecture refs. A real x86-64 client requested two delta objects,
+verified the updated commit and installed content, and received **10,278,094
+HTTP response-body bytes / 12 GETs** (including readiness probes). That
+checkpoint established delta use, not a matched bandwidth comparison.
+
+At exact commit `2065623b1fc535a36282ba9ac16d946246a58177`,
+[U1 proof run 41370900319](https://github.com/Certain1989/Broadcaster/actions/runs/41370900319),
+[Fast CI 41370900318](https://github.com/Certain1989/Broadcaster/actions/runs/41370900318)
+and REUSE **all passed** on 2026-11-02. Both native architecture signed
+update/security/migration jobs and the capacity job passed. In this run the
+dual-architecture repository occupied **42,046,821 bytes** without generated
+deltas, **46,925,257 bytes** with from-empty deltas, and **58,199,538
+bytes** after explicit v1-to-v2 deltas for both refs. The final delta
+directory occupied **16,150,949 bytes / 12 files** (including filesystem
+metadata). The matched x86-64 v1-to-v2 client controls measured:
+
+| Loopback update path | HTTP response-body bytes | GETs |
+| --- | ---: | ---: |
+| Signed incremental static delta | 10,277,934 | 12 |
+| Signed loose objects, no static delta | 11,252,577 | 695 |
+
+Both paths verified the same expected new commit and installed changed
+content, and the no-delta control made no `/deltas/` requests. The delta
+path transferred **974,643 fewer response-body bytes (~8.66%)** and used
+**683 fewer GETs** in this one synthetic x86-64 comparison. Totals include
+readiness probes, exclude headers/TLS/CDN, and vary slightly with
+per-run metadata. This is **local transport evidence**, not a production
+bandwidth or caching forecast; delta storage increased repository occupancy.
+An AArch64 incremental-delta *client* and real multi-version, hosted
+WAN/CDN/retention tests remain unverified. No GitHub Pages site or production
+remote was published.
 
 GitHub Release attachments alone are not an immutable path-preserving OSTree
 object service. If Pages exceeds limits or cannot serve valid update semantics,
