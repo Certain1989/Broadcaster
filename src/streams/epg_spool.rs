@@ -423,26 +423,36 @@ mod tests {
 
     #[test]
     fn concurrent_sweepers_respect_a_busy_lock_and_remove_once() {
-        use std::sync::{Arc, Barrier};
+        use std::sync::mpsc;
         let dir = PrivateDir::new();
         let stage = orphan(&dir, true);
-        let arrived = Arc::new(Barrier::new(2));
-        let proceed = Arc::new(Barrier::new(2));
+        let (arrived_tx, arrived_rx) = mpsc::channel();
+        let (proceed_tx, proceed_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
         let parent = dir.0.clone();
         let now = SystemTime::now();
-        let arrival_worker = arrived.clone();
-        let proceed_worker = proceed.clone();
         let worker = std::thread::spawn(move || {
-            sweep_stale_with_hook(&parent, now, |_, _| {
-                arrival_worker.wait();
-                proceed_worker.wait();
-            })
+            let result = sweep_stale_with_hook(&parent, now, |_, _| {
+                arrived_tx.send(()).expect("sweeper arrival receiver dropped");
+                proceed_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("sweeper release timed out");
+            });
+            finished_tx.send(result).expect("sweeper result receiver dropped");
         });
-        arrived.wait();
-        assert_eq!(sweep_stale(&dir.0, now).removed, 0);
-        assert!(stage.exists());
-        proceed.wait();
-        assert_eq!(worker.join().unwrap().removed, 1);
+        let arrival = arrived_rx.recv_timeout(Duration::from_secs(10));
+        if arrival.is_ok() {
+            assert_eq!(sweep_stale(&dir.0, now).removed, 0);
+            assert!(stage.exists());
+        }
+        // Always release a worker that reached the hook, including on assertion failure.
+        let _ = proceed_tx.send(());
+        let result = finished_rx.recv_timeout(Duration::from_secs(10));
+        if result.is_ok() {
+            worker.join().expect("sweeper panicked");
+        }
+        arrival.expect("first sweeper never reached the before-unlink hook");
+        assert_eq!(result.expect("first sweeper did not complete").removed, 1);
         assert!(!stage.exists());
     }
 
