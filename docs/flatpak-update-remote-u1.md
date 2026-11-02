@@ -117,12 +117,21 @@ The experiment generated from-empty deltas, **not** an explicitly measured
 v1-to-v2 transfer. Those sizes are local filesystem occupancy, not
 bandwidth savings or GitHub Pages feasibility.
 
-A subsequent isolated CI experiment on the U1 branch adds **explicit
-v1-to-v2 deltas for both application architecture refs** and a real
-x86-64 loopback HTTP update that must request delta objects and verify the
-installed changed-content revision. Its transfer and storage measurements
-are **pending exact-HEAD CI**, not yet accepted evidence. Even if successful,
-the result excludes production hosting, CDN behaviour, TLS, long-lived
+At exact commit `26c970e57f8888f06bb457b3dfc5a21726371398`,
+[U1 proof run 41362213853](https://github.com/Certain1989/Broadcaster/actions/runs/41362213853)
+and Fast CI both **passed**. Explicit v1-to-v2 static deltas were generated
+for both architecture refs. The dual-architecture repository occupied
+**58,197,992 bytes** with from-empty and incremental deltas; the delta
+directory occupied **16,149,405 bytes across 12 files** (including
+filesystem metadata). A real x86-64 client requested two delta objects
+during a normal loopback HTTP update, verified the new commit and the
+changed installed file, and received **10,278,094 response-body bytes
+across 12 GETs** (including readiness probes). The experiment did not run
+an AArch64 incremental-delta client or measure a matched no-delta update;
+delta **use** is proven on x86-64, but bandwidth **savings** are not.
+A separate no-delta x86-64 control is being added to compare like-for-like
+client update traffic; its outcome remains **pending exact-HEAD CI**.
+These figures exclude production hosting, CDN behaviour, TLS, long-lived
 retention and real multi-version release history.
 
 GitHub Release attachments alone are not an immutable path-preserving OSTree
