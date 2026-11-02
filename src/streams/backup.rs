@@ -942,7 +942,9 @@ mod tests {
         let candidate = prepared.candidate.path.clone();
         confirm_import(&storage, prepared).unwrap();
         fs::remove_file(candidate).unwrap();
-        assert!(apply_pending(storage.database_path()).is_err());
+        // An abandoned pre-recovery marker must not strand a healthy live DB.
+        apply_pending(storage.database_path()).unwrap();
+        assert!(!sandbox.0.join(REQUEST).exists());
         let name: String = storage
             .connect()
             .unwrap()
