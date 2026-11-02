@@ -359,7 +359,6 @@ mod tests {
         assert!(stages.iter().all(|stage| !stage.exists()));
     }
 
-
     #[test]
     fn leaf_and_lock_substitution_before_unlink_are_rejected() {
         for replace_lock in [false, true] {
@@ -367,7 +366,11 @@ mod tests {
             let old = orphan(&dir, true);
             let marker = old.with_extension("lock");
             let moved = dir.0.join("old-entry");
-            let target = if replace_lock { marker.clone() } else { old.clone() };
+            let target = if replace_lock {
+                marker.clone()
+            } else {
+                old.clone()
+            };
             let mut hit = false;
             let result = sweep_stale_with_hook(&dir.0, SystemTime::now(), |spool, lock| {
                 hit = true;
