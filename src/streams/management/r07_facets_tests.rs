@@ -1295,3 +1295,201 @@ fn r07_native_recycle_removed_source_1280_800() {
 fn r07_native_recycle_removed_source_negative() {
     r07_native_recycle_removed_source(640, 480, true);
 }
+
+// FOCUS-AUD-01/02: exercise the real nested FacetPicker buttons with physical
+// remote key events, rather than seeding a synthetic focus graph.
+fn r07_native_editor_facet_boundaries(width: i32, height: i32, negative: bool) {
+    use crate::streams::{facet_picker::FacetPicker, model::FacetDimension};
+    adw::init().expect("native X11 display");
+    let resources = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+        .expect("compiled app resources");
+    gio::resources_register(&resources);
+    fn find_buttons(widget: &gtk::Widget, label: &str, out: &mut Vec<gtk::Button>) {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            let matches = if label == "remove" {
+                button.icon_name().as_deref() == Some("list-remove-symbolic")
+            } else {
+                button.label().as_deref() == Some(label)
+            };
+            if matches && button.is_mapped() {
+                out.push(button.clone());
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            find_buttons(&current, label, out);
+            child = current.next_sibling();
+        }
+    }
+    fn find_search(widget: &gtk::Widget) -> Option<gtk::SearchEntry> {
+        if let Ok(search) = widget.clone().downcast::<gtk::SearchEntry>() {
+            return Some(search);
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(found) = find_search(&current) {
+                return Some(found);
+            }
+            child = current.next_sibling();
+        }
+        None
+    }
+    fn find_checkbox(widget: &gtk::Widget, label: &str) -> Option<gtk::CheckButton> {
+        if let Ok(check) = widget.clone().downcast::<gtk::CheckButton>() {
+            if check.label().as_deref() == Some(label) {
+                return Some(check);
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            if let Some(found) = find_checkbox(&current, label) {
+                return Some(found);
+            }
+            child = current.next_sibling();
+        }
+        None
+    }
+    let win = adw::Window::new();
+    win.set_default_size(width, height);
+    let shell = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    shell.set_margin_start(12);
+    shell.set_margin_end(12);
+    let language = FacetPicker::new(
+        FacetDimension::Language,
+        &BTreeSet::from(["de".to_owned(), "en".to_owned()]),
+    );
+    let next = gtk::Button::with_label("Country mode");
+    let country = FacetPicker::new(FacetDimension::Country, &BTreeSet::from(["DE".to_owned()]));
+    let footer = gtk::Button::with_label("Save editor");
+    language.link_next(&next);
+    country.link_next(&footer);
+    shell.append(&language.root);
+    shell.append(&next);
+    shell.append(&country.root);
+    shell.append(&footer);
+    win.set_content(Some(&shell));
+    win.present();
+    spin();
+
+    let mut buttons = Vec::new();
+    find_buttons(language.root.upcast_ref(), "remove", &mut buttons);
+    assert_eq!(buttons.len(), 2, "two persisted selected language chips");
+    assert!(buttons[0].grab_focus());
+    inject("Return");
+    let mut remaining = Vec::new();
+    find_buttons(language.root.upcast_ref(), "remove", &mut remaining);
+    assert_eq!(remaining.len(), 1, "one chip removed through physical OK");
+    assert!(
+        !buttons[0].is_mapped(),
+        "old chip focus owner was destroyed"
+    );
+    assert!(
+        remaining[0].has_focus(),
+        "focus transfers to nearest live chip"
+    );
+    inject("Return");
+    let mut removed = Vec::new();
+    find_buttons(language.root.upcast_ref(), "remove", &mut removed);
+    assert!(removed.is_empty());
+    let focus = gtk::prelude::GtkWindowExt::focus(&win).expect("focus after last removal");
+    assert!(
+        focus.is_mapped() && focus.is_sensitive() && language.root.is_ancestor(&focus),
+        "last removed chip must leave focus on live language control"
+    );
+
+    language.focus();
+    spin();
+    let search = find_search(language.root.upcast_ref()).expect("real language search");
+    // Filter to exactly the first actual named checkbox, not a fabricated
+    // candidate or a forced index outside the GtkListBox filter.
+    let check = find_checkbox(language.root.upcast_ref(), "German (de)")
+        .or_else(|| find_checkbox(language.root.upcast_ref(), "Deutsch (de)"))
+        .expect("actual de checkbox");
+    search.set_text(&check.label().unwrap());
+    spin();
+    assert!(check.grab_focus());
+    inject("Up");
+    let owner = gtk::prelude::GtkWindowExt::focus(&win).unwrap();
+    assert!(
+        owner.is_ancestor(&language.root) || language.root.is_ancestor(&owner),
+        "first checkbox Up stays in editor chooser"
+    );
+    assert!(check.grab_focus());
+    inject("Down");
+    let mut done = Vec::new();
+    find_buttons(language.root.upcast_ref(), "Done choosing", &mut done);
+    assert!(
+        done.len() == 1 && done[0].has_focus(),
+        "last visible checkbox Down must reach the explicit exit"
+    );
+    if negative {
+        assert!(
+            footer.has_focus(),
+            "FOCUS_AUD_EXPECTED_NEGATIVE_ORACLE: cannot skip Done"
+        );
+    }
+    inject("Up");
+    assert!(
+        check.has_focus(),
+        "Done Up returns to last filtered checkbox"
+    );
+    inject("Down");
+    inject("Return");
+    assert!(!next.has_focus(), "Done returns to the collapsed chooser");
+    inject("Down");
+    assert!(
+        next.has_focus(),
+        "collapsed chooser Down visits next editor section"
+    );
+    inject("Up");
+    inject("Down");
+    assert!(next.has_focus(), "reciprocal next-section navigation");
+
+    country.focus();
+    spin();
+    let mut country_remove = Vec::new();
+    find_buttons(country.root.upcast_ref(), "remove", &mut country_remove);
+    assert_eq!(country_remove.len(), 1);
+    assert!(country_remove[0].grab_focus());
+    inject("Return");
+    let focus = gtk::prelude::GtkWindowExt::focus(&win).expect("country last remove focus");
+    assert!(
+        country.root.is_ancestor(&focus) && focus.is_mapped(),
+        "country last chip retains a live focus owner"
+    );
+    let mut country_done = Vec::new();
+    find_buttons(
+        country.root.upcast_ref(),
+        "Done choosing",
+        &mut country_done,
+    );
+    assert_eq!(country_done.len(), 1);
+    assert!(country_done[0].grab_focus());
+    inject("Return");
+    inject("Down");
+    assert!(
+        footer.has_focus(),
+        "country Done exits to editor Save boundary"
+    );
+    inject("Up");
+    assert!(!footer.has_focus(), "Save Up returns to country chooser");
+    win.destroy();
+}
+
+#[test]
+#[ignore = "FOCUS-AUD mapped metadata language/country chip and picker boundary at 640x480"]
+fn r07_native_editor_facets_640_480() {
+    r07_native_editor_facet_boundaries(640, 480, false);
+}
+
+#[test]
+#[ignore = "FOCUS-AUD mapped metadata language/country chip and picker boundary at 1280x800"]
+fn r07_native_editor_facets_1280_800() {
+    r07_native_editor_facet_boundaries(1280, 800, false);
+}
+
+#[test]
+#[ignore = "FOCUS-AUD deliberate skipped Done action must be detected"]
+fn r07_native_editor_facets_negative() {
+    r07_native_editor_facet_boundaries(640, 480, true);
+}

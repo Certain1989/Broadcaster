@@ -524,6 +524,7 @@ fn render_selected(
     kind: FacetDimension,
     selected: &Rc<RefCell<BTreeSet<String>>>,
     checks: &Rc<RefCell<Vec<(String, gtk::CheckButton)>>>,
+    chooser: &gtk::Expander,
 ) {
     while let Some(child) = box_.first_child() {
         box_.remove(&child);
@@ -550,7 +551,14 @@ fn render_selected(
         let selected = selected.clone();
         let checks = checks.clone();
         let box_weak = box_.downgrade();
-        remove.connect_clicked(move |_| {
+        let chooser_weak = chooser.downgrade();
+        remove.connect_clicked(move |button| {
+            let restore_focus = button.has_focus();
+            let position = selected
+                .borrow()
+                .iter()
+                .position(|value| value == &code)
+                .unwrap_or(0);
             selected.borrow_mut().remove(&code);
             for (known, button) in checks.borrow().iter() {
                 if known == &code {
@@ -558,7 +566,25 @@ fn render_selected(
                 }
             }
             if let Some(box_) = box_weak.upgrade() {
-                render_selected(&box_, kind, &selected, &checks);
+                if let Some(chooser) = chooser_weak.upgrade() {
+                    render_selected(&box_, kind, &selected, &checks, &chooser);
+                    // The old Remove button was destroyed. Move to the nearest
+                    // surviving chip, or to the chooser when none remain.
+                    if restore_focus {
+                        let mut row = box_.first_child();
+                        for _ in 0..position {
+                            if row.as_ref().is_some_and(|w| w.next_sibling().is_some()) {
+                                row = row.and_then(|w| w.next_sibling());
+                            }
+                        }
+                        let next = row
+                            .and_then(|w| w.last_child())
+                            .and_then(|w| w.downcast::<gtk::Button>().ok());
+                        if !next.is_some_and(|button| button.grab_focus()) {
+                            chooser.grab_focus();
+                        }
+                    }
+                }
             }
         });
     }
@@ -638,6 +664,14 @@ impl FacetPicker {
                 human_label(kind, code).to_lowercase(),
             )
         });
+        let done = gtk::Button::with_label(&gettext("Done choosing"));
+        let done_for_click = chooser.downgrade();
+        done.connect_clicked(move |_| {
+            if let Some(chooser) = done_for_click.upgrade() {
+                chooser.set_expanded(false);
+                chooser.grab_focus();
+            }
+        });
         let error = gtk::Label::new(None);
         error.set_wrap(true);
         error.set_xalign(0.0);
@@ -653,6 +687,7 @@ impl FacetPicker {
             let checks_for_keys = Rc::downgrade(&checks);
             let check_for_keys = check.downgrade();
             let chooser_for_keys = chooser.downgrade();
+            let done_for_keys = done.downgrade();
             key_control.connect_key_pressed(move |_, key, _, modifiers| {
                 if !modifiers.is_empty() {
                     return gtk::glib::Propagation::Proceed;
@@ -681,9 +716,14 @@ impl FacetPicker {
                             }
                             next += direction;
                         }
-                        if direction < 0
-                            && chooser_for_keys.upgrade().is_some_and(|w| w.grab_focus())
-                        {
+                        let edge = if direction < 0 {
+                            chooser_for_keys
+                                .upgrade()
+                                .map(|w| w.upcast::<gtk::Widget>())
+                        } else {
+                            done_for_keys.upgrade().map(|w| w.upcast::<gtk::Widget>())
+                        };
+                        if edge.is_some_and(|widget| widget.grab_focus()) {
                             return gtk::glib::Propagation::Stop;
                         }
                     }
@@ -695,6 +735,7 @@ impl FacetPicker {
             let checks_weak = Rc::downgrade(&checks);
             let selected_box_weak = selected_box.downgrade();
             let error_weak = error.downgrade();
+            let chooser_for_toggle = chooser.clone();
             check.connect_toggled(move |button| {
                 if button.is_active() {
                     if selected.borrow().len() >= 64 && !selected.borrow().contains(&code) {
@@ -714,7 +755,7 @@ impl FacetPicker {
                 if let (Some(selected_box), Some(checks)) =
                     (selected_box_weak.upgrade(), checks_weak.upgrade())
                 {
-                    render_selected(&selected_box, kind, &selected, &checks);
+                    render_selected(&selected_box, kind, &selected, &checks, &chooser_for_toggle);
                 }
             });
         }
@@ -726,7 +767,7 @@ impl FacetPicker {
                 && modifiers.is_empty()
                 && chooser_weak
                     .upgrade()
-                    .is_some_and(|widget| widget.has_focus())
+                    .is_some_and(|widget| widget.has_focus() && widget.is_expanded())
             {
                 if let Some(checks) = checks_weak.upgrade() {
                     if let Some((_, first)) = checks
@@ -746,8 +787,32 @@ impl FacetPicker {
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_size_request(-1, 196);
+        scroller.set_focusable(false);
         scroller.set_child(Some(&list));
         panel.append(&scroller);
+        panel.append(&done);
+        // The final selection has an explicit way out of the long list.
+        // A second Down moves into the manual editor where applicable.
+        let done_up = gtk::EventControllerKey::new();
+        let checks_for_done = Rc::downgrade(&checks);
+        done_up.connect_key_pressed(move |_, key, _, modifiers| {
+            if modifiers.is_empty() && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up) {
+                if let Some(checks) = checks_for_done.upgrade() {
+                    if let Some((_, last)) = checks
+                        .borrow()
+                        .iter()
+                        .rev()
+                        .find(|(_, button)| button.parent().is_some_and(|row| row.is_visible()))
+                    {
+                        if last.grab_focus() {
+                            return gtk::glib::Propagation::Stop;
+                        }
+                    }
+                }
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        done.add_controller(done_up);
         let search_weak = search.downgrade();
         list.set_filter_func(move |row| {
             let needle = search_weak
@@ -771,6 +836,30 @@ impl FacetPicker {
         let manual = if kind == FacetDimension::Language {
             let advanced =
                 gtk::Expander::new(Some(&gettext("Advanced: add a language tag manually")));
+            let done_to_manual = gtk::EventControllerKey::new();
+            let advanced_target = advanced.downgrade();
+            done_to_manual.connect_key_pressed(move |_, key, _, modifiers| {
+                if modifiers.is_empty()
+                    && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+                    && advanced_target.upgrade().is_some_and(|w| w.grab_focus())
+                {
+                    return gtk::glib::Propagation::Stop;
+                }
+                gtk::glib::Propagation::Proceed
+            });
+            done.add_controller(done_to_manual);
+            let advanced_to_done = gtk::EventControllerKey::new();
+            let done_target = done.downgrade();
+            advanced_to_done.connect_key_pressed(move |_, key, _, modifiers| {
+                if modifiers.is_empty()
+                    && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                    && done_target.upgrade().is_some_and(|w| w.grab_focus())
+                {
+                    return gtk::glib::Propagation::Stop;
+                }
+                gtk::glib::Propagation::Proceed
+            });
+            advanced.add_controller(advanced_to_done);
             let manual_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             let entry = gtk::Entry::new();
             entry.set_placeholder_text(Some(&gettext("Example: de-DE (language tag)")));
@@ -803,6 +892,7 @@ impl FacetPicker {
             let checks = checks.clone();
             let selected_box = selected_box.clone();
             let entry_for_click = entry.clone();
+            let chooser_for_add = chooser.clone();
             add.connect_clicked(
                 move |_| match validate_manual_language(&entry_for_click.text()) {
                     Ok(code)
@@ -817,7 +907,7 @@ impl FacetPicker {
                                 button.set_active(true);
                             }
                         }
-                        render_selected(&selected_box, kind, &selected, &checks);
+                        render_selected(&selected_box, kind, &selected, &checks, &chooser_for_add);
                         manual_error.set_text("");
                         entry_for_click.set_text("");
                     }
@@ -834,7 +924,7 @@ impl FacetPicker {
         chooser.set_child(Some(&panel));
         root.append(&chooser);
         root.append(&error);
-        render_selected(&selected_box, kind, &selected, &checks);
+        render_selected(&selected_box, kind, &selected, &checks, &chooser);
         Self {
             root,
             kind,
@@ -883,7 +973,13 @@ impl FacetPicker {
             check.set_active(true);
         } else {
             self.selected.borrow_mut().insert(code.to_owned());
-            render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
+            render_selected(
+                &self.selected_box,
+                self.kind,
+                &self.selected,
+                &self.checks,
+                &self.chooser,
+            );
         }
     }
 
@@ -899,7 +995,13 @@ impl FacetPicker {
             check.set_active(false);
         } else {
             self.selected.borrow_mut().remove(code);
-            render_selected(&self.selected_box, self.kind, &self.selected, &self.checks);
+            render_selected(
+                &self.selected_box,
+                self.kind,
+                &self.selected,
+                &self.checks,
+                &self.chooser,
+            );
         }
     }
 
@@ -915,6 +1017,45 @@ impl FacetPicker {
         let code = validate_manual_language(tag)?;
         self.selected.borrow_mut().insert(code);
         Ok(())
+    }
+
+    // A collapsed nested chooser must provide an explicit remote exit into
+    // the next editor section, with the inverse edge back to the chooser.
+    pub(crate) fn link_next(&self, next: &impl IsA<gtk::Widget>) {
+        let following = next.as_ref().downgrade();
+        let down = gtk::EventControllerKey::new();
+        down.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let chooser = self.chooser.downgrade();
+        down.connect_key_pressed(move |_, key, _, modifiers| {
+            if modifiers.is_empty()
+                && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+                && chooser
+                    .upgrade()
+                    .is_some_and(|w| w.has_focus() && !w.is_expanded())
+                && following
+                    .upgrade()
+                    .is_some_and(|w| w.is_sensitive() && w.grab_focus())
+            {
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        self.chooser.add_controller(down);
+        let previous = self.chooser.downgrade();
+        let up = gtk::EventControllerKey::new();
+        up.set_propagation_phase(gtk::PropagationPhase::Capture);
+        up.connect_key_pressed(move |_, key, _, modifiers| {
+            if modifiers.is_empty()
+                && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                && previous
+                    .upgrade()
+                    .is_some_and(|w| w.is_sensitive() && w.grab_focus())
+            {
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        next.add_controller(up);
     }
 
     pub(crate) fn focus(&self) {

@@ -1262,6 +1262,41 @@ fn choose_database_import(view: &TvStreamsView) {
     ));
 }
 
+// Keep the dynamically appended quit action reachable in both directions.
+// This exact helper is also exercised by native D-pad regression tests.
+fn link_restore_quit_controls(keep: &gtk::Button, quit: &gtk::Button) {
+    let back_to_keep = gtk::EventControllerKey::new();
+    back_to_keep.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let keep_target = keep.downgrade();
+    back_to_keep.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && keep_target
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    quit.add_controller(back_to_keep);
+    let forward_to_quit = gtk::EventControllerKey::new();
+    forward_to_quit.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let quit_target = quit.downgrade();
+    forward_to_quit.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && quit_target
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    keep.add_controller(forward_to_quit);
+}
+
 fn confirm_database_restore(
     view: &TvStreamsView,
     service: StreamsService,
@@ -1313,6 +1348,8 @@ fn confirm_database_restore(
                 dialog,
                 #[weak]
                 status,
+                #[weak]
+                cancel,
                 async move {
                     match service.confirm_database_import(import).await {
                         Ok(()) => {
@@ -1322,6 +1359,7 @@ fn confirm_database_restore(
                                 content.append(&quit);
                             }
                             quit.connect_clicked(|_| crate::application::TvApplication::get().quit());
+                            link_restore_quit_controls(&cancel, &quit);
                             quit.grab_focus();
                         }
                         Err(_) => status.set_text(&gettext("Restore staging could not be confirmed. The running database is unchanged. A pending request, if published, will be reconciled safely at next startup; do not start another refresh before restarting.")),
@@ -2800,6 +2838,41 @@ mod c1_mapped_native_diagnostic {
     use crate::{application::TvApplication, streams::view::TvStreamsView};
     use std::{thread, time::Duration};
 
+    // FOCUS-AUD-05: same production quit/keep key controller with live GTK
+    // capture and physical XTest; never stage/replace a real owner database.
+    fn d1_native_quit_focus(width: i32, height: i32) {
+        adw::init().expect("native GTK display");
+        let win = adw::Window::new();
+        win.set_default_size(width, height);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let keep = gtk::Button::with_label("Keep Current Database");
+        let quit = gtk::Button::with_label("Close Broadcaster Now");
+        body.append(&keep);
+        body.append(&quit);
+        super::link_restore_quit_controls(&keep, &quit);
+        win.set_content(Some(&body));
+        win.present();
+        spin();
+        assert!(quit.grab_focus());
+        inject("Up");
+        assert!(keep.has_focus(), "staged Quit Up -> Keep");
+        inject("Down");
+        assert!(quit.has_focus(), "Keep Down -> staged Quit");
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD staged restore quit/keep physical remote compact"]
+    fn d1_native_quit_focus_640_480() {
+        d1_native_quit_focus(640, 480);
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD staged restore quit/keep physical remote TV"]
+    fn d1_native_quit_focus_1280_800() {
+        d1_native_quit_focus(1280, 800);
+    }
+
     pub(super) fn spin() {
         for _ in 0..20 {
             while glib::MainContext::default().pending() {
@@ -4229,8 +4302,58 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     },
                     "first 30 selected-guide exact results",
                 );
+                let matches = || {
+                    c4_picker_buttons(root)
+                        .into_iter()
+                        .filter(|button| {
+                            button.label().is_some_and(|label| {
+                                label.contains("SearchMe") && label.contains("— [")
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                };
+                // FOCUS-AUD-03: start at the actual OSK launcher and reach
+                // every mapped result, then the pager, using physical arrows.
+                let keyboard = c4_picker_buttons(root)
+                    .into_iter()
+                    .find(|button| {
+                        button.icon_name().as_deref() == Some("input-keyboard-symbolic")
+                            && button.is_mapped()
+                    })
+                    .expect("mapped advanced search keyboard launcher");
+                assert!(keyboard.grab_focus());
+                inject("Down");
+                let first_page = matches();
+                assert_eq!(first_page.len(), 30);
+                assert!(
+                    first_page[0].has_focus(),
+                    "OSK launcher Down reaches first result"
+                );
+                for _ in 1..first_page.len() {
+                    inject("Down");
+                }
+                assert!(
+                    first_page[29].has_focus(),
+                    "all 30 physical result actions reachable"
+                );
+                inject("Up");
+                assert!(
+                    first_page[28].has_focus(),
+                    "result inverse moves to previous live row"
+                );
+                inject("Down");
                 let next = c4_picker_button(root, "Next");
-                assert!(next.is_sensitive() && next.grab_focus());
+                inject("Down");
+                assert!(
+                    next.is_sensitive() && next.has_focus(),
+                    "last first-page result Down reaches enabled Next"
+                );
+                inject("Up");
+                assert!(
+                    first_page[29].has_focus(),
+                    "Next Up returns to last current result"
+                );
+                inject("Down");
                 inject("Return");
                 wait(
                     &|| {
@@ -4244,6 +4367,46 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             == 6
                     },
                     "second page with six exact results",
+                );
+                let second_page = matches();
+                assert_eq!(second_page.len(), 6);
+                assert!(
+                    second_page[0].has_focus(),
+                    "pager action replaces results and transfers focus to first live row"
+                );
+                for _ in 1..second_page.len() {
+                    inject("Down");
+                }
+                assert!(
+                    second_page[5].has_focus(),
+                    "last second-page result reachable"
+                );
+                inject("Down");
+                let previous = c4_picker_button(root, "Previous");
+                assert!(
+                    previous.has_focus(),
+                    "last second-page result Down reaches Previous"
+                );
+                inject("Down");
+                let settings = c4_picker_button(root, "Change guide / playlist exception…");
+                assert!(settings.has_focus(), "pager Down reaches guide action");
+                inject("Down");
+                let cancel = c4_picker_button(root, "Cancel");
+                assert!(
+                    cancel.has_focus(),
+                    "guide action Down reaches footer Cancel"
+                );
+                inject("Up");
+                assert!(settings.has_focus(), "Cancel Up reaches guide action");
+                inject("Up");
+                assert!(
+                    previous.has_focus(),
+                    "guide action Up returns to enabled pager"
+                );
+                inject("Up");
+                assert!(
+                    second_page[5].has_focus(),
+                    "pager Up returns to last current result"
                 );
                 // Real OSK launcher, physical arrows on its live preview and
                 // physical Cancel. Never commit a fabricated search result.

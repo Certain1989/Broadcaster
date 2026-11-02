@@ -778,6 +778,9 @@ jobs:
             c4_native_favourites_640_480 c4_native_favourites_1280_800 \
             c4_native_mapping_640_480 c4_native_mapping_1280_800 \
             r07_native_facets_640_480 r07_native_facets_1280_800 \
+            r07_native_editor_facets_640_480 r07_native_editor_facets_1280_800 \
+            d1_native_quit_focus_640_480 d1_native_quit_focus_1280_800 \
+            osk_mapped_mpv_empty_header_640_480 osk_mapped_mpv_empty_header_1280_800 \
             r07_native_popup_search_640_480 r07_native_popup_search_1280_800 \
             r07_native_playlist_guide_640_480 r07_native_playlist_guide_1280_800 \
             r07_native_e08_action_graph_640_480 r07_native_e08_action_graph_1280_800; do
@@ -856,6 +859,23 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "R07 source-qualified facet focus negative oracle rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-focus-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked r07_native_editor_facets_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "FOCUS-AUD skipped-selection oracle unexpectedly passed" >&2
+            exit 1
+          fi
+          if ! grep -Fq FOCUS_AUD_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "FOCUS-AUD wrong-target failure was unrelated" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "FOCUS-AUD deliberate skipped editor selection correctly rejected"
           negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
