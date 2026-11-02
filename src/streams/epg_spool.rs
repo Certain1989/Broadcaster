@@ -440,8 +440,10 @@ mod tests {
         let first = thread::spawn(move || {
             let result = sweep_stale_with_hook(&parent, now, |_, _| {
                 let _ = arrived_tx.send(());
+                // The main thread can spend one deadline waiting for arrival
+                // and another waiting for the contender before releasing us.
                 release_rx
-                    .recv_timeout(RENDEZVOUS_LIMIT)
+                    .recv_timeout(RENDEZVOUS_LIMIT * 3)
                     .expect("first sweeper was not released within the deadline");
             });
             let _ = first_tx.send(result);
