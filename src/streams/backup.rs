@@ -793,13 +793,28 @@ mod tests {
         // A second initializer starts while the first owns the mutex and must
         // then observe the durable error instead of opening SQLite.
         std::thread::scope(|scope| {
-            let first = scope.spawn(|| {
-                check_startup_restore_with(&storage, &lock, &armed, &failed, &processed, |_| {
-                    restore_attempts.fetch_add(1, Ordering::SeqCst);
-                    entered_tx.send(()).unwrap();
-                    release_rx.recv().unwrap();
-                    Err(StorageError::StorageFailure)
-                })
+            // The receiver is Send but not Sync. Move the rendezvous handles
+            // into the first thread, retaining shared references to gate state.
+            let first_storage = &storage;
+            let first_lock = &lock;
+            let first_armed = &armed;
+            let first_failed = &failed;
+            let first_processed = &processed;
+            let first_attempts = &restore_attempts;
+            let first = scope.spawn(move || {
+                check_startup_restore_with(
+                    first_storage,
+                    first_lock,
+                    first_armed,
+                    first_failed,
+                    first_processed,
+                    |_| {
+                        first_attempts.fetch_add(1, Ordering::SeqCst);
+                        entered_tx.send(()).unwrap();
+                        release_rx.recv().unwrap();
+                        Err(StorageError::StorageFailure)
+                    },
+                )
             });
             entered_rx.recv().unwrap();
             let second = scope.spawn(|| {
