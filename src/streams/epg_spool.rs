@@ -304,9 +304,7 @@ mod tests {
     #[test]
     fn removal_budget_allows_progress_on_repeated_launches() {
         let dir = PrivateDir::new();
-        let stages: Vec<_> = (0..MAX_REMOVED + 8)
-            .map(|_| orphan(&dir, true))
-            .collect();
+        let stages: Vec<_> = (0..MAX_REMOVED + 8).map(|_| orphan(&dir, true)).collect();
         let now = SystemTime::now();
         let first = sweep_stale(&dir.0, now);
         assert!(first.scanned <= MAX_SCANNED);
