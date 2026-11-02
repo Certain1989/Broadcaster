@@ -351,8 +351,14 @@ jobs:
   # without changing either native signed-update integration environment.
   static-delta-capacity:
     needs: bundles
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.variant.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -429,8 +435,10 @@ jobs:
           echo "U1 static delta directory bytes with incremental deltas: $(du -sb "$repo/deltas" | cut -f1)"
           echo "U1 static delta files with incremental deltas: $(find "$repo/deltas" -type f | wc -l)"
           ostree --repo="$repo" static-delta list
-          # Verify a real x86-64 client uses the incremental delta over
-          # loopback HTTP. This is neither CDN hosting nor a stable update.
+          # Verify a native client uses the incremental delta over loopback HTTP
+          # on each architecture. This is neither CDN hosting nor a stable update.
+          arch="${{ matrix.variant.arch }}"
+          test "$(flatpak --default-arch)" = "$arch"
           export XDG_DATA_HOME="$RUNNER_TEMP/u1-delta-flatpak-data"
           app=io.github.Certain1989.Broadcaster.Devel
           flatpak --user remote-add --from broadcaster-u1-delta \
@@ -439,7 +447,7 @@ jobs:
             broadcaster-u1-delta "$app"
           old_installed=$(flatpak --user info --show-commit "$app")
           test "$old_installed" = "$(ostree --repo="$RUNNER_TEMP/u1-delta-v1/repo" rev-parse \
-            app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
+            app/io.github.Certain1989.Broadcaster.Devel/$arch/master)"
           python3 -u build-aux/u1/http-meter.py 18391 "$repo" >"$RUNNER_TEMP/u1-delta-http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -453,17 +461,17 @@ jobs:
           new_installed=$(flatpak --user info --show-commit "$app")
           test "$new_installed" != "$old_installed"
           test "$new_installed" = "$(ostree --repo="$repo" rev-parse \
-            app/io.github.Certain1989.Broadcaster.Devel/x86_64/master)"
+            app/io.github.Certain1989.Broadcaster.Devel/$arch/master)"
           installed=$(flatpak --user info --show-location "$app")
           grep -Fx 'u1-nonproduction-content-revision-2' \
             "$installed/files/share/broadcaster/u1-transport-test-marker.txt"
           grep -F 'GET /deltas/' "$RUNNER_TEMP/u1-delta-http.log"
           delta_http_bytes=$(awk '/U1_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
             END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/u1-delta-http.log")
-          echo "U1 x86-64 incremental static delta HTTP update: PASS"
-          echo "U1 x86-64 incremental update HTTP body bytes (includes readiness probes): $delta_http_bytes"
-          echo "U1 x86-64 incremental update HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-delta-http.log")"
-          # Compare the same x86-64 v1 -> v2 update with ordinary loose objects,
+          echo "U1 $arch incremental static delta HTTP update: PASS"
+          echo "U1 $arch incremental update HTTP body bytes (includes readiness probes): $delta_http_bytes"
+          echo "U1 $arch incremental update HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-delta-http.log")"
+          # Compare the same native-arch v1 -> v2 update with ordinary loose objects,
           # using a separate Flatpak user installation and the unmodified v2 repo.
           # This is a loopback transport comparison, not a Pages/CDN benchmark.
           export XDG_DATA_HOME="$RUNNER_TEMP/u1-nodelta-flatpak-data"
@@ -493,7 +501,7 @@ jobs:
           fi
           no_delta_http_bytes=$(awk '/U1_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
             END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/u1-nodelta-http.log")
-          echo 'U1 x86-64 no-delta loose-object HTTP update: PASS'
-          echo "U1 x86-64 no-delta HTTP body bytes (includes readiness probes): $no_delta_http_bytes"
-          echo "U1 x86-64 no-delta HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-nodelta-http.log")"
-          echo "U1 x86-64 measured delta vs no-delta HTTP body bytes: $delta_http_bytes vs $no_delta_http_bytes"
+          echo "U1 $arch no-delta loose-object HTTP update: PASS"
+          echo "U1 $arch no-delta HTTP body bytes (includes readiness probes): $no_delta_http_bytes"
+          echo "U1 $arch no-delta HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/u1-nodelta-http.log")"
+          echo "U1 $arch measured delta vs no-delta HTTP body bytes: $delta_http_bytes vs $no_delta_http_bytes"
