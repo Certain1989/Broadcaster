@@ -70,7 +70,7 @@ if [[ "$outcome" == error ]]; then
 fi
 if (( after_requests > before_requests )); then
   echo 'U1 replay diagnostic: replay-window HTTP requests (up to 40):'
-  grep '"GET /' "$root/http.log" | tail -n "$((after_requests-before_requests))" | head -n 40
+  grep '"GET /' "$root/http.log" | tail -n "$((after_requests-before_requests))" | sed -n '1,40p'
 fi
 if (( after_requests <= before_requests )); then
   echo 'U1 replay diagnostic: INCONCLUSIVE metadata freshness (no observed replay HTTP GET)'
