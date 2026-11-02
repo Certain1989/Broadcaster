@@ -397,31 +397,13 @@ pub(crate) fn prepare_import_cancellable(
     check_space(parent, source_meta.len().saturating_mul(2))?;
     let candidate = Temporary::new(random_file(parent, CANDIDATE_PREFIX));
     let mut writer = create_private(&candidate.path)?;
-    let mut copied = 0u64;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err(StorageError::Declined);
-        }
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|_| StorageError::StorageFailure)?;
-        if read == 0 {
-            break;
-        }
-        copied = copied
-            .checked_add(read as u64)
-            .ok_or(StorageError::IncompatibleDatabase)?;
-        if copied > MAX_SNAPSHOT_BYTES || copied > source_meta.len() {
-            return Err(StorageError::IncompatibleDatabase);
-        }
-        writer
-            .write_all(&buffer[..read])
-            .map_err(|_| StorageError::StorageFailure)?;
-    }
-    if copied != source_meta.len() {
-        return Err(StorageError::IncompatibleDatabase);
-    }
+    copy_import_bytes(
+        &mut reader,
+        &mut writer,
+        source_meta.len(),
+        cancelled,
+        |_| Ok(()),
+    )?;
     writer
         .sync_all()
         .map_err(|_| StorageError::StorageFailure)?;
@@ -442,6 +424,48 @@ pub(crate) fn prepare_import_cancellable(
         candidate,
         counts: summary,
     })
+}
+
+/// The same bounded copy path is exercised by production imports and test
+/// failures. The callback is an inert no-op in production, but lets tests
+/// deterministically cancel *after* data was copied, without timing races.
+fn copy_import_bytes(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    expected_len: u64,
+    cancelled: &AtomicBool,
+    mut after_chunk: impl FnMut(u64) -> StorageResult<()>,
+) -> StorageResult<()> {
+    let mut copied = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(StorageError::Declined);
+        }
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|_| StorageError::StorageFailure)?;
+        if read == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(read as u64)
+            .ok_or(StorageError::IncompatibleDatabase)?;
+        if copied > MAX_SNAPSHOT_BYTES || copied > expected_len {
+            return Err(StorageError::IncompatibleDatabase);
+        }
+        writer
+            .write_all(&buffer[..read])
+            .map_err(|_| StorageError::StorageFailure)?;
+        after_chunk(copied)?;
+    }
+    if copied != expected_len {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(StorageError::Declined);
+    }
+    Ok(())
 }
 
 /// Confirmation does not touch the currently open database. A fixed private
@@ -553,6 +577,15 @@ fn rollback(recovery: &Path, database: &Path) -> StorageResult<()> {
 }
 
 fn apply_pending(database: &Path) -> StorageResult<()> {
+    apply_pending_with_sync(database, sync_dir)
+}
+
+// The journal fsync boundaries are injectable only to exercise actual
+// restart/rollback control flow, not a mock SQLite replacement.
+fn apply_pending_with_sync(
+    database: &Path,
+    mut sync: impl FnMut(&Path) -> StorageResult<()>,
+) -> StorageResult<()> {
     let parent = database.parent().ok_or(StorageError::InvalidInput)?;
     storage::ensure_private_parent(database)?;
     let marker = parent.join(REQUEST);
@@ -609,7 +642,7 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
             Err(_) => return Err(StorageError::PermissionDenied),
         }
         fs::remove_file(&marker).map_err(|_| StorageError::StorageFailure)?;
-        sync_dir(parent)?;
+        sync(parent)?;
         return Ok(());
     }
     // An invalid/corrupt candidate before recovery creation may also be
@@ -625,7 +658,7 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
             rollback(&recovery, database)?;
         }
         fs::remove_file(&marker).map_err(|_| StorageError::StorageFailure)?;
-        sync_dir(parent)?;
+        sync(parent)?;
         return Ok(());
     }
     let (import, _) = verify_snapshot(&candidate, false)?;
@@ -641,17 +674,17 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
         drop(old);
         let (check, _) = verify_snapshot(&recovery_stage.path, false)?;
         drop(check);
-        sync_dir(parent)?;
+        sync(parent)?;
         fs::hard_link(&recovery_stage.path, &recovery).map_err(|_| StorageError::StorageFailure)?;
-        sync_dir(parent)?;
+        sync(parent)?;
         drop(recovery_stage);
-        sync_dir(parent)?;
+        sync(parent)?;
     } else {
         let (check, _) = verify_snapshot(&recovery, false)?;
         drop(check);
     }
     fs::rename(&candidate, database).map_err(|_| StorageError::StorageFailure)?;
-    sync_dir(parent)?;
+    sync(parent)?;
     if Storage::at(database)
         .connect()
         .and_then(|connection| storage::validate_snapshot_schema(&connection, SCHEMA_VERSION))
@@ -661,7 +694,7 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
         return Err(StorageError::CorruptDatabase);
     }
     fs::remove_file(&marker).map_err(|_| StorageError::StorageFailure)?;
-    sync_dir(parent)
+    sync(parent)
 }
 
 #[cfg(test)]
@@ -1195,5 +1228,121 @@ mod tests {
             .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn copy_import_cancels_after_first_chunk_and_rejects_partial_write() {
+        use std::io::{self, Cursor};
+        let content = vec![0x57u8; 180 * 1024];
+        let cancelled = AtomicBool::new(false);
+        let mut reader = Cursor::new(content.as_slice());
+        let mut output = Vec::new();
+        let result = copy_import_bytes(
+            &mut reader,
+            &mut output,
+            content.len() as u64,
+            &cancelled,
+            |written| {
+                assert_eq!(written, 64 * 1024);
+                cancelled.store(true, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err(StorageError::Declined));
+        assert_eq!(output.len(), 64 * 1024, "the copy actually started");
+
+        // Simulate a short write followed by ENOSPC within write_all. The
+        // importer must not treat partial success as a valid snapshot.
+        struct SpaceLimitedWriter {
+            remaining: usize,
+            written: usize,
+        }
+        impl Write for SpaceLimitedWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.remaining == 0 {
+                    return Err(io::Error::from_raw_os_error(28)); // Linux ENOSPC
+                }
+                let count = self.remaining.min(buf.len());
+                self.remaining -= count;
+                self.written += count;
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut short_writer = SpaceLimitedWriter {
+            remaining: 32 * 1024,
+            written: 0,
+        };
+        let mut reader = Cursor::new(content.as_slice());
+        let no_cancel = AtomicBool::new(false);
+        assert_eq!(
+            copy_import_bytes(
+                &mut reader,
+                &mut short_writer,
+                content.len() as u64,
+                &no_cancel,
+                |_| Ok(())
+            ),
+            Err(StorageError::StorageFailure)
+        );
+        assert_eq!(short_writer.written, 32 * 1024);
+    }
+
+    #[test]
+    fn restart_faults_at_each_recovery_sync_preserve_valid_old_or_new_rows() {
+        // Five phases: before recovery publication, after hard-link of
+        // recovery, after stage cleanup, after import rename, and after
+        // removing the marker. Every induced failure must be detected, and
+        // a subsequent startup must open either the intact original data or
+        // a validated complete imported snapshot, never an incomplete DB.
+        for fail_at in 1..=5usize {
+            let sandbox = Sandbox::new();
+            let storage = sandbox.storage();
+            storage.initialize().unwrap();
+            seed(&storage, "imported");
+            let backup = sandbox.0.join("backup.sqlite3");
+            export(&storage, &backup).unwrap();
+            storage
+                .connect()
+                .unwrap()
+                .execute("UPDATE iptv_sources SET name='old'", [])
+                .unwrap();
+            let prepared = prepare_import(&storage, &backup).unwrap();
+            confirm_import(&storage, prepared).unwrap();
+            let mut sync_calls = 0usize;
+            let fail_result = apply_pending_with_sync(storage.database_path(), |dir| {
+                sync_calls += 1;
+                if sync_calls == fail_at {
+                    return Err(StorageError::StorageFailure);
+                }
+                sync_dir(dir)
+            });
+            assert_eq!(
+                fail_result,
+                Err(StorageError::StorageFailure),
+                "phase {fail_at}"
+            );
+            assert_eq!(sync_calls, fail_at, "injection hit phase {fail_at}");
+            // A restart after any phase must safely reconcile the journal.
+            apply_pending(storage.database_path()).unwrap();
+            apply_pending(storage.database_path()).unwrap();
+            let name: String = storage
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT name FROM iptv_sources WHERE id='playlist-1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let expected = if fail_at == 4 { "old" } else { "imported" };
+            assert_eq!(name, expected, "phase {fail_at}");
+            assert!(
+                !sandbox.0.join(REQUEST).exists(),
+                "stale journal phase {fail_at}"
+            );
+        }
     }
 }
