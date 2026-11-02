@@ -296,30 +296,45 @@ jobs:
             exit 1
           fi
           echo 'U1 trusted-summary onboarding succeeded; unsigned commit installation rejected'
-          # Negative: signed commits and summary stay intact, but summary.sig is
-          # missing. A FRESH user client must reject it without cached remote data.
+          # Negative: the commit objects and summary are signed, but the
+          # summary signature is missing. The default .flatpakrepo onboarding
+          # must NOT be mistaken for summary-signature enforcement: OSTree
+          # defaults gpg-verify-summary to false. Test an explicitly enabled
+          # policy on a separate disposable user installation instead.
           unsigned_summary_repo="$RUNNER_TEMP/u1-unsigned-summary/repo"
           mkdir -p "$(dirname "$unsigned_summary_repo")"
           cp -a "$RUNNER_TEMP/u1-v2/repo" "$unsigned_summary_repo"
           test -s "$unsigned_summary_repo/summary" && test -s "$unsigned_summary_repo/summary.sig"
           rm "$unsigned_summary_repo/summary.sig"
           test ! -e "$unsigned_summary_repo/summary.sig"
-          sed -e "s#^Url=.*#Url=file://$unsigned_summary_repo#" \
-              -e 's#^Name=.*#Name=broadcaster-u1-unsigned-summary#' \
+          sed -e 's#^Name=.*#Name=broadcaster-u1-unsigned-summary#' \
               "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/unsigned-summary.flatpakrepo"
           summary_client="$RUNNER_TEMP/u1-unsigned-summary-client"
           summary_log="$RUNNER_TEMP/u1-unsigned-summary.log"
-          if XDG_DATA_HOME="$summary_client" flatpak --user remote-add --from \
-               broadcaster-u1-unsigned-summary "$RUNNER_TEMP/unsigned-summary.flatpakrepo" \
-               >"$summary_log" 2>&1; then
-            if XDG_DATA_HOME="$summary_client" flatpak --user remote-ls \
-                 broadcaster-u1-unsigned-summary >>"$summary_log" 2>&1; then
-              echo 'U1 unsigned repository summary was accepted and enumerated' >&2
-              exit 1
-            fi
+          XDG_DATA_HOME="$summary_client" flatpak --user remote-add --from \
+            broadcaster-u1-unsigned-summary "$RUNNER_TEMP/unsigned-summary.flatpakrepo"
+          XDG_DATA_HOME="$summary_client" flatpak --user remote-ls \
+            broadcaster-u1-unsigned-summary | grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          summary_client_repo="$summary_client/flatpak/repo"
+          test -f "$summary_client_repo/config"
+          summary_option='remote "broadcaster-u1-unsigned-summary".gpg-verify-summary'
+          summary_before=$(ostree --repo="$summary_client_repo" config get "$summary_option" 2>/dev/null || true)
+          echo "U1 initial .flatpakrepo summary verification policy: ${summary_before:-unset} (not a security PASS)"
+          ostree --repo="$summary_client_repo" config set "$summary_option" true
+          test "$(ostree --repo="$summary_client_repo" config get "$summary_option")" = true
+          # The positive control above enumerated a signed summary under the
+          # pinned key. Change only the remote URL to the unsigned copy and
+          # require a signature-specific rejection; never weaken the oracle.
+          XDG_DATA_HOME="$summary_client" flatpak --user remote-modify \
+            --url="file://$unsigned_summary_repo" broadcaster-u1-unsigned-summary
+          test "$(ostree --repo="$summary_client_repo" config get "$summary_option")" = true
+          if XDG_DATA_HOME="$summary_client" flatpak --user remote-ls \
+               broadcaster-u1-unsigned-summary >"$summary_log" 2>&1; then
+            echo 'U1 missing summary signature accepted despite explicit verification' >&2
+            exit 1
           fi
           if ! grep -Eiq 'gpg|signature|verification|not signed' "$summary_log"; then
-            echo 'U1 unsigned summary rejected for an unrelated or unidentified reason' >&2
+            echo 'U1 missing summary signature failed for an unrelated or unidentified reason' >&2
             cat "$summary_log" >&2
             exit 1
           fi
@@ -328,7 +343,7 @@ jobs:
             echo 'U1 unsigned-summary negative left an app installed' >&2
             exit 1
           fi
-          echo 'U1 missing summary signature negative: PASS (fresh user client)'
+          echo 'U1 missing summary signature rejected under explicit gpg-verify-summary=true policy'
           # Positive system-scope counterpart: this uses a separate test remote
           # and the same signed Devel revisions, never the stable application.
           sudo flatpak --system remote-add --from broadcaster-u1-system \
