@@ -338,6 +338,46 @@ jobs:
             echo 'U1 normal .flatpakrepo onboarding did not enable summary verification' >&2
             exit 1
           fi
+          # Diagnostic control: distinguish absent summary.sig from a present
+          # but corrupted signature. This probe is observational; the existing
+          # missing-signature negative below remains a hard security gate.
+          invalid_summary_repo="$RUNNER_TEMP/u1-invalid-summary/repo"
+          mkdir -p "$(dirname "$invalid_summary_repo")"
+          cp -a "$RUNNER_TEMP/u1-v2/repo" "$invalid_summary_repo"
+          test -s "$invalid_summary_repo/summary.sig"
+          printf 'invalid-U1-summary-signature\\n' > "$invalid_summary_repo/summary.sig"
+          python3 -u build-aux/u1/http-meter.py 18392 \\
+            "$invalid_summary_repo" >"$RUNNER_TEMP/u1-invalid-summary-http.log" 2>&1 &
+          invalid_summary_server_pid=$!
+          trap 'kill "$server_pid" "$unsigned_summary_server_pid" "$invalid_summary_server_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18392/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18392/summary.sig >/dev/null
+          sed -e 's#^Name=.*#Name=broadcaster-u1-invalid-summary#' \\
+              -e "s#^Url=.*#Url=http://127.0.0.1:18392#" \\
+              "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/invalid-summary.flatpakrepo"
+          invalid_summary_client="$RUNNER_TEMP/u1-invalid-summary-client"
+          invalid_summary_log="$RUNNER_TEMP/u1-invalid-summary.log"
+          if XDG_DATA_HOME="$invalid_summary_client" flatpak --user remote-add --from \\
+               broadcaster-u1-invalid-summary "$RUNNER_TEMP/invalid-summary.flatpakrepo" >"$invalid_summary_log" 2>&1; then
+            if XDG_DATA_HOME="$invalid_summary_client" flatpak --user install \\
+                 -y --noninteractive --no-deps --no-related \\
+                 broadcaster-u1-invalid-summary io.github.Certain1989.Broadcaster.Devel \\
+                 >>"$invalid_summary_log" 2>&1; then
+              echo 'U1 DIAGNOSTIC: corrupt summary.sig allowed signed app installation'
+            else
+              echo 'U1 DIAGNOSTIC: corrupt summary.sig rejected at installation'
+            fi
+          else
+            echo 'U1 DIAGNOSTIC: corrupt summary.sig rejected at remote onboarding'
+          fi
+          tail -n 12 "$invalid_summary_log"
+          if XDG_DATA_HOME="$invalid_summary_client" flatpak --user info \\
+               io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'U1 DIAGNOSTIC: corrupt-signature client has app installed'
+          fi
           # Same pinned public key, distinct remote name, unsigned-summary URL,
           # and a genuinely fresh user installation. A signature-specific
           # rejection may happen at remote-add or at first remote-ls.
