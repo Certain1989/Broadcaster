@@ -296,6 +296,39 @@ jobs:
             exit 1
           fi
           echo 'U1 trusted-summary onboarding succeeded; unsigned commit installation rejected'
+          # Negative: signed commits and summary stay intact, but summary.sig is
+          # missing. A FRESH user client must reject it without cached remote data.
+          unsigned_summary_repo="$RUNNER_TEMP/u1-unsigned-summary/repo"
+          mkdir -p "$(dirname "$unsigned_summary_repo")"
+          cp -a "$RUNNER_TEMP/u1-v2/repo" "$unsigned_summary_repo"
+          test -s "$unsigned_summary_repo/summary" && test -s "$unsigned_summary_repo/summary.sig"
+          rm "$unsigned_summary_repo/summary.sig"
+          test ! -e "$unsigned_summary_repo/summary.sig"
+          sed -e "s#^Url=.*#Url=file://$unsigned_summary_repo#" \
+              -e 's#^Name=.*#Name=broadcaster-u1-unsigned-summary#' \
+              "$RUNNER_TEMP/u1-v2/u1-test.flatpakrepo" > "$RUNNER_TEMP/unsigned-summary.flatpakrepo"
+          summary_client="$RUNNER_TEMP/u1-unsigned-summary-client"
+          summary_log="$RUNNER_TEMP/u1-unsigned-summary.log"
+          if XDG_DATA_HOME="$summary_client" flatpak --user remote-add --from \
+               broadcaster-u1-unsigned-summary "$RUNNER_TEMP/unsigned-summary.flatpakrepo" \
+               >"$summary_log" 2>&1; then
+            if XDG_DATA_HOME="$summary_client" flatpak --user remote-ls \
+                 broadcaster-u1-unsigned-summary >>"$summary_log" 2>&1; then
+              echo 'U1 unsigned repository summary was accepted and enumerated' >&2
+              exit 1
+            fi
+          fi
+          if ! grep -Eiq 'gpg|signature|verification|not signed|summary' "$summary_log"; then
+            echo 'U1 unsigned summary rejected for an unrelated or unidentified reason' >&2
+            cat "$summary_log" >&2
+            exit 1
+          fi
+          if XDG_DATA_HOME="$summary_client" flatpak --user info \
+               io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'U1 unsigned-summary negative left an app installed' >&2
+            exit 1
+          fi
+          echo 'U1 missing summary signature negative: PASS (fresh user client)'
           # Positive system-scope counterpart: this uses a separate test remote
           # and the same signed Devel revisions, never the stable application.
           sudo flatpak --system remote-add --from broadcaster-u1-system \
