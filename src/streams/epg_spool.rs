@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Private EPG attempt ownership and narrowly bounded crash-orphan reclamation.
-//! Every new attempt holds an OS file lock until its parser finishes. A second
+//! Each worker retains an OS file lock until it finishes. A second
 //! application instance therefore cannot reclaim an active attempt, even if
 //! its timestamp has become old due to suspension or a long-running worker.
 use std::{
@@ -65,18 +65,45 @@ pub(crate) struct SweepStats {
 /// their ownership cannot be proven against another running instance.
 #[cfg(target_os = "linux")]
 pub(crate) fn sweep_stale(parent: &Path, now: SystemTime) -> SweepStats {
+    sweep_stale_with_hook(parent, now, |_, _| {})
+}
+
+// A test-only substitution point immediately before the last path validation.
+// The production call has a zero-cost no-op hook. Same-UID hostile leaf writers
+// can still race the final check and unlink; see the documented threat boundary.
+#[cfg(target_os = "linux")]
+fn sweep_stale_with_hook<F: FnMut(&Path, &Path)>(
+    parent: &Path,
+    now: SystemTime,
+    mut before_unlink: F,
+) -> SweepStats {
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     const O_NOFOLLOW: i32 = 0o400000;
+    const O_DIRECTORY: i32 = 0o200000;
     let mut stats = SweepStats::default();
-    let Ok(directory) = fs::symlink_metadata(parent) else {
+    // Keep the verified directory inode open through enumeration AND unlink.
+    // /proc/self/fd is Linux-only; if procfs is not accessible, fail closed.
+    let Ok(parent_fd) = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW | O_DIRECTORY)
+        .open(parent)
+    else {
         return stats;
     };
+    let Ok(directory) = parent_fd.metadata() else {
+        return stats;
+    };
+    let anchored_parent = PathBuf::from(format!("/proc/self/fd/{}", parent_fd.as_raw_fd()));
     if !directory.is_dir() || directory.mode() & 0o077 != 0 {
         return stats;
     }
-    let Ok(entries) = fs::read_dir(parent) else {
+    let Ok(entries) = fs::read_dir(&anchored_parent) else {
         return stats;
     };
+    // Best-effort bound: iterator order is not fair. With >256 permanent
+    // unrelated entries, some orphans can remain indefinitely; never widen
+    // work or delete unknown files just to guarantee collection.
     for entry in entries.take(MAX_SCANNED) {
         stats.scanned += 1;
         if stats.removed >= MAX_REMOVED {
@@ -99,7 +126,7 @@ pub(crate) fn sweep_stale(parent: &Path, now: SystemTime) -> SweepStats {
             continue;
         }
         let spool_path = entry.path();
-        let lock_path = parent.join(format!(".epg-{id}.lock"));
+        let lock_path = anchored_parent.join(format!(".epg-{id}.lock"));
         let (Ok(spool_meta), Ok(lock_meta)) = (
             fs::symlink_metadata(&spool_path),
             fs::symlink_metadata(&lock_path),
@@ -124,8 +151,9 @@ pub(crate) fn sweep_stale(parent: &Path, now: SystemTime) -> SweepStats {
         {
             continue;
         }
-        // Never follow a swapped symlink, and only unlink the same inode
-        // observed before opening. This directory is user-owned and 0700.
+        // No-follow open and inode checks reject substituted leaves observed
+        // before deletion. The private 0700 parent is held by a directory fd;
+        // a concurrent ancestor rename cannot redirect the unlink.
         let Ok(lock) = OpenOptions::new()
             .read(true)
             .custom_flags(O_NOFOLLOW)
@@ -163,6 +191,23 @@ pub(crate) fn sweep_stale(parent: &Path, now: SystemTime) -> SweepStats {
                     && m.file_type().is_file()
             })
         {
+            continue;
+        }
+        // Deterministically exercise last-moment replacement in tests. There
+        // is no atomic compare-and-unlink for a hostile same-UID leaf writer;
+        // this extra check narrows, but cannot eliminate, that race.
+        before_unlink(&spool_path, &lock_path);
+        if !fs::symlink_metadata(&spool_path).is_ok_and(|m| {
+            m.dev() == open_meta.dev()
+                && m.ino() == open_meta.ino()
+                && m.file_type().is_file()
+                && m.nlink() == 1
+        }) || !fs::symlink_metadata(&lock_path).is_ok_and(|m| {
+            m.dev() == locked_meta.dev()
+                && m.ino() == locked_meta.ino()
+                && m.file_type().is_file()
+                && m.nlink() == 1
+        }) {
             continue;
         }
         drop(spool);
@@ -312,6 +357,93 @@ mod tests {
         assert_eq!(stages.iter().filter(|stage| stage.exists()).count(), 8);
         assert_eq!(sweep_stale(&dir.0, now).removed, 8);
         assert!(stages.iter().all(|stage| !stage.exists()));
+    }
+
+
+    #[test]
+    fn leaf_and_lock_substitution_before_unlink_are_rejected() {
+        for replace_lock in [false, true] {
+            let dir = PrivateDir::new();
+            let old = orphan(&dir, true);
+            let marker = old.with_extension("lock");
+            let moved = dir.0.join("old-entry");
+            let target = if replace_lock { marker.clone() } else { old.clone() };
+            let mut hit = false;
+            let result = sweep_stale_with_hook(&dir.0, SystemTime::now(), |spool, lock| {
+                hit = true;
+                let active = if replace_lock { lock } else { spool };
+                fs::rename(active, &moved).unwrap();
+                fs::write(active, b"new and unrelated").unwrap();
+            });
+            assert!(hit);
+            assert_eq!(result.removed, 0);
+            assert_eq!(fs::read(&target).unwrap(), b"new and unrelated");
+            assert!(moved.exists());
+        }
+    }
+
+    #[test]
+    fn ancestor_substitution_does_not_redirect_directory_fd_unlink() {
+        let dir = PrivateDir::new();
+        let old = orphan(&dir, true);
+        let filename = old.file_name().unwrap().to_owned();
+        let relocated = dir.0.with_extension("relocated");
+        let replacement = dir.0.join(&filename);
+        let mut hit = false;
+        let result = sweep_stale_with_hook(&dir.0, SystemTime::now(), |_, _| {
+            hit = true;
+            fs::rename(&dir.0, &relocated).unwrap();
+            fs::create_dir(&dir.0).unwrap();
+            fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::write(&replacement, b"must survive").unwrap();
+        });
+        assert!(hit);
+        assert_eq!(result.removed, 1);
+        assert_eq!(fs::read(&replacement).unwrap(), b"must survive");
+        assert!(!relocated.join(&filename).exists());
+        fs::remove_dir_all(relocated).unwrap();
+    }
+
+    #[test]
+    fn concurrent_sweepers_respect_a_busy_lock_and_remove_once() {
+        use std::sync::{Arc, Barrier};
+        let dir = PrivateDir::new();
+        let stage = orphan(&dir, true);
+        let arrived = Arc::new(Barrier::new(2));
+        let proceed = Arc::new(Barrier::new(2));
+        let parent = dir.0.clone();
+        let now = SystemTime::now();
+        let arrival_worker = arrived.clone();
+        let proceed_worker = proceed.clone();
+        let worker = std::thread::spawn(move || {
+            sweep_stale_with_hook(&parent, now, |_, _| {
+                arrival_worker.wait();
+                proceed_worker.wait();
+            })
+        });
+        arrived.wait();
+        assert_eq!(sweep_stale(&dir.0, now).removed, 0);
+        assert!(stage.exists());
+        proceed.wait();
+        assert_eq!(worker.join().unwrap().removed, 1);
+        assert!(!stage.exists());
+    }
+
+    #[test]
+    fn future_mtime_and_missing_lock_fail_closed() {
+        let dir = PrivateDir::new();
+        let future = orphan(&dir, false);
+        let tomorrow = SystemTime::now() + Duration::from_secs(86400);
+        File::options()
+            .write(true)
+            .open(&future)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(tomorrow))
+            .unwrap();
+        let lockless = dir.stage(true);
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+        assert!(future.exists());
+        assert!(lockless.exists());
     }
 
     #[test]
