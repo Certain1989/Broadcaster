@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Temporary isolated source naming migration
+on:
+  push:
+    branches:
+      - maintenance/campaign-neutral-source-cleanup-20261103
+
+permissions:
+  contents: write
+
+jobs:
+  scoped-rename:
+    if: github.repository == 'Certain1989/Broadcaster'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated branch and verify authorized base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: maintenance/campaign-neutral-source-cleanup-20261103
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Transform local names and remove one-shot implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "maintenance/campaign-neutral-source-cleanup-20261103"
+          test "$(git merge-base HEAD origin/main)" = "326ff67bef597f424ceec8ca62417efc244f19b9"
+          python3 .github/scripts/campaign-neutral-once.py
+          git rm -f .github/scripts/campaign-neutral-once.py .github/workflows/campaign-neutral-once.yml
+          cargo fmt --all
+          python3 tests/check_campaign_neutral_names.py
+          python3 -m py_compile tests/check_campaign_neutral_names.py tests/player/mpv_http_probe.py
+          bash -n tests/ci-fast-smoke.sh
+          bash .github/scripts/test-worker-source-request.sh
+          git add -A
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -gt 20
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor: use functional names for native focus and guide tests"
+          git push origin HEAD:refs/heads/maintenance/campaign-neutral-source-cleanup-20261103
