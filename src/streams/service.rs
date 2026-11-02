@@ -11,7 +11,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     sync::{
-        atomic::{AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -249,17 +249,25 @@ impl StreamsService {
     pub(crate) async fn export_database(
         &self,
         destination: std::path::PathBuf,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<super::backup::SnapshotCounts, ServiceError> {
-        self.db(move |storage| super::backup::export(&storage, &destination).map_err(Into::into))
-            .await
+        self.db(move |storage| {
+            super::backup::export_cancellable(&storage, &destination, &cancelled)
+                .map_err(Into::into)
+        })
+        .await
     }
 
     pub(crate) async fn prepare_database_import(
         &self,
         source: std::path::PathBuf,
+        cancelled: Arc<AtomicBool>,
     ) -> Result<super::backup::PreparedImport, ServiceError> {
-        self.db(move |storage| super::backup::prepare_import(&storage, &source).map_err(Into::into))
-            .await
+        self.db(move |storage| {
+            super::backup::prepare_import_cancellable(&storage, &source, &cancelled)
+                .map_err(Into::into)
+        })
+        .await
     }
 
     pub(crate) async fn confirm_database_import(

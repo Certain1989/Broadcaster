@@ -6,6 +6,10 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -1138,12 +1142,39 @@ fn choose_database_export(view: &TvStreamsView) {
                 );
                 return;
             };
-            match service.export_database(path).await {
-                Ok(_) => message(
-                    &view,
-                    &gettext("Database backup exported. Keep this private file safe."),
-                ),
-                Err(error) => fail(&view, error),
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (progress, body, status) = sheet(&gettext("Exporting Complete Database"));
+            status.set_text(&gettext("Creating a private, consistent SQLite backup..."));
+            body.append(&status);
+            let cancel = button(&gettext("Cancel Backup"), &body);
+            cancel.connect_clicked({
+                let cancelled = cancelled.clone();
+                let status = status.clone();
+                move |button| {
+                    cancelled.store(true, Ordering::Relaxed);
+                    button.set_sensitive(false);
+                    status.set_text(&gettext(
+                        "Cancellation requested. Finishing the current SQLite step...",
+                    ));
+                }
+            });
+            progress.connect_closed({
+                let cancelled = cancelled.clone();
+                move |_| cancelled.store(true, Ordering::Relaxed)
+            });
+            progress.present(Some(&window));
+            let result = service.export_database(path, cancelled.clone()).await;
+            progress.close();
+            if cancelled.load(Ordering::Relaxed) {
+                message(&view, &gettext("Database backup operation finished or was cancelled; check the selected file before retrying."));
+            } else {
+                match result {
+                    Ok(_) => message(
+                        &view,
+                        &gettext("Database backup exported. Keep this private file safe."),
+                    ),
+                    Err(error) => fail(&view, error),
+                }
             }
         }
     ));
@@ -1165,9 +1196,41 @@ fn choose_database_import(view: &TvStreamsView) {
                 message(&view, &gettext("Select a local SQLite backup file."));
                 return;
             };
-            match service.prepare_database_import(path).await {
-                Ok(prepared) => confirm_database_restore(&view, service, prepared),
-                Err(error) => fail(&view, error),
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (progress, body, status) = sheet(&gettext("Validating Database Backup"));
+            status.set_text(&gettext(
+                "Copying and validating the selected file privately...",
+            ));
+            body.append(&status);
+            let cancel = button(&gettext("Cancel Import"), &body);
+            cancel.connect_clicked({
+                let cancelled = cancelled.clone();
+                let status = status.clone();
+                move |button| {
+                    cancelled.store(true, Ordering::Relaxed);
+                    button.set_sensitive(false);
+                    status.set_text(&gettext("Cancelling staged import..."));
+                }
+            });
+            progress.connect_closed({
+                let cancelled = cancelled.clone();
+                move |_| cancelled.store(true, Ordering::Relaxed)
+            });
+            progress.present(Some(&window));
+            let result = service
+                .prepare_database_import(path, cancelled.clone())
+                .await;
+            progress.close();
+            if cancelled.load(Ordering::Relaxed) {
+                message(
+                    &view,
+                    &gettext("Database import cancelled; the current database is unchanged."),
+                );
+            } else {
+                match result {
+                    Ok(prepared) => confirm_database_restore(&view, service, prepared),
+                    Err(error) => fail(&view, error),
+                }
             }
         }
     ));
@@ -1235,7 +1298,7 @@ fn confirm_database_restore(
                             quit.connect_clicked(|_| crate::application::TvApplication::get().quit());
                             quit.grab_focus();
                         }
-                        Err(_) => status.set_text(&gettext("Could not stage database restore. The current database is unchanged.")),
+                        Err(_) => status.set_text(&gettext("Restore staging could not be confirmed. The running database is unchanged. A pending request, if published, will be reconciled safely at next startup; do not start another refresh before restarting.")),
                     }
                 }
             ));

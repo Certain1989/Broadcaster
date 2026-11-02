@@ -174,7 +174,30 @@ fn counts(conn: &Connection) -> StorageResult<SnapshotCounts> {
     })
 }
 
+fn snapshot_bytes(conn: &Connection) -> StorageResult<u64> {
+    let pages: i64 = conn
+        .query_row("PRAGMA page_count", [], |r| r.get(0))
+        .map_err(storage::map_sql)?;
+    let size: i64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get(0))
+        .map_err(storage::map_sql)?;
+    let pages = u64::try_from(pages).map_err(|_| StorageError::CorruptDatabase)?;
+    let size = u64::try_from(size).map_err(|_| StorageError::CorruptDatabase)?;
+    pages.checked_mul(size).ok_or(StorageError::CorruptDatabase)
+}
+
 fn online_backup(source: &Connection, target: &Path) -> StorageResult<()> {
+    online_backup_cancellable(source, target, &AtomicBool::new(false))
+}
+
+fn online_backup_cancellable(
+    source: &Connection,
+    target: &Path,
+    cancelled: &AtomicBool,
+) -> StorageResult<()> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(StorageError::Declined);
+    }
     let file = create_private(target)?;
     drop(file);
     let mut dest = Connection::open_with_flags(target, OpenFlags::SQLITE_OPEN_READ_WRITE)
@@ -187,6 +210,9 @@ fn online_backup(source: &Connection, target: &Path) -> StorageResult<()> {
         // 512 pages per step keeps WAL writers responsive for large guides.
         let deadline = Instant::now() + Duration::from_secs(900);
         loop {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(StorageError::Declined);
+            }
             if Instant::now() >= deadline {
                 return Err(StorageError::StorageFailure);
             }
@@ -221,6 +247,23 @@ fn online_backup(source: &Connection, target: &Path) -> StorageResult<()> {
 /// Export as a new, private 0600 file in the user-chosen folder. The hard-link
 /// is an atomic no-clobber publish even under a destination symlink race.
 pub(crate) fn export(storage: &Storage, destination: &Path) -> StorageResult<SnapshotCounts> {
+    export_cancellable(storage, destination, &AtomicBool::new(false))
+}
+
+pub(crate) fn export_cancellable(
+    storage: &Storage,
+    destination: &Path,
+    cancelled: &AtomicBool,
+) -> StorageResult<SnapshotCounts> {
+    export_with_sync(storage, destination, cancelled, sync_dir)
+}
+
+fn export_with_sync(
+    storage: &Storage,
+    destination: &Path,
+    cancelled: &AtomicBool,
+    mut sync: impl FnMut(&Path) -> StorageResult<()>,
+) -> StorageResult<SnapshotCounts> {
     let parent = destination.parent().ok_or(StorageError::InvalidInput)?;
     if !parent.is_dir() || destination.file_name().is_none() {
         return Err(StorageError::InvalidInput);
@@ -229,13 +272,21 @@ pub(crate) fn export(storage: &Storage, destination: &Path) -> StorageResult<Sna
         return Err(StorageError::AlreadyExists);
     }
     let source = storage.connect()?;
+    // Preflight file-system space before copying potentially gigabytes of EPG
+    // cache. Free-space queries can be unavailable on portal mounts: the
+    // underlying SQLite/file-copy I/O failures are still authoritative.
+    let estimated_bytes = snapshot_bytes(&source)?;
+    check_space(parent, estimated_bytes)?;
     let candidate_path = random_file(parent, ".broadcaster-export-");
     let stage = Temporary::new(candidate_path.clone());
-    online_backup(&source, &candidate_path)?;
+    online_backup_cancellable(&source, &candidate_path, cancelled)?;
     let (check, _) = verify_snapshot(&candidate_path, false)?;
     let result = counts(&check)?;
     drop(check);
-    sync_dir(parent)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(StorageError::Declined);
+    }
+    sync(parent)?;
     fs::hard_link(&candidate_path, destination).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             StorageError::AlreadyExists
@@ -243,15 +294,70 @@ pub(crate) fn export(storage: &Storage, destination: &Path) -> StorageResult<Sna
             StorageError::StorageFailure
         }
     })?;
-    sync_dir(parent)?;
+    // After publish, cancellation cannot revoke an already committed backup.
+    // A failed durability sync attempts a guarded rollback of exactly the
+    // inode that was published, never an unrelated user-created replacement.
+    if let Err(err) = sync(parent) {
+        discard_export_link(destination, &candidate_path, parent);
+        return Err(err);
+    }
     drop(stage);
-    sync_dir(parent)?;
+    // Destination has already been durably published by the preceding sync.
+    // Final cleanup sync is best effort; failure cannot turn a complete,
+    // verified backup into an ambiguous reported failure.
+    let _ = sync(parent);
     Ok(result)
+}
+
+#[cfg(unix)]
+fn discard_export_link(destination: &Path, stage: &Path, parent: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let (Ok(dest), Ok(copy)) = (
+        fs::symlink_metadata(destination),
+        fs::symlink_metadata(stage),
+    ) {
+        if dest.file_type().is_file()
+            && copy.file_type().is_file()
+            && dest.dev() == copy.dev()
+            && dest.ino() == copy.ino()
+        {
+            let _ = fs::remove_file(destination);
+            let _ = sync_dir(parent);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn discard_export_link(_destination: &Path, _stage: &Path, _parent: &Path) {}
+
+fn check_space(dir: &Path, required: u64) -> StorageResult<()> {
+    // GIO is already used by the GTK FileDialog; query only public filesystem
+    // free-space metadata, never provider names, paths or hidden portal data.
+    use adw::{gio, prelude::*};
+    let file = gio::File::for_path(dir);
+    if let Ok(info) = file.query_filesystem_info("filesystem::free", gio::Cancellable::NONE) {
+        let free = info.attribute_uint64("filesystem::free");
+        if free != 0 && free < required.saturating_add(required / 10) {
+            return Err(StorageError::StorageFailure);
+        }
+    }
+    Ok(())
 }
 
 /// Untrusted picker input: bound a no-follow single-file copy in the private
 /// application directory; NEVER open the user-selected original read/write.
 pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<PreparedImport> {
+    prepare_import_cancellable(storage, input, &AtomicBool::new(false))
+}
+
+pub(crate) fn prepare_import_cancellable(
+    storage: &Storage,
+    input: &Path,
+    cancelled: &AtomicBool,
+) -> StorageResult<PreparedImport> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(StorageError::Declined);
+    }
     storage::ensure_private_parent(storage.database_path())?;
     let parent = storage
         .database_path()
@@ -288,11 +394,15 @@ pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<P
             return Err(StorageError::InvalidInput);
         }
     }
+    check_space(parent, source_meta.len().saturating_mul(2))?;
     let candidate = Temporary::new(random_file(parent, CANDIDATE_PREFIX));
     let mut writer = create_private(&candidate.path)?;
     let mut copied = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(StorageError::Declined);
+        }
         let read = reader
             .read(&mut buffer)
             .map_err(|_| StorageError::StorageFailure)?;
@@ -316,6 +426,9 @@ pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<P
         .sync_all()
         .map_err(|_| StorageError::StorageFailure)?;
     drop(writer);
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(StorageError::Declined);
+    }
     let (probe, version) = verify_snapshot(&candidate.path, true)?;
     drop(probe);
     if version < SCHEMA_VERSION {
@@ -335,6 +448,18 @@ pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<P
 /// marker is published durably; the next primary application startup performs
 /// the replacement before the first SQLite connection and scheduler.
 pub(crate) fn confirm_import(storage: &Storage, prepared: PreparedImport) -> StorageResult<()> {
+    confirm_import_with_sync(storage, prepared, sync_dir)
+}
+
+/// The journal's hard-link publication transfers ownership of the import
+/// candidate to the next startup. Never let Temporary::drop unlink it once
+/// a marker can survive a crash, even if the following fsync reports failure.
+/// The injected sync function is used to reproduce each durability boundary.
+fn confirm_import_with_sync(
+    storage: &Storage,
+    prepared: PreparedImport,
+    mut sync: impl FnMut(&Path) -> StorageResult<()>,
+) -> StorageResult<()> {
     let parent = storage
         .database_path()
         .parent()
@@ -343,6 +468,11 @@ pub(crate) fn confirm_import(storage: &Storage, prepared: PreparedImport) -> Sto
     if fs::symlink_metadata(&marker).is_ok() {
         return Err(StorageError::AlreadyExists);
     }
+    // A restart needs space for a full consistent recovery snapshot before
+    // any byte of the previous database is replaced.
+    let old = storage.connect()?;
+    check_space(parent, snapshot_bytes(&old)?)?;
+    drop(old);
     let recovery = random_file(parent, RECOVERY_PREFIX);
     let candidate_name = prepared
         .candidate
@@ -362,13 +492,21 @@ pub(crate) fn confirm_import(storage: &Storage, prepared: PreparedImport) -> Sto
     .map_err(|_| StorageError::StorageFailure)?;
     file.sync_all().map_err(|_| StorageError::StorageFailure)?;
     drop(file);
-    sync_dir(parent)?;
-    fs::hard_link(&staged.path, &marker).map_err(|_| StorageError::AlreadyExists)?;
-    sync_dir(parent)?;
+    sync(parent)?;
+    fs::hard_link(&staged.path, &marker).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            StorageError::AlreadyExists
+        } else {
+            StorageError::StorageFailure
+        }
+    })?;
+    // COMMIT POINT: marker is visible, and a restart may now perform the
+    // restore. Preserve the candidate unconditionally, including if fsync,
+    // unlink of the temporary marker, or cleanup subsequently fails.
+    let _persisted_candidate = prepared.candidate.keep();
+    sync(parent)?;
     drop(staged);
-    sync_dir(parent)?;
-    let _ = prepared.candidate.keep();
-    Ok(())
+    sync(parent)
 }
 
 fn marker_name(parent: &Path, value: &str, prefix: &str) -> StorageResult<PathBuf> {
@@ -445,14 +583,50 @@ fn apply_pending(database: &Path) -> StorageResult<()> {
     if lines.next().is_some() {
         return Err(StorageError::IncompatibleDatabase);
     }
-    if fs::symlink_metadata(&candidate).is_err() {
-        // Crash after publish but before clearing the journal: recover the
-        // preserved pre-replacement database deterministically.
-        let (copy, _) = verify_snapshot(&recovery, false)?;
-        drop(copy);
-        rollback(&recovery, database)?;
+    // A marker can outlive its candidate if an older version crashed after
+    // journal publication or a prepared file disappeared. Before creating a
+    // recovery copy, no live DB bytes can have been swapped. Once a verified
+    // recovery exists, it takes precedence over the candidate on restart.
+    let candidate_missing = match fs::symlink_metadata(&candidate) {
+        Ok(_) => false,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => return Err(StorageError::PermissionDenied),
+    };
+    if candidate_missing {
+        match fs::symlink_metadata(&recovery) {
+            Ok(_) => {
+                let (copy, _) = verify_snapshot(&recovery, false)?;
+                drop(copy);
+                rollback(&recovery, database)?;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // No recovery means replacement has never begun. Refuse to
+                // discard a marker unless the original SQLite DB is sound.
+                let original = Storage::at(database).connect()?;
+                storage::validate_snapshot_schema(&original, SCHEMA_VERSION)?;
+                drop(original);
+            }
+            Err(_) => return Err(StorageError::PermissionDenied),
+        }
         fs::remove_file(&marker).map_err(|_| StorageError::StorageFailure)?;
-        return sync_dir(parent);
+        sync_dir(parent)?;
+        return Ok(());
+    }
+    // An invalid/corrupt candidate before recovery creation may also be
+    // abandoned safely, but only after confirming the original database.
+    if verify_snapshot(&candidate, false).is_err() {
+        if fs::symlink_metadata(&recovery).is_err() {
+            let original = Storage::at(database).connect()?;
+            storage::validate_snapshot_schema(&original, SCHEMA_VERSION)?;
+            drop(original);
+        } else {
+            let (copy, _) = verify_snapshot(&recovery, false)?;
+            drop(copy);
+            rollback(&recovery, database)?;
+        }
+        fs::remove_file(&marker).map_err(|_| StorageError::StorageFailure)?;
+        sync_dir(parent)?;
+        return Ok(());
     }
     let (import, _) = verify_snapshot(&candidate, false)?;
     drop(import);
@@ -769,6 +943,250 @@ mod tests {
         confirm_import(&storage, prepared).unwrap();
         fs::remove_file(candidate).unwrap();
         assert!(apply_pending(storage.database_path()).is_err());
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn marker_sync_failure_keeps_import_and_recovers_on_next_startup() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "original");
+        let exported = sandbox.0.join("backup.sqlite3");
+        export(&storage, &exported).unwrap();
+        storage
+            .connect()
+            .unwrap()
+            .execute("UPDATE iptv_sources SET name='last-good'", [])
+            .unwrap();
+        let staged = prepare_import(&storage, &exported).unwrap();
+        let candidate = staged.candidate.path.clone();
+        let mut sync_calls = 0;
+        // Fail immediately after the marker was hard-linked (the second
+        // directory fsync), the original F1 failure point.
+        assert_eq!(
+            confirm_import_with_sync(&storage, staged, |parent| {
+                sync_calls += 1;
+                if sync_calls == 2 {
+                    return Err(StorageError::StorageFailure);
+                }
+                sync_dir(parent)
+            }),
+            Err(StorageError::StorageFailure)
+        );
+        assert!(candidate.exists(), "marker owns candidate on sync failure");
+        assert!(sandbox.0.join(REQUEST).exists());
+        let before: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, "last-good");
+        // A subsequent primary startup must be able to finish the staging.
+        apply_pending(storage.database_path()).unwrap();
+        let after: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, "original");
+    }
+
+    #[test]
+    fn missing_candidate_without_recovery_keeps_original_and_clears_marker() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "safe");
+        let exported = sandbox.0.join("backup.sqlite3");
+        export(&storage, &exported).unwrap();
+        let prepared = prepare_import(&storage, &exported).unwrap();
+        let candidate = prepared.candidate.path.clone();
+        confirm_import(&storage, prepared).unwrap();
+        fs::remove_file(&candidate).unwrap();
+        assert!(sandbox.0.join(REQUEST).exists());
+        apply_pending(storage.database_path()).unwrap();
+        assert!(!sandbox.0.join(REQUEST).exists());
+        apply_pending(storage.database_path()).unwrap(); // repeat restart
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn invalid_candidate_before_recovery_keeps_previous_live_database() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "safe");
+        let exported = sandbox.0.join("backup.sqlite3");
+        export(&storage, &exported).unwrap();
+        let prepared = prepare_import(&storage, &exported).unwrap();
+        let candidate = prepared.candidate.path.clone();
+        confirm_import(&storage, prepared).unwrap();
+        fs::write(&candidate, b"corrupt and truncated").unwrap();
+        apply_pending(storage.database_path()).unwrap();
+        assert!(!sandbox.0.join(REQUEST).exists());
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn post_export_publish_sync_error_removes_only_our_link() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "safe");
+        let target = sandbox.0.join("exported.sqlite3");
+        let mut sync_calls = 0;
+        assert_eq!(
+            export_with_sync(&storage, &target, &AtomicBool::new(false), |dir| {
+                sync_calls += 1;
+                if sync_calls == 2 {
+                    return Err(StorageError::StorageFailure);
+                }
+                sync_dir(dir)
+            }),
+            Err(StorageError::StorageFailure)
+        );
+        assert!(!target.exists(), "failed export left published output");
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn cancellation_prevents_export_and_import_and_preserves_original() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "untouched");
+        let cancel = AtomicBool::new(true);
+        let output = sandbox.0.join("cancel.sqlite3");
+        assert_eq!(
+            export_cancellable(&storage, &output, &cancel),
+            Err(StorageError::Declined)
+        );
+        assert!(!output.exists());
+        let input = sandbox.0.join("backup.sqlite3");
+        export(&storage, &input).unwrap();
+        assert!(matches!(
+            prepare_import_cancellable(&storage, &input, &cancel),
+            Err(StorageError::Declined)
+        ));
+        assert!(!sandbox.0.join(REQUEST).exists());
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "untouched");
+    }
+
+    #[test]
+    fn concurrent_wal_updates_leave_a_consistent_snapshot() {
+        use std::sync::atomic::AtomicUsize;
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "stable");
+        storage
+            .connect()
+            .unwrap()
+            .execute_batch("PRAGMA journal_mode=WAL;")
+            .unwrap();
+        let writes = std::sync::Arc::new(AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let storage_worker = storage.clone();
+        let counter = writes.clone();
+        let stop_writer = stop.clone();
+        let worker = std::thread::spawn(move || {
+            let conn = storage_worker.connect().unwrap();
+            while !stop_writer.load(Ordering::Relaxed) {
+                conn.execute(
+                    "UPDATE iptv_sources SET updated_at=updated_at+1 WHERE id='playlist-1'",
+                    [],
+                )
+                .unwrap();
+                counter.fetch_add(1, Ordering::Relaxed);
+                std::thread::yield_now();
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while writes.load(Ordering::Relaxed) < 5 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(writes.load(Ordering::Relaxed) >= 5);
+        let exported = sandbox.0.join("concurrent.sqlite3");
+        let result = export(&storage, &exported);
+        stop.store(true, Ordering::Relaxed);
+        worker.join().unwrap();
+        assert_eq!(result.unwrap().channels, 1);
+        let (conn, _) = verify_snapshot(&exported, false).unwrap();
+        assert_eq!(counts(&conn).unwrap().playlists, 1);
+        let name: String = conn
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "stable");
+    }
+
+    #[test]
+    fn untrusted_foreign_key_and_unknown_shadow_table_rejected() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "safe");
+        let source = sandbox.0.join("clean.sqlite3");
+        export(&storage, &source).unwrap();
+        for modification in [
+            "PRAGMA foreign_keys=OFF; INSERT INTO iptv_channels (id,source_id,playlist_order,imported_name,stream_url,created_at,updated_at) VALUES ('orphan','missing',0,'fake','https://invalid.example/none',100,100);",
+            "CREATE TABLE fts_data (id INTEGER PRIMARY KEY, body TEXT);",
+        ] {
+            let path = random_file(&sandbox.0, "invalid-");
+            fs::copy(&source, &path).unwrap();
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(modification).unwrap();
+            drop(conn);
+            assert!(prepare_import(&storage, &path).is_err());
+        }
+        let name: String = storage
+            .connect()
+            .unwrap()
+            .query_row("SELECT name FROM iptv_sources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(name, "safe");
+    }
+
+    #[test]
+    fn prepublication_marker_sync_failure_does_not_schedule_restore() {
+        let sandbox = Sandbox::new();
+        let storage = sandbox.storage();
+        storage.initialize().unwrap();
+        seed(&storage, "safe");
+        let backup = sandbox.0.join("backup.sqlite3");
+        export(&storage, &backup).unwrap();
+        let candidate = prepare_import(&storage, &backup).unwrap();
+        assert_eq!(
+            confirm_import_with_sync(&storage, candidate, |_| Err(StorageError::StorageFailure)),
+            Err(StorageError::StorageFailure)
+        );
+        assert!(!sandbox.0.join(REQUEST).exists());
+        apply_pending(storage.database_path()).unwrap();
         let name: String = storage
             .connect()
             .unwrap()
