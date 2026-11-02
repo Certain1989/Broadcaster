@@ -61,6 +61,17 @@ else
   echo 'U1 replay diagnostic: installed revision stayed at v2; NOT proof of anti-replay protection'
 fi
 echo "U1 replay diagnostic: Flatpak update exit=$outcome, HTTP GET count $before_requests -> $after_requests"
+# A nonzero update is not an anti-rollback verdict: expose the bounded native
+# Flatpak diagnostic instead of silently discarding it in a runner-local file.
+# This is a synthetic Devel-only remote with no owner credentials or data.
+if [[ "$outcome" == error ]]; then
+  echo 'U1 replay diagnostic: older signed update output (first 60 lines):'
+  sed -n '1,60p' "$root/older-update.log"
+fi
+if (( after_requests > before_requests )); then
+  echo 'U1 replay diagnostic: replay-window HTTP requests (up to 40):'
+  grep '"GET /' "$root/http.log" | tail -n "$((after_requests-before_requests))" | head -n 40
+fi
 if (( after_requests <= before_requests )); then
   echo 'U1 replay diagnostic: INCONCLUSIVE metadata freshness (no observed replay HTTP GET)'
 fi
