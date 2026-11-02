@@ -36,7 +36,7 @@ impl AttemptSpool {
         let held_lock = options.open(&lock_path)?;
         if let Err(error) = held_lock.try_lock() {
             let _ = fs::remove_file(&lock_path);
-            return Err(error);
+            return Err(io::Error::other("could not acquire private EPG stage lock"));
         }
         Ok(Self {
             path,
