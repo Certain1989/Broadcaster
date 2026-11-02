@@ -16,6 +16,118 @@ const STALE_AFTER: Duration = Duration::from_secs(48 * 60 * 60);
 const MAX_SCANNED: usize = 256;
 const MAX_REMOVED: usize = 32;
 
+// Linux directory cookies survive a closed DIR stream while the directory is
+// unchanged. Remember a bounded pass's position *on the verified directory
+// inode*, without adding or removing ordinary files in the application folder.
+// A malformed or unsupported xattr simply restores the original conservative
+// first-page scan; never trust a foreign cursor to select a deletion target.
+#[cfg(target_os = "linux")]
+const CURSOR_XATTR: &[u8] = b"user.broadcaster.epg_sweep_cursor_v1\0";
+
+#[cfg(target_os = "linux")]
+struct DirectoryStream(*mut libc::DIR);
+
+#[cfg(target_os = "linux")]
+impl DirectoryStream {
+    fn open(directory: &File) -> io::Result<Self> {
+        use std::os::fd::{AsRawFd, IntoRawFd};
+        // fdopendir owns the duplicate; the verified parent fd stays alive for
+        // the full sweep, including all fd-anchored path operations.
+        let duplicate = directory.try_clone()?;
+        // SAFETY: duplicate is a live owned directory fd. On success,
+        // fdopendir assumes ownership, transferred below with into_raw_fd.
+        let handle = unsafe { libc::fdopendir(duplicate.as_raw_fd()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let _ = duplicate.into_raw_fd();
+        Ok(Self(handle))
+    }
+
+    fn next_name(&mut self) -> Option<std::ffi::OsString> {
+        use std::os::unix::ffi::OsStringExt;
+        loop {
+            // SAFETY: self.0 is a live DIR owned by this DirectoryStream.
+            let entry = unsafe { libc::readdir(self.0) };
+            if entry.is_null() {
+                return None;
+            }
+            // SAFETY: readdir returned a valid dirent and a NUL-terminated name.
+            // Clone before any subsequent readdir invalidates the storage.
+            let bytes = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if bytes == b"." || bytes == b".." {
+                continue;
+            }
+            return Some(std::ffi::OsString::from_vec(bytes.to_vec()));
+        }
+    }
+
+    fn tell(&self) -> Option<libc::c_long> {
+        // SAFETY: the DIR stream is live for this call.
+        let position = unsafe { libc::telldir(self.0) };
+        (position >= 0).then_some(position)
+    }
+
+    fn seek(&mut self, position: libc::c_long) {
+        // SAFETY: the DIR stream is live; an invalid/stale cookie may fail
+        // to position the iterator but cannot bypass per-leaf safety checks.
+        unsafe { libc::seekdir(self.0, position) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for DirectoryStream {
+    fn drop(&mut self) {
+        // SAFETY: this stream owns the DIR handle exactly once.
+        unsafe { libc::closedir(self.0) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_cursor(directory: &File) -> libc::c_long {
+    use std::os::fd::AsRawFd;
+    let mut bytes = [0u8; 8];
+    // SAFETY: fd and NUL-terminated attribute name are valid, and the
+    // fixed buffer is writable for its declared length.
+    let length = unsafe {
+        libc::fgetxattr(
+            directory.as_raw_fd(),
+            CURSOR_XATTR.as_ptr().cast(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+        )
+    };
+    if length != bytes.len() as isize {
+        return 0;
+    }
+    let position = i64::from_le_bytes(bytes);
+    libc::c_long::try_from(position)
+        .ok()
+        .filter(|n| *n >= 0)
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "linux")]
+fn save_cursor(directory: &File, position: libc::c_long) {
+    use std::os::fd::AsRawFd;
+    // On 32-bit Linux c_long is shorter; persist a fixed eight-byte cursor.
+    #[allow(clippy::unnecessary_cast)]
+    let bytes = (position as i64).to_le_bytes();
+    // Best effort: unsupported xattrs only affect progress fairness, not the
+    // per-file deletion safety checks. A cursor must never cause a delete.
+    // SAFETY: fd and NUL-terminated attribute name are valid, and the
+    // fixed byte array remains readable for the duration of the call.
+    let _ = unsafe {
+        libc::fsetxattr(
+            directory.as_raw_fd(),
+            CURSOR_XATTR.as_ptr().cast(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            0,
+        )
+    };
+}
+
 pub(crate) struct AttemptSpool {
     path: PathBuf,
     lock_path: PathBuf,
@@ -113,19 +225,26 @@ where
     if !directory.is_dir() || directory.mode() & 0o077 != 0 {
         return stats;
     }
-    let Ok(entries) = fs::read_dir(&anchored_parent) else {
+    // Procfs is required for the verified fd-anchored path operations.
+    if fs::read_dir(&anchored_parent).is_err() {
+        return stats;
+    }
+    let Ok(mut entries) = DirectoryStream::open(&parent_fd) else {
         return stats;
     };
-    // Best-effort bound: iterator order is not fair. With >256 permanent
-    // unrelated entries, some orphans can remain indefinitely; never widen
-    // work or delete unknown files just to guarantee collection.
-    for entry in entries.take(MAX_SCANNED) {
-        stats.scanned += 1;
-        if stats.removed >= MAX_REMOVED {
+    entries.seek(read_cursor(&parent_fd));
+    let mut next_cursor = 0;
+    // A real DIR cookie advances across launches without traversing more than
+    // MAX_SCANNED entries per attempt. EOF wraps to the first page. A changed
+    // directory can invalidate old cookies; this is best-effort, not a claim
+    // of strict fairness under hostile concurrent directory mutation.
+    while stats.scanned < MAX_SCANNED && stats.removed < MAX_REMOVED {
+        let Some(name) = entries.next_name() else {
+            next_cursor = 0;
             break;
-        }
-        let Ok(entry) = entry else { continue };
-        let name = entry.file_name();
+        };
+        stats.scanned += 1;
+        next_cursor = entries.tell().unwrap_or(0);
         let Some(name) = name.to_str() else { continue };
         let Some(id) = name
             .strip_prefix(".epg-")
@@ -140,7 +259,7 @@ where
         if uuid.get_version_num() != 4 || uuid.to_string() != id {
             continue;
         }
-        let spool_path = entry.path();
+        let spool_path = anchored_parent.join(format!(".epg-{id}.part"));
         let lock_path = anchored_parent.join(format!(".epg-{id}.lock"));
         let (Ok(spool_meta), Ok(lock_meta)) = (
             fs::symlink_metadata(&spool_path),
@@ -225,13 +344,16 @@ where
         }) {
             continue;
         }
-        drop(spool);
+        // Keep the opened spool inode pinned until unlink completes: this
+        // narrows inode-reuse races without claiming an atomic pathname unlink.
         // Failure to remove the stage leaves the lock marker for a later pass.
         if unlink(&spool_path).is_ok() {
             stats.removed += 1;
             let _ = unlink(&lock_path);
         }
+        drop(spool);
     }
+    save_cursor(&parent_fd, next_cursor);
     stats
 }
 
@@ -374,6 +496,151 @@ mod tests {
         assert!(other.exists());
     }
     #[test]
+    fn bounded_scan_makes_forward_progress_past_permanent_unrelated_entries() {
+        let dir = PrivateDir::new();
+        for n in 0..(MAX_SCANNED * 5) {
+            fs::write(dir.0.join(format!("ignored-{n:05}")), b"untouched").unwrap();
+        }
+        // Created last to reproduce the old starvation on stable readdir
+        // order: its name is generally beyond the initial 256 entries.
+        let stale = orphan(&dir, true);
+        let now = SystemTime::now();
+        let mut removed = false;
+        for _ in 0..8 {
+            let stats = sweep_stale(&dir.0, now);
+            assert!(stats.scanned <= MAX_SCANNED);
+            assert!(stats.removed <= MAX_REMOVED);
+            if stats.removed == 1 {
+                removed = true;
+                break;
+            }
+        }
+        assert!(
+            removed,
+            "cursor did not reach a stale spool behind unrelated files"
+        );
+        assert!(!stale.exists());
+        assert_eq!(fs::read(dir.0.join("ignored-00000")).unwrap(), b"untouched");
+        assert_eq!(fs::read(dir.0.join("ignored-01279")).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn continuation_is_tied_to_the_original_directory_instead_of_a_replacement() {
+        let dir = PrivateDir::new();
+        for n in 0..(MAX_SCANNED * 3) {
+            fs::write(dir.0.join(format!("ignored-{n:05}")), b"keep").unwrap();
+        }
+        // Save progress on this exact directory before inserting an orphan.
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+        let stale = orphan(&dir, true);
+        let moved = dir.0.with_extension("relocated");
+        fs::rename(&dir.0, &moved).unwrap();
+        fs::create_dir(&dir.0).unwrap();
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let unrelated = dir.0.join("not-an-epg-spool");
+        fs::write(&unrelated, b"keep replacement").unwrap();
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep replacement");
+        let mut completed = false;
+        for _ in 0..6 {
+            if sweep_stale(&moved, SystemTime::now()).removed == 1 {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "original directory did not retain its cursor");
+        assert!(!moved.join(stale.file_name().unwrap()).exists());
+        fs::remove_dir_all(&moved).unwrap();
+    }
+
+    #[test]
+    fn corrupt_or_unavailable_cursor_never_expands_cleanup_scope() {
+        use std::os::fd::AsRawFd;
+        let dir = PrivateDir::new();
+        let old = orphan(&dir, true);
+        let f = File::open(&dir.0).unwrap();
+        let invalid = b"corrupt";
+        let result = unsafe {
+            libc::fsetxattr(
+                f.as_raw_fd(),
+                CURSOR_XATTR.as_ptr().cast(),
+                invalid.as_ptr().cast(),
+                invalid.len(),
+                0,
+            )
+        };
+        if result == 0 {
+            assert_eq!(read_cursor(&f), 0);
+        }
+        let stats = sweep_stale(&dir.0, SystemTime::now());
+        assert!(stats.scanned <= MAX_SCANNED);
+        assert_eq!(stats.removed, 1);
+        assert!(!old.exists());
+    }
+
+    #[test]
+    fn separate_process_lock_survives_parent_scan_and_sigkill_releases_it() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Child, Command, Stdio};
+        use std::sync::mpsc;
+
+        const CHILD_LOCK_PATH: &str = "BROADCASTER_OPS01_TEST_CHILD_LOCK_PATH";
+        if let Some(path) = std::env::var_os(CHILD_LOCK_PATH) {
+            let held = File::open(PathBuf::from(path)).unwrap();
+            held.try_lock().unwrap();
+            println!("OPS01_CHILD_LOCKED");
+            io::stdout().flush().unwrap();
+            // The parent must SIGKILL us before we release the lock.
+            std::thread::sleep(Duration::from_secs(30));
+            return;
+        }
+
+        struct KillOnDrop(Child);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let dir = PrivateDir::new();
+        let old = orphan(&dir, true);
+        let lock = old.with_extension("lock");
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "separate_process_lock_survives_parent_scan_and_sigkill_releases_it",
+                "--nocapture",
+            ])
+            .env(CHILD_LOCK_PATH, &lock)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = KillOnDrop(child);
+        let stdout = child.0.stdout.take().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if line.is_ok_and(|line| line.contains("OPS01_CHILD_LOCKED")) {
+                    let _ = ready_tx.send(());
+                    break;
+                }
+            }
+        });
+        let ready = ready_rx.recv_timeout(Duration::from_secs(10));
+        if ready.is_ok() {
+            assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 0);
+            assert!(old.exists());
+        }
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        reader.join().unwrap();
+        ready.expect("separate child did not acquire spool lock");
+        assert_eq!(sweep_stale(&dir.0, SystemTime::now()).removed, 1);
+        assert!(!old.exists());
+    }
+
+    #[test]
     fn hardlinks_and_unsafe_directory_are_not_reclaimed() {
         let dir = PrivateDir::new();
         let linked = orphan(&dir, true);
@@ -510,7 +777,8 @@ mod tests {
             first.join().expect("first sweeper panicked");
         }
         if let Some(second) = contender {
-            if !matches!(contender_result, Some(Err(mpsc::RecvTimeoutError::Timeout))) {
+            let completed = !matches!(contender_result, Some(Err(mpsc::RecvTimeoutError::Timeout)));
+            if completed {
                 second.join().expect("contending sweeper panicked");
             }
         }
