@@ -147,7 +147,7 @@ fn osk_mapped_gtk_input_transaction_and_cancel() {
 #[test]
 #[ignore = "requires a mapped display and isolated test GSettings"]
 fn osk_mapped_gtk_multiple_changed_signal_observers() {
-    // R-01: Make the observable signal trace explicit, without pretending it
+    // Mapped signal observation: Make the observable signal trace explicit, without pretending it
     // proves equivalence for every custom/delegated GtkEditable implementation.
     let (win, body) = host();
     let entry = gtk::Entry::new();
@@ -1314,7 +1314,7 @@ fn osk_mapped_gtk_dropped_origin_cancel_nonretention() {
     win.destroy();
 }
 
-// NATIVE_FOCUS C01/C02/C03/C05: physical remote input traverses the actual *mapped*
+// NATIVE_FOCUS mapped-key traversal, dismissal and focus: physical remote input traverses the actual *mapped*
 // seven-row keyboard. This is not a call to `next_key` or synthetic GTK focus
 // movement: only the initial control is seeded, every subsequent focus hop
 // is delivered with XTest on an isolated X11 server.
@@ -1601,11 +1601,11 @@ fn focus_navigation_osk_native_grid_negative_owner() {
     focus_navigation_osk_complete_graph(640, 480, true);
 }
 
-// C04: reopen the *actual* keyboard from a second process using a keyfile
+// cross-process QWERTZ preference: reopen the *actual* keyboard from a second process using a keyfile
 // backend. Reading the preference twice within the same process is not a
 // persistence oracle and must never count as a cold application restart.
 #[test]
-#[ignore = "NATIVE_FOCUS C04 native OSK QWERTZ persisted across independent process"]
+#[ignore = "NATIVE_FOCUS cross-process QWERTZ preference native OSK QWERTZ persisted across independent process"]
 fn focus_navigation_osk_native_persist_qwertz_restart() {
     let config_home = std::env::temp_dir().join(format!(
         "broadcaster-osk-qwertz-process-{}",
@@ -1684,7 +1684,7 @@ fn focus_navigation_osk_qwertz_process_child() {
     win.destroy();
 }
 
-// NATIVE_FOCUS C05 / GUIDE_PICKER_PAINTED_FOCUS (OSK portion): actual Xvfb RGB pixels around the focused
+// NATIVE_FOCUS painted OSK cell focus / GUIDE_PICKER_PAINTED_FOCUS (OSK portion): actual Xvfb RGB pixels around the focused
 // keyboard cell must change when only its outline is suppressed. A logical
 // :focus bit without a painted cue does not satisfy this oracle.
 fn focus_navigation_osk_native_painted_cell(width: i32, height: i32, negative: bool) {

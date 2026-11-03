@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Opt-in local mpv 0.41 probe; never uses live media or authentic credentials.
 
-Run: python3 tests/player/mpv_http_mpv_http_probe.py [--mpv /path/to/mpv]
+Run: python3 tests/player/mpv_http_probe.py [--mpv /path/to/mpv]
 A fake mpv executable argv check runs in Rust CI separately. This probe
 tests actual mpv HTTP behavior and MUST be executed before MPV_HTTP sign-off.
 """

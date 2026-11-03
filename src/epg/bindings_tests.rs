@@ -1183,7 +1183,7 @@ fn focus_navigation_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot 
 }
 
 #[test]
-fn focus_navigation_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
+fn picker_rejects_disappeared_playlist_row_after_source_removal() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");
@@ -1213,7 +1213,7 @@ fn focus_navigation_b12_picker_rejects_disappeared_playlist_row_after_source_rem
 }
 
 #[test]
-fn focus_navigation_b13_picker_rejects_guide_removed_and_other_guide_selected() {
+fn picker_rejects_removed_guide_and_reselection() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");

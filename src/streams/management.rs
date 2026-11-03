@@ -2513,7 +2513,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             "ROW_FAVOURITE_TOGGLE no cross-card focus or UUID after reload"
         );
         // Restore the established favourite-ON fixture using the same
-        // physically focused Star; retain the F03/F04 footer/restart journey.
+        // physically focused Star; retain the favourites footer and cross-process restart journey.
         inject("Return");
         wait_until(
             &|| {
@@ -2563,7 +2563,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &|| store.favourites_only() == Ok(true) && view.remote_action_test_visible_count() == 1,
             "favourites-only toggle and SQL filter",
         );
-        // F04: a new OS process (not just another Rust service handle)
+        // favourites restart: a new OS process (not just another Rust service handle)
         // must see the true saved favourites-only mode on the same private DB.
         // The reusable Arch toolchain may invoke this test through its
         // dynamic loader rather than a native host ELF interpreter. In that
@@ -2591,13 +2591,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             .expect("spawn real independent test process");
         assert!(
             output.status.success(),
-            "NATIVE_FOCUS F04 process restart: {} {}",
+            "NATIVE_FOCUS favourite-mode process restart: {} {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-            "NATIVE_FOCUS F04 child process must execute its SQLite restart oracle"
+            "NATIVE_FOCUS favourite-mode child process must execute its SQLite restart oracle"
         );
         let reopened = glib::MainContext::default()
             .block_on(StreamsService::with_storage(store.clone()))
@@ -2715,7 +2715,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert_eq!(
             storage.favourites_only(),
             Ok(true),
-            "F04 persisted favourite mode"
+            "favourite mode persists after process restart"
         );
     }
 
@@ -2866,7 +2866,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         wrong_race: bool,
         scenario: (bool, bool, bool, bool),
     ) {
-        let (source_race, advanced_exception, false_exception, e08_actions) = scenario;
+        let (source_race, advanced_exception, false_exception, verify_card_actions) = scenario;
         use crate::streams::{
             editor,
             model::{
@@ -3088,7 +3088,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             let play = guide_mapping_focused_button(&win).expect("Play entry");
             assert_eq!(play.label().as_deref(), Some("Play"));
             view.assert_remote_action_focus_owner(play.upcast_ref(), id);
-            if e08_actions {
+            if verify_card_actions {
                 // CHANNEL_CARD_JOURNEY: activate the actual first/middle/last source-qualified
                 // SQLite cards, not merely inspect the labels. The app's
                 // test-only player absorbs Play without mpv or network access.
@@ -4441,8 +4441,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 );
             }
         }
-        if e08_actions {
-            // R2 negative-input regression: the last source-qualified row
+        if verify_card_actions {
+            // Stale unbound-card negative-input regression: the last source-qualified row
             // remains valid in SQLite, but it has *no* expanded/bound card
             // when another row is selected. Opening the async full editor
             // must fail closed before launching its detail fetch, and may
@@ -4451,7 +4451,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             spin();
             assert!(
                 view.card_mapping_context(&ids[2]).is_none(),
-                "R2 initial unbound card context must be absent"
+                "initial unbound card context must be absent"
             );
             let link_before: i64 = store
                 .connect()
@@ -4478,7 +4478,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert!(
                 guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor")
                     .is_none(),
-                "R2 initially absent card generation must never present full mapping editor"
+                "initially absent card generation must never present full mapping editor"
             );
             let db = store.connect().unwrap();
             let link_after: i64 = db
@@ -4498,7 +4498,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 (link_after, override_after),
                 (link_before, override_before),
-                "R2 no manual playlist/row write after initially invalidated card"
+                "no manual playlist/row write after initially invalidated card"
             );
         }
         win.destroy();
@@ -4654,7 +4654,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY real first/middle/last SQLite Play/Edit/Mapping physical modal returns compact"]
-    fn native_e08_action_graph_640_480() {
+    fn native_channel_card_action_graph_640_480() {
         native_channel_mapping_picker(
             640,
             480,
@@ -4668,7 +4668,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY real first/middle/last SQLite Play/Edit/Mapping physical modal returns TV"]
-    fn native_e08_action_graph_1280_800() {
+    fn native_channel_card_action_graph_1280_800() {
         native_channel_mapping_picker(
             1280,
             800,
@@ -4682,7 +4682,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY wrong middle-card identity must fail on the precise return assertion"]
-    fn native_e08_action_graph_negative() {
+    fn native_channel_card_action_graph_negative() {
         native_channel_mapping_picker(
             640,
             480,

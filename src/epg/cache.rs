@@ -219,7 +219,7 @@ pub fn read_guide_window(
 /// Validate the WHOLE snapshot before touching cached rows. A failed parse,
 /// validation, cancellation or SQLite write leaves the previous success intact.
 /// All original guide programmes (not just now/next) are stored atomically.
-/// The original E1 import remains strict about equal retrieval times.
+/// The original XMLTV snapshot import remains strict about equal retrieval times.
 pub fn replace_guide_snapshot(
     conn: &mut Connection,
     snapshot: &GuideSnapshot,
@@ -279,7 +279,7 @@ fn replace_snapshot_inner(
     if enabled != 1 {
         return Err(EpgError::Unavailable);
     }
-    // Preserve E1's original strict success-timestamp policy. EPG_CACHE instead
+    // Preserve the original import's strict success-timestamp policy. EPG_CACHE instead
     // checks the exact source revision, including competing same-second
     // refreshes, without falsifying the real last-success wall-clock time.
     match expected_revision {

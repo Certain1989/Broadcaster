@@ -782,7 +782,7 @@ jobs:
             native_facets_640_480 native_facets_1280_800 \
             native_popup_search_640_480 native_popup_search_1280_800 \
             native_playlist_guide_640_480 native_playlist_guide_1280_800 \
-            native_e08_action_graph_640_480 native_e08_action_graph_1280_800; do
+            native_channel_card_action_graph_640_480 native_channel_card_action_graph_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -811,7 +811,7 @@ jobs:
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked native_e08_action_graph_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_channel_card_action_graph_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
             echo "NATIVE_FOCUS CHANNEL_CARD_JOURNEY false middle-row return unexpectedly passed" >&2
@@ -995,11 +995,11 @@ jobs:
             native_source_refresh_negative:NATIVE_FOCUS_SOURCE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE \
             native_source_file_chooser_negative:NATIVE_FOCUS_SOURCE_FILE_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
             native_guide_add_url_negative:NATIVE_FOCUS_GUIDE_ADD_URL_EXPECTED_NEGATIVE_ORACLE \
-            native_guide_refresh_negative:NATIVE_FOCUS_APAINTED_CARDS_EXPECTED_NEGATIVE_ORACLE \
+            native_guide_refresh_negative:NATIVE_FOCUS_GUIDE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE \
             native_guide_local_chooser_negative:NATIVE_FOCUS_GUIDE_LOCAL_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
             native_guide_manager_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
             native_picker_osk_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
-            native_nested_guide_osk_negative:NATIVE_FOCUS_C09_EXPECTED_NEGATIVE_ORACLE \
+            native_nested_guide_osk_negative:NATIVE_FOCUS_NESTED_GUIDE_OSK_EXPECTED_NEGATIVE_ORACLE \
             native_app_menu_negative:NATIVE_FOCUS_APPLICATION_MENU_EXPECTED_NEGATIVE_ORACLE \
             native_mediathek_loaded_vertical_negative:NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_EXPECTED_NEGATIVE_ORACLE \
             native_recycle_removed_source_negative:NATIVE_FOCUS_CHANNEL_REBIND_EXPECTED_NEGATIVE_ORACLE \

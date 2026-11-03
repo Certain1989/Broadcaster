@@ -104,7 +104,7 @@ fn choose_by_keys(drop: &gtk::DropDown, item: u32) {
     );
 }
 
-// FILTER_POPUP-FILTER_POPUP: open the actual GTK searchable DropDown popup and type into its
+// SEARCHABLE_FACET_POPUP: open the actual GTK searchable DropDown popup and type into its
 // native SearchEntry with XTest. Do not confuse the main channels SearchEntry
 // or the global OSK with the popup's focused local search.
 fn focus_navigation_popup_search_and_cancel(
@@ -266,14 +266,14 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     ] {
         assert!(
             control.enables_search(),
-            "FILTER_POPUP-FILTER_POPUP {name} must have native popup search enabled"
+            "SEARCHABLE_FACET_POPUP {name} must have native popup search enabled"
         );
     }
     if popup_only {
         focus_navigation_popup_search_and_cancel(source, &win, &["e", "x", "t", "r", "a"]);
         focus_navigation_popup_search_and_cancel(country, &win, &["f", "r"]);
         focus_navigation_popup_search_and_cancel(language, &win, &["d", "e"]);
-        // FILTER_POPUP/FILTER_POPUP: select actual country/language popup results, not only
+        // FACET_RESULT_SELECTION: select actual country/language popup results, not only
         // cancel their search or manipulate DropDown selected properties.
         // These two facets are native searchable GTK selectors, not OSK inputs.
         fn choose_popup_search(
@@ -345,7 +345,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         assert_eq!(
             selected_id.as_deref(),
             Some(french.id.as_str()),
-            "FILTER_POPUP/FILTER_POPUP real selected French country and language must retain SQLite UUID"
+            "FACET_RESULT_SELECTION real selected French country and language must retain SQLite UUID"
         );
         choose_by_keys(language, 0);
         wait_count(
@@ -651,7 +651,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         "FILTER_TOOLBAR_REVERSIBILITY Up may return to another mapped header action but not a detached row"
     );
 
-    // F05: start a native text Search debounce while a source/group/country/
+    // Concurrent reload: start a native text Search debounce while a source/group/country/
     // language intersection is active, then mutate the real SQLite source
     // catalogue and reload before the pending search commits. It must not
     // resurrect a stale result or switch UUID across independent sources.
@@ -659,21 +659,17 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     choose_by_keys(group, filter_choice(group, "News"));
     choose_by_keys(country, filter_choice(country, "DE"));
     choose_by_keys(language, filter_choice(language, "de"));
-    wait_count(1, "F05 four filters intersect before concurrent reload");
+    wait_count(1, "four filters intersect before concurrent reload");
     let sort = targets[3].clone().downcast::<gtk::DropDown>().unwrap();
     choose_by_keys(&sort, 1);
-    assert_eq!(sort.selected(), 1, "F05 real sort changed by physical key");
-    wait_count(1, "F05 sorted filter intersection remains source-qualified");
+    assert_eq!(sort.selected(), 1, "physical sort change");
+    wait_count(1, "sorted filter intersection remains source-qualified");
     let search = targets[0].clone().downcast::<gtk::SearchEntry>().unwrap();
     assert!(search.grab_focus());
     for key in ["g", "e", "r", "m", "a", "n"] {
         inject(key);
     }
-    assert_eq!(
-        search.text().as_str(),
-        "german",
-        "F05 real XTest search typing"
-    );
+    assert_eq!(search.text().as_str(), "german", "real XTest search typing");
     // Concurrent non-network change: third source appears while the 250ms
     // Search debounce and prior async filter generations are pending.
     let concurrent = fixture_source(
@@ -684,42 +680,42 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     );
     assert_ne!(concurrent, b);
     view.source_mutated();
-    wait_count(1, "F05 post-source-change search generation");
+    wait_count(1, "post-source-change search generation");
     assert_eq!(
         view.remote_action_test_selected_id().as_deref(),
         Some(target.as_str()),
-        "F05 latest search generation never takes concurrent source UUID",
+        "latest search generation never takes concurrent source UUID",
     );
     let focused_search =
-        gtk::prelude::GtkWindowExt::focus(&win).expect("F05 async search focused widget");
+        gtk::prelude::GtkWindowExt::focus(&win).expect("async search focused widget");
     assert!(
         search.has_focus() || focused_search.is_ancestor(search.upcast_ref::<gtk::Widget>()),
-        "F05 SearchEntry or its GtkText child retains focus after rebind: {}",
+        "SearchEntry or GtkText child retains focus after rebind: {}",
         focused_search.type_().name()
     );
     assert!(clear.grab_focus());
     inject("space");
-    wait_count(14, "F05 clear after concurrent real catalogue reload");
-    assert!(search.text().is_empty(), "F05 clear removes debounced text");
+    wait_count(14, "clear after concurrent catalogue reload");
+    assert!(search.text().is_empty(), "clear removes debounced text");
     for control in [source, group, language, country] {
-        assert_eq!(control.selected(), 0, "F05 no stale filter after clearing");
+        assert_eq!(control.selected(), 0, "no stale filter after clearing");
     }
-    assert_eq!(sort.selected(), 0, "F05 Clear Filters resets sort too");
+    assert_eq!(sort.selected(), 0, "Clear Filters resets sort too");
     assert_eq!(
         store
             .query_channels(&ChannelQuery::default())
             .unwrap()
             .total,
         14,
-        "F05 no channel deletions or cross-source writes",
+        "no channel deletions or cross-source writes",
     );
     // Repeat a filter after the rebind to detect stale GtkDropDown handles.
     choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
-    wait_count(3, "F05 source dropdown remains actionable after rebind");
+    wait_count(3, "source dropdown remains actionable after rebind");
     choose_by_keys(source, 0);
-    wait_count(14, "F05 final inverse");
+    wait_count(14, "final filter inverse");
 
-    // FILTER_POPUP/FILTER_POPUP adjacent OSK integration: these two dimensions are GTK
+    // FACET_RESULT_SELECTION adjacent OSK integration: these two dimensions are GTK
     // DropDown selectors, not editable fields. Test their physical
     // keyboard inverses above and verify that the actual shared My Channels
     // search OSK does not mutate either selector when Back cancels.
@@ -759,7 +755,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     }
     assert!(
         opened,
-        "FILTER_POPUP/FILTER_POPUP shared search OSK opens from mapped launcher"
+        "FACET_RESULT_SELECTION shared search OSK opens from mapped launcher"
     );
     inject("XF86Back");
     for _ in 0..15 {
@@ -809,7 +805,7 @@ fn native_facets_negative() {
     run(640, 480, true, false, false);
 }
 
-// NATIVE_FOCUS F06–F11: large real SQLite catalogue through the production virtual
+// NATIVE_FOCUS catalogue boundaries and recycling: large real SQLite catalogue through the production virtual
 // GtkListView, with mapped XTest boundary travel and page recycling. Each
 // size runs in a fresh test subprocess with an isolated application data dir.
 // A model count or test-helper-selected card alone never constitutes a
@@ -1294,12 +1290,12 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS FILTER_POPUP-FILTER_POPUP searchable native GtkDropDown popup compact"]
+#[ignore = "NATIVE_FOCUS SEARCHABLE_FACET_POPUP searchable native GtkDropDown popup compact"]
 fn native_popup_search_640_480() {
     run(640, 480, false, true, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS FILTER_POPUP-FILTER_POPUP searchable native GtkDropDown popup TV"]
+#[ignore = "NATIVE_FOCUS SEARCHABLE_FACET_POPUP searchable native GtkDropDown popup TV"]
 fn native_popup_search_1280_800() {
     run(1280, 800, false, true, false);
 }
@@ -1310,7 +1306,7 @@ fn native_popup_search_negative() {
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS FILTER_POPUP/FILTER_POPUP intentionally false French country/language source UUID"]
+#[ignore = "NATIVE_FOCUS FACET_RESULT_SELECTION intentionally false French country/language source UUID"]
 fn native_popup_facet_negative() {
     run(640, 480, false, true, true);
 }

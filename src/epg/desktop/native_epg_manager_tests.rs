@@ -1198,7 +1198,7 @@ fn native_guide_add_url_negative() {
     native_guide_add_url(640, 480, true);
 }
 
-// NATIVE_FOCUS APAINTED_CARDS: native guide Refresh success/failure + focus return, all local
+// NATIVE_FOCUS GUIDE_REFRESH_PERSISTENCE: native guide Refresh success/failure + focus return, all local
 // synthetic XMLTV. The saved registry remains real disposable SQLite.
 fn native_guide_refresh(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
@@ -1277,13 +1277,13 @@ fn native_guide_refresh(width: i32, height: i32, negative: bool) {
     assert_remote_focus(
         &win,
         &guide_action(&manager, "Guide 0", "Refresh"),
-        "APAINTED_CARDS refresh success native focus",
+        "guide refresh success retains focus",
     );
     if negative {
         assert!(GuideSourceRegistry::new(fixture.storage.clone())
             .get(&guide_id).unwrap().last_success_at.is_none(),
-            "NATIVE_FOCUS_APAINTED_CARDS_EXPECTED_NEGATIVE_ORACLE: a successful local XMLTV refresh must persist success");
-        unreachable!("APAINTED_CARDS false success evidence was accepted");
+            "NATIVE_FOCUS_GUIDE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE: a successful local XMLTV refresh must persist success");
+        unreachable!("GUIDE_REFRESH_PERSISTENCE false success evidence was accepted");
     }
     fs::write(&file, "<invalid broken xml").unwrap();
     assert!(guide_action(&manager, "Guide 0", "Refresh").grab_focus());
@@ -1299,7 +1299,7 @@ fn native_guide_refresh(width: i32, height: i32, negative: bool) {
     assert_remote_focus(
         &win,
         &guide_action(&manager, "Guide 0", "Refresh"),
-        "APAINTED_CARDS refresh failure native focus",
+        "guide refresh failure retains focus",
     );
     let persisted = GuideSourceRegistry::new(fixture.storage.clone())
         .get(&guide_id)
@@ -1322,28 +1322,28 @@ fn native_guide_refresh(width: i32, height: i32, negative: bool) {
                 .is_some_and(|l| l.text().contains("Last refresh failed"))),
         "real warning must be rendered on the same guide's row"
     );
-    eprintln!("NATIVE_FOCUS_APAINTED_CARDS native local guide refresh {width}x{height}: success, failure, same-ID focus, cache retained");
+    eprintln!("NATIVE_FOCUS_GUIDE_REFRESH_PERSISTENCE native local guide refresh {width}x{height}: success, failure, same-ID focus, cache retained");
     manager.close();
     source.close();
     win.destroy();
 }
 #[test]
-#[ignore = "NATIVE_FOCUS APAINTED_CARDS native nonnetwork XMLTV success/failure compact"]
+#[ignore = "NATIVE_FOCUS GUIDE_REFRESH_PERSISTENCE native nonnetwork XMLTV success/failure compact"]
 fn native_guide_refresh_640_480() {
     native_guide_refresh(640, 480, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS APAINTED_CARDS native nonnetwork XMLTV success/failure TV"]
+#[ignore = "NATIVE_FOCUS GUIDE_REFRESH_PERSISTENCE native nonnetwork XMLTV success/failure TV"]
 fn native_guide_refresh_1280_800() {
     native_guide_refresh(1280, 800, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS APAINTED_CARDS invalid local XMLTV refresh success oracle"]
+#[ignore = "NATIVE_FOCUS GUIDE_REFRESH_PERSISTENCE invalid local XMLTV refresh success oracle"]
 fn native_guide_refresh_negative() {
     native_guide_refresh(640, 480, true);
 }
 
-// NATIVE_FOCUS C07/C09: actual Guide Edit on-screen keyboard, physical Back versus
+// NATIVE_FOCUS nested Guide Edit OSK: actual Guide Edit on-screen keyboard, physical Back versus
 // Home while nested, cancellation and preserved guide editor identity.
 fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
@@ -1371,24 +1371,24 @@ fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     view.source_manager_install_test_service(stream_service);
     assert!(view.source_manager_test_manage_button().grab_focus());
     inject("Return");
-    until("C09 source manager", || {
+    until("nested guide OSK source manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-source-manager").is_some()
     });
     let source = find_dialog(win.upcast_ref(), "broadcaster-source-manager").unwrap();
     let guides = named_button(source.upcast_ref(), "Programme Guides").unwrap();
     assert!(guides.grab_focus());
     inject("Return");
-    until("C09 real guide manager", || {
+    until("nested guide OSK real guide manager", || {
         find_dialog(win.upcast_ref(), "broadcaster-guide-manager").is_some()
     });
     let manager = find_dialog(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
-    until("C09 local source row", || {
+    until("nested guide OSK local source row", || {
         row(&manager, "Guide 0").is_some()
     });
     let edit = guide_action(&manager, "Guide 0", "Edit");
     assert!(edit.grab_focus());
     inject("Return");
-    until("C09 guide Edit form", || {
+    until("nested guide OSK guide Edit form", || {
         named_button(win.upcast_ref(), "Apply").is_some()
     });
     let apply = named_button(win.upcast_ref(), "Apply").unwrap();
@@ -1406,14 +1406,16 @@ fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     for (round, key) in ["XF86Back", "XF86HomePage"].iter().enumerate() {
         assert!(launcher.grab_focus());
         inject("Return");
-        until("C09 native nested OSK", || {
+        until("nested guide on-screen keyboard", || {
             find_dialog(win.upcast_ref(), "osk-production").is_some()
         });
         let osk = find_dialog(win.upcast_ref(), "osk-production").unwrap();
         let entry = first_entry(&osk);
-        entry.set_text(&format!("Unsaved C09 draft {round}"));
+        entry.set_text(&format!("Unsaved guide draft {round}"));
         inject(key);
-        until("C09 remote dismissal only topmost OSK", || !osk.is_mapped());
+        until("nested guide OSK remote dismissal only topmost OSK", || {
+            !osk.is_mapped()
+        });
         assert!(
             editor.is_mapped() && manager.is_mapped() && source.is_mapped(),
             "nested {key} must never close Guide Edit or manager behind OSK"
@@ -1428,7 +1430,7 @@ fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
             "Guide 0",
             "cancelled draft must not commit"
         );
-        until("C09 restored to Guide Edit Entry", || {
+        until("nested guide OSK restored to Guide Edit Entry", || {
             gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|w| {
                 w == name.clone().upcast::<gtk::Widget>()
                     || w.is_ancestor(name.upcast_ref::<gtk::Widget>())
@@ -1451,8 +1453,8 @@ fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     if negative {
         assert_eq!(
             name.text().as_str(),
-            "Unsaved C09 draft 1",
-            "NATIVE_FOCUS_C09_EXPECTED_NEGATIVE_ORACLE: nested Home must never save draft"
+            "Unsaved guide draft 1",
+            "NATIVE_FOCUS_NESTED_GUIDE_OSK_EXPECTED_NEGATIVE_ORACLE: nested Home must never save draft"
         );
     }
     // A subsequent Home at the parent editor, unlike Home inside the nested
@@ -1469,17 +1471,17 @@ fn native_nested_guide_osk(width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 #[test]
-#[ignore = "NATIVE_FOCUS C07/C09 nested Guide OSK actual Back and Home 640x480"]
+#[ignore = "NATIVE_FOCUS nested Guide Edit OSK actual Back and Home 640x480"]
 fn native_nested_guide_osk_640_480() {
     native_nested_guide_osk(640, 480, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS C07/C09 nested Guide OSK actual Back and Home 1280x800"]
+#[ignore = "NATIVE_FOCUS nested Guide Edit OSK actual Back and Home 1280x800"]
 fn native_nested_guide_osk_1280_800() {
     native_nested_guide_osk(1280, 800, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS C09 deliberately false OSK unsaved-draft persistence oracle"]
+#[ignore = "NATIVE_FOCUS nested Guide Edit deliberately false OSK unsaved-draft persistence oracle"]
 fn native_nested_guide_osk_negative() {
     native_nested_guide_osk(640, 480, true);
 }
