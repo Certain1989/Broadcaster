@@ -739,10 +739,10 @@ mod tests {
             let set = scalar(&tx, "PRAGMA temp.max_page_count = 4");
             assert_eq!(set, 4, "bundled SQLite must support the TEMP page limit");
             assert_eq!(scalar(&tx, "PRAGMA temp.max_page_count"), 4);
-            tx.execute_batch("CREATE TEMP TABLE sqlite_temp_capacity_page_probe (payload BLOB);")
+            tx.execute_batch("CREATE TEMP TABLE import_temp_page_probe (payload BLOB);")
                 .unwrap();
             let result = tx.execute(
-                "INSERT INTO temp.sqlite_temp_capacity_page_probe(payload) VALUES (zeroblob(?1))",
+                "INSERT INTO temp.import_temp_page_probe(payload) VALUES (zeroblob(?1))",
                 [page_size * 16],
             );
             assert!(
@@ -761,7 +761,7 @@ mod tests {
         }
         let stale: i64 = scalar(
             &conn,
-            "SELECT count(*) FROM sqlite_temp_master WHERE name='sqlite_temp_capacity_page_probe'",
+            "SELECT count(*) FROM sqlite_temp_master WHERE name='import_temp_page_probe'",
         );
         assert_eq!(
             stale, 0,
@@ -774,14 +774,14 @@ mod tests {
 
         {
             let tx = conn.transaction().unwrap();
-            tx.execute_batch("CREATE TEMP TABLE sqlite_temp_capacity_page_probe (payload BLOB);")
+            tx.execute_batch("CREATE TEMP TABLE import_temp_page_probe (payload BLOB);")
                 .unwrap();
             tx.execute(
-                "INSERT INTO temp.sqlite_temp_capacity_page_probe(payload) VALUES (zeroblob(?1))",
+                "INSERT INTO temp.import_temp_page_probe(payload) VALUES (zeroblob(?1))",
                 [page_size * 16],
             )
             .unwrap();
-            tx.execute_batch("DROP TABLE temp.sqlite_temp_capacity_page_probe;")
+            tx.execute_batch("DROP TABLE temp.import_temp_page_probe;")
                 .unwrap();
             // Locked bundled SQLite must accept restoration and readback while
             // the transaction is still active, not only after COMMIT.
