@@ -13,6 +13,31 @@ Broadcaster v0.3.0 ergänzt die Verwaltung eigener M3U-Playlists um eine optiona
 - **XMLTV-Kompatibilität:** Problematische Steuerzeichen in Sendungstiteln können sicher ausgelassen werden. Zusätzliche Tests decken auch große Programmführer ab. Externe Programmdaten können weiterhin unvollständig oder fehlerhaft sein.
 - **Speicherbetrieb und Fernbedienung:** Verwaiste XMLTV-Zwischendateien werden unter Beachtung aktiver Sperren begrenzt bereinigt. Historische Wiederherstellungskopien von Datenbankmigrationen bleiben erhalten. Weitere Regressionstests decken Quellenverwaltung und Fernbedienungsnavigation ab.
 
+
+## Screenshots
+
+Diese Screenshots stammen aus v0.2.5 und zeigen die im Wesentlichen unveränderte Oberfläche von v0.3.0. Die neuen Dialoge für die automatische Playlist-Aktualisierung und die Datenbanksicherung sind darauf nicht abgebildet.
+
+### Mediathek-Suche
+
+<img width="960" alt="Mediathek-Suche mit Sender- und Dauerfilter" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/mediathek-search.png" />
+
+### Live-TV
+
+<img width="960" alt="Live-TV-Senderliste mit Fortschrittsanzeigen und Beschreibungen" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/live-tv.png" />
+
+### Bildschirmtastatur
+
+<img width="960" alt="Bildschirmtastatur über der Live-TV-Senderliste" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### Eigene Sender mit Jetzt/Nächste
+
+<img width="960" alt="IPTV-Senderlisten mit Favoriten und XMLTV-Programminformationen" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programmführer
+
+<img width="960" alt="Programmführer-Verwaltung mit Quellen und gemeinsamem Standard" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/programme-guides.png" />
+
 ## Datenbank sichern und wiederherstellen
 
 Unter **Eigene Sender → Quellen verwalten → Backup / Restore** stehen beide Funktionen bereit.
