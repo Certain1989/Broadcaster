@@ -34,7 +34,7 @@ mod storage_tests;
 mod tests;
 
 #[cfg(test)]
-pub(crate) fn assert_s5_form_controls() {
+pub(crate) fn assert_native_stream_form_controls() {
     editor::assert_synthetic_editor_form();
     management::assert_synthetic_source_defaults_form();
 }
