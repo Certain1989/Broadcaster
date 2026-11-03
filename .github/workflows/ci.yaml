@@ -880,7 +880,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "FOCUS-AUD deliberate skipped editor selection correctly rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-popup-fixture-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
