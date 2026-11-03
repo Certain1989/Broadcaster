@@ -54,7 +54,7 @@ BACKUP_COMPAT_TOKENS = (
     '.broadcaster-d1-restore-request', '.broadcaster-d1-import-',
     '.broadcaster-d1-recovery-', '.broadcaster-d1-marker-',
     '.broadcaster-d1-rollback-', '.broadcaster-d1-recovery-stage-',
-    'broadcaster-d1-test-', '"D1\\n{}\\n{}\\n"', 'Some("D1")',
+    '"D1\\n{}\\n{}\\n"', 'Some("D1")',
 )
 DIAGNOSTIC_LABELS = re.compile(r"(?<![A-Za-z0-9])(?:R2|E1)(?![A-Za-z0-9])")
 # Files with historical two-character labels are not legitimate fixture row IDs.
@@ -88,6 +88,9 @@ def violations(rel: str, contents: str) -> list[str]:
 
 def self_test() -> None:
     assert violations("src/window/r07_focus.rs", "fn r07_focus() {}")
+    assert violations("src/streams/backup.rs", 'let p = "broadcaster-d1-test-";')
+    assert not violations("src/streams/backup.rs", 'let p = "broadcaster-backup-test-";')
+    assert not violations("src/streams/backup.rs", 'let p = ".broadcaster-d1-restore-request";')
     assert violations("src/test.rs", "NATIVE_FOCUS_AS10_EXPECTED_NEGATIVE_ORACLE")
     for label in ("C09", "F04", "F05", "E08", "B12", "B13", "R-01", "R2", "E1"):
         assert violations("src/test.rs", f'NATIVE_FOCUS_{label}_EXPECTED_NEGATIVE_ORACLE'), label
