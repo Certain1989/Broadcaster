@@ -59,7 +59,7 @@ jobs:
             fi
           done
           if command -v dpkg-query >/dev/null; then
-            dpkg-query -W -f='DIAG_DEB $(binary:Package)=$(Version)\n' flatpak libostree-1-1 libglib2.0-0t64 libglib2.0-0 2>/dev/null || true
+            dpkg-query -W -f='DIAG_DEB ${binary:Package}=${Version}\n' flatpak libostree-1-1 libglib2.0-0t64 libglib2.0-0 2>/dev/null || true
           fi
           if command -v rpm >/dev/null; then rpm -q flatpak ostree-libs glib2 || true; fi
           case "$(flatpak --version)" in
@@ -165,7 +165,7 @@ jobs:
             fi
           done
           if command -v dpkg-query >/dev/null; then
-            dpkg-query -W -f='DIAG_DEB $(binary:Package)=$(Version)\n' flatpak libostree-1-1 libglib2.0-0t64 libglib2.0-0 2>/dev/null || true
+            dpkg-query -W -f='DIAG_DEB ${binary:Package}=${Version}\n' flatpak libostree-1-1 libglib2.0-0t64 libglib2.0-0 2>/dev/null || true
           fi
           if command -v rpm >/dev/null; then rpm -q flatpak ostree-libs glib2 || true; fi
           case "$(flatpak --version)" in
