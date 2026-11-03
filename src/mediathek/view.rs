@@ -1460,7 +1460,7 @@ mod tests {
             let entry_bounds = entry.compute_bounds(panel).expect("mapped entry");
             let button_bounds = keyboard.compute_bounds(panel).expect("mapped keyboard");
             println!(
-                "UX02 geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
+                "MAPPED_TOOLBAR_LAYOUT geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
                 panel.width(), panel.height(), search_row.height(), entry.width(), entry.height(),
                 entry_bounds.x(), entry_bounds.y(), keyboard.width(), keyboard.height(),
                 button_bounds.x(), button_bounds.y(), second_row.map_or(0, gtk::Widget::height)
@@ -1563,7 +1563,7 @@ mod tests {
             // entries) establish the visual parity; the two Mediathek toggles
             // must also match the keyboard in the narrow-allocation test.
             println!(
-                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
+                "MAPPED_TOOLBAR_LAYOUT launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
             );
             let mediathek_gap = mediathek_entry_height - mediathek_keyboard_size.1;
             for (name, reference, reference_gap) in [
@@ -1594,7 +1594,7 @@ mod tests {
             // must expose identical content widths; Live's 6px margins leave
             // exactly 12px more available for its corresponding content.
             println!(
-                "UX02 compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
+                "MAPPED_TOOLBAR_LAYOUT compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
             );
             assert!(
                 mediathek_panel_width == streams_panel_width
