@@ -2462,11 +2462,11 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 guide_mapping_focused_button(&win)
                     .is_some_and(|b| b.label().as_deref() == Some("Play"))
             },
-            "F02 expanded real card Play action",
+            "ROW_FAVOURITE_TOGGLE expanded real card Play action",
         );
         let expanded_star = view
             .remote_action_test_row_star(&first_id)
-            .expect("F02 same bound expanded row Star");
+            .expect("ROW_FAVOURITE_TOGGLE same bound expanded row Star");
         // New direct remote route: Play Right enters Star, Star Left
         // reverses to Play. This must not require Tab or focus injection.
         inject("Right");
@@ -2505,12 +2505,12 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             star.label().as_deref() == Some("☆") && star.has_focus()
                         })
             },
-            "F02 expanded-row star OFF persists and focus returns after async reload",
+            "ROW_FAVOURITE_TOGGLE expanded-row star OFF persists and focus returns after async reload",
         );
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(first_id.as_str()),
-            "F02 no cross-card focus or UUID after reload"
+            "ROW_FAVOURITE_TOGGLE no cross-card focus or UUID after reload"
         );
         // Restore the established favourite-ON fixture using the same
         // physically focused Star; retain the F03/F04 footer/restart journey.
@@ -2526,7 +2526,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             star.label().as_deref() == Some("★") && star.has_focus()
                         })
             },
-            "F02 inverse ON persists before favourite-filter regression",
+            "ROW_FAVOURITE_TOGGLE inverse ON persists before favourite-filter regression",
         );
         let (favourites, show_all) = view.remote_action_test_favourite_buttons();
         if painted {
