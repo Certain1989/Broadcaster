@@ -29,7 +29,7 @@ mapfile -t matching_tests < <(awk -v sought="$case_name" '
   }
 ' "$list_log")
 if (( ${#matching_tests[@]} != 1 )); then
-  printf 'CI exact selector expected one named %s test, found %s\n' \
+  printf 'CI false-green prevented: exact selector expected one named %s test, found %s\n' \
     "$case_name" "${#matching_tests[@]}" >&2
   printf '%s\n' "${matching_tests[@]}" >&2
   exit 1

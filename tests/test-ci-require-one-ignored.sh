@@ -53,10 +53,10 @@ grep -Fq '1 passed; 0 failed' "$scratch/log"
 if MOCK_INVENTORY=duplicate bash tests/ci-require-one-ignored.sh source_manager_actual_remote_back_trace >"$scratch/log" 2>&1; then
   echo 'Ambiguous same-leaf test inventory was wrongly accepted' >&2; exit 1
 fi
-grep -Fq 'expected one named source_manager_actual_remote_back_trace test, found 2' "$scratch/log"
+grep -Fq 'CI false-green prevented: exact selector expected one named source_manager_actual_remote_back_trace test, found 2' "$scratch/log"
 
 if MOCK_INVENTORY=zero bash tests/ci-require-one-ignored.sh source_manager_actual_remote_back_trace >"$scratch/log" 2>&1; then
   echo 'Zero-match test inventory was wrongly accepted' >&2; exit 1
 fi
-grep -Fq 'expected one named source_manager_actual_remote_back_trace test, found 0' "$scratch/log"
+grep -Fq 'CI false-green prevented: exact selector expected one named source_manager_actual_remote_back_trace test, found 0' "$scratch/log"
 echo 'Native CI exact selection: prefix isolation and ambiguous/zero-match negatives PASS'
