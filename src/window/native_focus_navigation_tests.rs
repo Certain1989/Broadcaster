@@ -126,7 +126,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
         focused_inside(&win, first.upcast_ref(), "Live Search -> first row");
         assert!(
             first.has_focus(),
-            "NATIVE_FOCUS E01: first Live card row itself must own focus"
+            "NATIVE_FOCUS LIVE_ROW_FOCUS: first Live card row itself must own focus"
         );
         assert_eq!(
             win.imp().live_view.native_channel_id(0).as_deref(),
@@ -143,7 +143,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
             focused_inside(&win, next.upcast_ref(), "Live real next row");
             assert!(
                 next.has_focus(),
-                "NATIVE_FOCUS E01: Down must focus the Live row, not an inner button"
+                "NATIVE_FOCUS LIVE_ROW_FOCUS: Down must focus the Live row, not an inner button"
             );
         }
         for index in (0..4).rev() {
@@ -152,7 +152,7 @@ fn run(page: &str, width: i32, height: i32, negative: bool) {
             focused_inside(&win, previous.upcast_ref(), "Live real previous row");
             assert!(
                 previous.has_focus(),
-                "NATIVE_FOCUS E01: Up must focus the previous Live row directly"
+                "NATIVE_FOCUS LIVE_ROW_FOCUS: Up must focus the previous Live row directly"
             );
         }
     } else {
@@ -320,7 +320,7 @@ fn native_live_play_negative_source_identity() {
     run_live_play_portals(640, 480, "Return", true);
 }
 
-// D01/D02/PAGE_SWITCHER: combine the Live controls, first/middle/last real rows,
+// LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS/PAGE_SWITCHER: combine the Live controls, first/middle/last real rows,
 // expanded Play, real category switcher and Home in one physical journey.
 // This deliberately tests the complete navigation connection rather than
 // giving PASS credit for isolated toolbar-only or row-only fixtures.
@@ -349,12 +349,12 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     assert!(search.is_mapped() && search.grab_focus());
     settle();
     inject("Right", true);
-    focused_inside(&win, &keyboard, "D01/D02 real keyboard right");
+    focused_inside(&win, &keyboard, "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS real keyboard right");
     inject("Left", false);
-    focused_inside(&win, &search, "D01/D02 Search inverse");
+    focused_inside(&win, &search, "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Search inverse");
     inject("Down", false);
     let first = list.row_at_index(0).expect("mapped first Live row");
-    focused_inside(&win, first.upcast_ref(), "D01/D02 Search to first result");
+    focused_inside(&win, first.upcast_ref(), "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Search to first result");
     for index in 0..5 {
         if index > 0 {
             inject("Down", false);
@@ -376,7 +376,7 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     let last = list.row_at_index(4).unwrap();
     // Physical OK enters Play but never starts mpv; Left returns to the same row.
     inject("Return", false);
-    let play = win.focused_widget().expect("D01/D02 real focused Play");
+    let play = win.focused_widget().expect("LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS real focused Play");
     assert!(play.is_mapped() && TvWindow::is_within(&play, last.upcast_ref()));
     assert_eq!(
         play.downcast_ref::<gtk::Button>()
@@ -385,16 +385,16 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
         Some("card.play"),
     );
     inject("Left", false);
-    assert!(last.has_focus(), "D01/D02 Play Left returns last Live row");
+    assert!(last.has_focus(), "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Play Left returns last Live row");
     live.focus_navigation_collapse_test_channel(4);
     settle();
     for index in (0..4).rev() {
         inject("Up", false);
         let row = list.row_at_index(index).unwrap();
-        assert!(row.has_focus(), "D01/D02 reverse returns row {index}");
+        assert!(row.has_focus(), "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS reverse returns row {index}");
     }
     inject("Up", false);
-    focused_inside(&win, &search, "D01/D02 first row Up to Search");
+    focused_inside(&win, &search, "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS first row Up to Search");
     inject("Up", false);
     let switcher = TvWindow::find_descendant(win.upcast_ref(), &|w| {
         (w.is::<adw::ViewSwitcher>() || w.is::<adw::ViewSwitcherBar>()) && w.is_mapped()
@@ -410,15 +410,15 @@ fn run_live_complete_graph(width: i32, height: i32, wrong_row: bool) {
     assert_eq!(
         win.imp().stack.visible_child_name().as_deref(),
         Some("mediathek"),
-        "D01/D02 Home switches to Mediathek",
+        "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Home switches to Mediathek",
     );
-    let home_owner = win.focused_widget().expect("D01/D02 Home focus owner");
+    let home_owner = win.focused_widget().expect("LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Home focus owner");
     assert!(
         home_owner.is_mapped()
             && home_owner.is_sensitive()
             && (TvWindow::is_within(&home_owner, &switcher)
                 || TvWindow::is_within(&home_owner, win.imp().mediathek_view.upcast_ref(),)),
-        "D01/D02 Home focus must remain on a mapped Mediathek or switcher control",
+        "LIVE_SEARCH_NAVIGATION/LIVE_LAST_ROW_FOCUS Home focus must remain on a mapped Mediathek or switcher control",
     );
     win.destroy();
 }
