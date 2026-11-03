@@ -39,7 +39,7 @@ use super::{
     service::StreamsService,
 };
 
-// Only E4 presentation uses these time labels. UTC matching remains in E3.
+// These time labels are for presentation only; guide matching remains in UTC.
 // Injecting the zone makes fall-back/repeated-hour cases testable without
 // mutating the process-wide TZ or relying on a CI runner's local timezone.
 #[derive(Clone)]
@@ -2371,7 +2371,7 @@ impl TvStreamsView {
             );
             assert_eq!(model.cached_pages(), 0);
             eprintln!(
-                "S4 detached lazy model {count} positions: 1 slot, duration={:?}",
+                "LAZY_STREAM_MODEL detached {count} positions: 1 slot, duration={:?}",
                 start.elapsed()
             );
         }
