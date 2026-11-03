@@ -150,7 +150,7 @@ struct Fixture {
 impl Fixture {
     fn new(count: usize) -> Self {
         let home =
-            std::env::temp_dir().join(format!("broadcaster-epg_manager-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("broadcaster-epg-manager-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&home).unwrap();
         std::env::set_var("XDG_DATA_HOME", &home);
         let storage = Storage::new();
