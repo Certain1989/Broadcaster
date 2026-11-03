@@ -53,7 +53,7 @@ sys.stdout.buffer.write(pixels)
 "#;
 
 #[derive(Clone, Copy)]
-struct NATIVE_FOCUSPaintBox {
+struct NativeFocusPaintBox {
     x: i32,
     y: i32,
     w: usize,
@@ -65,7 +65,7 @@ struct NATIVE_FOCUSPaintBox {
     bottom: i32,
 }
 
-impl NATIVE_FOCUSPaintBox {
+impl NativeFocusPaintBox {
     fn new(win: &TvWindow, widget: &gtk::Widget) -> Self {
         let rect = widget
             .compute_bounds(win.upcast_ref::<gtk::Widget>())
@@ -153,7 +153,7 @@ pub(crate) fn focus_navigation_painted_probe(win: &TvWindow, widget: &gtk::Widge
     assert!(widget.is_mapped() && widget.is_visible() && widget.is_sensitive());
     let focused = win.focused_widget().expect("NATIVE_FOCUS painted focus owner");
     assert!(TvWindow::is_within(&focused, widget), "NATIVE_FOCUS painted {label} logical owner");
-    let box_ = NATIVE_FOCUSPaintBox::new(win, widget);
+    let box_ = NativeFocusPaintBox::new(win, widget);
     eprintln!("NATIVE_FOCUS_GEOM {label}: crop=({},{} {}x{}) control=({},{},{},{}) mapped={} css={:?}",box_.x,box_.y,box_.w,box_.h,box_.left,box_.top,box_.right,box_.bottom,widget.is_mapped(),widget.css_classes());
     settle();
     let positive = box_.capture();
@@ -262,7 +262,7 @@ pub(crate) fn focus_navigation_painted_probe_physical_inverse(
             && TvWindow::is_within(&focused, widget),
         "NATIVE_FOCUS {label}: starting mapped target and owner"
     );
-    let box_ = NATIVE_FOCUSPaintBox::new(win, widget);
+    let box_ = NativeFocusPaintBox::new(win, widget);
     settle();
     let positive = box_.capture();
     away();
