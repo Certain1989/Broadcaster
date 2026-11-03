@@ -1347,7 +1347,10 @@ mod playback_navigation_tests {
             streams.remote_action_test_state()
         );
         spin();
-        eprintln!("CHANNEL_ROW_ACTIVATION after animation: {}", streams.remote_action_test_state());
+        eprintln!(
+            "CHANNEL_ROW_ACTIVATION after animation: {}",
+            streams.remote_action_test_state()
+        );
         // GtkListView may still retain an unbound/recycled ListItem with the
         // same *position* as the selected row. Its detached buttons are
         // correctly unmapped, but are not the actions rendered on screen.
