@@ -17,7 +17,7 @@ run_positive() {
   # GUIDE_MAPPING's real-SQLite safety guard requires its established fixture prefix.
   # Preserve that guard; never relax production or test storage protections.
   case "$case_name" in
-    native_channel_*) data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX) ;;
+    native_channel_*) data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX) ;;
     *) data_dir=$(mktemp -d -t broadcaster-fast-ci-XXXXXXXX) ;;
   esac
   if ! xvfb-run -a -s "-screen 0 ${geometry}x24" \
