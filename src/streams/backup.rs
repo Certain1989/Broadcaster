@@ -729,8 +729,8 @@ mod tests {
     struct Sandbox(PathBuf);
     impl Sandbox {
         fn new() -> Self {
-            let path =
-                std::env::temp_dir().join(format!("broadcaster-d1-test-{}", uuid::Uuid::new_v4()));
+            let path = std::env::temp_dir()
+                .join(format!("broadcaster-backup-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             #[cfg(unix)]
             {
