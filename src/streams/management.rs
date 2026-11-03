@@ -2448,7 +2448,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .is_some_and(|star| star.has_focus()),
             "the toggled star must reclaim focus after SQLite reload"
         );
-        // F02: move back into the exact real card, expand it using physical
+        // ROW_FAVOURITE_TOGGLE: move back into the exact real card, expand it using physical
         // Return and reach its Star with the *remote D-pad*.
         // Tab-only evidence did not prove real TV remote accessibility.
         inject("Right");
