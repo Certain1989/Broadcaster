@@ -87,7 +87,7 @@ fn query_all() -> ChannelQuery {
     }
 }
 #[test]
-fn exact_migration_v1_with_fk_and_d6_constraints() {
+fn exact_migration_v1_with_fk_and_storage_migration_constraints() {
     let f = Fixture::new();
     let conn = f.conn();
     assert_eq!(
@@ -904,7 +904,7 @@ fn logo_references_protect_other_and_disabled_sources() {
 }
 
 #[test]
-fn d35_favourites_persist_across_reopen_and_filter_sql_before_paging_and_facets() {
+fn guide_picker_favourites_persist_across_reopen_and_filter_sql_before_paging_and_facets() {
     let f = Fixture::new();
     let (source, _) = f.new_source("All channels", 5);
     let all = f.store.query_channels(&query_all()).unwrap();

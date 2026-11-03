@@ -176,7 +176,9 @@ impl GlobalGuideManager {
                 heavy_imports: Arc::new(Semaphore::new(1)),
             }),
         };
-        service.start_opt_in_scheduler();
+        if !crate::streams::backup::suppress_automatic_refresh_this_startup() {
+            service.start_opt_in_scheduler();
+        }
         Ok(service)
     }
     /// An application-lifetime timer runs only for sources whose user
@@ -691,7 +693,7 @@ async fn read_local_spooled_inner(
 }
 
 #[cfg(test)]
-mod e2_admission_tests {
+mod epg_cache_admission_tests {
     use super::*;
     use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};

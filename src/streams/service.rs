@@ -11,7 +11,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     sync::{
-        atomic::{AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -162,7 +162,9 @@ impl StreamsService {
     /// GLib future; all later repository operations use the same worker bridge.
     pub(crate) async fn open() -> Result<Self, ServiceError> {
         let service = Self::with_storage(Storage::new()).await?;
-        service.start_opt_in_scheduler();
+        if !super::backup::suppress_automatic_refresh_this_startup() {
+            service.start_opt_in_scheduler();
+        }
         Ok(service)
     }
 
@@ -239,6 +241,41 @@ impl StreamsService {
         self.db(move |s| {
             s.due_source_ids_excluding(at, 2, &active)
                 .map_err(Into::into)
+        })
+        .await
+    }
+
+    /// Backup/restore runs on a SQLite worker, never GTK or an HTTP worker.
+    pub(crate) async fn export_database(
+        &self,
+        destination: std::path::PathBuf,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<super::backup::SnapshotCounts, ServiceError> {
+        self.db(move |storage| {
+            super::backup::export_cancellable(&storage, &destination, &cancelled)
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub(crate) async fn prepare_database_import(
+        &self,
+        source: std::path::PathBuf,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<super::backup::PreparedImport, ServiceError> {
+        self.db(move |storage| {
+            super::backup::prepare_import_cancellable(&storage, &source, &cancelled)
+                .map_err(Into::into)
+        })
+        .await
+    }
+
+    pub(crate) async fn confirm_database_import(
+        &self,
+        prepared: super::backup::PreparedImport,
+    ) -> Result<(), ServiceError> {
+        self.db(move |storage| {
+            super::backup::confirm_import(&storage, prepared).map_err(Into::into)
         })
         .await
     }
@@ -713,7 +750,7 @@ impl StreamsService {
 
     /// Reselecting a revoked portal file grant or changing a configured URL
     /// uses the same preview/approval as refresh, but commits the new origin
-    /// and catalogue together using S1's D1 transaction.
+    /// and catalogue together in one atomic source-and-catalogue transaction.
     pub(crate) async fn replace_origin(
         &self,
         id: &str,

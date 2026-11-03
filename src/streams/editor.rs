@@ -296,6 +296,7 @@ impl Fields {
             &detail.effective.countries
         };
         let countries = FacetPicker::new(FacetDimension::Country, initial_countries);
+        languages.link_next(&country_mode);
         label(
             &format!(
                 "{} · {}",
@@ -320,6 +321,7 @@ impl Fields {
             set_text(&detail.effective.countries),
         );
         let region_mode = mode_picker(detail.overrides.region.mode);
+        countries.link_next(&region_mode);
         let region = detail
             .overrides
             .region
@@ -838,7 +840,7 @@ fn confirm_epg_mapping(
     }
     if matches!(action, MappingAction::ExactAlias) {
         // Literal strings, never markup. This is the exact scope a future
-        // atomic E3 API must compare under the same write transaction.
+        // atomic exact-alias API must compare under the same write transaction.
         label(
             &format!(
                 "{}: {}\n{}: {}\n{}: {}",
@@ -942,28 +944,28 @@ fn confirm_epg_mapping(
 // source swap can be injected before presentation; no production shortcut.
 #[cfg(test)]
 thread_local! {
-    static C4_PICKER_DIALOG: std::cell::RefCell<Option<glib::WeakRef<adw::Dialog>>> =
+    static GUIDE_MAPPING_PICKER_DIALOG: std::cell::RefCell<Option<glib::WeakRef<adw::Dialog>>> =
         const { std::cell::RefCell::new(None) };
-    static C4_PICKER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static C4_PICKER_LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static GUIDE_MAPPING_PICKER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static GUIDE_MAPPING_PICKER_LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 #[cfg(test)]
-pub(crate) fn c4_test_picker_dialog() -> Option<adw::Dialog> {
-    C4_PICKER_DIALOG.with(|slot| slot.borrow().as_ref().and_then(glib::WeakRef::upgrade))
+pub(crate) fn guide_mapping_test_picker_dialog() -> Option<adw::Dialog> {
+    GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.borrow().as_ref().and_then(glib::WeakRef::upgrade))
 }
 #[cfg(test)]
-pub(crate) fn c4_test_pause_picker(paused: bool) {
-    C4_PICKER_PAUSED.with(|state| state.set(paused));
+pub(crate) fn guide_mapping_test_pause_picker(paused: bool) {
+    GUIDE_MAPPING_PICKER_PAUSED.with(|state| state.set(paused));
     if paused {
-        C4_PICKER_LOADED.with(|state| state.set(false));
+        GUIDE_MAPPING_PICKER_LOADED.with(|state| state.set(false));
     }
 }
 #[cfg(test)]
-pub(crate) fn c4_test_picker_loaded() -> bool {
-    C4_PICKER_LOADED.with(std::cell::Cell::get)
+pub(crate) fn guide_mapping_test_picker_loaded() -> bool {
+    GUIDE_MAPPING_PICKER_LOADED.with(std::cell::Cell::get)
 }
 
-// D35 compact on-card mapper. The fuller manager is retained for the other
+// GUIDE_PICKER compact on-card mapper. The fuller manager is retained for the other
 // explicit guide management workflows; the card action uses only this picker.
 #[derive(Clone)]
 struct CardMappingData {
@@ -1175,10 +1177,36 @@ fn card_picker_apply(
     ));
 }
 
+// Local D-pad edges are owned by their live widgets; a recycled search result
+// must never retain an old destination or become a ghost navigation target.
+fn picker_focus_edge(from: &impl IsA<gtk::Widget>, key: gtk::gdk::Key, to: &impl IsA<gtk::Widget>) {
+    let target = to.as_ref().downgrade();
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    controller.connect_key_pressed(move |_, pressed, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && (pressed == key
+                || (key == gtk::gdk::Key::Down && pressed == gtk::gdk::Key::KP_Down)
+                || (key == gtk::gdk::Key::Up && pressed == gtk::gdk::Key::KP_Up)
+                || (key == gtk::gdk::Key::Left && pressed == gtk::gdk::Key::KP_Left)
+                || (key == gtk::gdk::Key::Right && pressed == gtk::gdk::Key::KP_Right))
+            && target.upgrade().is_some_and(|target| {
+                target.is_mapped() && target.is_sensitive() && target.grab_focus()
+            })
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    from.add_controller(controller);
+}
+
 struct CardSearchUi {
     results: gtk::Box,
     previous: gtk::Button,
     next: gtk::Button,
+    entry: gtk::Entry,
+    settings: gtk::Button,
     page: std::rc::Rc<std::cell::Cell<u32>>,
     serial: std::rc::Rc<std::cell::Cell<u64>>,
 }
@@ -1187,6 +1215,8 @@ impl CardSearchUi {
         results: &gtk::Box,
         previous: &gtk::Button,
         next: &gtk::Button,
+        entry: &gtk::Entry,
+        settings: &gtk::Button,
         page: &std::rc::Rc<std::cell::Cell<u32>>,
         serial: &std::rc::Rc<std::cell::Cell<u64>>,
     ) -> Self {
@@ -1194,6 +1224,8 @@ impl CardSearchUi {
             results: results.clone(),
             previous: previous.clone(),
             next: next.clone(),
+            entry: entry.clone(),
+            settings: settings.clone(),
             page: page.clone(),
             serial: serial.clone(),
         }
@@ -1213,6 +1245,8 @@ fn refresh_card_guide_search(
     let next = &ui.next;
     let page = &ui.page;
     let serial = &ui.serial;
+    let result_entry = ui.entry.clone();
+    let result_settings = ui.settings.clone();
     let generation = serial.get().wrapping_add(1);
     serial.set(generation);
     let current_page = page.get();
@@ -1234,11 +1268,26 @@ fn refresh_card_guide_search(
         #[weak]
         next,
         #[strong]
+        result_entry,
+        #[strong]
+        result_settings,
+        #[strong]
         serial,
         async move {
             let found = search_card_guide(guide, query, current_page).await;
             if serial.get() != generation {
                 return;
+            }
+            // Only a currently focused result needs rescue before GTK
+            // destroys its button on search, pagination or guide refresh.
+            let had_result_focus = results
+                .root()
+                .and_downcast::<gtk::Window>()
+                .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window))
+                .is_some_and(|focused| results.is_ancestor(&focused));
+            let had_pager_focus = previous.has_focus() || next.has_focus();
+            if had_result_focus {
+                result_entry.grab_focus();
             }
             while let Some(first) = results.first_child() {
                 results.remove(&first);
@@ -1249,6 +1298,7 @@ fn refresh_card_guide_search(
                     channels.truncate(30);
                     previous.set_sensitive(current_page > 0);
                     next.set_sensitive(more);
+                    let mut result_buttons = Vec::new();
                     for (id, name) in channels {
                         let button = gtk::Button::with_label(&format!("{name} — [{id}]"));
                         button.set_halign(gtk::Align::Fill);
@@ -1263,6 +1313,32 @@ fn refresh_card_guide_search(
                             move |_| card_picker_apply(&view, &dialog, &status, &snap, id.clone())
                         ));
                         results.append(&button);
+                        result_buttons.push(button);
+                    }
+                    for (index, button) in result_buttons.iter().enumerate() {
+                        let before: &gtk::Widget = if index == 0 {
+                            result_entry.upcast_ref()
+                        } else {
+                            result_buttons[index - 1].upcast_ref()
+                        };
+                        picker_focus_edge(button, gtk::gdk::Key::Up, before);
+                        let after: &gtk::Widget = if index + 1 < result_buttons.len() {
+                            result_buttons[index + 1].upcast_ref()
+                        } else if next.is_sensitive() {
+                            next.upcast_ref()
+                        } else if previous.is_sensitive() {
+                            previous.upcast_ref()
+                        } else {
+                            result_settings.upcast_ref()
+                        };
+                        picker_focus_edge(button, gtk::gdk::Key::Down, after);
+                    }
+                    if had_result_focus || had_pager_focus {
+                        if let Some(first) = result_buttons.first() {
+                            first.grab_focus();
+                        } else {
+                            result_entry.grab_focus();
+                        }
                     }
                     status.set_text(&format!(
                         "{} / {}",
@@ -1375,8 +1451,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             };
             #[cfg(test)]
             {
-                C4_PICKER_LOADED.with(|state| state.set(true));
-                while C4_PICKER_PAUSED.with(std::cell::Cell::get) {
+                GUIDE_MAPPING_PICKER_LOADED.with(|state| state.set(true));
+                while GUIDE_MAPPING_PICKER_PAUSED.with(std::cell::Cell::get) {
                     glib::timeout_future(std::time::Duration::from_millis(10)).await;
                 }
             }
@@ -1456,7 +1532,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             search_area.append(&pager);
             advanced.set_child(Some(&search_area));
             body.append(&advanced);
-            // The compact D35 row picker deliberately only confirms a single
+            // The compact GUIDE_PICKER row picker deliberately only confirms a single
             // exact channel identity. Route explicit playlist-guide overrides
             // to the pre-existing, separately confirmed full mapping editor;
             // never change a playlist binding merely by opening this control.
@@ -1496,6 +1572,114 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             let snapshot = data.snapshot.clone();
             let current_page = std::rc::Rc::new(std::cell::Cell::new(0_u32));
             let generation = std::rc::Rc::new(std::cell::Cell::new(0_u64));
+            // Explicit section transitions, never depending on GtkScrolledWindow
+            // becoming an accidental focus stop at small TV resolutions.
+            scroll.set_focusable(false);
+            let mut suggestions = Vec::new();
+            let mut sibling = body.first_child();
+            while let Some(child) = sibling {
+                if let Ok(button) = child.clone().downcast::<gtk::Button>() {
+                    if button != search_toggle && button != guide_settings && button != close {
+                        suggestions.push(button);
+                    }
+                }
+                sibling = child.next_sibling();
+            }
+            for (index, item) in suggestions.iter().enumerate() {
+                let below: &gtk::Widget = suggestions
+                    .get(index + 1)
+                    .map(|w| w.upcast_ref())
+                    .unwrap_or(search_toggle.upcast_ref());
+                picker_focus_edge(item, gtk::gdk::Key::Down, below);
+                if index > 0 {
+                    picker_focus_edge(item, gtk::gdk::Key::Up, &suggestions[index - 1]);
+                }
+            }
+            if let Some(last) = suggestions.last() {
+                picker_focus_edge(&search_toggle, gtk::gdk::Key::Up, last);
+            }
+            // Up from the footer returns to the actual last live search
+            // section, not past a pager or an asynchronously replaced row.
+            picker_focus_edge(&search_toggle, gtk::gdk::Key::Down, &guide_settings);
+            let up_from_settings = gtk::EventControllerKey::new();
+            up_from_settings.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let next_for_up = next.downgrade();
+            let prev_for_up = prev.downgrade();
+            let results_for_up = results.downgrade();
+            let toggle_for_up = search_toggle.downgrade();
+            up_from_settings.connect_key_pressed(move |_, key, _, modifiers| {
+                if crate::keyboard::unmodified_remote(modifiers)
+                    && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                {
+                    let pager = next_for_up
+                        .upgrade()
+                        .filter(|w| w.is_sensitive())
+                        .or_else(|| prev_for_up.upgrade().filter(|w| w.is_sensitive()));
+                    let target = pager
+                        .map(|w| w.upcast::<gtk::Widget>())
+                        .or_else(|| results_for_up.upgrade().and_then(|w| w.last_child()))
+                        .or_else(|| toggle_for_up.upgrade().map(|w| w.upcast()));
+                    if target.is_some_and(|w| w.is_mapped() && w.grab_focus()) {
+                        return glib::Propagation::Stop;
+                    }
+                }
+                glib::Propagation::Proceed
+            });
+            guide_settings.add_controller(up_from_settings);
+            picker_focus_edge(&guide_settings, gtk::gdk::Key::Down, &close);
+            picker_focus_edge(&close, gtk::gdk::Key::Up, &guide_settings);
+            picker_focus_edge(&prev, gtk::gdk::Key::Right, &next);
+            picker_focus_edge(&next, gtk::gdk::Key::Left, &prev);
+            picker_focus_edge(&prev, gtk::gdk::Key::Down, &guide_settings);
+            picker_focus_edge(&next, gtk::gdk::Key::Down, &guide_settings);
+            picker_focus_edge(&guide_settings, gtk::gdk::Key::Left, &prev);
+            picker_focus_edge(&guide_settings, gtk::gdk::Key::Right, &next);
+            // Up from the pager re-enters the current live result, not a
+            // button from the previous async page.
+            for pager in [&prev, &next] {
+                let results_for_pager = results.downgrade();
+                let entry_for_pager = entry.downgrade();
+                let key = gtk::EventControllerKey::new();
+                key.set_propagation_phase(gtk::PropagationPhase::Capture);
+                key.connect_key_pressed(move |_, pressed, _, modifiers| {
+                    if crate::keyboard::unmodified_remote(modifiers)
+                        && matches!(pressed, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                    {
+                        let last = results_for_pager
+                            .upgrade()
+                            .and_then(|results| results.last_child());
+                        let target =
+                            last.or_else(|| entry_for_pager.upgrade().map(|entry| entry.upcast()));
+                        if target.is_some_and(|widget| widget.grab_focus()) {
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    glib::Propagation::Proceed
+                });
+                pager.add_controller(key);
+            }
+            // An opened search starts from its entry. From the OSK launcher
+            // Down goes into the first mapped result or the next action.
+            if let Some(launcher) = entry.parent().and_then(|row| row.last_child()) {
+                let result_box = results.downgrade();
+                let settings = guide_settings.downgrade();
+                let controller = gtk::EventControllerKey::new();
+                controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+                controller.connect_key_pressed(move |_, pressed, _, modifiers| {
+                    if crate::keyboard::unmodified_remote(modifiers)
+                        && matches!(pressed, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+                    {
+                        let first = result_box.upgrade().and_then(|box_| box_.first_child());
+                        let target =
+                            first.or_else(|| settings.upgrade().map(|button| button.upcast()));
+                        if target.is_some_and(|widget| widget.grab_focus()) {
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    glib::Propagation::Proceed
+                });
+                launcher.add_controller(controller);
+            }
             search_toggle.connect_clicked(glib::clone!(
                 #[weak]
                 view,
@@ -1507,6 +1691,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 entry,
                 #[weak]
                 results,
+                #[weak]
+                guide_settings,
                 #[weak]
                 prev,
                 #[weak]
@@ -1528,7 +1714,15 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                         &status,
                         &snapshot,
                         &entry,
-                        &CardSearchUi::new(&results, &prev, &next, &current_page, &generation),
+                        &CardSearchUi::new(
+                            &results,
+                            &prev,
+                            &next,
+                            &entry,
+                            &guide_settings,
+                            &current_page,
+                            &generation,
+                        ),
                     );
                 }
             ));
@@ -1541,6 +1735,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 status,
                 #[weak]
                 results,
+                #[weak]
+                guide_settings,
                 #[weak]
                 prev,
                 #[weak]
@@ -1562,7 +1758,15 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                             &status,
                             &snapshot,
                             entry,
-                            &CardSearchUi::new(&results, &prev, &next, &current_page, &generation),
+                            &CardSearchUi::new(
+                                &results,
+                                &prev,
+                                &next,
+                                entry,
+                                &guide_settings,
+                                &current_page,
+                                &generation,
+                            ),
                         );
                     }
                 }
@@ -1579,6 +1783,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 #[weak]
                 results,
                 #[weak]
+                guide_settings,
+                #[weak]
                 prev,
                 #[strong]
                 current_page,
@@ -1594,7 +1800,15 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                         &status,
                         &snapshot,
                         &entry,
-                        &CardSearchUi::new(&results, &prev, next, &current_page, &generation),
+                        &CardSearchUi::new(
+                            &results,
+                            &prev,
+                            next,
+                            &entry,
+                            &guide_settings,
+                            &current_page,
+                            &generation,
+                        ),
                     );
                 }
             ));
@@ -1609,6 +1823,8 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 entry,
                 #[weak]
                 results,
+                #[weak]
+                guide_settings,
                 #[weak]
                 next,
                 #[strong]
@@ -1625,7 +1841,15 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                         &status,
                         &snapshot,
                         &entry,
-                        &CardSearchUi::new(&results, prev, &next, &current_page, &generation),
+                        &CardSearchUi::new(
+                            &results,
+                            prev,
+                            &next,
+                            &entry,
+                            &guide_settings,
+                            &current_page,
+                            &generation,
+                        ),
                     );
                 }
             ));
@@ -1635,7 +1859,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
                 view,
                 move |_| {
                     #[cfg(test)]
-                    C4_PICKER_DIALOG.with(|slot| slot.replace(None));
+                    GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.replace(None));
                     view.restore_card_mapping_focus(&restore_id);
                 }
             ));
@@ -1657,7 +1881,7 @@ pub(crate) fn show_card_mapping_picker(view: &TvStreamsView, row_id: String) {
             }
             dialog.present(Some(&parent));
             #[cfg(test)]
-            C4_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
+            GUIDE_MAPPING_PICKER_DIALOG.with(|slot| slot.replace(Some(dialog.downgrade())));
         }
     ));
 }
@@ -2084,7 +2308,7 @@ mod editor_tests {
     }
 }
 
-// M1's candidate assistant never mutates an inferred mapping directly. It
+// GUIDE_MATCHING's candidate assistant never mutates an inferred mapping directly. It
 // exposes at most one small page of controls, uses background SQLite snapshots,
 // and requires a second explicit impact confirmation before the atomic write.
 const GUIDE_REVIEW_PAGE_SIZE: usize = 16;

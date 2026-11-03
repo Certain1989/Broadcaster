@@ -5,7 +5,7 @@ name: EPG capacity diagnostics
 
 # Synthetic-only diagnostics. No downloaded EPGs, secrets or write permissions.
 # Separate from routine CI: targeted EPG PRs run the core suite;
-# manual dispatch selects either core or R08-specific diagnostics.
+# manual dispatch selects either core or IMPORT_CAPACITY-specific diagnostics.
 on:
   pull_request:
     branches: [main]
@@ -21,7 +21,7 @@ on:
         default: core
         options:
           - core
-          - r08
+          - import_capacity
 
 permissions:
   contents: read
@@ -103,15 +103,15 @@ jobs:
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_combined_plain_streamed_success -- --ignored --nocapture --test-threads=1
           df -h .
-      - name: R08 D28/D29 persistence, rollback and concurrency negative tests
-        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'r08'
+      - name: IMPORT_CAPACITY IMPORT_DURABILITY/SQLITE_TEMP_CAPACITY persistence, rollback and concurrency negative tests
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'import_capacity'
         timeout-minutes: 8
         run: |
           /usr/bin/time -v timeout --signal=TERM 420s cargo test --locked --release epg::ingest::tests -- --nocapture --test-threads=1
           /usr/bin/time -v timeout --signal=TERM 120s cargo test --locked --release epg::tests:: -- --nocapture --test-threads=1
-      - name: R08 exact D33 production-floor real XMLTV importer (15k/1.5m)
-        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'r08'
+      - name: IMPORT_CAPACITY exact SUPPORTED_FLOOR production-floor real XMLTV importer (15k/1.5m)
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'import_capacity'
         timeout-minutes: 17
         run: |
-          /usr/bin/time -v timeout --signal=TERM 960s cargo test --locked --release epg_capacity_r08_d33_support_floor_streamed -- --ignored --nocapture --test-threads=1
+          /usr/bin/time -v timeout --signal=TERM 960s cargo test --locked --release epg_capacity_supported_floor_streamed -- --ignored --nocapture --test-threads=1
           df -h .

@@ -723,7 +723,7 @@ mod redaction_tests {
             .unwrap()
             .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "broadcaster-p1-fake-mpv-{}-{unique}",
+            "broadcaster-mpv-http-fake-mpv-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir(&directory).unwrap();

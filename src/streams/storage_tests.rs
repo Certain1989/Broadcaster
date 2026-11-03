@@ -466,7 +466,7 @@ fn epg_manual_override_survives_ninety_day_missing_purge_until_real_guide_deleti
 
 #[cfg(unix)]
 #[test]
-fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
+fn guide_picker_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();
@@ -539,7 +539,7 @@ fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
 
 #[cfg(unix)]
 #[test]
-fn g1_v3_to_v4_preserves_user_data_and_recovery_copy() {
+fn guide_v3_to_v4_preserves_user_data_and_recovery_copy() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();
@@ -597,7 +597,7 @@ fn g1_v3_to_v4_preserves_user_data_and_recovery_copy() {
 
 #[cfg(unix)]
 #[test]
-fn g1_invalid_v4_optout_schema_rejected_without_mutation() {
+fn guide_invalid_v4_optout_schema_rejected_without_mutation() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();
@@ -620,7 +620,7 @@ fn g1_invalid_v4_optout_schema_rejected_without_mutation() {
 
 #[cfg(unix)]
 #[test]
-fn g1_reopening_corrupt_dual_selection_is_rejected() {
+fn guide_reopening_corrupt_dual_selection_is_rejected() {
     let dir = Sandbox::new();
     let path = dir.path();
     seed_real_v1(&path);
@@ -661,7 +661,7 @@ fn g1_reopening_corrupt_dual_selection_is_rejected() {
 
 #[cfg(unix)]
 #[test]
-fn p1_v4_to_v5_preserves_guide_optout_channel_and_recovery() {
+fn playlist_refresh_v4_to_v5_preserves_guide_optout_channel_and_recovery() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();
@@ -720,7 +720,7 @@ fn p1_v4_to_v5_preserves_guide_optout_channel_and_recovery() {
 }
 
 #[test]
-fn p1_schedule_opt_in_backoff_attention_and_isolation() {
+fn playlist_refresh_schedule_opt_in_backoff_attention_and_isolation() {
     use super::storage::ErrorCode;
     let dir = Sandbox::new();
     let storage = Storage::at(dir.path());
@@ -770,7 +770,7 @@ fn p1_schedule_opt_in_backoff_attention_and_isolation() {
 
 #[cfg(unix)]
 #[test]
-fn p1_invalid_v5_shape_is_rejected_without_mutating_db() {
+fn playlist_refresh_invalid_v5_shape_is_rejected_without_mutating_db() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();

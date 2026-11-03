@@ -86,6 +86,7 @@ mod imp {
             let previous = self.arguments();
             self.settings.reset(&self.key.borrow());
             self.load();
+            self.restore_defaults_button.grab_focus();
             self.offer_undo(&gettext("Defaults restored"), previous);
         }
     }
@@ -166,6 +167,7 @@ mod imp {
                 self.restore_defaults_button.get(),
                 self.add_argument_button.get(),
             ] {
+                let button_for_keys = button.clone();
                 let controller = gtk::EventControllerKey::new();
                 controller.set_propagation_phase(gtk::PropagationPhase::Capture);
                 controller.connect_key_pressed(glib::clone!(
@@ -174,9 +176,27 @@ mod imp {
                     #[upgrade_or]
                     glib::Propagation::Proceed,
                     move |_, key, _, modifiers| {
-                        if unmodified_arrow(modifiers)
-                            && (key == gtk::gdk::Key::Down || key == gtk::gdk::Key::KP_Down)
+                        if !unmodified_arrow(modifiers) {
+                            return glib::Propagation::Proceed;
+                        }
+                        if matches!(key, gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left)
+                            && slf.restore_defaults_button.grab_focus()
                         {
+                            return glib::Propagation::Stop;
+                        }
+                        if matches!(key, gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right)
+                            && slf.add_argument_button.grab_focus()
+                        {
+                            return glib::Propagation::Stop;
+                        }
+                        if matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+                            && button_for_keys == slf.add_argument_button.get()
+                            && slf.arguments_list.row_at_index(0).is_none()
+                            && slf.restore_defaults_button.grab_focus()
+                        {
+                            return glib::Propagation::Stop;
+                        }
+                        if matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down) {
                             if let Some(first) = slf.arguments_list.row_at_index(0) {
                                 if first
                                     .downcast::<adw::EntryRow>()
@@ -184,6 +204,11 @@ mod imp {
                                 {
                                     return glib::Propagation::Stop;
                                 }
+                            } else if button_for_keys == slf.restore_defaults_button.get()
+                                && slf.add_argument_button.grab_focus()
+                            {
+                                // Empty argument list: Down must not disappear into its empty ListBox.
+                                return glib::Propagation::Stop;
                             }
                         }
                         glib::Propagation::Proceed
@@ -336,6 +361,11 @@ mod imp {
         #[cfg(test)]
         pub(super) fn mapped_test_arguments_list(&self) -> gtk::ListBox {
             self.arguments_list.get()
+        }
+
+        #[cfg(test)]
+        pub(super) fn mapped_test_reload(&self) {
+            self.load();
         }
     }
 
@@ -680,6 +710,73 @@ x.XCloseDisplay(d)
         );
         dialog.close();
         win.destroy();
+    }
+
+    fn mapped_empty_arguments_header(width: i32, height: i32) {
+        adw::init().expect("mapped GTK X11 display");
+        let resources =
+            adw::gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
+                .expect("compiled resources");
+        adw::gio::resources_register(&resources);
+        let settings = TvSettings::get();
+        settings.set_strv(GENERAL_KEY, &[] as &[&str]).unwrap();
+        let win = adw::Window::new();
+        win.set_default_size(width, height);
+        win.present();
+        let dialog = adw::PreferencesDialog::new();
+        let page = TvMpvArgumentsPage::new(GENERAL_KEY);
+        dialog.push_subpage(&page);
+        dialog.present(Some(&win));
+        mapped_spin();
+        page.imp().mapped_test_reload();
+        let list = page.imp().mapped_test_arguments_list();
+        assert!(
+            list.row_at_index(0).is_none(),
+            "explicitly empty argument list"
+        );
+        let restore = find_icon_button(page.upcast_ref(), "edit-undo-symbolic").unwrap();
+        let add = find_icon_button(page.upcast_ref(), "list-add-symbolic").unwrap();
+        assert!(restore.grab_focus());
+        native_key("Right");
+        assert!(add.has_focus(), "Restore Right -> Add even for empty list");
+        native_key("Left");
+        assert!(restore.has_focus(), "Add Left -> Restore");
+        native_key("Down");
+        assert!(add.has_focus(), "Restore Down -> Add, not empty list trap");
+        native_key("Up");
+        assert!(restore.has_focus(), "empty Add Up -> Restore");
+        native_key("Right");
+        native_key("Return");
+        mapped_spin();
+        assert!(
+            list.row_at_index(0).is_some(),
+            "Add creates a real row from empty"
+        );
+        let first = list
+            .row_at_index(0)
+            .unwrap()
+            .downcast::<adw::EntryRow>()
+            .unwrap();
+        assert!(
+            row_owns_focus(&win, &first),
+            "new argument has native focus"
+        );
+        native_key("Down");
+        assert!(add.has_focus(), "new last row Down exits back to Add");
+        dialog.close();
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD empty mpv argument list native header at compact size"]
+    fn osk_mapped_mpv_empty_header_640_480() {
+        mapped_empty_arguments_header(640, 480);
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD empty mpv argument list native header at TV size"]
+    fn osk_mapped_mpv_empty_header_1280_800() {
+        mapped_empty_arguments_header(1280, 800);
     }
 
     #[test]

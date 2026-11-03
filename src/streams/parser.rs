@@ -60,7 +60,7 @@ pub(crate) struct ParseWarning {
     pub count: usize,
 }
 
-/// Contains S1's canonical DTO; no second import model or identity algorithm.
+/// Canonical parsed-playlist representation; no duplicate import model or identity algorithm.
 pub(crate) struct ParsedPlaylist {
     pub channels: Vec<IncomingChannel>,
     pub candidates: usize,
@@ -266,7 +266,7 @@ fn media_url(raw: &str, base: Option<&Url>) -> Option<String> {
     }
     if let Ok(url) = Url::parse(raw) {
         // Keep the original absolute string, including every auth query token;
-        // parsing/normalizing it for storage could alter S1's identity key.
+        // parsing or normalizing it for storage could alter the playlist identity key.
         return (allowed_url(&url) && explicit_http_authority(raw)).then(|| raw.to_owned());
     }
     let base = base?;

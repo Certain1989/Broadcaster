@@ -57,6 +57,8 @@ jobs:
       # Configure Rust values in the Meson build tree; Cargo's build.rs stages resources in OUT_DIR.
       - name: Configure
         run: meson setup _build -Dprofile=development
+      - name: Validate campaign-neutral executable names
+        run: python3 tests/check_campaign_neutral_names.py
       - name: Check formatting
         run: cargo fmt --check
       - name: Clippy
@@ -68,12 +70,12 @@ jobs:
           set -eu
           log=$(mktemp)
           trap 'rm -f "$log"' EXIT
-          if bash tests/ci-require-one-ignored.sh r07_nonexistent_ci_filter_sentinel >"$log" 2>&1; then
-            echo 'R07 exact-positive runner silently accepted zero matched tests' >&2
+          if bash tests/ci-require-one-ignored.sh focus_navigation_nonexistent_ci_filter_sentinel >"$log" 2>&1; then
+            echo 'NATIVE_FOCUS exact-positive runner silently accepted zero matched tests' >&2
             exit 1
           fi
           grep -Fq 'CI false-green prevented' "$log"
-      - name: R07 native painted X11 focus pixels and suppressed-control oracle
+      - name: NATIVE_FOCUS native painted X11 focus pixels and suppressed-control oracle
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -81,12 +83,12 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_painted_focus_640_480 r07_native_painted_focus_1280_800; do
+          for case_name in native_painted_focus_640_480 native_painted_focus_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-pixels-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-pixels-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -97,20 +99,20 @@ jobs:
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
             GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_painted_focus_negative_pixels -- --ignored --test-threads=1 \
+            cargo test --locked native_painted_focus_negative_pixels -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 painted negative oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS painted negative oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_G01_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_PAINTED_FOCUS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 painted negative oracle failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS painted negative oracle failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 real X11 pixel negative-control assertion rejected as expected"
+          echo "NATIVE_FOCUS real X11 pixel negative-control assertion rejected as expected"
 
-      - name: C1 real source-manager native XTest and SQLite regressions
+      - name: SOURCE_MANAGER real source-manager native XTest and SQLite regressions
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -118,8 +120,8 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            c1_native_manager_0_640_480 c1_native_manager_1_640_480 c1_native_manager_3_640_480 \
-            c1_native_manager_0_1280_800 c1_native_manager_1_1280_800 c1_native_manager_3_1280_800; do
+            native_source_manager_0_640_480 native_source_manager_1_640_480 native_source_manager_3_640_480 \
+            native_source_manager_0_1280_800 native_source_manager_1_1280_800 native_source_manager_3_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -132,20 +134,20 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c1_native_negative_oracle -- --ignored --test-threads=1 \
+            cargo test --locked source_manager_native_negative_oracle -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "C1 negative oracle unexpectedly passed" >&2
+            echo "SOURCE_MANAGER negative oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq C1_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq SOURCE_MANAGER_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "C1 negative oracle failed for the wrong reason" >&2
+            echo "SOURCE_MANAGER negative oracle failed for the wrong reason" >&2
             exit 1
           fi
           echo "Deliberately wrong focus expectation was correctly rejected"
 
-      - name: R07 connected source-row native traversal and identity control
+      - name: NATIVE_FOCUS connected source-row native traversal and identity control
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -153,7 +155,7 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_source_rows_640_480 r07_native_source_rows_1280_800; do
+          for case_name in native_source_rows_640_480 native_source_rows_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -164,20 +166,20 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_negative_row_identity -- --ignored --test-threads=1 \
+            cargo test --locked native_negative_row_identity -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 source identity negative oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS source identity negative oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 negative oracle failed for the wrong reason" >&2
+            echo "NATIVE_FOCUS negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "R07 deliberately wrong persisted source identity was rejected"
+          echo "NATIVE_FOCUS deliberately wrong persisted source identity was rejected"
 
-      - name: R07 batched three-source SQLite reorder and wrong-order native control
+      - name: NATIVE_FOCUS batched three-source SQLite reorder and wrong-order native control
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -185,12 +187,12 @@ jobs:
           trap 'rm -rf "$schema_dir" "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_source_reorder_640_480 r07_native_source_reorder_1280_800; do
+          for case_name in native_source_reorder_640_480 native_source_reorder_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-reorder-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-reorder-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -199,20 +201,20 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_source_reorder_negative_order -- --ignored --test-threads=1 \
+            cargo test --locked native_source_reorder_negative_order -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 reordered-source wrong-order oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS reordered-source wrong-order oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_AS12_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_SOURCE_REORDER_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 source-order negative failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS source-order negative failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 wrong persisted source order rejected as expected"
+          echo "NATIVE_FOCUS wrong persisted source order rejected as expected"
 
-      - name: R07 batched source-grid XTest with negative oracle
+      - name: NATIVE_FOCUS batched source-grid XTest with negative oracle
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -221,12 +223,12 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            r07_native_source_grid_640_480 r07_native_source_grid_1280_800; do
+            native_source_grid_640_480 native_source_grid_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -235,20 +237,20 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_source_grid_negative_edge -- --ignored --test-threads=1 \
+            cargo test --locked native_source_grid_negative_edge -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong disabled source-manager edge unexpectedly passed" >&2
+            echo "NATIVE_FOCUS wrong disabled source-manager edge unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_AS03_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_SOURCE_GRID_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 negative grid oracle failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS negative grid oracle failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 disabled source-manager edge rejected as expected"
+          echo "NATIVE_FOCUS disabled source-manager edge rejected as expected"
 
-      - name: R07 batched source editors and first/middle/last deletion
+      - name: NATIVE_FOCUS batched source editors and first/middle/last deletion
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -257,46 +259,46 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            r07_native_source_editors_640_480 r07_native_source_editors_1280_800 \
-            r07_native_source_delete_first_640_480 r07_native_source_delete_middle_640_480 \
-            r07_native_source_delete_last_640_480 r07_native_source_delete_first_1280_800 \
-            r07_native_source_delete_middle_1280_800 r07_native_source_delete_last_1280_800; do
+            native_source_editors_640_480 native_source_editors_1280_800 \
+            native_source_delete_first_640_480 native_source_delete_middle_640_480 \
+            native_source_delete_last_640_480 native_source_delete_first_1280_800 \
+            native_source_delete_middle_1280_800 native_source_delete_last_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-source-dialogs-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-source-dialogs-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
               bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
-          for case_name in r07_native_source_editors_negative r07_native_source_deletions_negative; do
+          for case_name in native_source_editors_negative native_source_deletions_negative; do
             case "$case_name" in
-              r07_native_source_editors_negative) marker=R07_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE ;;
-              *) marker=R07_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE ;;
+              native_source_editors_negative) marker=NATIVE_FOCUS_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE ;;
+              *) marker=NATIVE_FOCUS_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-source-dialogs-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-source-dialogs-XXXXXXXX)
             if xvfb-run -a -s "-screen 0 640x480x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
               cargo test --locked "$case_name" -- --ignored --test-threads=1 \
               >"$negative_log" 2>&1; then
               cat "$negative_log"
-              echo "R07 source-dialog negative unexpectedly passed: $case_name" >&2
+              echo "NATIVE_FOCUS source-dialog negative unexpectedly passed: $case_name" >&2
               exit 1
             fi
             if ! grep -Fq "$marker" "$negative_log"; then
               cat "$negative_log"
-              echo "R07 source-dialog negative failed for unrelated reason" >&2
+              echo "NATIVE_FOCUS source-dialog negative failed for unrelated reason" >&2
               exit 1
             fi
             rm -rf "$data_dir"
           done
-          echo "R07 source-dialog and wrong-UUID negative controls passed"
+          echo "NATIVE_FOCUS source-dialog and wrong-UUID negative controls passed"
 
-      - name: R07 source Rename Defaults Replace real OSK keys and negative UUID
+      - name: NATIVE_FOCUS source Rename Defaults Replace real OSK keys and negative UUID
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -304,37 +306,37 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_source_osk_640_480 r07_native_source_osk_1280_800; do
+          for case_name in native_source_osk_640_480 native_source_osk_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-source-osk-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-source-osk-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
               bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
-          data_dir=$(mktemp -d -t broadcaster-r07-source-osk-XXXXXXXX)
+          data_dir=$(mktemp -d -t broadcaster-focus-navigation-source-osk-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$data_dir" \
-            cargo test --locked r07_native_source_osk_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_source_osk_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong OSK source identity unexpectedly accepted" >&2
+            echo "NATIVE_FOCUS wrong OSK source identity unexpectedly accepted" >&2
             exit 1
           fi
-          if ! grep -Fq R07_SOURCE_OSK_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_SOURCE_OSK_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 wrong OSK source test failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS wrong OSK source test failed for unrelated reason" >&2
             exit 1
           fi
           rm -rf "$data_dir"
-          echo "R07 source OSK and negative UUID verified"
+          echo "NATIVE_FOCUS source OSK and negative UUID verified"
 
-      - name: R07 batched Source Manager Back Escape Home and negative oracle
+      - name: NATIVE_FOCUS batched Source Manager Back Escape Home and negative oracle
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -342,7 +344,7 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_source_modal_640_480 r07_native_source_modal_1280_800; do
+          for case_name in native_source_modal_640_480 native_source_modal_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -353,20 +355,20 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_source_modal_negative_home -- --ignored --test-threads=1 \
+            cargo test --locked native_source_modal_negative_home -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong Home-vs-Back modal oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS wrong Home-vs-Back modal oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_AS16_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_SOURCE_MODAL_HOME_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 wrong Home-vs-Back modal failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS wrong Home-vs-Back modal failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 AS16 deliberately false Home-vs-Back rejected"
+          echo "NATIVE_FOCUS SOURCE_MODAL_HOME deliberately false Home-vs-Back rejected"
 
-      - name: R07 native Live and Mediathek search focus reversal
+      - name: NATIVE_FOCUS native Live and Mediathek search focus reversal
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -375,16 +377,16 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            r07_native_live_search_640_480 r07_native_live_search_1280_800 \
-            r07_native_mediathek_search_640_480 r07_native_mediathek_search_1280_800 \
-            r07_native_live_play_ok_640_480 r07_native_live_play_ok_1280_800 \
-            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800 \
-            r07_native_live_full_graph_640_480 r07_native_live_full_graph_1280_800; do
+            native_live_search_640_480 native_live_search_1280_800 \
+            native_mediathek_search_640_480 native_mediathek_search_1280_800 \
+            native_live_play_ok_640_480 native_live_play_ok_1280_800 \
+            native_live_play_right_640_480 native_live_play_right_1280_800 \
+            native_live_full_graph_640_480 native_live_full_graph_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-focus-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-focus-XXXXXXXX)
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -393,48 +395,48 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_negative_live_search_stuck -- --ignored --test-threads=1 \
+            cargo test --locked native_negative_live_search_stuck -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 deliberately wrong Live Search oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS deliberately wrong Live Search oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 negative focus oracle failed for the wrong reason" >&2
+            echo "NATIVE_FOCUS negative focus oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "R07 deliberately wrong native Live Search focus was rejected"
+          echo "NATIVE_FOCUS deliberately wrong native Live Search focus was rejected"
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_live_play_negative_source_identity -- --ignored --test-threads=1 \
+            cargo test --locked native_live_play_negative_source_identity -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 deliberately wrong Live Play identity oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS deliberately wrong Live Play identity oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_E02_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_LIVE_PLAY_IDENTITY_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 Live Play negative oracle failed for the wrong reason" >&2
+            echo "NATIVE_FOCUS Live Play negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "R07 deliberately wrong native Live Play source identity was rejected"
+          echo "NATIVE_FOCUS deliberately wrong native Live Play source identity was rejected"
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_live_full_graph_negative_identity -- --ignored --test-threads=1 \
+            cargo test --locked native_live_full_graph_negative_identity -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong Live full-graph identity unexpectedly passed" >&2
+            echo "NATIVE_FOCUS wrong Live full-graph identity unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_D01_D02_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_LIVE_FULL_GRAPH_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 full-graph negative failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS full-graph negative failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 full-graph last-row negative oracle rejected"
+          echo "NATIVE_FOCUS full-graph last-row negative oracle rejected"
 
-      - name: R07 native Mediathek actions and app-wide Back/Home
+      - name: NATIVE_FOCUS native Mediathek actions and app-wide Back/Home
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -443,14 +445,14 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            r07_native_mediathek_actions_640_480 r07_native_mediathek_actions_1280_800 \
-            r07_native_mediathek_three_rows_640_480 r07_native_mediathek_three_rows_1280_800 \
-            r07_native_page_home_back_640_480 r07_native_page_home_back_1280_800; do
+            native_mediathek_actions_640_480 native_mediathek_actions_1280_800 \
+            native_mediathek_three_rows_640_480 native_mediathek_three_rows_1280_800 \
+            native_page_home_back_640_480 native_page_home_back_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-med-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-med-XXXXXXXX)
             xvfb-run -a -s "-screen 0 "${geometry}"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -459,34 +461,34 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_mediathek_actions_negative_source -- --ignored --test-threads=1 \
+            cargo test --locked native_mediathek_actions_negative_source -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 Mediathek source identity negative oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS Mediathek source identity negative oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_E05_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_MEDIATHEK_ACTIONS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 Mediathek negative oracle failed for the wrong reason" >&2
+            echo "NATIVE_FOCUS Mediathek negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "R07 deliberately wrong Mediathek source identity was rejected"
+          echo "NATIVE_FOCUS deliberately wrong Mediathek source identity was rejected"
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_mediathek_three_rows_negative_identity -- --ignored --test-threads=1 \
+            cargo test --locked native_mediathek_three_rows_negative_identity -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 E04 wrong-row negative unexpectedly passed" >&2
+            echo "NATIVE_FOCUS MEDIATHEK_ROWS wrong-row negative unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_E04_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_MEDIATHEK_ROWS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 E04 wrong-row negative failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS MEDIATHEK_ROWS wrong-row negative failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 E04 real-row identity negative control rejected as expected"
+          echo "NATIVE_FOCUS MEDIATHEK_ROWS real-row identity negative control rejected as expected"
 
-      - name: R07 D07 real three-category switcher and wrong-page oracle
+      - name: NATIVE_FOCUS PAGE_SWITCHER real three-category switcher and wrong-page oracle
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -494,12 +496,12 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_category_switcher_640_480 r07_native_category_switcher_1280_800; do
+          for case_name in native_category_switcher_640_480 native_category_switcher_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-switcher-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-switcher-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -508,20 +510,20 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked r07_native_category_switcher_negative_page -- --ignored --test-threads=1 \
+            cargo test --locked native_category_switcher_negative_page -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong-category oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS wrong-category oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_D07_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_PAGE_SWITCHER_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 wrong-category oracle failed for the wrong reason" >&2
+            echo "NATIVE_FOCUS wrong-category oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "R07 deliberately wrong physical category assertion was rejected"
+          echo "NATIVE_FOCUS deliberately wrong physical category assertion was rejected"
 
-      - name: C2 native guide manager 0/3 guides, OSK and SQLite
+      - name: EPG_MANAGER native guide manager 0/3 guides, OSK and SQLite
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -529,7 +531,7 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in c2_native_0_640_480 c2_native_3_640_480 c2_native_0_1280_800 c2_native_3_1280_800; do
+          for case_name in native_epg_manager_0_640_480 native_epg_manager_3_640_480 native_epg_manager_0_1280_800 native_epg_manager_3_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -540,32 +542,32 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c2_native_negative_oracle -- --ignored --test-threads=1 \
+            cargo test --locked native_epg_manager_negative_oracle -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "C2 negative focus oracle unexpectedly passed" >&2
+            echo "EPG_MANAGER negative focus oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq C2_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq EPG_MANAGER_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "C2 negative oracle failed for the wrong reason" >&2
+            echo "EPG_MANAGER negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          echo "C2 deliberately incorrect focus expectation rejected"
+          echo "EPG_MANAGER deliberately incorrect focus expectation rejected"
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c2_native_negative_origin_focus -- --ignored --test-threads=1 \
+            cargo test --locked native_epg_manager_negative_origin_focus -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 AG08 wrong origin owner unexpectedly passed" >&2
+            echo "NATIVE_FOCUS GUIDE_RETURN_FOCUS wrong origin owner unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_AG08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_GUIDE_RETURN_FOCUS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 AG08 negative origin test failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS GUIDE_RETURN_FOCUS negative origin test failed for unrelated reason" >&2
             exit 1
           fi
-          echo "R07 AG08 deliberately wrong guide return owner rejected"
+          echo "NATIVE_FOCUS GUIDE_RETURN_FOCUS deliberately wrong guide return owner rejected"
 
       - name: Exercise external-player D-Bus discovery on an isolated session bus
         run: dbus-run-session -- bash tests/ci-require-one-ignored.sh dbus_proxy_lists_activatable_names
@@ -596,7 +598,7 @@ jobs:
           LC_ALL=C lua tests/mpv-remote.lua
           LC_ALL=de_DE.UTF-8 lua tests/mpv-remote.lua
           LC_ALL=fr_FR.UTF-8 lua tests/mpv-remote.lua
-      # One integrated R07 gate for connected native journeys accumulated
+      # One integrated NATIVE_FOCUS gate for connected native journeys accumulated
       # locally before publication. Each X11 fixture gets fresh SQLite and
       # GSettings; deliberately wrong assertions must fail for their marker.
       - name: Native Meson compile and validation
@@ -620,40 +622,40 @@ jobs:
           test ! -e data/resources/io.github.Certain1989.Broadcaster.metainfo.xml
           test -z "$(git status --porcelain --untracked-files=all)"
 
-      # G07/G08: make the CI-side environment and physical key routes visible
+      # LIVE_SEARCH_DOWN/LIVE_PLAY_RIGHT: make the CI-side environment and physical key routes visible
       # for comparison with the independently recorded local X11 baseline.
       # This does not substitute for owner-only Wayland/remote validation.
-      - name: R07 G07 G08 controlled Live Search Down and Right Play environment comparison
+      - name: NATIVE_FOCUS LIVE_SEARCH_DOWN LIVE_PLAY_RIGHT controlled Live Search Down and Right Play environment comparison
         run: |
           set -eu
-          echo 'R07_G07_G08_ENVIRONMENT_BEGIN'
+          echo 'NATIVE_FOCUS_LIVE_SEARCH_PLAY_ENVIRONMENT_BEGIN'
           echo "GTK=$(pkg-config --modversion gtk4)"
           echo "Adwaita=$(pkg-config --modversion libadwaita-1)"
           echo "font=$(fc-match -f '%{family}|%{style}' Cantarell)"
           echo "GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 GTK_THEME=${GTK_THEME-<default>}"
           echo 'viewport=640x480/1280x800'
-          echo 'R07_G07_G08_ENVIRONMENT_END'
+          echo 'NATIVE_FOCUS_LIVE_SEARCH_PLAY_ENVIRONMENT_END'
           schema_dir=$(mktemp -d)
           trap 'rm -rf "$schema_dir"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           for case_name in \
-            r07_native_live_search_640_480 r07_native_live_search_1280_800 \
-            r07_native_live_play_right_640_480 r07_native_live_play_right_1280_800; do
+            native_live_search_640_480 native_live_search_1280_800 \
+            native_live_play_right_640_480 native_live_play_right_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-variance-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-variance-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
               bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
-          echo 'R07_G07_G08_LIVE_KEY_ROUTES_PASS'
+          echo 'NATIVE_FOCUS_LIVE_SEARCH_PLAY_LIVE_KEY_ROUTES_PASS'
 
-      - name: R07 batched painted source-card actions (Live, Mediathek and My Channels)
+      - name: NATIVE_FOCUS batched painted source-card actions (Live, Mediathek and My Channels)
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -661,29 +663,29 @@ jobs:
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
           audit_failure=0
-          for case_name in r07_native_painted_cards_640_480 r07_native_painted_cards_1280_800; do
+          for case_name in native_painted_cards_640_480 native_painted_cards_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-r07-painted-card-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-focus-navigation-painted-card-XXXXXXXX)
             if xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" XDG_DATA_HOME="$data_dir" \
               bash tests/ci-require-one-ignored.sh "$case_name"; then
-              echo "R07 G03 ${case_name}: painted-card PASS"
+              echo "NATIVE_FOCUS PAINTED_CARDS ${case_name}: painted-card PASS"
             else
-              echo "R07 G03 ${case_name}: visible-pixel RED; keep clause open" >&2
+              echo "NATIVE_FOCUS PAINTED_CARDS ${case_name}: visible-pixel RED; keep clause open" >&2
               audit_failure=1
             fi
             rm -rf "$data_dir"
           done
           if [ "$audit_failure" -ne 0 ]; then
-            echo 'R07_G03_MATERIAL_PAINTED_FOCUS_RED: examine actual visible outline and viewport geometry' >&2
+            echo 'NATIVE_FOCUS_PAINTED_CARDS_MATERIAL_PAINTED_FOCUS_RED: examine actual visible outline and viewport geometry' >&2
             exit 1
           fi
 
-      - name: R07 favourites-to-Show-All physical painted fallback at both viewports
+      - name: NATIVE_FOCUS favourites-to-Show-All physical painted fallback at both viewports
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -691,12 +693,12 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in r07_native_favourites_paint_640_480 r07_native_favourites_paint_1280_800; do
+          for case_name in native_favourites_paint_640_480 native_favourites_paint_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -704,24 +706,24 @@ jobs:
               bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
             GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_favourites_paint_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_favourites_paint_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo 'R07 false G04 painted focus unexpectedly accepted' >&2
+            echo 'NATIVE_FOCUS false FAVOURITES_PAINT painted focus unexpectedly accepted' >&2
             exit 1
           fi
-          if ! grep -Fq R07_G04_EXPECTED_NEGATIVE_PAINT "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_FAVOURITES_PAINT_EXPECTED_NEGATIVE_PAINT "$negative_log"; then
             cat "$negative_log"
-            echo 'R07 G04 negative failed before the painted-focus assertion' >&2
+            echo 'NATIVE_FOCUS FAVOURITES_PAINT negative failed before the painted-focus assertion' >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo 'R07 G04 physical painted positive and negative checks passed'
+          echo 'NATIVE_FOCUS FAVOURITES_PAINT physical painted positive and negative checks passed'
 
       - name: Native validation failure diagnostics
         if: failure()
@@ -736,8 +738,8 @@ jobs:
   # Independent native matrices run in parallel with Rust/other native gates.
   # Each Actions job has its own Xvfb, temporary GSettings and SQLite fixtures;
   # preserve all positive tests and marker-checked negative controls.
-  native-c4:
-    name: "R07 native C4 cards, mapping and facets"
+  native-guide_mapping:
+    name: "NATIVE_FOCUS native GUIDE_MAPPING cards, mapping and facets"
     timeout-minutes: 90
     env:
       BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS: "900"
@@ -755,7 +757,7 @@ jobs:
           key: archlinux-container
       - name: Configure
         run: meson setup _build -Dprofile=development
-      - name: C4 physical XTest card, star and mapping action routes
+      - name: GUIDE_MAPPING physical XTest card, star and mapping action routes
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -763,7 +765,7 @@ jobs:
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
           glib-compile-schemas "$schema_dir"
-          for case_name in c4_native_cards_640_480 c4_native_cards_1280_800; do
+          for case_name in native_channel_cards_640_480 native_channel_cards_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
@@ -775,17 +777,20 @@ jobs:
           # Each service-backed GTK case uses a fresh, private real SQLite
           # database. Never touch the developer's XDG data directory.
           for case_name in \
-            c4_native_favourites_640_480 c4_native_favourites_1280_800 \
-            c4_native_mapping_640_480 c4_native_mapping_1280_800 \
-            r07_native_facets_640_480 r07_native_facets_1280_800 \
-            r07_native_popup_search_640_480 r07_native_popup_search_1280_800 \
-            r07_native_playlist_guide_640_480 r07_native_playlist_guide_1280_800 \
-            r07_native_e08_action_graph_640_480 r07_native_e08_action_graph_1280_800; do
+            native_channel_favourites_640_480 native_channel_favourites_1280_800 \
+            native_channel_mapping_640_480 native_channel_mapping_1280_800 \
+            native_facets_640_480 native_facets_1280_800 \
+            native_editor_facets_640_480 native_editor_facets_1280_800 \
+            native_backup_restore_quit_focus_640_480 native_backup_restore_quit_focus_1280_800 \
+            osk_mapped_mpv_empty_header_640_480 osk_mapped_mpv_empty_header_1280_800 \
+            native_popup_search_640_480 native_popup_search_1280_800 \
+            native_playlist_guide_640_480 native_playlist_guide_1280_800 \
+            native_channel_card_action_graph_640_480 native_channel_card_action_graph_1280_800; do
             case "$case_name" in
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -794,119 +799,136 @@ jobs:
           done
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
-            cargo test --locked c4_native_negative_oracle -- --ignored --test-threads=1 \
+            cargo test --locked native_channel_negative_oracle -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "C4 negative focus oracle unexpectedly passed" >&2
+            echo "GUIDE_MAPPING negative focus oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq C4_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq GUIDE_MAPPING_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "C4 negative oracle failed for the wrong reason" >&2
+            echo "GUIDE_MAPPING negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_e08_action_graph_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_channel_card_action_graph_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 E08 false middle-row return unexpectedly passed" >&2
+            echo "NATIVE_FOCUS CHANNEL_CARD_JOURNEY false middle-row return unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_E08_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_CHANNEL_CARD_JOURNEY_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 E08 negative oracle failed before its target assertion" >&2
+            echo "NATIVE_FOCUS CHANNEL_CARD_JOURNEY negative oracle failed before its target assertion" >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "R07 E08 false-row identity rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          echo "NATIVE_FOCUS CHANNEL_CARD_JOURNEY false-row identity rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_compact_geometry_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_compact_geometry_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo 'R07 R1 false compact viewport oracle unexpectedly passed' >&2
+            echo 'NATIVE_FOCUS COMPACT_VIEWPORT false compact viewport oracle unexpectedly passed' >&2
             exit 1
           fi
-          if ! grep -Fq R07_R1_EXPECTED_NEGATIVE_VISIBILITY "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_COMPACT_VIEWPORT_EXPECTED_NEGATIVE_VISIBILITY "$negative_log"; then
             cat "$negative_log"
-            echo 'R07 R1 geometry negative failed before its target assertion' >&2
+            echo 'NATIVE_FOCUS COMPACT_VIEWPORT geometry negative failed before its target assertion' >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "C4 deliberately incorrect Play-entry expectation rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-XXXXXXXX)
+          echo "GUIDE_MAPPING deliberately incorrect Play-entry expectation rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_facets_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_facets_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 foreign source focus oracle unexpectedly passed" >&2
+            echo "NATIVE_FOCUS foreign source focus oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_FACETS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_FACETS_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 facet negative oracle failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS facet negative oracle failed for unrelated reason" >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "R07 source-qualified facet focus negative oracle rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          echo "NATIVE_FOCUS source-qualified facet focus negative oracle rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-focus-fixture-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_popup_search_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_editor_facets_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 searched popup false selection unexpectedly accepted" >&2
+            echo "FOCUS-AUD skipped-selection oracle unexpectedly passed" >&2
             exit 1
           fi
-          if ! grep -Fq R07_POPUP_MIDDLE_EXPECTED_NEGATIVE "$negative_log"; then
+          if ! grep -Fq FOCUS_AUD_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 searched popup negative failed for unrelated reason" >&2
+            echo "FOCUS-AUD wrong-target failure was unrelated" >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "R07 searched popup selection negative oracle rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          echo "FOCUS-AUD deliberate skipped editor selection correctly rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-popup-fixture-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_popup_facet_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_popup_search_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 false French country/language UUID unexpectedly accepted" >&2
+            echo "NATIVE_FOCUS searched popup false selection unexpectedly accepted" >&2
             exit 1
           fi
-          if ! grep -Fq R07_POPUP_FACET_EXPECTED_NEGATIVE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_POPUP_MIDDLE_EXPECTED_NEGATIVE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 French facet negative failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS searched popup negative failed for unrelated reason" >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "R07 false French popup identity correctly rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+          echo "NATIVE_FOCUS searched popup selection negative oracle rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
-            cargo test --locked r07_native_playlist_guide_negative -- --ignored --test-threads=1 \
+            cargo test --locked native_popup_facet_negative -- --ignored --test-threads=1 \
             >"$negative_log" 2>&1; then
             cat "$negative_log"
-            echo "R07 wrong playlist guide unexpectedly accepted" >&2
+            echo "NATIVE_FOCUS false French country/language UUID unexpectedly accepted" >&2
             exit 1
           fi
-          if ! grep -Fq R07_B06_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+          if ! grep -Fq NATIVE_FOCUS_POPUP_FACET_EXPECTED_NEGATIVE "$negative_log"; then
             cat "$negative_log"
-            echo "R07 playlist guide negative failed for unrelated reason" >&2
+            echo "NATIVE_FOCUS French facet negative failed for unrelated reason" >&2
             exit 1
           fi
           rm -rf "$negative_data_dir"
-          echo "R07 confirmed playlist-guide negative oracle rejected"
+          echo "NATIVE_FOCUS false French popup identity correctly rejected"
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
+          if xvfb-run -a -s '-screen 0 640x480x24' \
+            env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            XDG_DATA_HOME="$negative_data_dir" \
+            cargo test --locked native_playlist_guide_negative -- --ignored --test-threads=1 \
+            >"$negative_log" 2>&1; then
+            cat "$negative_log"
+            echo "NATIVE_FOCUS wrong playlist guide unexpectedly accepted" >&2
+            exit 1
+          fi
+          if ! grep -Fq NATIVE_FOCUS_PLAYLIST_GUIDE_SELECTION_EXPECTED_NEGATIVE_ORACLE "$negative_log"; then
+            cat "$negative_log"
+            echo "NATIVE_FOCUS playlist guide negative failed for unrelated reason" >&2
+            exit 1
+          fi
+          rm -rf "$negative_data_dir"
+          echo "NATIVE_FOCUS confirmed playlist-guide negative oracle rejected"
 
       - name: Native validation failure diagnostics
         if: failure()
@@ -919,7 +941,7 @@ jobs:
 
 
   native-integrated:
-    name: "R07 native integrated keyboard, managers and scale"
+    name: "NATIVE_FOCUS native integrated keyboard, managers and scale"
     timeout-minutes: 90
     env:
       BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS: "900"
@@ -937,7 +959,7 @@ jobs:
           key: archlinux-container
       - name: Configure
         run: meson setup _build -Dprofile=development
-      - name: R07 integrated keyboard, managers, rebind, menu and scale native matrix
+      - name: NATIVE_FOCUS integrated keyboard, managers, rebind, menu and scale native matrix
         run: |
           set -eu
           schema_dir=$(mktemp -d)
@@ -948,37 +970,37 @@ jobs:
           glib-compile-schemas "$schema_dir"
           trap 'rm -rf "$schema_dir"' EXIT
           for case_name in \
-            r07_osk_native_grid_640_480 r07_osk_native_grid_1280_800 \
-            r07_osk_native_paint_640_480 r07_osk_native_paint_1280_800 \
-            r07_osk_native_persist_qwertz_restart \
-            r07_native_source_refresh_one_640_480 r07_native_source_refresh_three_1280_800 \
-            r07_native_source_file_chooser_640_480 r07_native_source_file_chooser_1280_800 \
-            r07_native_guide_add_url_640_480 r07_native_guide_add_url_1280_800 \
-            r07_native_guide_refresh_640_480 r07_native_guide_refresh_1280_800 \
-            r07_native_guide_local_chooser_640_480 r07_native_guide_local_chooser_1280_800 \
-            r07_native_guide_manager_paint_640_480 r07_native_guide_manager_paint_1280_800 \
-            r07_native_picker_osk_paint_640_480 r07_native_picker_osk_paint_1280_800 \
-            r07_native_nested_guide_osk_640_480 r07_native_nested_guide_osk_1280_800 \
-            r07_native_app_menu_640_480 r07_native_app_menu_1280_800 \
-            r07_native_mediathek_loaded_vertical_640_480 r07_native_mediathek_loaded_vertical_1280_800 \
-            r07_native_recycle_removed_source_640_480 r07_native_recycle_removed_source_1280_800 \
-            r07_native_manager_paint_upper_640_480 r07_native_manager_paint_upper_1280_800 \
-            r07_native_manager_paint_lower_640_480 r07_native_manager_paint_lower_1280_800 \
-            r07_native_manager_paint_confirm_640_480 r07_native_manager_paint_confirm_1280_800 \
-            r07_native_live_player_failure_640_480 r07_native_live_player_failure_1280_800 \
-            r07_native_mediathek_paged_640_480 r07_native_mediathek_paged_1280_800 \
-            r07_native_mediathek_retry_640_480 r07_native_mediathek_retry_1280_800 \
-            r07_native_fake_fullscreen_cancel_640_480 r07_native_fake_fullscreen_cancel_1280_800 \
-            r07_native_three_page_loaded_640_480 r07_native_three_page_loaded_1280_800 \
-            r07_native_picker_guide_removed_640_480 r07_native_picker_guide_removed_1280_800 \
-            r07_native_picker_source_refreshed_640_480 r07_native_picker_source_refreshed_1280_800 \
-            r07_native_scale_284 r07_native_scale_1484 r07_native_scale_10000 r07_native_scale_15000; do
+            focus_navigation_osk_native_grid_640_480 focus_navigation_osk_native_grid_1280_800 \
+            focus_navigation_osk_native_paint_640_480 focus_navigation_osk_native_paint_1280_800 \
+            focus_navigation_osk_native_persist_qwertz_restart \
+            native_source_refresh_one_640_480 native_source_refresh_three_1280_800 \
+            native_source_file_chooser_640_480 native_source_file_chooser_1280_800 \
+            native_guide_add_url_640_480 native_guide_add_url_1280_800 \
+            native_guide_refresh_640_480 native_guide_refresh_1280_800 \
+            native_guide_local_chooser_640_480 native_guide_local_chooser_1280_800 \
+            native_guide_manager_paint_640_480 native_guide_manager_paint_1280_800 \
+            native_picker_osk_paint_640_480 native_picker_osk_paint_1280_800 \
+            native_nested_guide_osk_640_480 native_nested_guide_osk_1280_800 \
+            native_app_menu_640_480 native_app_menu_1280_800 \
+            native_mediathek_loaded_vertical_640_480 native_mediathek_loaded_vertical_1280_800 \
+            native_recycle_removed_source_640_480 native_recycle_removed_source_1280_800 \
+            native_manager_paint_upper_640_480 native_manager_paint_upper_1280_800 \
+            native_manager_paint_lower_640_480 native_manager_paint_lower_1280_800 \
+            native_manager_paint_confirm_640_480 native_manager_paint_confirm_1280_800 \
+            native_live_player_failure_640_480 native_live_player_failure_1280_800 \
+            native_mediathek_paged_640_480 native_mediathek_paged_1280_800 \
+            native_mediathek_retry_640_480 native_mediathek_retry_1280_800 \
+            native_fake_fullscreen_cancel_640_480 native_fake_fullscreen_cancel_1280_800 \
+            native_three_page_loaded_640_480 native_three_page_loaded_1280_800 \
+            native_picker_guide_removed_640_480 native_picker_guide_removed_1280_800 \
+            native_picker_source_refreshed_640_480 native_picker_source_refreshed_1280_800 \
+            native_scale_284 native_scale_1484 native_scale_10000 native_scale_15000; do
             case "$case_name" in
-              *_1280_800|r07_native_scale_1484|r07_native_scale_15000) geometry=1280x800 ;;
+              *_1280_800|native_scale_1484|native_scale_15000) geometry=1280x800 ;;
               *) geometry=640x480 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
-            echo "R07 native positive: $case_name ($geometry)"
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
+            echo "NATIVE_FOCUS native positive: $case_name ($geometry)"
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -988,31 +1010,31 @@ jobs:
           negative_log=$(mktemp)
           trap 'rm -rf "$schema_dir"; rm -f "$negative_log"' EXIT
           for item in \
-            r07_osk_native_grid_negative_owner:R07_OSK_EXPECTED_NEGATIVE_ORACLE \
-            r07_osk_native_paint_negative:R07_OSK_EXPECTED_NEGATIVE_PAINT \
-            r07_native_source_refresh_negative:R07_AS07_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_source_file_chooser_negative:R07_AS10_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_guide_add_url_negative:R07_AG06_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_guide_refresh_negative:R07_AG03_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_guide_local_chooser_negative:R07_AG07_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_guide_manager_paint_negative:R07_G06_EXPECTED_NEGATIVE_PAINT \
-            r07_native_picker_osk_paint_negative:R07_G06_EXPECTED_NEGATIVE_PAINT \
-            r07_native_nested_guide_osk_negative:R07_C09_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_app_menu_negative:R07_D08_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_mediathek_loaded_vertical_negative:R07_D03_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_recycle_removed_source_negative:R07_F10_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_manager_paint_negative:R07_G05_EXPECTED_NEGATIVE_PAINT \
-            r07_native_live_player_failure_negative:R07_E03_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_mediathek_paged_negative:R07_E06_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_mediathek_retry_negative:R07_E07_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_fake_fullscreen_cancel_negative:R07_E11_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_three_page_loaded_negative:R07_D07_CONNECTED_EXPECTED_NEGATIVE \
-            r07_native_picker_guide_removed_negative:R07_B13_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_picker_source_refreshed_negative:R07_B12_EXPECTED_NEGATIVE_ORACLE \
-            r07_native_scale_negative:R07_SCALE_EXPECTED_NEGATIVE_ORACLE; do
+            focus_navigation_osk_native_grid_negative_owner:NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_ORACLE \
+            focus_navigation_osk_native_paint_negative:NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_PAINT \
+            native_source_refresh_negative:NATIVE_FOCUS_SOURCE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE \
+            native_source_file_chooser_negative:NATIVE_FOCUS_SOURCE_FILE_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
+            native_guide_add_url_negative:NATIVE_FOCUS_GUIDE_ADD_URL_EXPECTED_NEGATIVE_ORACLE \
+            native_guide_refresh_negative:NATIVE_FOCUS_GUIDE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE \
+            native_guide_local_chooser_negative:NATIVE_FOCUS_GUIDE_LOCAL_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
+            native_guide_manager_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
+            native_picker_osk_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
+            native_nested_guide_osk_negative:NATIVE_FOCUS_NESTED_GUIDE_OSK_EXPECTED_NEGATIVE_ORACLE \
+            native_app_menu_negative:NATIVE_FOCUS_APPLICATION_MENU_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_loaded_vertical_negative:NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_EXPECTED_NEGATIVE_ORACLE \
+            native_recycle_removed_source_negative:NATIVE_FOCUS_CHANNEL_REBIND_EXPECTED_NEGATIVE_ORACLE \
+            native_manager_paint_negative:NATIVE_FOCUS_SOURCE_MANAGER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
+            native_live_player_failure_negative:NATIVE_FOCUS_LIVE_PLAY_ENTRY_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_paged_negative:NATIVE_FOCUS_MEDIATHEK_PAGING_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_retry_negative:NATIVE_FOCUS_MEDIATHEK_RETRY_EXPECTED_NEGATIVE_ORACLE \
+            native_fake_fullscreen_cancel_negative:NATIVE_FOCUS_FULLSCREEN_CANCEL_FOCUS_EXPECTED_NEGATIVE_ORACLE \
+            native_three_page_loaded_negative:NATIVE_FOCUS_PAGE_SWITCHER_CONNECTED_EXPECTED_NEGATIVE \
+            native_picker_guide_removed_negative:NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE \
+            native_picker_source_refreshed_negative:NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE \
+            native_scale_negative:NATIVE_FOCUS_SCALE_EXPECTED_NEGATIVE_ORACLE; do
             case_name=${item%%:*}
             marker=${item#*:}
-            data_dir=$(mktemp -d -t broadcaster-c4-fixture-r07-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
             if xvfb-run -a -s '-screen 0 640x480x24' \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -1024,12 +1046,12 @@ jobs:
             fi
             if ! grep -Fq "$marker" "$negative_log"; then
               cat "$negative_log"
-              echo "R07 $case_name failed for the wrong reason" >&2
+              echo "NATIVE_FOCUS $case_name failed for the wrong reason" >&2
               exit 1
             fi
             rm -rf "$data_dir"
           done
-          echo 'R07 integrated native positives and marker-controlled negatives passed'
+          echo 'NATIVE_FOCUS integrated native positives and marker-controlled negatives passed'
 
 
       - name: Native validation failure diagnostics

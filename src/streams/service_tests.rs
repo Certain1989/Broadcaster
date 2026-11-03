@@ -591,7 +591,7 @@ async fn purge_and_refresh_serialize_without_catalogue_loss() {
 }
 
 #[tokio::test]
-async fn p1_unattended_shrink_pauses_without_granting_approval() {
+async fn playlist_refresh_unattended_shrink_pauses_without_granting_approval() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(20)).await;
     let service = &test.service;
@@ -654,7 +654,7 @@ async fn p1_unattended_shrink_pauses_without_granting_approval() {
 }
 
 #[tokio::test]
-async fn p1_opt_out_and_disabled_source_do_not_fetch() {
+async fn playlist_refresh_opt_out_and_disabled_source_do_not_fetch() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(2)).await;
     let service = &test.service;
@@ -686,7 +686,7 @@ async fn p1_opt_out_and_disabled_source_do_not_fetch() {
 }
 
 #[tokio::test]
-async fn p1_busy_manual_confirmations_do_not_starve_third_due_source() {
+async fn playlist_refresh_busy_manual_confirmations_do_not_starve_third_due_source() {
     use super::service::RefreshStage;
     let test = Fixture::new().await;
     let old = HttpFixture::new(playlist(20)).await;
@@ -767,7 +767,7 @@ async fn p1_busy_manual_confirmations_do_not_starve_third_due_source() {
 }
 
 #[tokio::test]
-async fn p1_disable_cancels_in_flight_scheduled_refresh_and_keeps_last_good() {
+async fn playlist_refresh_disable_cancels_in_flight_scheduled_refresh_and_keeps_last_good() {
     let test = Fixture::new().await;
     let server = HttpFixture::new(playlist(2)).await;
     let service = &test.service;

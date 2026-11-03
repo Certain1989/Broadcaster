@@ -6,6 +6,10 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -989,6 +993,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     let actions = line(&body);
     let add = button(&gettext("Add Playlist"), &actions);
     let guides = button(&gettext("Programme Guides"), &actions);
+    let database = button(&gettext("Backup / Restore"), &actions);
     let close = button(&gettext("Close"), &actions);
     guides.connect_clicked(glib::clone!(
         #[weak]
@@ -1015,7 +1020,7 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
     // Native GTK spatial fallback can strand a remote in the first source
     // card: the row's Up key has no preceding ListBoxRow. Give every header
     // action a physical Down route back into that first source portal.
-    for header in [&add, &guides, &close] {
+    for header in [&add, &guides, &database, &close] {
         let key = gtk::EventControllerKey::new();
         key.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_list = list.downgrade();
@@ -1033,6 +1038,11 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         });
         header.add_controller(key);
     }
+    database.connect_clicked(glib::clone!(
+        #[weak]
+        view,
+        move |_| show_database_actions(&view)
+    ));
     scroll.set_child(Some(&list));
     body.append(&scroll);
     body.append(&status);
@@ -1056,6 +1066,309 @@ pub(crate) fn show_manager(view: &TvStreamsView) {
         move |_| view.forget_source_manager()
     ));
     attach_progress(&dialog, &status, service);
+    dialog.present(Some(&window));
+}
+
+/// DB-01 contains source locators, playlist URLs and possibly credentials.
+/// The preview intentionally includes counts only, never titles or paths.
+fn show_database_actions(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let (dialog, body, _) = sheet(&gettext("Database Backup and Restore"));
+    let warning = gtk::Label::new(Some(&gettext(
+        "Database backups contain private source URLs, local paths and possible access tokens. They include cached programmes, channels, favourites, guide links and refresh settings, but NOT GSettings, external playlist/guide files, artwork or portal grants. Keep the backup private. Export asks you to select a writable folder (not a single file), giving Broadcaster access to that folder so it can atomically save a unique backup. Restoring replaces ALL existing database data and may require reauthorizing local files.",
+    )));
+    warning.set_wrap(true);
+    warning.set_xalign(0.0);
+    body.append(&warning);
+    let export = button(&gettext("Export Complete Database"), &body);
+    let restore = button(&gettext("Import and Replace Database"), &body);
+    let cancel = button(&gettext("Cancel"), &body);
+    export.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        view,
+        move |_| {
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| choose_database_export(&view)
+            ));
+            dialog.close();
+        }
+    ));
+    restore.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        view,
+        move |_| {
+            dialog.connect_closed(glib::clone!(
+                #[weak]
+                view,
+                move |_| choose_database_import(&view)
+            ));
+            dialog.close();
+        }
+    ));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    dialog.present(Some(&window));
+}
+
+fn choose_database_export(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let Some(service) = view.service() else {
+        return;
+    };
+    // A SaveFile grant can expose only the selected file via the document
+    // portal. Snapshot export requires private sibling staging and atomic,
+    // no-clobber hard-link publish. Ask the user explicitly for a directory
+    // grant; never broaden the Flatpak manifest's filesystem permissions.
+    // Use an unguessable filename so repeated exports never overwrite others.
+    let picker = gtk::FileDialog::new();
+    picker.set_title("Choose Backup Folder");
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let Ok(folder) = picker.select_folder_future(Some(&window)).await else {
+                return;
+            };
+            let Some(folder_path) = folder.path() else {
+                message(
+                    &view,
+                    &gettext("Choose a local writable folder for the database backup."),
+                );
+                return;
+            };
+            let filename = format!("broadcaster-backup-{}.sqlite3", uuid::Uuid::new_v4());
+            let path = folder_path.join(&filename);
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let active = Arc::new(AtomicBool::new(true));
+            let (progress, body, status) = sheet(&gettext("Exporting Complete Database"));
+            status.set_text(&gettext("Creating a private, consistent SQLite backup..."));
+            body.append(&status);
+            let cancel = button(&gettext("Cancel Backup"), &body);
+            cancel.connect_clicked({
+                let cancelled = cancelled.clone();
+                let status = status.clone();
+                move |button| {
+                    cancelled.store(true, Ordering::Relaxed);
+                    button.set_sensitive(false);
+                    status.set_text(&gettext(
+                        "Cancellation requested. Finishing the current SQLite step...",
+                    ));
+                }
+            });
+            progress.connect_closed({
+                let cancelled = cancelled.clone();
+                let active = active.clone();
+                move |_| {
+                    // Closing the dialog programmatically after successful
+                    // worker completion is NOT a user cancellation.
+                    if active.load(Ordering::Relaxed) {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
+            });
+            progress.present(Some(&window));
+            let result = service.export_database(path, cancelled.clone()).await;
+            active.store(false, Ordering::Relaxed);
+            progress.close();
+            match result {
+                Ok(_) => message(
+                    &view,
+                    &format!(
+                        "{} {filename}",
+                        gettext("Private database backup exported:")
+                    ),
+                ),
+                Err(_) if cancelled.load(Ordering::Relaxed) => message(
+                    &view,
+                    &gettext("Database backup cancelled; no finished backup was published."),
+                ),
+                Err(error) => message(
+                    &view,
+                    &format!("{}: {error}", gettext("Database backup export failed")),
+                ),
+            }
+        }
+    ));
+}
+
+fn choose_database_import(view: &TvStreamsView) {
+    let Some(window) = parent(view) else { return };
+    let Some(service) = view.service() else {
+        return;
+    };
+    spawn(glib::clone!(
+        #[weak]
+        view,
+        async move {
+            let Ok(file) = gtk::FileDialog::new().open_future(Some(&window)).await else {
+                return;
+            };
+            let Some(path) = file.path() else {
+                message(&view, &gettext("Select a local SQLite backup file."));
+                return;
+            };
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let active = Arc::new(AtomicBool::new(true));
+            let (progress, body, status) = sheet(&gettext("Validating Database Backup"));
+            status.set_text(&gettext(
+                "Copying and validating the selected file privately...",
+            ));
+            body.append(&status);
+            let cancel = button(&gettext("Cancel Import"), &body);
+            cancel.connect_clicked({
+                let cancelled = cancelled.clone();
+                let status = status.clone();
+                move |button| {
+                    cancelled.store(true, Ordering::Relaxed);
+                    button.set_sensitive(false);
+                    status.set_text(&gettext("Cancelling staged import..."));
+                }
+            });
+            progress.connect_closed({
+                let cancelled = cancelled.clone();
+                let active = active.clone();
+                move |_| {
+                    if active.load(Ordering::Relaxed) {
+                        cancelled.store(true, Ordering::Relaxed);
+                    }
+                }
+            });
+            progress.present(Some(&window));
+            let result = service
+                .prepare_database_import(path, cancelled.clone())
+                .await;
+            active.store(false, Ordering::Relaxed);
+            progress.close();
+            match result {
+                Ok(prepared) => confirm_database_restore(&view, service, prepared),
+                Err(_) if cancelled.load(Ordering::Relaxed) => message(
+                    &view,
+                    &gettext("Database import cancelled; the current database is unchanged."),
+                ),
+                Err(error) => fail(&view, error),
+            }
+        }
+    ));
+}
+
+// Keep the dynamically appended quit action reachable in both directions.
+// This exact helper is also exercised by native D-pad regression tests.
+fn link_restore_quit_controls(keep: &gtk::Button, quit: &gtk::Button) {
+    let back_to_keep = gtk::EventControllerKey::new();
+    back_to_keep.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let keep_target = keep.downgrade();
+    back_to_keep.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up)
+            && keep_target
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    quit.add_controller(back_to_keep);
+    let forward_to_quit = gtk::EventControllerKey::new();
+    forward_to_quit.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let quit_target = quit.downgrade();
+    forward_to_quit.connect_key_pressed(move |_, key, _, modifiers| {
+        if crate::keyboard::unmodified_remote(modifiers)
+            && matches!(key, gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down)
+            && quit_target
+                .upgrade()
+                .is_some_and(|button| button.grab_focus())
+        {
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    keep.add_controller(forward_to_quit);
+}
+
+fn confirm_database_restore(
+    view: &TvStreamsView,
+    service: StreamsService,
+    prepared: super::backup::PreparedImport,
+) {
+    let Some(window) = parent(view) else { return };
+    let (dialog, body, status) = sheet(&gettext("Confirm Complete Database Replacement"));
+    let summary = gtk::Label::new(Some(&format!(
+        "{}: {}  |  {}: {}  |  {}: {}  |  {}: {}",
+        gettext("Playlists"),
+        prepared.counts.playlists,
+        gettext("Channels"),
+        prepared.counts.channels,
+        gettext("Guides"),
+        prepared.counts.guides,
+        gettext("Cached programmes"),
+        prepared.counts.programmes,
+    )));
+    summary.set_wrap(true);
+    body.append(&summary);
+    let warning = gtk::Label::new(Some(&gettext(
+        "This is a FULL REPLACEMENT, not a merge. Everything currently stored in Broadcaster's database will be replaced after you quit and relaunch the application. The previous database will be kept as a recovery copy. No automatic source or guide refresh will run during the restore startup.",
+    )));
+    warning.set_wrap(true);
+    body.append(&warning);
+    let confirm = button(&gettext("Replace Entire Database After Restart"), &body);
+    let cancel = button(&gettext("Keep Current Database"), &body);
+    let pending = Rc::new(RefCell::new(Some(prepared)));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    confirm.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        status,
+        #[weak]
+        confirm,
+        move |_| {
+            let Some(import) = pending.borrow_mut().take() else { return };
+            confirm.set_sensitive(false);
+            let service = service.clone();
+            spawn(glib::clone!(
+                #[weak]
+                dialog,
+                #[weak]
+                status,
+                #[weak]
+                cancel,
+                async move {
+                    match service.confirm_database_import(import).await {
+                        Ok(()) => {
+                            status.set_text(&gettext("Restore safely staged. Close Broadcaster and relaunch to complete replacement. Do not start another refresh now."));
+                            let quit = gtk::Button::with_label(&gettext("Close Broadcaster Now"));
+                            if let Some(content) = dialog.child().and_downcast::<gtk::Box>() {
+                                content.append(&quit);
+                            }
+                            quit.connect_clicked(|_| crate::application::TvApplication::get().quit());
+                            link_restore_quit_controls(&cancel, &quit);
+                            quit.grab_focus();
+                        }
+                        Err(_) => status.set_text(&gettext("Restore staging could not be confirmed. The running database is unchanged. A pending request, if published, will be reconciled safely at next startup; do not start another refresh before restarting.")),
+                    }
+                }
+            ));
+        }
+    ));
+    body.append(&status);
     dialog.present(Some(&window));
 }
 
@@ -2471,7 +2784,7 @@ mod source_form_tests {
     }
 }
 #[cfg(test)]
-mod c1_vertical_reversibility_tests {
+mod source_manager_vertical_reversibility_tests {
     use super::*;
 
     #[test]
@@ -2520,10 +2833,45 @@ mod c1_vertical_reversibility_tests {
 }
 
 #[cfg(test)]
-mod c1_mapped_native_diagnostic {
+mod native_navigation_test_support {
     use super::*;
     use crate::{application::TvApplication, streams::view::TvStreamsView};
     use std::{thread, time::Duration};
+
+    // FOCUS-AUD-05: same production quit/keep key controller with live GTK
+    // capture and physical XTest; never stage/replace a real owner database.
+    fn native_backup_restore_quit_focus(width: i32, height: i32) {
+        adw::init().expect("native GTK display");
+        let win = adw::Window::new();
+        win.set_default_size(width, height);
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let keep = gtk::Button::with_label("Keep Current Database");
+        let quit = gtk::Button::with_label("Close Broadcaster Now");
+        body.append(&keep);
+        body.append(&quit);
+        super::link_restore_quit_controls(&keep, &quit);
+        win.set_content(Some(&body));
+        win.present();
+        spin();
+        assert!(quit.grab_focus());
+        inject("Up");
+        assert!(keep.has_focus(), "staged Quit Up -> Keep");
+        inject("Down");
+        assert!(quit.has_focus(), "Keep Down -> staged Quit");
+        win.destroy();
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD staged restore quit/keep physical remote compact"]
+    fn native_backup_restore_quit_focus_640_480() {
+        native_backup_restore_quit_focus(640, 480);
+    }
+
+    #[test]
+    #[ignore = "FOCUS-AUD staged restore quit/keep physical remote TV"]
+    fn native_backup_restore_quit_focus_1280_800() {
+        native_backup_restore_quit_focus(1280, 800);
+    }
 
     pub(super) fn spin() {
         for _ in 0..20 {
@@ -2613,25 +2961,25 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "native XTest mapped synthetic manager; diagnostic only"]
-    fn c1_actual_remote_back_trace() {
+    fn source_manager_actual_remote_back_trace() {
         run_mapped_manager(640, 480);
     }
 
     #[test]
     #[ignore = "native XTest mapped synthetic manager, TV viewport; diagnostic only"]
-    fn c1_bigscreen_guide_remote_back_trace() {
+    fn source_manager_actual_remote_back_trace_tv() {
         run_mapped_manager(1280, 800);
     }
 
-    /// C4 keeps the existing physical XTest injector. Direct router calls
+    /// GUIDE_MAPPING keeps the existing physical XTest injector. Direct router calls
     /// cannot prove that a mapped list actually receives the remote key.
-    fn c4_focused_button(win: &crate::window::TvWindow) -> Option<gtk::Button> {
+    fn guide_mapping_focused_button(win: &crate::window::TvWindow) -> Option<gtk::Button> {
         gtk::prelude::GtkWindowExt::focus(win)?
             .downcast::<gtk::Button>()
             .ok()
     }
 
-    fn c4_native_cards(width: i32, height: i32, negative: bool) {
+    fn native_channel_cards(width: i32, height: i32, negative: bool) {
         adw::init().expect("GTK display");
         let resource =
             gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
@@ -2673,7 +3021,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             } else {
                 inject("Right");
             }
-            let play = c4_focused_button(&win).unwrap_or_else(|| {
+            let play = guide_mapping_focused_button(&win).unwrap_or_else(|| {
                 panic!(
                     "Play action focus missing on row {index}: {}",
                     view.remote_action_test_state()
@@ -2699,7 +3047,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert_eq!(
                     play.label().as_deref(),
                     Some("Edit Metadata"),
-                    "C4_EXPECTED_NEGATIVE_ORACLE: Right/OK entry cannot focus Edit"
+                    "GUIDE_MAPPING_EXPECTED_NEGATIVE_ORACLE: Right/OK entry cannot focus Edit"
                 );
             }
             inject("Return");
@@ -2712,7 +3060,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(pages.visible_child_name().as_deref(), Some("streams"));
             inject("Left");
             assert_eq!(
-                c4_focused_button(&win)
+                guide_mapping_focused_button(&win)
                     .and_then(|button| button.label())
                     .as_deref(),
                 Some("☆"),
@@ -2723,21 +3071,21 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             view.assert_remote_action_focus_owner(&focused, id);
             inject("Right");
             assert_eq!(
-                c4_focused_button(&win)
+                guide_mapping_focused_button(&win)
                     .and_then(|button| button.label())
                     .as_deref(),
                 Some("Play")
             );
             inject("Down");
             assert_eq!(
-                c4_focused_button(&win)
+                guide_mapping_focused_button(&win)
                     .and_then(|button| button.label())
                     .as_deref(),
                 Some("Edit Metadata")
             );
             inject("Down");
             assert_eq!(
-                c4_focused_button(&win)
+                guide_mapping_focused_button(&win)
                     .and_then(|button| button.label())
                     .as_deref(),
                 Some("Programme mapping")
@@ -2755,46 +3103,47 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "native XTest mapped C4 cards"]
-    fn c4_native_cards_640_480() {
-        c4_native_cards(640, 480, false);
+    #[ignore = "native XTest mapped GUIDE_MAPPING cards"]
+    fn native_channel_cards_640_480() {
+        native_channel_cards(640, 480, false);
     }
 
     #[test]
-    #[ignore = "native XTest mapped C4 cards"]
-    fn c4_native_cards_1280_800() {
-        c4_native_cards(1280, 800, false);
+    #[ignore = "native XTest mapped GUIDE_MAPPING cards"]
+    fn native_channel_cards_1280_800() {
+        native_channel_cards(1280, 800, false);
     }
 
     #[test]
     #[ignore = "deliberately wrong physical focus oracle"]
-    fn c4_native_negative_oracle() {
-        c4_native_cards(640, 480, true);
+    fn native_channel_negative_oracle() {
+        native_channel_cards(640, 480, true);
     }
 
     /// Test the real star click, persisted SQLite preference, filter and
     /// zero-results focus return, not merely a fabricated glyph/focus route.
     /// The CI wrapper must provide a fresh isolated XDG_DATA_HOME.
-    fn c4_native_favourites(width: i32, height: i32, painted: bool, negative: bool) {
+    fn native_channel_favourites(width: i32, height: i32, painted: bool, negative: bool) {
         use crate::streams::{
             model::{ChannelQuery, IncomingChannel, SourceDraft, SourceOrigin, ValidatedSnapshot},
             storage::Storage,
         };
         use std::collections::BTreeSet;
 
-        let data_home = std::env::var("XDG_DATA_HOME").expect("isolated C4 XDG_DATA_HOME");
+        let data_home =
+            std::env::var("XDG_DATA_HOME").expect("isolated GUIDE_MAPPING XDG_DATA_HOME");
         assert!(
-            data_home.contains("broadcaster-c4-fixture-"),
+            data_home.contains("broadcaster-guide-mapping-fixture-"),
             "refusing to use a real user's My Channels database"
         );
         let store = Storage::new();
         store.initialize().expect("disposable SQLite database");
         let source_id = uuid::Uuid::new_v4().to_string();
         let source = SourceDraft {
-            name: "C4 disposable source".into(),
+            name: "GUIDE_MAPPING disposable source".into(),
             origin: SourceOrigin {
                 kind: OriginKind::RemoteUrl,
-                locator: "https://example.invalid/c4.m3u".into(),
+                locator: "https://example.invalid/guide_mapping.m3u".into(),
             },
             enabled: true,
             order: 0,
@@ -2803,9 +3152,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         let entries: Vec<IncomingChannel> = (0..3)
             .map(|i| IncomingChannel {
                 order: i,
-                imported_name: format!("C4 channel {i}"),
-                stream_url: format!("https://example.invalid/c4/{i}.m3u8"),
-                tvg_id: Some(format!("c4-{i}")),
+                imported_name: format!("GUIDE_MAPPING channel {i}"),
+                stream_url: format!("https://example.invalid/guide_mapping/{i}.m3u8"),
+                tvg_id: Some(format!("guide_mapping-{i}")),
                 tvg_name: None,
                 group_title: None,
                 logo_url: None,
@@ -2874,7 +3223,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     return;
                 }
             }
-            panic!("C4 timed out: {reason}");
+            panic!("GUIDE_MAPPING timed out: {reason}");
         };
         wait_until(
             &|| {
@@ -2883,25 +3232,25 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             },
             "SQLite rows bound",
         );
-        // R07: use only one real Search focus seed. Descend through the
+        // NATIVE_FOCUS: use only one real Search focus seed. Descend through the
         // mapped toolbar/filters into the actual three-row virtualized list
         // with XTest, never the show_and_focus_test_results helper.
         let search = view.toolbar_focus_targets()[0].clone();
-        assert!(search.grab_focus(), "R07 My Channels Search entry");
+        assert!(search.grab_focus(), "NATIVE_FOCUS My Channels Search entry");
         spin();
         for _ in 0..16 {
             let owner = gtk::prelude::GtkWindowExt::focus(&win)
-                .expect("R07 mapped My Channels focus owner");
+                .expect("NATIVE_FOCUS mapped My Channels focus owner");
             if view.contains_results_focus(&owner) {
                 break;
             }
             inject("Down");
         }
-        let owner =
-            gtk::prelude::GtkWindowExt::focus(&win).expect("R07 physical Search-to-results owner");
+        let owner = gtk::prelude::GtkWindowExt::focus(&win)
+            .expect("NATIVE_FOCUS physical Search-to-results owner");
         assert!(
             owner.is_mapped() && view.contains_results_focus(&owner),
-            "R07 Search must reach real virtualized SQLite results through D-pad"
+            "NATIVE_FOCUS Search must reach real virtualized SQLite results through D-pad"
         );
         let row_ids: Vec<_> = all.items.iter().map(|row| row.id.clone()).collect();
         // Traverse and reverse three distinct source-qualified SQLite rows;
@@ -2914,24 +3263,25 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 view.remote_action_test_selected_id().as_deref(),
                 Some(id.as_str()),
-                "R07 source-qualified native row selection {index}"
+                "NATIVE_FOCUS source-qualified native row selection {index}"
             );
             inject("Left");
             let star = view
                 .remote_action_test_row_star(id)
-                .expect("R07 mapped star in actual selected SQLite row");
+                .expect("NATIVE_FOCUS mapped star in actual selected SQLite row");
             assert!(star.has_focus() && star.is_mapped());
             assert_eq!(star.label().as_deref(), Some("☆"));
             inject("Right");
-            let owner =
-                gtk::prelude::GtkWindowExt::focus(&win).expect("R07 star-to-row physical return");
+            let owner = gtk::prelude::GtkWindowExt::focus(&win)
+                .expect("NATIVE_FOCUS star-to-row physical return");
             view.assert_remote_action_focus_owner(&owner, id);
-            // E08: every *real SQLite-bound* first/middle/last card must
+            // CHANNEL_CARD_JOURNEY: every *real SQLite-bound* first/middle/last card must
             // offer all three actions and restore the exact card identity.
             // Fake player/editor/picker counters must remain untouched.
             inject("Return");
             for label in ["Play", "Edit Metadata", "Programme mapping"] {
-                let action = c4_focused_button(&win).expect("R07 bound card action");
+                let action =
+                    guide_mapping_focused_button(&win).expect("NATIVE_FOCUS bound card action");
                 assert_eq!(action.label().as_deref(), Some(label));
                 assert!(action.is_mapped() && action.is_sensitive());
                 view.assert_remote_action_focus_owner(action.upcast_ref(), id);
@@ -2941,7 +3291,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
             inject("Left");
             view.assert_remote_action_focus_owner(
-                &gtk::prelude::GtkWindowExt::focus(&win).expect("R07 card inverse"),
+                &gtk::prelude::GtkWindowExt::focus(&win).expect("NATIVE_FOCUS card inverse"),
                 id,
             );
             inject("XF86Back");
@@ -2953,37 +3303,42 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 view.remote_action_test_selected_id().as_deref(),
                 Some(row_ids[index].as_str()),
-                "R07 physical reverse row selection {index}"
+                "NATIVE_FOCUS physical reverse row selection {index}"
             );
         }
         assert_eq!(view.remote_action_test_counts(), (0, 0, 0));
         inject("Return");
         assert_eq!(
-            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            guide_mapping_focused_button(&win)
+                .and_then(|b| b.label())
+                .as_deref(),
             Some("Play")
         );
         view.assert_remote_action_focus_owner(
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &first_id,
         );
-        // R07 E08: these are the three actual source-qualified SQLite card
+        // NATIVE_FOCUS CHANNEL_CARD_JOURNEY: these are the three actual source-qualified SQLite card
         // actions, reached physically without triggering player, editor or
         // mapping writes. Keep the persisted-favourite journey below intact.
         for label in ["Edit Metadata", "Programme mapping"] {
             inject("Down");
-            let focused = c4_focused_button(&win).expect("R07 real SQLite action focus");
+            let focused =
+                guide_mapping_focused_button(&win).expect("NATIVE_FOCUS real SQLite action focus");
             assert_eq!(focused.label().as_deref(), Some(label));
             assert!(focused.is_mapped() && focused.is_sensitive());
             view.assert_remote_action_focus_owner(focused.upcast_ref(), &first_id);
         }
         assert_eq!(view.remote_action_test_counts(), (0, 0, 0));
         inject("Left");
-        let row_owner = gtk::prelude::GtkWindowExt::focus(&win).expect("R07 row return");
+        let row_owner = gtk::prelude::GtkWindowExt::focus(&win).expect("NATIVE_FOCUS row return");
         view.assert_remote_action_focus_owner(&row_owner, &first_id);
         inject("XF86Back");
         inject("Left");
         assert_eq!(
-            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            guide_mapping_focused_button(&win)
+                .and_then(|b| b.label())
+                .as_deref(),
             Some("☆")
         );
         inject("Return");
@@ -3003,7 +3358,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .is_some_and(|star| star.has_focus()),
             "the toggled star must reclaim focus after SQLite reload"
         );
-        // F02: move back into the exact real card, expand it using physical
+        // ROW_FAVOURITE_TOGGLE: move back into the exact real card, expand it using physical
         // Return and reach its Star with the *remote D-pad*.
         // Tab-only evidence did not prove real TV remote accessibility.
         inject("Right");
@@ -3013,26 +3368,29 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
         inject("Return");
         wait_until(
-            &|| c4_focused_button(&win).is_some_and(|b| b.label().as_deref() == Some("Play")),
-            "F02 expanded real card Play action",
+            &|| {
+                guide_mapping_focused_button(&win)
+                    .is_some_and(|b| b.label().as_deref() == Some("Play"))
+            },
+            "ROW_FAVOURITE_TOGGLE expanded real card Play action",
         );
         let expanded_star = view
             .remote_action_test_row_star(&first_id)
-            .expect("F02 same bound expanded row Star");
+            .expect("ROW_FAVOURITE_TOGGLE same bound expanded row Star");
         // New direct remote route: Play Right enters Star, Star Left
         // reverses to Play. This must not require Tab or focus injection.
         inject("Right");
         assert!(
             expanded_star.has_focus(),
-            "G09 Play Right must reach favourite Star"
+            "FOCUS_GRAPH Play Right must reach favourite Star"
         );
         inject("Left");
         assert_eq!(
-            c4_focused_button(&win)
+            guide_mapping_focused_button(&win)
                 .and_then(|button| button.label())
                 .as_deref(),
             Some("Play"),
-            "G09 Star Left returns to same expanded Play"
+            "FOCUS_GRAPH Star Left returns to same expanded Play"
         );
         // The older Play Left -> source row -> Left Star path remains valid.
         inject("Left");
@@ -3043,7 +3401,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         inject("Left");
         assert!(
             expanded_star.has_focus(),
-            "G09 real Left/Left must reach expanded card Star without Tab"
+            "FOCUS_GRAPH real Left/Left must reach expanded card Star without Tab"
         );
         inject("Return");
         wait_until(
@@ -3057,15 +3415,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             star.label().as_deref() == Some("☆") && star.has_focus()
                         })
             },
-            "F02 expanded-row star OFF persists and focus returns after async reload",
+            "ROW_FAVOURITE_TOGGLE expanded-row star OFF persists and focus returns after async reload",
         );
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(first_id.as_str()),
-            "F02 no cross-card focus or UUID after reload"
+            "ROW_FAVOURITE_TOGGLE no cross-card focus or UUID after reload"
         );
         // Restore the established favourite-ON fixture using the same
-        // physically focused Star; retain the F03/F04 footer/restart journey.
+        // physically focused Star; retain the favourites footer and cross-process restart journey.
         inject("Return");
         wait_until(
             &|| {
@@ -3078,7 +3436,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                             star.label().as_deref() == Some("★") && star.has_focus()
                         })
             },
-            "F02 inverse ON persists before favourite-filter regression",
+            "ROW_FAVOURITE_TOGGLE inverse ON persists before favourite-filter regression",
         );
         let (favourites, show_all) = view.remote_action_test_favourite_buttons();
         if painted {
@@ -3092,16 +3450,16 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
             assert!(
                 favourites.has_focus(),
-                "G04 native Tab must reach favourites footer"
+                "FAVOURITES_PAINT native Tab must reach favourites footer"
             );
         } else {
             assert!(favourites.grab_focus());
         }
         let favourite_pixels = if painted {
-            crate::window::r07_native_focus_tests::r07_painted_probe(
+            crate::window::native_focus_navigation_tests::focus_navigation_painted_probe(
                 &win,
                 favourites.upcast_ref(),
-                "G04 favourites footer",
+                "FAVOURITES_PAINT favourites footer",
             )
         } else {
             0
@@ -3115,16 +3473,16 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             &|| store.favourites_only() == Ok(true) && view.remote_action_test_visible_count() == 1,
             "favourites-only toggle and SQL filter",
         );
-        // F04: a new OS process (not just another Rust service handle)
+        // favourites restart: a new OS process (not just another Rust service handle)
         // must see the true saved favourites-only mode on the same private DB.
         // The reusable Arch toolchain may invoke this test through its
         // dynamic loader rather than a native host ELF interpreter. In that
         // bounded local-only mode, launch the *same test binary* explicitly;
         // normal CI still runs std::env::current_exe() unchanged.
-        let mut process = if let Ok(loader) = std::env::var("R07_FOCUS_LOCAL_LOADER") {
-            let libs = std::env::var("R07_FOCUS_LOCAL_LIBS")
+        let mut process = if let Ok(loader) = std::env::var("BROADCASTER_NATIVE_TEST_LOADER") {
+            let libs = std::env::var("BROADCASTER_NATIVE_TEST_LIBS")
                 .expect("local loader needs explicit recovered library paths");
-            let binary = std::env::var("R07_FOCUS_LOCAL_BINARY")
+            let binary = std::env::var("BROADCASTER_NATIVE_TEST_BINARY")
                 .expect("local loader must name the current test binary");
             let mut command = std::process::Command::new(loader);
             command.args(["--library-path", &libs, &binary]);
@@ -3134,22 +3492,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         };
         let output = process
             .args([
-                "r07_native_favourites_restart_child",
+                "native_favourites_restart_child",
                 "--ignored",
                 "--test-threads=1",
             ])
-            .env("R07_C4_PROCESS_CHILD", "1")
+            .env("NATIVE_FOCUS_GUIDE_MAPPING_PROCESS_CHILD", "1")
             .output()
             .expect("spawn real independent test process");
         assert!(
             output.status.success(),
-            "R07 F04 process restart: {} {}",
+            "NATIVE_FOCUS favourite-mode process restart: {} {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-            "R07 F04 child process must execute its SQLite restart oracle"
+            "NATIVE_FOCUS favourite-mode child process must execute its SQLite restart oracle"
         );
         let reopened = glib::MainContext::default()
             .block_on(StreamsService::with_storage(store.clone()))
@@ -3167,7 +3525,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         spin();
         inject("Left");
         assert_eq!(
-            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            guide_mapping_focused_button(&win)
+                .and_then(|b| b.label())
+                .as_deref(),
             Some("★")
         );
         inject(if painted { "space" } else { "Return" });
@@ -3196,29 +3556,29 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
         }
         let fallback_pixels = if painted {
-            crate::window::r07_native_focus_tests::r07_painted_probe(
+            crate::window::native_focus_navigation_tests::focus_navigation_painted_probe(
                 &win,
                 show_all.upcast_ref(),
-                "G04 last-favourite Show All fallback",
+                "FAVOURITES_PAINT last-favourite Show All fallback",
             )
         } else {
             0
         };
         if painted {
-            eprintln!("R07_G04_PAINTED {width}x{height} footer={favourite_pixels} fallback={fallback_pixels}");
+            eprintln!("NATIVE_FOCUS_FAVOURITES_PAINT_PAINTED {width}x{height} footer={favourite_pixels} fallback={fallback_pixels}");
             if negative {
                 assert_eq!(
                     favourite_pixels, 0,
-                    "R07_G04_EXPECTED_NEGATIVE_PAINT: focused favourites footer has pixels"
+                    "NATIVE_FOCUS_FAVOURITES_PAINT_EXPECTED_NEGATIVE_PAINT: focused favourites footer has pixels"
                 );
-                unreachable!("invalid G04 visual oracle was accepted");
+                unreachable!("invalid FAVOURITES_PAINT visual oracle was accepted");
             }
             assert!(
                 favourite_pixels >= 15,
-                "R07_G04_MISSING_PAINTED_FOOTER: real favourites action had no reversible outline"
+                "NATIVE_FOCUS_FAVOURITES_PAINT_MISSING_PAINTED_FOOTER: real favourites action had no reversible outline"
             );
             assert!(fallback_pixels >= 15,
-                "R07_G04_MISSING_PAINTED_FALLBACK: real Show All async return had no reversible outline");
+                "NATIVE_FOCUS_FAVOURITES_PAINT_MISSING_PAINTED_FALLBACK: real Show All async return had no reversible outline");
         }
         inject(if painted { "space" } else { "Return" });
         wait_until(
@@ -3232,29 +3592,32 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R07 G04 real X11 favourites footer/fallback painted focus compact"]
-    fn r07_native_favourites_paint_640_480() {
-        c4_native_favourites(640, 480, true, false);
+    #[ignore = "NATIVE_FOCUS FAVOURITES_PAINT real X11 favourites footer/fallback painted focus compact"]
+    fn native_favourites_paint_640_480() {
+        native_channel_favourites(640, 480, true, false);
     }
 
     #[test]
-    #[ignore = "R07 G04 real X11 favourites footer/fallback painted focus TV"]
-    fn r07_native_favourites_paint_1280_800() {
-        c4_native_favourites(1280, 800, true, false);
+    #[ignore = "NATIVE_FOCUS FAVOURITES_PAINT real X11 favourites footer/fallback painted focus TV"]
+    fn native_favourites_paint_1280_800() {
+        native_channel_favourites(1280, 800, true, false);
     }
 
     #[test]
-    #[ignore = "R07 G04 deliberately wrong visible footer focus oracle"]
-    fn r07_native_favourites_paint_negative() {
-        c4_native_favourites(640, 480, true, true);
+    #[ignore = "NATIVE_FOCUS FAVOURITES_PAINT deliberately wrong visible footer focus oracle"]
+    fn native_favourites_paint_negative() {
+        native_channel_favourites(640, 480, true, true);
     }
 
     #[test]
     #[ignore = "child-process persisted SQLite favourite mode oracle"]
-    fn r07_native_favourites_restart_child() {
-        assert_eq!(std::env::var("R07_C4_PROCESS_CHILD").as_deref(), Ok("1"));
-        let home = std::env::var("XDG_DATA_HOME").expect("private C4 data directory");
-        assert!(home.contains("broadcaster-c4-fixture-"));
+    fn native_favourites_restart_child() {
+        assert_eq!(
+            std::env::var("NATIVE_FOCUS_GUIDE_MAPPING_PROCESS_CHILD").as_deref(),
+            Ok("1")
+        );
+        let home = std::env::var("XDG_DATA_HOME").expect("private GUIDE_MAPPING data directory");
+        assert!(home.contains("broadcaster-guide-mapping-fixture-"));
         let storage = crate::streams::storage::Storage::new();
         storage
             .initialize()
@@ -3262,24 +3625,24 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert_eq!(
             storage.favourites_only(),
             Ok(true),
-            "F04 persisted favourite mode"
+            "favourite mode persists after process restart"
         );
     }
 
     #[test]
-    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
-    fn c4_native_favourites_640_480() {
-        c4_native_favourites(640, 480, false, false);
+    #[ignore = "real SQLite-backed mapped GUIDE_MAPPING favourite focus"]
+    fn native_channel_favourites_640_480() {
+        native_channel_favourites(640, 480, false, false);
     }
 
     #[test]
-    #[ignore = "real SQLite-backed mapped C4 favourite focus"]
-    fn c4_native_favourites_1280_800() {
-        c4_native_favourites(1280, 800, false, false);
+    #[ignore = "real SQLite-backed mapped GUIDE_MAPPING favourite focus"]
+    fn native_channel_favourites_1280_800() {
+        native_channel_favourites(1280, 800, false, false);
     }
 
     // Walk the live GTK widget tree, not test-fabricated action widgets.
-    fn c4_picker_buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
+    fn guide_mapping_picker_buttons(widget: &gtk::Widget) -> Vec<gtk::Button> {
         fn visit(widget: &gtk::Widget, found: &mut Vec<gtk::Button>) {
             if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
                 found.push(button);
@@ -3295,14 +3658,14 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         buttons
     }
 
-    fn c4_picker_button(root: &gtk::Widget, name: &str) -> gtk::Button {
-        c4_picker_buttons(root)
+    fn guide_mapping_picker_button(root: &gtk::Widget, name: &str) -> gtk::Button {
+        guide_mapping_picker_buttons(root)
             .into_iter()
             .find(|button| button.label().as_deref() == Some(name))
-            .unwrap_or_else(|| panic!("C4 modal button absent: {name}"))
+            .unwrap_or_else(|| panic!("GUIDE_MAPPING modal button absent: {name}"))
     }
 
-    fn c4_native_focus_within(win: &crate::window::TvWindow, ancestor: &gtk::Widget) -> bool {
+    fn native_channel_focus_within(win: &crate::window::TvWindow, ancestor: &gtk::Widget) -> bool {
         let mut focused = gtk::prelude::GtkWindowExt::focus(win);
         while let Some(widget) = focused {
             if widget == *ancestor {
@@ -3317,7 +3680,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     // outside the physical Xvfb window. Check its true window-relative GTK
     // allocation and every ancestor scroll viewport; used only after real
     // XTest directional keys have moved focus and scrolled the control in.
-    fn c4_native_visible_in_viewport(win: &crate::window::TvWindow, control: &gtk::Widget) -> bool {
+    fn native_channel_visible_in_viewport(
+        win: &crate::window::TvWindow,
+        control: &gtk::Widget,
+    ) -> bool {
         if !control.is_mapped() || !control.is_visible() || !control.is_sensitive() {
             return false;
         }
@@ -3353,13 +3719,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         true
     }
 
-    fn c4_picker_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
+    fn guide_mapping_picker_entry(widget: &gtk::Widget) -> Option<gtk::Entry> {
         if let Ok(entry) = widget.clone().downcast::<gtk::Entry>() {
             return Some(entry);
         }
         let mut child = widget.first_child();
         while let Some(next) = child {
-            if let Some(entry) = c4_picker_entry(&next) {
+            if let Some(entry) = guide_mapping_picker_entry(&next) {
                 return Some(entry);
             }
             child = next.next_sibling();
@@ -3367,7 +3733,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         None
     }
 
-    fn c4_picker_modal(widget: &gtk::Widget, css: &str) -> Option<adw::Dialog> {
+    fn guide_mapping_picker_modal(widget: &gtk::Widget, css: &str) -> Option<adw::Dialog> {
         if let Ok(dialog) = widget.clone().downcast::<adw::Dialog>() {
             if dialog.has_css_class(css) && dialog.is_mapped() {
                 return Some(dialog);
@@ -3375,7 +3741,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         }
         let mut child = widget.first_child();
         while let Some(next) = child {
-            if let Some(dialog) = c4_picker_modal(&next, css) {
+            if let Some(dialog) = guide_mapping_picker_modal(&next, css) {
                 return Some(dialog);
             }
             child = next.next_sibling();
@@ -3383,7 +3749,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         None
     }
 
-    fn c4_picker_has_label(widget: &gtk::Widget, expected: &str) -> bool {
+    fn guide_mapping_picker_has_label(widget: &gtk::Widget, expected: &str) -> bool {
         if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
             if label.text().contains(expected) {
                 return true;
@@ -3391,7 +3757,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         }
         let mut child = widget.first_child();
         while let Some(next) = child {
-            if c4_picker_has_label(&next, expected) {
+            if guide_mapping_picker_has_label(&next, expected) {
                 return true;
             }
             child = next.next_sibling();
@@ -3401,7 +3767,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     /// Real selected-guide SQLite, async snapshot, GTK modal, XTest and
     /// transaction CAS. Never use an owner's playlist or non-disposable guide.
-    fn c4_native_mapping_picker(
+    fn native_channel_mapping_picker(
         width: i32,
         height: i32,
         painted: bool,
@@ -3410,7 +3776,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         wrong_race: bool,
         scenario: (bool, bool, bool, bool),
     ) {
-        let (source_race, advanced_exception, false_exception, e08_actions) = scenario;
+        let (source_race, advanced_exception, false_exception, verify_card_actions) = scenario;
         use crate::streams::{
             editor,
             model::{
@@ -3423,7 +3789,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         use std::collections::BTreeSet;
 
         let data_home = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME");
-        assert!(data_home.contains("broadcaster-c4-fixture-"));
+        assert!(data_home.contains("broadcaster-guide-mapping-fixture-"));
         let store = Storage::new();
         store.initialize().unwrap();
         let playlist_id = uuid::Uuid::new_v4().to_string();
@@ -3437,7 +3803,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         .map(|(index, (name, tvg))| IncomingChannel {
             order: index as u32,
             imported_name: name.into(),
-            stream_url: format!("https://example.invalid/c4-picker/{index}.m3u8"),
+            stream_url: format!("https://example.invalid/guide_mapping-picker/{index}.m3u8"),
             tvg_id: Some(tvg.into()),
             tvg_name: None,
             group_title: None,
@@ -3454,10 +3820,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             .create_source_with_initial_snapshot(
                 &playlist_id,
                 &SourceDraft {
-                    name: "C4 picker playlist".into(),
+                    name: "GUIDE_MAPPING picker playlist".into(),
                     origin: SourceOrigin {
                         kind: OriginKind::RemoteUrl,
-                        locator: "https://example.invalid/c4-picker.m3u".into(),
+                        locator: "https://example.invalid/guide_mapping-picker.m3u".into(),
                     },
                     enabled: true,
                     order: 0,
@@ -3480,13 +3846,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         {
             let mut db = store.connect().unwrap();
             for (id, name) in [
-                (&guide, "C4 selected guide"),
-                (&other_guide, "C4 other guide"),
+                (&guide, "GUIDE_MAPPING selected guide"),
+                (&other_guide, "GUIDE_MAPPING other guide"),
             ] {
                 db.execute(
                     "INSERT INTO epg_sources
                      (id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
-                     VALUES (?1,?2,'local_file','/fabricated/c4-guide',1,1,10,1000)",
+                     VALUES (?1,?2,'local_file','/fabricated/guide_mapping-guide',1,1,10,1000)",
                     params![id, name],
                 )
                 .unwrap();
@@ -3571,7 +3937,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     return;
                 }
             }
-            panic!("C4 mapping timeout: {reason}");
+            panic!("GUIDE_MAPPING mapping timeout: {reason}");
         };
         wait(
             &|| {
@@ -3581,31 +3947,34 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             "mapped SQLite rows",
         );
 
-        // B01: only the initial Search field is focus-seeded. Traverse the
+        // CHANNEL_SEARCH_TRAVERSAL: only the initial Search field is focus-seeded. Traverse the
         // real toolbar, filter row, and virtualised SQLite list with physical
         // XTest Down before opening the *actual* picker; do not call
         // remote_action_test_select() for any of these three card entries.
         let search = view.toolbar_focus_targets()[0].clone();
-        assert!(search.grab_focus(), "B01 mapped Search entry");
+        assert!(
+            search.grab_focus(),
+            "CHANNEL_SEARCH_TRAVERSAL mapped Search entry"
+        );
         spin();
         for _ in 0..16 {
-            let owner =
-                gtk::prelude::GtkWindowExt::focus(&win).expect("B01 Search-to-results focus owner");
+            let owner = gtk::prelude::GtkWindowExt::focus(&win)
+                .expect("CHANNEL_SEARCH_TRAVERSAL Search-to-results focus owner");
             if view.contains_results_focus(&owner) {
                 break;
             }
             inject("Down");
         }
         let owner = gtk::prelude::GtkWindowExt::focus(&win)
-            .expect("B01 focus after actual toolbar traversal");
+            .expect("CHANNEL_SEARCH_TRAVERSAL focus after actual toolbar traversal");
         assert!(
             owner.is_mapped() && view.contains_results_focus(&owner),
-            "B01 physical Search→filters→SQLite result route"
+            "CHANNEL_SEARCH_TRAVERSAL physical Search→filters→SQLite result route"
         );
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(ids[0].as_str()),
-            "B01 first real row after Search traversal"
+            "CHANNEL_SEARCH_TRAVERSAL first real row after Search traversal"
         );
         for (index, expected_proposals) in [(0_u32, 0), (1, 1), (2, 5)] {
             let id = &ids[index as usize];
@@ -3623,14 +3992,14 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 view.remote_action_test_selected_id().as_deref(),
                 Some(id.as_str()),
-                "B01 row traversal must preserve source-qualified ID"
+                "CHANNEL_SEARCH_TRAVERSAL row traversal must preserve source-qualified ID"
             );
             inject("Right");
-            let play = c4_focused_button(&win).expect("Play entry");
+            let play = guide_mapping_focused_button(&win).expect("Play entry");
             assert_eq!(play.label().as_deref(), Some("Play"));
             view.assert_remote_action_focus_owner(play.upcast_ref(), id);
-            if e08_actions {
-                // E08: activate the actual first/middle/last source-qualified
+            if verify_card_actions {
+                // CHANNEL_CARD_JOURNEY: activate the actual first/middle/last source-qualified
                 // SQLite cards, not merely inspect the labels. The app's
                 // test-only player absorbs Play without mpv or network access.
                 let before = view.remote_action_test_counts();
@@ -3638,23 +4007,26 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert_eq!(
                     view.remote_action_test_counts(),
                     (before.0 + 1, before.1, before.2),
-                    "E08 explicit Play only invokes fake player, never editor/picker"
+                    "CHANNEL_CARD_JOURNEY explicit Play only invokes fake player, never editor/picker"
                 );
                 view.assert_remote_action_focus_owner(
-                    &gtk::prelude::GtkWindowExt::focus(&win).expect("E08 Play stays focused"),
+                    &gtk::prelude::GtkWindowExt::focus(&win)
+                        .expect("CHANNEL_CARD_JOURNEY Play stays focused"),
                     id,
                 );
                 inject("Down");
                 assert_eq!(
-                    c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                    guide_mapping_focused_button(&win)
+                        .and_then(|b| b.label())
+                        .as_deref(),
                     Some("Edit Metadata"),
-                    "E08 physical Play→Edit"
+                    "CHANNEL_CARD_JOURNEY physical Play→Edit"
                 );
                 inject("Return");
                 assert_eq!(
                     view.remote_action_test_counts().1,
                     before.1 + 1,
-                    "E08 real Edit callback invoked once"
+                    "CHANNEL_CARD_JOURNEY real Edit callback invoked once"
                 );
                 fn edit_dialog(root: &gtk::Widget) -> Option<adw::Dialog> {
                     if let Ok(dialog) = root.clone().downcast::<adw::Dialog>() {
@@ -3674,19 +4046,22 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 }
                 wait(
                     &|| edit_dialog(win.upcast_ref()).is_some(),
-                    "E08 real SQLite row editor dialog",
+                    "CHANNEL_CARD_JOURNEY real SQLite row editor dialog",
                 );
                 let dialog = edit_dialog(win.upcast_ref()).unwrap();
-                assert!(dialog.is_mapped(), "E08 editor must really be on screen");
+                assert!(
+                    dialog.is_mapped(),
+                    "CHANNEL_CARD_JOURNEY editor must really be on screen"
+                );
                 if index == 0 {
-                    // R1: use the X11 remote to scroll to the real footer,
+                    // COMPACT_VIEWPORT: use the X11 remote to scroll to the real footer,
                     // then traverse its three actions without Tab, pointer
                     // or test-side focus injection. A mapped button whose
                     // rectangle is outside any scroller is not accepted.
                     let footer = ["Cancel", "Reset to Automatic", "Save"];
                     let mut first_footer = None;
                     for _ in 0..70 {
-                        if let Some(button) = c4_focused_button(&win) {
+                        if let Some(button) = guide_mapping_focused_button(&win) {
                             if let Some(pos) = footer
                                 .iter()
                                 .position(|s| button.label().as_deref() == Some(*s))
@@ -3697,34 +4072,35 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         }
                         inject("Down");
                     }
-                    let pos =
-                        first_footer.expect("R1 physical Down must reach compact metadata footer");
-                    let button = c4_picker_button(dialog.upcast_ref(), footer[pos]);
-                    assert!(c4_native_visible_in_viewport(&win, button.upcast_ref()),
-                        "R1 metadata footer control must be entirely inside real viewport after Down: {}", footer[pos]);
+                    let pos = first_footer.expect(
+                        "COMPACT_VIEWPORT physical Down must reach compact metadata footer",
+                    );
+                    let button = guide_mapping_picker_button(dialog.upcast_ref(), footer[pos]);
+                    assert!(native_channel_visible_in_viewport(&win, button.upcast_ref()),
+                        "COMPACT_VIEWPORT metadata footer control must be entirely inside real viewport after Down: {}", footer[pos]);
                     // The footer is a horizontal GTK action row; real Left
                     // and Right expose all three choices after scrolling.
                     for _ in 0..pos {
                         inject("Left");
                     }
                     for (idx, name) in footer.iter().enumerate() {
-                        let button = c4_picker_button(dialog.upcast_ref(), name);
+                        let button = guide_mapping_picker_button(dialog.upcast_ref(), name);
                         assert!(
                             button.has_focus(),
-                            "R1 physical metadata footer action: {name}"
+                            "COMPACT_VIEWPORT physical metadata footer action: {name}"
                         );
                         assert!(
-                            c4_native_visible_in_viewport(&win, button.upcast_ref()),
-                            "R1 clipped compact metadata button: {name}"
+                            native_channel_visible_in_viewport(&win, button.upcast_ref()),
+                            "COMPACT_VIEWPORT clipped compact metadata button: {name}"
                         );
                         if idx + 1 < footer.len() {
                             inject("Right");
                         }
                     }
                     if wrong_race {
-                        assert!(!c4_native_visible_in_viewport(&win,
-                            c4_picker_button(dialog.upcast_ref(), "Save").upcast_ref()),
-                            "R07_R1_EXPECTED_NEGATIVE_VISIBILITY: visible Save must not appear clipped");
+                        assert!(!native_channel_visible_in_viewport(&win,
+                            guide_mapping_picker_button(dialog.upcast_ref(), "Save").upcast_ref()),
+                            "NATIVE_FOCUS_COMPACT_VIEWPORT_EXPECTED_NEGATIVE_VISIBILITY: visible Save must not appear clipped");
                     }
                 }
                 // On the compact first-row route, complete the physical
@@ -3734,11 +4110,14 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 if index == 0 && !wrong_race {
                     inject("Left");
                     inject("Left");
-                    let cancel = c4_picker_button(dialog.upcast_ref(), "Cancel");
-                    assert!(cancel.has_focus(), "R1 physical Save→Reset→Cancel inverse");
+                    let cancel = guide_mapping_picker_button(dialog.upcast_ref(), "Cancel");
                     assert!(
-                        c4_native_visible_in_viewport(&win, cancel.upcast_ref()),
-                        "R1 Cancel must be visible before D-pad activation"
+                        cancel.has_focus(),
+                        "COMPACT_VIEWPORT physical Save→Reset→Cancel inverse"
+                    );
+                    assert!(
+                        native_channel_visible_in_viewport(&win, cancel.upcast_ref()),
+                        "COMPACT_VIEWPORT Cancel must be visible before D-pad activation"
                     );
                     inject("Return");
                 } else {
@@ -3746,7 +4125,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 }
                 wait(
                     &|| !dialog.is_mapped(),
-                    "E08 physical editor Cancel/ Escape dismisses modal",
+                    "CHANNEL_CARD_JOURNEY physical editor Cancel/ Escape dismisses modal",
                 );
                 assert_eq!(
                     view.remote_action_test_selected_id().as_deref(),
@@ -3761,22 +4140,25 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         |r| r.get(0),
                     )
                     .unwrap();
-                assert_eq!(mutations, 0, "E08 cancelled editor cannot mutate this row");
+                assert_eq!(
+                    mutations, 0,
+                    "CHANNEL_CARD_JOURNEY cancelled editor cannot mutate this row"
+                );
                 if negative && index == 1 {
                     assert_eq!(view.remote_action_test_selected_id().as_deref(),
                         Some(ids[0].as_str()),
-                        "R07_E08_EXPECTED_NEGATIVE_ORACLE: middle card must not return to first UUID");
+                        "NATIVE_FOCUS_CHANNEL_CARD_JOURNEY_EXPECTED_NEGATIVE_ORACLE: middle card must not return to first UUID");
                 }
                 // Detect actual focus restoration; never mask a broken
                 // modal return by programmatically focusing the editor.
                 let edit = view
                     .remote_action_test_buttons()
-                    .expect("E08 original card still bound")[1]
+                    .expect("CHANNEL_CARD_JOURNEY original card still bound")[1]
                     .clone();
                 assert!(edit.is_mapped() && edit.is_sensitive());
                 assert!(
                     edit.has_focus(),
-                    "E08 real Edit cancellation must restore focus without test-only grab_focus"
+                    "CHANNEL_CARD_JOURNEY real Edit cancellation must restore focus without test-only grab_focus"
                 );
                 view.assert_remote_action_focus_owner(edit.upcast_ref(), id);
                 inject("Down");
@@ -3785,19 +4167,21 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 inject("Down");
             }
             assert_eq!(
-                c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                guide_mapping_focused_button(&win)
+                    .and_then(|b| b.label())
+                    .as_deref(),
                 Some("Programme mapping")
             );
             let previous = view.remote_action_test_counts().2;
             inject("Return");
             wait(
-                &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+                &|| editor::guide_mapping_test_picker_dialog().is_some_and(|d| d.is_mapped()),
                 "real mapping dialog",
             );
             assert_eq!(view.remote_action_test_counts().2, previous + 1);
-            let dialog = editor::c4_test_picker_dialog().unwrap();
+            let dialog = editor::guide_mapping_test_picker_dialog().unwrap();
             let root = dialog.upcast_ref::<gtk::Widget>();
-            let proposals = c4_picker_buttons(root)
+            let proposals = guide_mapping_picker_buttons(root)
                 .into_iter()
                 .filter(|b| {
                     b.label().is_some_and(|label| {
@@ -3807,15 +4191,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .count();
             assert_eq!(proposals, expected_proposals, "selected-guide proposals");
             assert!(
-                !c4_picker_buttons(root)
+                !guide_mapping_picker_buttons(root)
                     .into_iter()
                     .any(|b| b.label().is_some_and(|label| label.contains("WrongGuide"))),
                 "wrong guide leaked into picker"
             );
             if index == 0 {
-                // B02: zero suggestions must neither invent an exact mapping
+                // ZERO_GUIDE_SUGGESTIONS: zero suggestions must neither invent an exact mapping
                 // nor silently save one before the user opens advanced search.
-                assert!(c4_picker_buttons(root).iter().all(|b| {
+                assert!(guide_mapping_picker_buttons(root).iter().all(|b| {
                     !b.label().is_some_and(|l| {
                         l.contains("exact identity") || l.contains("review variant")
                     })
@@ -3829,102 +4213,118 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         |r| r.get(0),
                     )
                     .unwrap();
-                assert_eq!(count, 0, "B02 no automatic mapping for zero candidates");
+                assert_eq!(
+                    count, 0,
+                    "ZERO_GUIDE_SUGGESTIONS no automatic mapping for zero candidates"
+                );
             }
             if painted {
-                // G06: real picker, then the real nested K2 OSK, after
+                // GUIDE_PICKER_PAINTED_FOCUS: real picker, then the real nested ON_SCREEN_KEYBOARD OSK, after
                 // Search→filters→bound card→Mapping on physical XTest input.
                 // Compare positive, suppressed and restored X11 pixels, not
                 // a fabricated CSS class or GtkWidget::has_focus alone.
-                let search = c4_picker_button(root, "Search all guide channels / choose exact ID…");
-                assert!(search.grab_focus(), "G06 mapped picker search control");
-                let picker_pixels = crate::window::r07_native_focus_tests::r07_painted_probe(
-                    &win,
-                    search.upcast_ref(),
-                    "G06 real mapping picker search",
+                let search = guide_mapping_picker_button(
+                    root,
+                    "Search all guide channels / choose exact ID…",
                 );
+                assert!(
+                    search.grab_focus(),
+                    "GUIDE_PICKER_PAINTED_FOCUS mapped picker search control"
+                );
+                let picker_pixels =
+                    crate::window::native_focus_navigation_tests::focus_navigation_painted_probe(
+                        &win,
+                        search.upcast_ref(),
+                        "GUIDE_PICKER_PAINTED_FOCUS real mapping picker search",
+                    );
                 inject("Return");
                 wait(
-                    &|| c4_picker_entry(root).is_some(),
-                    "G06 real exact-guide search field",
+                    &|| guide_mapping_picker_entry(root).is_some(),
+                    "GUIDE_PICKER_PAINTED_FOCUS real exact-guide search field",
                 );
-                let keyboard = c4_picker_buttons(root)
+                let keyboard = guide_mapping_picker_buttons(root)
                     .into_iter()
                     .find(|b| {
                         b.icon_name().as_deref() == Some("input-keyboard-symbolic") && b.is_mapped()
                     })
-                    .expect("G06 real picker OSK launcher");
+                    .expect("GUIDE_PICKER_PAINTED_FOCUS real picker OSK launcher");
                 assert!(keyboard.grab_focus());
                 inject("Return");
                 wait(
-                    &|| c4_picker_modal(win.upcast_ref(), "osk-production").is_some(),
-                    "G06 real nested OSK",
+                    &|| guide_mapping_picker_modal(win.upcast_ref(), "osk-production").is_some(),
+                    "GUIDE_PICKER_PAINTED_FOCUS real nested OSK",
                 );
-                let osk = c4_picker_modal(win.upcast_ref(), "osk-production").unwrap();
-                let left = c4_picker_button(osk.upcast_ref(), "←");
-                assert!(left.grab_focus(), "G06 physical OSK caret cell focusable");
-                let osk_pixels = crate::window::r07_native_focus_tests::r07_painted_probe(
-                    &win,
-                    left.upcast_ref(),
-                    "G06 nested OSK caret",
+                let osk = guide_mapping_picker_modal(win.upcast_ref(), "osk-production").unwrap();
+                let left = guide_mapping_picker_button(osk.upcast_ref(), "←");
+                assert!(
+                    left.grab_focus(),
+                    "GUIDE_PICKER_PAINTED_FOCUS physical OSK caret cell focusable"
                 );
+                let osk_pixels =
+                    crate::window::native_focus_navigation_tests::focus_navigation_painted_probe(
+                        &win,
+                        left.upcast_ref(),
+                        "GUIDE_PICKER_PAINTED_FOCUS nested OSK caret",
+                    );
                 if negative {
                     assert_eq!(
                         picker_pixels + osk_pixels,
                         0,
-                        "R07_G06_EXPECTED_NEGATIVE_PAINT: native picker and OSK must paint focus"
+                        "NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT: native picker and OSK must paint focus"
                     );
                 }
                 assert!(picker_pixels >= 15 && osk_pixels >= 15,
-                    "R07_G06_MISSING_PAINTED_PICKER_OSK: both actual controls must paint reversible focus pixels");
-                let cancel = c4_picker_button(osk.upcast_ref(), "Cancel");
+                    "NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_MISSING_PAINTED_PICKER_OSK: both actual controls must paint reversible focus pixels");
+                let cancel = guide_mapping_picker_button(osk.upcast_ref(), "Cancel");
                 assert!(cancel.grab_focus());
                 inject("Return");
                 wait(
                     &|| !osk.is_mapped(),
-                    "G06 OSK cancel closes only nested dialog",
+                    "GUIDE_PICKER_PAINTED_FOCUS OSK cancel closes only nested dialog",
                 );
-                let close = c4_picker_button(root, "Cancel");
+                let close = guide_mapping_picker_button(root, "Cancel");
                 assert!(close.grab_focus());
                 inject("Return");
                 wait(
-                    &|| editor::c4_test_picker_dialog().is_none(),
-                    "G06 picker cancel",
+                    &|| editor::guide_mapping_test_picker_dialog().is_none(),
+                    "GUIDE_PICKER_PAINTED_FOCUS picker cancel",
                 );
                 win.destroy();
                 return;
             }
             if index == 1 {
-                // B03: physical Return on the only scoped suggestion must
+                // EXACT_GUIDE_SELECTION: physical Return on the only scoped suggestion must
                 // reach the real SQLite CAS writer, close the live modal and
                 // return to the exact source-qualified card, not a test stub.
-                let exact = c4_picker_buttons(root)
+                let exact = guide_mapping_picker_buttons(root)
                     .into_iter()
                     .find(|b| {
                         b.label().is_some_and(|label| {
                             label.contains("review variant") || label.contains("exact identity")
                         })
                     })
-                    .expect("B03 exactly one mapped action");
+                    .expect("EXACT_GUIDE_SELECTION exactly one mapped action");
                 assert!(exact.grab_focus());
                 inject("Return");
                 wait(
-                    &|| editor::c4_test_picker_dialog().is_none(),
-                    "B03 confirmed mapping closes picker",
+                    &|| editor::guide_mapping_test_picker_dialog().is_none(),
+                    "EXACT_GUIDE_SELECTION confirmed mapping closes picker",
                 );
                 let (saved_guide, saved_target): (String, String) = store.connect().unwrap()
                     .query_row(
                         "SELECT guide_source_id,guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
                         [id], |r| Ok((r.get(0)?, r.get(1)?)),
-                    ).expect("B03 exact row-level mapping persisted");
+                    ).expect("EXACT_GUIDE_SELECTION exact row-level mapping persisted");
                 assert_eq!(
                     (saved_guide, saved_target),
                     (guide.clone(), "one.001".to_string())
                 );
                 assert_eq!(
-                    c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                    guide_mapping_focused_button(&win)
+                        .and_then(|b| b.label())
+                        .as_deref(),
                     Some("Programme mapping"),
-                    "B03 focus returned to mapped card action",
+                    "EXACT_GUIDE_SELECTION focus returned to mapped card action",
                 );
                 view.assert_remote_action_focus_owner(
                     &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
@@ -3934,16 +4334,19 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
 
             if index == 2 {
-                let search = c4_picker_button(root, "Search all guide channels / choose exact ID…");
+                let search = guide_mapping_picker_button(
+                    root,
+                    "Search all guide channels / choose exact ID…",
+                );
                 assert!(search.grab_focus());
                 inject("Return");
                 spin();
-                let entry = c4_picker_entry(root).expect("real search field");
+                let entry = guide_mapping_picker_entry(root).expect("real search field");
                 assert!(entry.is_mapped());
                 entry.set_text("SearchMe");
                 wait(
                     &|| {
-                        c4_picker_buttons(root)
+                        guide_mapping_picker_buttons(root)
                             .iter()
                             .filter(|b| {
                                 b.label()
@@ -3954,12 +4357,62 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     },
                     "first 30 selected-guide exact results",
                 );
-                let next = c4_picker_button(root, "Next");
-                assert!(next.is_sensitive() && next.grab_focus());
+                let matches = || {
+                    guide_mapping_picker_buttons(root)
+                        .into_iter()
+                        .filter(|button| {
+                            button.label().is_some_and(|label| {
+                                label.contains("SearchMe") && label.contains("— [")
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                };
+                // FOCUS-AUD-03: start at the actual OSK launcher and reach
+                // every mapped result, then the pager, using physical arrows.
+                let keyboard = guide_mapping_picker_buttons(root)
+                    .into_iter()
+                    .find(|button| {
+                        button.icon_name().as_deref() == Some("input-keyboard-symbolic")
+                            && button.is_mapped()
+                    })
+                    .expect("mapped advanced search keyboard launcher");
+                assert!(keyboard.grab_focus());
+                inject("Down");
+                let first_page = matches();
+                assert_eq!(first_page.len(), 30);
+                assert!(
+                    first_page[0].has_focus(),
+                    "OSK launcher Down reaches first result"
+                );
+                for _ in 1..first_page.len() {
+                    inject("Down");
+                }
+                assert!(
+                    first_page[29].has_focus(),
+                    "all 30 physical result actions reachable"
+                );
+                inject("Up");
+                assert!(
+                    first_page[28].has_focus(),
+                    "result inverse moves to previous live row"
+                );
+                inject("Down");
+                let next = guide_mapping_picker_button(root, "Next");
+                inject("Down");
+                assert!(
+                    next.is_sensitive() && next.has_focus(),
+                    "last first-page result Down reaches enabled Next"
+                );
+                inject("Up");
+                assert!(
+                    first_page[29].has_focus(),
+                    "Next Up returns to last current result"
+                );
+                inject("Down");
                 inject("Return");
                 wait(
                     &|| {
-                        c4_picker_buttons(root)
+                        guide_mapping_picker_buttons(root)
                             .iter()
                             .filter(|b| {
                                 b.label()
@@ -3970,9 +4423,50 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     },
                     "second page with six exact results",
                 );
+                let second_page = matches();
+                assert_eq!(second_page.len(), 6);
+                assert!(
+                    second_page[0].has_focus(),
+                    "pager action replaces results and transfers focus to first live row"
+                );
+                for _ in 1..second_page.len() {
+                    inject("Down");
+                }
+                assert!(
+                    second_page[5].has_focus(),
+                    "last second-page result reachable"
+                );
+                inject("Down");
+                let previous = guide_mapping_picker_button(root, "Previous");
+                assert!(
+                    previous.has_focus(),
+                    "last second-page result Down reaches Previous"
+                );
+                inject("Down");
+                let settings =
+                    guide_mapping_picker_button(root, "Change guide / playlist exception…");
+                assert!(settings.has_focus(), "pager Down reaches guide action");
+                inject("Down");
+                let cancel = guide_mapping_picker_button(root, "Cancel");
+                assert!(
+                    cancel.has_focus(),
+                    "guide action Down reaches footer Cancel"
+                );
+                inject("Up");
+                assert!(settings.has_focus(), "Cancel Up reaches guide action");
+                inject("Up");
+                assert!(
+                    previous.has_focus(),
+                    "guide action Up returns to enabled pager"
+                );
+                inject("Up");
+                assert!(
+                    second_page[5].has_focus(),
+                    "pager Up returns to last current result"
+                );
                 // Real OSK launcher, physical arrows on its live preview and
                 // physical Cancel. Never commit a fabricated search result.
-                let keyboard = c4_picker_buttons(root)
+                let keyboard = guide_mapping_picker_buttons(root)
                     .into_iter()
                     .find(|b| {
                         b.icon_name().as_deref() == Some("input-keyboard-symbolic") && b.is_mapped()
@@ -3981,22 +4475,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert!(keyboard.grab_focus());
                 inject("Return");
                 wait(
-                    &|| c4_picker_modal(win.upcast_ref(), "osk-production").is_some(),
+                    &|| guide_mapping_picker_modal(win.upcast_ref(), "osk-production").is_some(),
                     "mapped production OSK",
                 );
-                let osk = c4_picker_modal(win.upcast_ref(), "osk-production").unwrap();
-                let preview = c4_picker_entry(osk.upcast_ref()).expect("OSK draft entry");
+                let osk = guide_mapping_picker_modal(win.upcast_ref(), "osk-production").unwrap();
+                let preview =
+                    guide_mapping_picker_entry(osk.upcast_ref()).expect("OSK draft entry");
                 preview.set_text("ab");
                 preview.set_position(1);
-                let left = c4_picker_button(osk.upcast_ref(), "←");
+                let left = guide_mapping_picker_button(osk.upcast_ref(), "←");
                 assert!(left.grab_focus());
                 inject("Return");
                 assert_eq!(preview.position(), 0, "physical OSK caret left");
-                let right = c4_picker_button(osk.upcast_ref(), "→");
+                let right = guide_mapping_picker_button(osk.upcast_ref(), "→");
                 assert!(right.grab_focus());
                 inject("Return");
                 assert_eq!(preview.position(), 1, "physical OSK caret right");
-                let osk_cancel = c4_picker_button(osk.upcast_ref(), "Cancel");
+                let osk_cancel = guide_mapping_picker_button(osk.upcast_ref(), "Cancel");
                 assert!(osk_cancel.grab_focus());
                 inject("Return");
                 wait(&|| !osk.is_mapped(), "OSK Cancel dismissed nested dialog");
@@ -4006,16 +4501,16 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     "cancel cannot edit origin"
                 );
 
-                // B11: the nested physical caret/Cancel journey above occurred
+                // MAPPING_KEYBOARD: the nested physical caret/Cancel journey above occurred
                 // on the actual second (30+6) exact-guide search page, not
                 // merely after returning to the first page. Now physically
                 // reverse pagination before the stale-CAS negative route.
-                let previous = c4_picker_button(root, "Previous");
+                let previous = guide_mapping_picker_button(root, "Previous");
                 assert!(previous.is_sensitive() && previous.grab_focus());
                 inject("Return");
                 wait(
                     &|| {
-                        c4_picker_buttons(root)
+                        guide_mapping_picker_buttons(root)
                             .iter()
                             .filter(|b| {
                                 b.label()
@@ -4027,7 +4522,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     "back to first search page",
                 );
 
-                // B14: mutate the real guide catalogue transactionally while
+                // GUIDE_CATALOGUE_STALE: mutate the real guide catalogue transactionally while
                 // preserving its successful-import second and target identity.
                 // A changed timestamp by itself would not prove a same-second
                 // reimport stale-picker conflict.
@@ -4084,7 +4579,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 }
                 // The physical picker still offers its loaded old target,
                 // but the transactional CAS must reject the mapping write.
-                let target = c4_picker_buttons(root)
+                let target = guide_mapping_picker_buttons(root)
                     .into_iter()
                     .find(|b| {
                         b.label()
@@ -4126,15 +4621,17 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     .unwrap();
                 assert_eq!(count, 0, "wrong programme cannot bind on stale guide");
             }
-            let cancel = c4_picker_button(root, "Cancel");
+            let cancel = guide_mapping_picker_button(root, "Cancel");
             assert!(cancel.grab_focus());
             inject("Return");
             wait(
-                &|| editor::c4_test_picker_dialog().is_none(),
+                &|| editor::guide_mapping_test_picker_dialog().is_none(),
                 "real picker Cancel close",
             );
             assert_eq!(
-                c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                guide_mapping_focused_button(&win)
+                    .and_then(|b| b.label())
+                    .as_deref(),
                 Some("Programme mapping"),
                 "mapping close must restore its exact source-qualified card"
             );
@@ -4144,7 +4641,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             );
         }
 
-        // B04: reopen the *same* third card after the stale-CAS rejection.
+        // MULTIPLE_GUIDE_SUGGESTIONS: reopen the *same* third card after the stale-CAS rejection.
         // This freshly loaded picker sees the updated guide revision. Walk
         // all five bounded suggestions through genuine Down/Up keys, then
         // choose the fourth via physical Return, verifying only that UUID's
@@ -4152,29 +4649,33 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         assert_eq!(
             view.remote_action_test_selected_id().as_deref(),
             Some(ids[2].as_str()),
-            "B04 still on five-suggestion card"
+            "MULTIPLE_GUIDE_SUGGESTIONS still on five-suggestion card"
         );
         inject("Return");
         wait(
-            &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
-            "B04 fresh five-suggestion picker",
+            &|| editor::guide_mapping_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+            "MULTIPLE_GUIDE_SUGGESTIONS fresh five-suggestion picker",
         );
-        let five_dialog = editor::c4_test_picker_dialog().unwrap();
+        let five_dialog = editor::guide_mapping_test_picker_dialog().unwrap();
         let five_root = five_dialog.upcast_ref::<gtk::Widget>();
-        let candidates: Vec<_> = c4_picker_buttons(five_root)
+        let candidates: Vec<_> = guide_mapping_picker_buttons(five_root)
             .into_iter()
             .filter(|b| {
                 b.label()
                     .is_some_and(|l| l.contains("review variant") || l.contains("exact identity"))
             })
             .collect();
-        assert_eq!(candidates.len(), 5, "B04 bounded five exact candidates");
+        assert_eq!(
+            candidates.len(),
+            5,
+            "MULTIPLE_GUIDE_SUGGESTIONS bounded five exact candidates"
+        );
         assert!(candidates[0].grab_focus());
         for (i, expected) in candidates.iter().enumerate().skip(1) {
             inject("Down");
             assert!(
                 expected.has_focus(),
-                "B04 physical Down must reach suggestion {i} without escaping modal"
+                "MULTIPLE_GUIDE_SUGGESTIONS physical Down must reach suggestion {i} without escaping modal"
             );
         }
         // Up is the inverse of the four candidate-to-candidate Down hops.
@@ -4184,7 +4685,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Up");
             assert!(
                 expected.has_focus(),
-                "B04 physical Up must reverse to suggestion {i}"
+                "MULTIPLE_GUIDE_SUGGESTIONS physical Up must reverse to suggestion {i}"
             );
         }
         for _ in 0..3 {
@@ -4192,21 +4693,21 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         }
         assert!(
             candidates[3].has_focus(),
-            "B04 fourth suggestion navigation"
+            "MULTIPLE_GUIDE_SUGGESTIONS fourth suggestion navigation"
         );
         inject("Return");
         wait(
-            &|| editor::c4_test_picker_dialog().is_none(),
-            "B04 physical fourth-suggestion mapping closes picker",
+            &|| editor::guide_mapping_test_picker_dialog().is_none(),
+            "MULTIPLE_GUIDE_SUGGESTIONS physical fourth-suggestion mapping closes picker",
         );
         let saved: (String, String) = store.connect().unwrap().query_row(
             "SELECT guide_source_id,guide_channel_id FROM epg_channel_overrides WHERE iptv_channel_id=?1",
             [&ids[2]], |r| Ok((r.get(0)?, r.get(1)?))
-        ).expect("B04 selected source's guide mapping persisted");
+        ).expect("MULTIPLE_GUIDE_SUGGESTIONS selected source's guide mapping persisted");
         assert_eq!(
             saved,
             (guide.clone(), "five.004".to_string()),
-            "B04 fourth candidate binds no other source or channel"
+            "MULTIPLE_GUIDE_SUGGESTIONS fourth candidate binds no other source or channel"
         );
         let one_binding: String = store
             .connect()
@@ -4217,18 +4718,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(one_binding, "one.001", "B04 cannot rewrite earlier card");
         assert_eq!(
-            c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+            one_binding, "one.001",
+            "MULTIPLE_GUIDE_SUGGESTIONS cannot rewrite earlier card"
+        );
+        assert_eq!(
+            guide_mapping_focused_button(&win)
+                .and_then(|b| b.label())
+                .as_deref(),
             Some("Programme mapping"),
-            "B04 focus returns to same card"
+            "MULTIPLE_GUIDE_SUGGESTIONS focus returns to same card"
         );
         view.assert_remote_action_focus_owner(
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &ids[2],
         );
 
-        // B05: three real UI reopenings, with precedence determined by real
+        // GUIDE_PRECEDENCE: three real UI reopenings, with precedence determined by real
         // SQLite row > playlist > shared selections. Changing selection must
         // never silently rewrite any channel's manual guide override.
         use crate::epg::bindings::{
@@ -4248,13 +4754,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
                 Some(guide.as_str()),
-                "B05 per-row guide wins over playlist exception",
+                "GUIDE_PRECEDENCE per-row guide wins over playlist exception",
             );
         }
         for (tier, selected_name) in [
-            ("row override", "C4 selected guide"),
-            ("playlist exception", "C4 other guide"),
-            ("shared default", "C4 selected guide"),
+            ("row override", "GUIDE_MAPPING selected guide"),
+            ("playlist exception", "GUIDE_MAPPING other guide"),
+            ("shared default", "GUIDE_MAPPING selected guide"),
         ] {
             if tier == "playlist exception" {
                 let mut db = store.connect().unwrap();
@@ -4267,7 +4773,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert_eq!(
                     selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
                     Some(other_guide.as_str()),
-                    "B05 playlist exception wins over shared",
+                    "GUIDE_PRECEDENCE playlist exception wins over shared",
                 );
             } else if tier == "shared default" {
                 let mut db = store.connect().unwrap();
@@ -4282,37 +4788,43 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 assert_eq!(
                     selected_guide_for_row(&db, &ids[2]).unwrap().as_deref(),
                     Some(guide.as_str()),
-                    "B05 shared guide restored after clearing playlist exception",
+                    "GUIDE_PRECEDENCE shared guide restored after clearing playlist exception",
                 );
             }
             // Existing Mapping action is the naturally restored focus owner.
             assert_eq!(
-                c4_focused_button(&win)
+                guide_mapping_focused_button(&win)
                     .and_then(|button| button.label())
                     .as_deref(),
                 Some("Programme mapping"),
-                "B05 same source card before opening real picker",
+                "GUIDE_PRECEDENCE same source card before opening real picker",
             );
             inject("Return");
             wait(
-                &|| editor::c4_test_picker_dialog().is_some_and(|dialog| dialog.is_mapped()),
-                "B05 real guide-precedence modal",
+                &|| {
+                    editor::guide_mapping_test_picker_dialog()
+                        .is_some_and(|dialog| dialog.is_mapped())
+                },
+                "GUIDE_PRECEDENCE real guide-precedence modal",
             );
-            let picker = editor::c4_test_picker_dialog().unwrap();
-            // The card action intentionally opens the compact D35 picker,
+            let picker = editor::guide_mapping_test_picker_dialog().unwrap();
+            // The card action intentionally opens the compact GUIDE_PICKER picker,
             // which displays its effective guide as a read-only label.
             // A DropDown exists in the separate full mapping editor only.
             assert!(
-                c4_picker_has_label(
+                guide_mapping_picker_has_label(
                     picker.upcast_ref(),
                     &format!("Selected programme guide: {selected_name}"),
                 ),
-                "B05 actual compact picker guide label for {tier}",
+                "GUIDE_PRECEDENCE actual compact picker guide label for {tier}",
             );
-            let cancel = c4_picker_button(picker.upcast_ref(), "Cancel");
+            let cancel = guide_mapping_picker_button(picker.upcast_ref(), "Cancel");
             assert!(cancel.grab_focus());
             inject("Return");
-            wait(&|| editor::c4_test_picker_dialog().is_none(), "B05 Cancel");
+            wait(
+                &|| editor::guide_mapping_test_picker_dialog().is_none(),
+                "GUIDE_PRECEDENCE Cancel",
+            );
             view.assert_remote_action_focus_owner(
                 &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
                 &ids[2],
@@ -4328,7 +4840,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 row_count,
                 i64::from(tier == "row override"),
-                "B05 opening and cancelling picker cannot write an override",
+                "GUIDE_PRECEDENCE opening and cancelling picker cannot write an override",
             );
             let retained: String = db
                 .query_row(
@@ -4337,10 +4849,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(retained, "one.001", "B05 unrelated mapping retained");
+            assert_eq!(
+                retained, "one.001",
+                "GUIDE_PRECEDENCE unrelated mapping retained"
+            );
         }
 
-        // B06 diagnostic: a disabled guide selected as playlist exception
+        // PLAYLIST_GUIDE_SELECTION diagnostic: a disabled guide selected as playlist exception
         // remains identifiable in the real picker, but must surface an
         // explicit disabled warning rather than presenting it as healthy.
         // This is evidence only: do not change the disabled-guide policy.
@@ -4368,60 +4883,77 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         for _ in 0..16 {
             spin();
             assert!(
-                editor::c4_test_picker_dialog().is_none(),
-                "B06 disabled guide must not open stale picker",
+                editor::guide_mapping_test_picker_dialog().is_none(),
+                "PLAYLIST_GUIDE_SELECTION disabled guide must not open stale picker",
             );
-            saw_warning |= c4_picker_has_label(win.upcast_ref(), "Selected guide is disabled");
+            saw_warning |=
+                guide_mapping_picker_has_label(win.upcast_ref(), "Selected guide is disabled");
         }
         assert!(
             saw_warning,
-            "B06 disabled-guide warning toast was never painted"
+            "PLAYLIST_GUIDE_SELECTION disabled-guide warning toast was never painted"
         );
         view.assert_remote_action_focus_owner(
             &gtk::prelude::GtkWindowExt::focus(&win).unwrap(),
             &ids[2],
         );
-        // B06/AG08 cross-component journey: real My Channels toolbar
+        // PLAYLIST_GUIDE_SELECTION/GUIDE_RETURN_FOCUS cross-component journey: real My Channels toolbar
         // launches Sources, then its Programme Guides child; disabled XMLTV
         // source remains listed rather than being mistaken for healthy.
         // Closing the nested modal must restore the exact manager launcher.
-        let manage = view.c1_test_manage_button();
-        assert!(manage.grab_focus(), "B06 mapped source manager launcher");
-        inject("Return");
-        wait(
-            &|| c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").is_some(),
-            "B06 source manager opened from My Channels toolbar",
-        );
-        let manager = c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
-        let guides = c4_picker_button(manager.upcast_ref(), "Programme Guides");
-        assert!(guides.grab_focus(), "B06 real nested guide launcher");
-        inject("Return");
-        wait(
-            &|| c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").is_some(),
-            "B06 manager-to-guide modal",
-        );
-        let guide_manager = c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+        let manage = view.source_manager_test_manage_button();
         assert!(
-            c4_picker_has_label(guide_manager.upcast_ref(), "C4 other guide"),
-            "B06 disabled guide must remain identifiable in manager",
+            manage.grab_focus(),
+            "PLAYLIST_GUIDE_SELECTION mapped source manager launcher"
         );
-        let guide_close = c4_picker_button(guide_manager.upcast_ref(), "Close");
+        inject("Return");
+        wait(
+            &|| {
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager").is_some()
+            },
+            "PLAYLIST_GUIDE_SELECTION source manager opened from My Channels toolbar",
+        );
+        let manager =
+            guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
+        let guides = guide_mapping_picker_button(manager.upcast_ref(), "Programme Guides");
+        assert!(
+            guides.grab_focus(),
+            "PLAYLIST_GUIDE_SELECTION real nested guide launcher"
+        );
+        inject("Return");
+        wait(
+            &|| guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").is_some(),
+            "PLAYLIST_GUIDE_SELECTION manager-to-guide modal",
+        );
+        let guide_manager =
+            guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+        assert!(
+            guide_mapping_picker_has_label(guide_manager.upcast_ref(), "GUIDE_MAPPING other guide"),
+            "PLAYLIST_GUIDE_SELECTION disabled guide must remain identifiable in manager",
+        );
+        let guide_close = guide_mapping_picker_button(guide_manager.upcast_ref(), "Close");
         assert!(guide_close.grab_focus());
         inject("XF86Back");
         wait(
             &|| !guide_manager.is_mapped(),
-            "B06 close only child guide manager",
+            "PLAYLIST_GUIDE_SELECTION close only child guide manager",
         );
         assert!(manager.is_mapped());
         wait(
             &|| guides.has_focus(),
-            "B06 nested focus returns to launcher",
+            "PLAYLIST_GUIDE_SELECTION nested focus returns to launcher",
         );
-        let source_close = c4_picker_button(manager.upcast_ref(), "Close");
+        let source_close = guide_mapping_picker_button(manager.upcast_ref(), "Close");
         assert!(source_close.grab_focus());
         inject("XF86Back");
-        wait(&|| !manager.is_mapped(), "B06 close source manager");
-        assert!(manage.is_mapped(), "B06 parent tab remains available");
+        wait(
+            &|| !manager.is_mapped(),
+            "PLAYLIST_GUIDE_SELECTION close source manager",
+        );
+        assert!(
+            manage.is_mapped(),
+            "PLAYLIST_GUIDE_SELECTION parent tab remains available"
+        );
         {
             let mut db = store.connect().unwrap();
             let count: i64 = db
@@ -4433,7 +4965,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .unwrap();
             assert_eq!(
                 count, 0,
-                "B06 disabled warning cannot silently write mapping"
+                "PLAYLIST_GUIDE_SELECTION disabled warning cannot silently write mapping"
             );
             db.execute(
                 "UPDATE epg_sources SET enabled=1 WHERE id=?1",
@@ -4451,7 +4983,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         }
 
         if advanced_exception {
-            // B06: Only the approved full mapping editor may change a
+            // PLAYLIST_GUIDE_SELECTION: Only the approved full mapping editor may change a
             // playlist-level guide. Enter it from the REAL compact card
             // picker and make a physical confirmed selection; no test-only
             // direct binding call is allowed along this journey.
@@ -4461,39 +4993,50 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Down");
             inject("Down");
             assert_eq!(
-                c4_focused_button(&win).and_then(|b| b.label()).as_deref(),
+                guide_mapping_focused_button(&win)
+                    .and_then(|b| b.label())
+                    .as_deref(),
                 Some("Programme mapping"),
-                "B06 mapped card action before advanced guide choice",
+                "PLAYLIST_GUIDE_SELECTION mapped card action before advanced guide choice",
             );
             inject("Return");
             wait(
-                &|| editor::c4_test_picker_dialog().is_some_and(|d| d.is_mapped()),
-                "B06 actual compact picker",
+                &|| editor::guide_mapping_test_picker_dialog().is_some_and(|d| d.is_mapped()),
+                "PLAYLIST_GUIDE_SELECTION actual compact picker",
             );
-            let compact = editor::c4_test_picker_dialog().unwrap();
-            let advanced =
-                c4_picker_button(compact.upcast_ref(), "Change guide / playlist exception…");
-            let search = c4_picker_button(
+            let compact = editor::guide_mapping_test_picker_dialog().unwrap();
+            let advanced = guide_mapping_picker_button(
+                compact.upcast_ref(),
+                "Change guide / playlist exception…",
+            );
+            let search = guide_mapping_picker_button(
                 compact.upcast_ref(),
                 "Search all guide channels / choose exact ID…",
             );
             assert!(
                 search.grab_focus(),
-                "B06 preceding real search action focus"
+                "PLAYLIST_GUIDE_SELECTION preceding real search action focus"
             );
             inject("Down");
             assert!(
                 advanced.has_focus(),
-                "B06 physical Down must reach the new guide-selection action",
+                "PLAYLIST_GUIDE_SELECTION physical Down must reach the new guide-selection action",
             );
             inject("Return");
             wait(
-                &|| c4_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor").is_some(),
-                "B06 full editor opened through real compact picker",
+                &|| {
+                    guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor")
+                        .is_some()
+                },
+                "PLAYLIST_GUIDE_SELECTION full editor opened through real compact picker",
             );
-            assert!(!compact.is_mapped(), "B06 compact picker must be closed");
+            assert!(
+                !compact.is_mapped(),
+                "PLAYLIST_GUIDE_SELECTION compact picker must be closed"
+            );
             let full =
-                c4_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor").unwrap();
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor")
+                    .unwrap();
             fn dropdown(widget: &gtk::Widget) -> Option<gtk::DropDown> {
                 if let Ok(d) = widget.clone().downcast::<gtk::DropDown>() {
                     return Some(d);
@@ -4507,23 +5050,24 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 }
                 None
             }
-            let picker = dropdown(full.upcast_ref()).expect("B06 full editor actual guide chooser");
+            let picker = dropdown(full.upcast_ref())
+                .expect("PLAYLIST_GUIDE_SELECTION full editor actual guide chooser");
             // GtkDropDown delegates the real focus owner to a descendant
             // GtkToggleButton. Accept that genuine mapped child, not only
             // parent GtkDropDown::has_focus (which is false by design).
             for _ in 0..35 {
-                if c4_native_focus_within(&win, picker.upcast_ref()) {
+                if native_channel_focus_within(&win, picker.upcast_ref()) {
                     break;
                 }
                 inject("Down");
             }
             assert!(
-                c4_native_focus_within(&win, picker.upcast_ref()),
-                "R1 remote must reach the real focusable dropdown child"
+                native_channel_focus_within(&win, picker.upcast_ref()),
+                "COMPACT_VIEWPORT remote must reach the real focusable dropdown child"
             );
             assert!(
-                c4_native_visible_in_viewport(&win, picker.upcast_ref()),
-                "R1 guide selector must fit in real rendered scroll viewport"
+                native_channel_visible_in_viewport(&win, picker.upcast_ref()),
+                "COMPACT_VIEWPORT guide selector must fit in real rendered scroll viewport"
             );
             inject("Return");
             spin();
@@ -4534,14 +5078,15 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             let selected = picker
                 .selected_item()
                 .and_downcast::<gtk::StringObject>()
-                .expect("B06 selected string object")
+                .expect("PLAYLIST_GUIDE_SELECTION selected string object")
                 .string();
             assert_eq!(
                 selected.as_str(),
-                "C4 other guide",
-                "B06 physical guide selection"
+                "GUIDE_MAPPING other guide",
+                "PLAYLIST_GUIDE_SELECTION physical guide selection"
             );
-            let playlist = c4_picker_button(full.upcast_ref(), "Use as playlist guide exception");
+            let playlist =
+                guide_mapping_picker_button(full.upcast_ref(), "Use as playlist guide exception");
             for _ in 0..48 {
                 if playlist.has_focus() {
                     break;
@@ -4550,24 +5095,26 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
             assert!(
                 playlist.has_focus(),
-                "R1 D-pad Down must reach playlist guide exception"
+                "COMPACT_VIEWPORT D-pad Down must reach playlist guide exception"
             );
             assert!(
-                c4_native_visible_in_viewport(&win, playlist.upcast_ref()),
-                "R1 playlist guide action must be fully visible after physical scroll"
+                native_channel_visible_in_viewport(&win, playlist.upcast_ref()),
+                "COMPACT_VIEWPORT playlist guide action must be fully visible after physical scroll"
             );
             inject("Return");
             wait(
                 &|| {
-                    c4_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor").is_some()
-                        && c4_picker_has_label(
+                    guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor")
+                        .is_some()
+                        && guide_mapping_picker_has_label(
                             win.upcast_ref(),
                             "Make this guide an explicit exception",
                         )
                 },
-                "B06 confirm playlist-specific guide warning",
+                "PLAYLIST_GUIDE_SELECTION confirm playlist-specific guide warning",
             );
-            let confirm = c4_picker_button(win.upcast_ref(), "Confirm Playlist Exception");
+            let confirm =
+                guide_mapping_picker_button(win.upcast_ref(), "Confirm Playlist Exception");
             for _ in 0..22 {
                 if confirm.has_focus() {
                     break;
@@ -4576,11 +5123,11 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             }
             assert!(
                 confirm.has_focus(),
-                "R1 D-pad must reach real guide confirmation"
+                "COMPACT_VIEWPORT D-pad must reach real guide confirmation"
             );
             assert!(
-                c4_native_visible_in_viewport(&win, confirm.upcast_ref()),
-                "R1 confirm guide exception must lie entirely in viewport"
+                native_channel_visible_in_viewport(&win, confirm.upcast_ref()),
+                "COMPACT_VIEWPORT confirm guide exception must lie entirely in viewport"
             );
             inject("Return");
             wait(
@@ -4592,7 +5139,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         |r| r.get::<_,String>(0),
                     ).ok().as_deref() == Some(other_guide.as_str())
                 },
-                "B06 SQLite committed selected playlist guide",
+                "PLAYLIST_GUIDE_SELECTION SQLite committed selected playlist guide",
             );
             let db = store.connect().unwrap();
             let unrelated: i64 = db
@@ -4602,7 +5149,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(unrelated, 1, "B06 unrelated per-row binding survives");
+            assert_eq!(
+                unrelated, 1,
+                "PLAYLIST_GUIDE_SELECTION unrelated per-row binding survives"
+            );
             let selected = db
                 .query_row(
                     "SELECT guide_source_id FROM epg_playlist_links WHERE playlist_source_id=?1",
@@ -4613,10 +5163,13 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             if false_exception {
                 assert_eq!(
                     selected, guide,
-                    "R07_B06_EXPECTED_NEGATIVE_ORACLE: incorrect playlist guide accepted"
+                    "NATIVE_FOCUS_PLAYLIST_GUIDE_SELECTION_EXPECTED_NEGATIVE_ORACLE: incorrect playlist guide accepted"
                 );
             }
-            assert_eq!(selected, other_guide, "B06 exact chosen guide committed");
+            assert_eq!(
+                selected, other_guide,
+                "PLAYLIST_GUIDE_SELECTION exact chosen guide committed"
+            );
             full.close();
             win.destroy();
             return;
@@ -4625,7 +5178,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         // Suspend a completed background snapshot just before presentation,
         // switch the selected card while suspended, and assert no stale modal
         // becomes visible after release.
-        editor::c4_test_pause_picker(true);
+        editor::guide_mapping_test_pause_picker(true);
         view.remote_action_test_select(2);
         spin();
         inject("Right");
@@ -4633,25 +5186,25 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         inject("Down");
         inject("Return");
         wait(
-            &editor::c4_test_picker_loaded,
+            &editor::guide_mapping_test_picker_loaded,
             "paused completed picker snapshot",
         );
-        assert!(editor::c4_test_picker_dialog().is_none());
+        assert!(editor::guide_mapping_test_picker_dialog().is_none());
         view.remote_action_test_select(0);
-        editor::c4_test_pause_picker(false);
+        editor::guide_mapping_test_pause_picker(false);
         spin();
         assert!(
-            editor::c4_test_picker_dialog().is_none(),
+            editor::guide_mapping_test_picker_dialog().is_none(),
             "stale source/row completion must never present a picker"
         );
         assert!(view.card_mapping_context(&ids[2]).is_none());
 
         if guide_race {
-            // B13: hold a *completed* picker snapshot while the user uses the
+            // GUIDE_PICKER: hold a *completed* picker snapshot while the user uses the
             // actual Source -> Programme Guides -> Remove -> Confirm dialogs.
             // The deleted guide must never be resurrected by this stale async
             // completion or become a writable cross-guide candidate.
-            editor::c4_test_pause_picker(true);
+            editor::guide_mapping_test_pause_picker(true);
             view.remote_action_test_select(2);
             spin();
             inject("Right");
@@ -4659,28 +5212,35 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Down");
             inject("Return");
             wait(
-                &editor::c4_test_picker_loaded,
-                "B13 completed picker snapshot pending real manager deletion",
+                &editor::guide_mapping_test_picker_loaded,
+                "GUIDE_PICKER completed picker snapshot pending real manager deletion",
             );
-            assert!(editor::c4_test_picker_dialog().is_none());
-            let manage = view.c1_test_manage_button();
+            assert!(editor::guide_mapping_test_picker_dialog().is_none());
+            let manage = view.source_manager_test_manage_button();
             assert!(manage.grab_focus());
             inject("Return");
             wait(
-                &|| c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").is_some(),
-                "B13 real Source Manager",
+                &|| {
+                    guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager")
+                        .is_some()
+                },
+                "GUIDE_PICKER real Source Manager",
             );
             let source_manager =
-                c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
-            let guides = c4_picker_button(source_manager.upcast_ref(), "Programme Guides");
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
+            let guides =
+                guide_mapping_picker_button(source_manager.upcast_ref(), "Programme Guides");
             assert!(guides.grab_focus());
             inject("Return");
             wait(
-                &|| c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").is_some(),
-                "B13 real nested Guide Manager",
+                &|| {
+                    guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-guide-manager")
+                        .is_some()
+                },
+                "GUIDE_PICKER real nested Guide Manager",
             );
             let guide_manager =
-                c4_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-guide-manager").unwrap();
             fn matching_guide_row(root: &gtk::Widget, expected: &str) -> Option<gtk::Widget> {
                 if let Ok(label) = root.clone().downcast::<gtk::Label>() {
                     if label.text().starts_with(&format!("{expected} —")) {
@@ -4696,20 +5256,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 }
                 None
             }
-            let selected_row = matching_guide_row(guide_manager.upcast_ref(), "C4 selected guide")
-                .expect("B13 exact selected guide row in real manager");
-            let remove = c4_picker_button(&selected_row, "Remove");
+            let selected_row =
+                matching_guide_row(guide_manager.upcast_ref(), "GUIDE_MAPPING selected guide")
+                    .expect("GUIDE_PICKER exact selected guide row in real manager");
+            let remove = guide_mapping_picker_button(&selected_row, "Remove");
             assert!(remove.grab_focus());
             inject("Return");
             wait(
                 &|| {
-                    c4_picker_buttons(win.upcast_ref()).iter().any(|b| {
-                        b.label().as_deref() == Some("Remove Permanently") && b.is_mapped()
-                    })
+                    guide_mapping_picker_buttons(win.upcast_ref())
+                        .iter()
+                        .any(|b| {
+                            b.label().as_deref() == Some("Remove Permanently") && b.is_mapped()
+                        })
                 },
-                "B13 real removal confirmation",
+                "GUIDE_PICKER real removal confirmation",
             );
-            let permanent = c4_picker_button(win.upcast_ref(), "Remove Permanently");
+            let permanent = guide_mapping_picker_button(win.upcast_ref(), "Remove Permanently");
             assert!(permanent.grab_focus());
             inject("Return");
             wait(
@@ -4723,23 +5286,29 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     .unwrap()
                         == 0
                 },
-                "B13 selected guide removed transactionally through real manager",
+                "GUIDE_PICKER selected guide removed transactionally through real manager",
             );
-            let guide_close = c4_picker_button(guide_manager.upcast_ref(), "Close");
+            let guide_close = guide_mapping_picker_button(guide_manager.upcast_ref(), "Close");
             assert!(guide_close.grab_focus());
             inject("XF86Back");
-            wait(&|| !guide_manager.is_mapped(), "B13 close guide manager");
-            let source_close = c4_picker_button(source_manager.upcast_ref(), "Close");
+            wait(
+                &|| !guide_manager.is_mapped(),
+                "GUIDE_PICKER close guide manager",
+            );
+            let source_close = guide_mapping_picker_button(source_manager.upcast_ref(), "Close");
             assert!(source_close.grab_focus());
             inject("XF86Back");
-            wait(&|| !source_manager.is_mapped(), "B13 close source manager");
-            editor::c4_test_pause_picker(false);
+            wait(
+                &|| !source_manager.is_mapped(),
+                "GUIDE_PICKER close source manager",
+            );
+            editor::guide_mapping_test_pause_picker(false);
             for _ in 0..18 {
                 spin();
             }
             assert!(
-                editor::c4_test_picker_dialog().is_none(),
-                "B13 deleted guide cannot present stale mapped picker",
+                editor::guide_mapping_test_picker_dialog().is_none(),
+                "GUIDE_PICKER deleted guide cannot present stale mapped picker",
             );
             let count: i64 = store
                 .connect()
@@ -4750,7 +5319,10 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(count, 0, "B13 deleted guide cannot persist mapping");
+            assert_eq!(
+                count, 0,
+                "GUIDE_PICKER deleted guide cannot persist mapping"
+            );
             if wrong_race {
                 assert!(
                     store
@@ -4763,26 +5335,27 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         )
                         .unwrap()
                         > 0,
-                    "R07_B13_EXPECTED_NEGATIVE_ORACLE",
+                    "NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE",
                 );
             }
         }
         if source_race {
-            // B12: preserve a completed real picker snapshot, then replace
+            // GUIDE_PICKER: preserve a completed real picker snapshot, then replace
             // the source catalogue through a *real physical* manager Refresh.
             // The local M3U keeps the first stream but makes the focused last
             // stream absent. No HTTP/network and no production playlist data.
-            let local = std::path::Path::new(&data_home).join("r07-picker-refresh.m3u");
+            let local =
+                std::path::Path::new(&data_home).join("focus-navigation-picker-refresh.m3u");
             std::fs::write(
                 &local,
-                "#EXTM3U\n#EXTINF:-1 tvg-id=\"zero.original\",Zero match\nhttps://example.invalid/c4-picker/0.m3u8\n",
-            ).expect("B12 disposable local M3U");
+                "#EXTM3U\n#EXTINF:-1 tvg-id=\"zero.original\",Zero match\nhttps://example.invalid/guide_mapping-picker/0.m3u8\n",
+            ).expect("GUIDE_PICKER disposable local M3U");
             let uri = gio::File::for_path(&local).uri();
             store.connect().unwrap().execute(
                 "UPDATE iptv_sources SET origin_kind='local_file',origin_locator=?1 WHERE id=?2",
                 rusqlite::params![uri.as_str(), &playlist_id],
-            ).expect("B12 local network-free source origin");
-            editor::c4_test_pause_picker(true);
+            ).expect("GUIDE_PICKER local network-free source origin");
+            editor::guide_mapping_test_pause_picker(true);
             view.remote_action_test_select(2);
             spin();
             inject("Right");
@@ -4790,19 +5363,23 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             inject("Down");
             inject("Return");
             wait(
-                &editor::c4_test_picker_loaded,
-                "B12 selected last row picker snapshot pending real source Refresh",
+                &editor::guide_mapping_test_picker_loaded,
+                "GUIDE_PICKER selected last row picker snapshot pending real source Refresh",
             );
-            assert!(editor::c4_test_picker_dialog().is_none());
-            let manage = view.c1_test_manage_button();
+            assert!(editor::guide_mapping_test_picker_dialog().is_none());
+            let manage = view.source_manager_test_manage_button();
             assert!(manage.grab_focus());
             inject("Return");
             wait(
-                &|| c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").is_some(),
-                "B12 native Source Manager",
+                &|| {
+                    guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager")
+                        .is_some()
+                },
+                "GUIDE_PICKER native Source Manager",
             );
-            let manager = c4_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
-            let refresh = c4_picker_button(manager.upcast_ref(), "Refresh");
+            let manager =
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-source-manager").unwrap();
+            let refresh = guide_mapping_picker_button(manager.upcast_ref(), "Refresh");
             assert!(refresh.grab_focus());
             inject("Return");
             wait(
@@ -4811,23 +5388,26 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                         .query_channels(&ChannelQuery::default())
                         .is_ok_and(|rows| rows.total == 1)
                 },
-                "B12 real local Refresh removed two channels in disposable SQLite",
+                "GUIDE_PICKER real local Refresh removed two channels in disposable SQLite",
             );
             wait(
                 &|| view.remote_action_test_visible_count() == 1,
-                "B12 async view rebind after source refresh",
+                "GUIDE_PICKER async view rebind after source refresh",
             );
-            let close = c4_picker_button(manager.upcast_ref(), "Close");
+            let close = guide_mapping_picker_button(manager.upcast_ref(), "Close");
             assert!(close.grab_focus());
             inject("XF86Back");
-            wait(&|| !manager.is_mapped(), "B12 close real Source Manager");
-            editor::c4_test_pause_picker(false);
+            wait(
+                &|| !manager.is_mapped(),
+                "GUIDE_PICKER close real Source Manager",
+            );
+            editor::guide_mapping_test_pause_picker(false);
             for _ in 0..18 {
                 spin();
             }
             assert!(
-                editor::c4_test_picker_dialog().is_none(),
-                "B12 removed source row must not resurrect a stale mapping modal",
+                editor::guide_mapping_test_picker_dialog().is_none(),
+                "GUIDE_PICKER removed source row must not resurrect a stale mapping modal",
             );
             let old_present: i64 = store
                 .connect()
@@ -4840,7 +5420,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 .unwrap();
             assert_eq!(
                 old_present, 0,
-                "B12 focused row absent in actual SQLite refresh"
+                "GUIDE_PICKER focused row absent in actual SQLite refresh"
             );
             let overrides: i64 = store
                 .connect()
@@ -4851,13 +5431,19 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     |r| r.get(0),
                 )
                 .unwrap();
-            assert_eq!(overrides, 0, "B12 cannot create override for absent stream");
+            assert_eq!(
+                overrides, 0,
+                "GUIDE_PICKER cannot create override for absent stream"
+            );
             if wrong_race {
-                assert_eq!(old_present, 1, "R07_B12_EXPECTED_NEGATIVE_ORACLE");
+                assert_eq!(
+                    old_present, 1,
+                    "NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE"
+                );
             }
         }
-        if e08_actions {
-            // R2 negative-input regression: the last source-qualified row
+        if verify_card_actions {
+            // Stale unbound-card negative-input regression: the last source-qualified row
             // remains valid in SQLite, but it has *no* expanded/bound card
             // when another row is selected. Opening the async full editor
             // must fail closed before launching its detail fetch, and may
@@ -4866,7 +5452,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             spin();
             assert!(
                 view.card_mapping_context(&ids[2]).is_none(),
-                "R2 initial unbound card context must be absent"
+                "initial unbound card context must be absent"
             );
             let link_before: i64 = store
                 .connect()
@@ -4891,8 +5477,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                 spin();
             }
             assert!(
-                c4_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor").is_none(),
-                "R2 initially absent card generation must never present full mapping editor"
+                guide_mapping_picker_modal(win.upcast_ref(), "broadcaster-full-mapping-editor")
+                    .is_none(),
+                "initially absent card generation must never present full mapping editor"
             );
             let db = store.connect().unwrap();
             let link_after: i64 = db
@@ -4912,7 +5499,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             assert_eq!(
                 (link_after, override_after),
                 (link_before, override_before),
-                "R2 no manual playlist/row write after initially invalidated card"
+                "no manual playlist/row write after initially invalidated card"
             );
         }
         win.destroy();
@@ -4920,8 +5507,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "real selected-guide mapping modal, CAS and XTest"]
-    fn c4_native_mapping_640_480() {
-        c4_native_mapping_picker(
+    fn native_channel_mapping_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -4934,8 +5521,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 
     #[test]
     #[ignore = "real selected-guide mapping modal, CAS and XTest"]
-    fn c4_native_mapping_1280_800() {
-        c4_native_mapping_picker(
+    fn native_channel_mapping_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             false,
@@ -4947,9 +5534,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R07 G06 real mapped programme picker and nested OSK painted X11 compact"]
-    fn r07_native_picker_osk_paint_640_480() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS GUIDE_PICKER_PAINTED_FOCUS real mapped programme picker and nested OSK painted X11 compact"]
+    fn native_picker_osk_paint_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             true,
@@ -4960,9 +5547,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "R07 G06 real mapped programme picker and nested OSK painted X11 TV"]
-    fn r07_native_picker_osk_paint_1280_800() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS GUIDE_PICKER_PAINTED_FOCUS real mapped programme picker and nested OSK painted X11 TV"]
+    fn native_picker_osk_paint_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             true,
@@ -4973,9 +5560,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "R07 G06 wrong missing-paint oracle must be rejected"]
-    fn r07_native_picker_osk_paint_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS GUIDE_PICKER_PAINTED_FOCUS wrong missing-paint oracle must be rejected"]
+    fn native_picker_osk_paint_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             true,
@@ -4987,9 +5574,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "B13 manager-initiated real guide deletion while picker load is suspended"]
-    fn r07_native_picker_guide_removed_640_480() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER manager-initiated real guide deletion while picker load is suspended"]
+    fn native_picker_guide_removed_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5000,9 +5587,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B13 manager-initiated real guide deletion while picker load is suspended"]
-    fn r07_native_picker_guide_removed_1280_800() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER manager-initiated real guide deletion while picker load is suspended"]
+    fn native_picker_guide_removed_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             false,
@@ -5013,9 +5600,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B13 deliberately false removed-guide persistence oracle"]
-    fn r07_native_picker_guide_removed_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER deliberately false removed-guide persistence oracle"]
+    fn native_picker_guide_removed_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5027,9 +5614,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "B12 real manager Refresh removes focused stream during completed picker snapshot"]
-    fn r07_native_picker_source_refreshed_640_480() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER real manager Refresh removes focused stream during completed picker snapshot"]
+    fn native_picker_source_refreshed_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5040,9 +5627,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B12 real manager Refresh removes focused stream during completed picker snapshot"]
-    fn r07_native_picker_source_refreshed_1280_800() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER real manager Refresh removes focused stream during completed picker snapshot"]
+    fn native_picker_source_refreshed_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             false,
@@ -5053,9 +5640,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B12 deliberately wrong missing-row identity after manager Refresh"]
-    fn r07_native_picker_source_refreshed_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "GUIDE_PICKER deliberately wrong missing-row identity after manager Refresh"]
+    fn native_picker_source_refreshed_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5067,9 +5654,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R07 E08 real first/middle/last SQLite Play/Edit/Mapping physical modal returns compact"]
-    fn r07_native_e08_action_graph_640_480() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY real first/middle/last SQLite Play/Edit/Mapping physical modal returns compact"]
+    fn native_channel_card_action_graph_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5081,9 +5668,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R07 E08 real first/middle/last SQLite Play/Edit/Mapping physical modal returns TV"]
-    fn r07_native_e08_action_graph_1280_800() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY real first/middle/last SQLite Play/Edit/Mapping physical modal returns TV"]
+    fn native_channel_card_action_graph_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             false,
@@ -5095,9 +5682,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R07 E08 wrong middle-card identity must fail on the precise return assertion"]
-    fn r07_native_e08_action_graph_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "NATIVE_FOCUS CHANNEL_CARD_JOURNEY wrong middle-card identity must fail on the precise return assertion"]
+    fn native_channel_card_action_graph_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5109,9 +5696,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "R1 deliberately wrong compact footer visibility oracle"]
-    fn r07_native_compact_geometry_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "COMPACT_VIEWPORT deliberately wrong compact footer visibility oracle"]
+    fn native_compact_geometry_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5123,9 +5710,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
     }
 
     #[test]
-    #[ignore = "B06 live compact picker to confirmed playlist guide selection"]
-    fn r07_native_playlist_guide_640_480() {
-        c4_native_mapping_picker(
+    #[ignore = "PLAYLIST_GUIDE_SELECTION live compact picker to confirmed playlist guide selection"]
+    fn native_playlist_guide_640_480() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5136,9 +5723,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B06 live compact picker to confirmed playlist guide selection"]
-    fn r07_native_playlist_guide_1280_800() {
-        c4_native_mapping_picker(
+    #[ignore = "PLAYLIST_GUIDE_SELECTION live compact picker to confirmed playlist guide selection"]
+    fn native_playlist_guide_1280_800() {
+        native_channel_mapping_picker(
             1280,
             800,
             false,
@@ -5149,9 +5736,9 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         );
     }
     #[test]
-    #[ignore = "B06 wrong confirmed guide identity rejected at SQLite oracle"]
-    fn r07_native_playlist_guide_negative() {
-        c4_native_mapping_picker(
+    #[ignore = "PLAYLIST_GUIDE_SELECTION wrong confirmed guide identity rejected at SQLite oracle"]
+    fn native_playlist_guide_negative() {
+        native_channel_mapping_picker(
             640,
             480,
             false,
@@ -5175,7 +5762,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         win.present();
         spin();
         let view = find_view(win.upcast_ref()).expect("stream view");
-        let (dialog, body, _status) = sheet("C1 mapped native diagnostic");
+        let (dialog, body, _status) = sheet("SOURCE_MANAGER mapped native diagnostic");
         dialog.add_css_class("broadcaster-source-manager");
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
@@ -5331,8 +5918,8 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
 }
 
 #[cfg(test)]
-#[path = "management/c1_native_service_tests.rs"]
-mod c1_native_service_tests;
+#[path = "management/native_source_manager_tests.rs"]
+mod native_source_manager_tests;
 
 #[cfg(test)]
-mod r07_facets_tests;
+mod native_channel_filter_tests;

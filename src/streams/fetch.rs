@@ -701,12 +701,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod p1_local_deadline_tests {
+mod playlist_local_deadline_tests {
     use super::*;
     use std::future::pending;
 
     #[test]
-    fn p1_never_resolving_gio_read_times_out_and_drops_pending_operation() {
+    fn playlist_never_resolving_gio_read_times_out_and_drops_pending_operation() {
         let context = glib::MainContext::new();
         context
             .with_thread_default(|| {
@@ -733,7 +733,7 @@ mod p1_local_deadline_tests {
     }
 
     #[test]
-    fn p1_unresponsive_local_read_is_cancellable_without_waiting_for_deadline() {
+    fn playlist_unresponsive_local_read_is_cancellable_without_waiting_for_deadline() {
         let context = glib::MainContext::new();
         context
             .with_thread_default(|| {

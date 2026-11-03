@@ -91,7 +91,7 @@ CREATE INDEX idx_epg_programmes_now
     ON epg_programmes(source_id,channel_id,start_utc,stop_utc);
 -- Complementary index supports time-range overlap queries for a future
 -- multi-channel programme-guide grid, independent of the now/next UI.
--- Required E1 cached XMLTV-only window query: start_utc < :to_utc AND stop_utc > :from_utc.
+-- Required cached XMLTV-only window query: start_utc < :to_utc AND stop_utc > :from_utc.
 -- Caller bounds: 1..64 selected guide channels, 0 < (to_utc-from_utc) <= 172800 s,
 -- <=4096 returned rows + 1 sentinel for explicit truncation, stable ordering.
 -- Observed min/max programme timestamps and last_success_at are not evidence of

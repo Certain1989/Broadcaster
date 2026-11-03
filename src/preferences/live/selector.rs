@@ -801,7 +801,7 @@ x.XCloseDisplay(d)
                 return;
             }
             eprintln!(
-                "F02 menu widget depth={} type={} mapped={} sensitive={} focusable={} focused={}",
+                "POPUP_MENU_FOCUS menu widget depth={} type={} mapped={} sensitive={} focusable={} focused={}",
                 depth,
                 widget.type_().name(),
                 widget.is_mapped(),
@@ -854,7 +854,7 @@ x.XCloseDisplay(d)
                 })
                 .unwrap_or_else(|| "NONE".to_string());
             eprintln!(
-                "F02 step={} key={} mapped={} visible={} popup_focus={} visible_list_ancestry={} hidden_list_ancestry={} background_focus={} GtkWindow::focus={}",
+                "POPUP_MENU_FOCUS step={} key={} mapped={} visible={} popup_focus={} visible_list_ancestry={} hidden_list_ancestry={} background_focus={} GtkWindow::focus={}",
                 step + 1,
                 key,
                 popup.is_mapped(),
@@ -867,7 +867,7 @@ x.XCloseDisplay(d)
             );
             assert!(
                 popup.is_mapped() && in_popup && !escaped_background,
-                "F02 first-row focus escaped at native step {} key {}: popup mapped={} focus={}",
+                "POPUP_MENU_FOCUS first-row focus escaped at native step {} key {}: popup mapped={} focus={}",
                 step + 1,
                 key,
                 popup.is_mapped(),
@@ -919,7 +919,7 @@ x.XCloseDisplay(d)
             fn inspect_items(widget: &gtk::Widget, context: &str, states: &mut Vec<bool>) {
                 if widget.type_().name() == "GtkModelButton" {
                     eprintln!(
-                        "F02 {context}: GtkModelButton mapped={} sensitive={}",
+                        "POPUP_MENU_FOCUS {context}: GtkModelButton mapped={} sensitive={}",
                         widget.is_mapped(),
                         widget.is_sensitive()
                     );
@@ -955,7 +955,7 @@ x.XCloseDisplay(d)
                     focus == popup.upcast_ref::<gtk::Widget>() || focus.is_ancestor(&popup)
                 });
                 eprintln!(
-                    "F02 {context} step={} key={key} popup_mapped={} popup_focus={} actual_focus={:?}",
+                    "POPUP_MENU_FOCUS {context} step={} key={key} popup_mapped={} popup_focus={} actual_focus={:?}",
                     step + 1,
                     popup.is_mapped(),
                     in_popup,

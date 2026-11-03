@@ -55,6 +55,9 @@ fn main() -> glib::ExitCode {
     // GtkApplication initializes GDK during startup, not before run().
     // Installing a provider earlier can silently do nothing (no display).
     application.connect_startup(|_| {
+        // Only the primary application process receives startup; arm the
+        // pending SQLite restore before constructing database-backed services.
+        crate::streams::backup::arm_primary_startup();
         let css = gtk::CssProvider::new();
         css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
         if let Some(display) = gtk::gdk::Display::default() {

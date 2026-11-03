@@ -32,6 +32,8 @@ jobs:
           cache-targets: true
           cache-all-crates: false
           key: archlinux-container
+      - name: Validate campaign-neutral executable names
+        run: python3 tests/check_campaign_neutral_names.py
       - name: Configure
         run: meson setup _build -Dprofile=development
       - name: Check formatting

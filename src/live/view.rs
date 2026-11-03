@@ -315,7 +315,7 @@ impl TvLiveView {
     /// Test-only complete native Live rows backed by actual TvLiveCard and
     /// ChannelObject widgets. No network requests or player activation.
     #[cfg(test)]
-    pub(crate) fn install_r07_native_channel_rows(&self) {
+    pub(crate) fn install_native_channel_rows(&self) {
         let imp = self.imp();
         // Invalidate a pending async production load before installing this
         // disposable model so its completion cannot rebind the test rows.
@@ -323,7 +323,7 @@ impl TvLiveView {
         let model = (0..5)
             .map(|index| {
                 ChannelObject::new(
-                    &format!("r07-live-{index}"),
+                    &format!("focus-navigation-live-{index}"),
                     &format!("Fixture Live {index}"),
                     "https://example.invalid/offline",
                 )
@@ -340,7 +340,7 @@ impl TvLiveView {
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_native_channel_id(&self, index: i32) -> Option<String> {
+    pub(crate) fn native_channel_id(&self, index: i32) -> Option<String> {
         self.imp()
             .channels_list
             .row_at_index(index)?
@@ -350,16 +350,16 @@ impl TvLiveView {
             .map(|channel| channel.id())
     }
 
-    /// Collapse a disposable native Live row between independent E02 portals.
+    /// Collapse a disposable native Live row between independent LIVE_PLAY_IDENTITY portals.
     /// This only prepares the next physical D-pad route and never plays media.
     #[cfg(test)]
-    pub(crate) fn r07_collapse_test_channel(&self, index: i32) {
+    pub(crate) fn focus_navigation_collapse_test_channel(&self, index: i32) {
         self.imp()
             .channels_list
             .row_at_index(index)
-            .expect("r07 real Live row")
+            .expect("focus_navigation real Live row")
             .downcast::<TvLiveCard>()
-            .expect("r07 real Live card")
+            .expect("focus_navigation real Live card")
             .set_expanded(false);
     }
 
