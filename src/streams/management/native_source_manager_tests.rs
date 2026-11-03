@@ -455,7 +455,7 @@ fn native_source_rows(width: i32, height: i32, negative: bool) {
     win.destroy();
 }
 
-// NATIVE_FOCUS SOURCE_GRID/AS15: traverse the entire two-line, real three-source GTK
+// NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID: traverse the entire two-line, real three-source GTK
 // action grid without activating Delete/Refresh/Move. Disabled first/last
 // movement edges are skipped by real XTest keys, not helper focus seeding.
 fn native_source_grid(width: i32, height: i32, negative: bool) {
@@ -558,13 +558,13 @@ fn native_source_grid(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS SOURCE_GRID/AS15 actual source-manager two-line D-pad graph at 640"]
+#[ignore = "NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID actual source-manager two-line D-pad graph at 640"]
 fn native_source_grid_640_480() {
     native_source_grid(640, 480, false);
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS SOURCE_GRID/AS15 actual source-manager two-line D-pad graph at 1280"]
+#[ignore = "NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID actual source-manager two-line D-pad graph at 1280"]
 fn native_source_grid_1280_800() {
     native_source_grid(1280, 800, false);
 }
@@ -593,7 +593,7 @@ fn native_negative_row_identity() {
     native_source_rows(640, 480, true);
 }
 
-// NATIVE_FOCUS SOURCE_REORDER/AS13: actual 3-source SQLite order changes from native D-pad,
+// NATIVE_FOCUS SOURCE_REORDER/SOURCE_REORDER_GRAPH: actual 3-source SQLite order changes from native D-pad,
 // with row/action focus restored by source UUID after each async rebuild.
 // This complements, rather than replaces, SOURCE_MANAGER's switch and Back tests.
 fn native_source_reorder(width: i32, height: i32, negative: bool) {
@@ -1040,7 +1040,7 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
         .region
         .is_none());
 
-    // SOURCE_KEYBOARD and AS10: Replace chooser must offer local/remote paths; an
+    // SOURCE_KEYBOARD and SOURCE_FILE_CHOOSER: Replace chooser must offer local/remote paths; an
     // invalid non-HTTP remote address must not alter a local source or
     // reach the network. Cancel returns to the populated source manager.
     let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
@@ -1708,7 +1708,7 @@ fn native_source_refresh_negative() {
     native_source_refresh_paths(640, 480, 1, true);
 }
 
-// NATIVE_FOCUS AS10: use the production GtkFileDialog, its real mapped native X11
+// NATIVE_FOCUS SOURCE_FILE_CHOOSER: use the production GtkFileDialog, its real mapped native X11
 // chooser and XTest keyboard input. This tests permission-scoped local file
 // selection, not a constructed GFile returned directly to the service.
 fn native_source_file_chooser(width: i32, height: i32, negative: bool) {
@@ -1744,7 +1744,7 @@ for char in sys.argv[1]:
 x.XFlush(d);time.sleep(.15)
 press('Return');x.XFlush(d);time.sleep(.6)
 press('Return');x.XFlush(d)
-print('NATIVE_FOCUS_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
+print('NATIVE_FOCUS_SOURCE_FILE_CHOOSER_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 "#;
     let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
     let id = fixture.ids[2].clone();
@@ -1782,7 +1782,7 @@ print('NATIVE_FOCUS_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
         assert_eq!(
             fixture.storage.get_source(&sibling).unwrap().origin.locator,
             fixture.storage.get_source(&id).unwrap().origin.locator,
-            "NATIVE_FOCUS_AS10_EXPECTED_NEGATIVE_ORACLE: a real file chooser must not replace another source"
+            "NATIVE_FOCUS_SOURCE_FILE_CHOOSER_EXPECTED_NEGATIVE_ORACLE: a real file chooser must not replace another source"
         );
         unreachable!("false selected-source oracle passed");
     }
@@ -1803,17 +1803,17 @@ print('NATIVE_FOCUS_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS AS10 genuine GTK file chooser compact, XTest local M3U selection"]
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER genuine GTK file chooser compact, XTest local M3U selection"]
 fn native_source_file_chooser_640_480() {
     native_source_file_chooser(640, 480, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS AS10 genuine GTK file chooser TV, XTest local M3U selection"]
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER genuine GTK file chooser TV, XTest local M3U selection"]
 fn native_source_file_chooser_1280_800() {
     native_source_file_chooser(1280, 800, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS AS10 intentionally wrong selected-source UUID oracle"]
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER intentionally wrong selected-source UUID oracle"]
 fn native_source_file_chooser_negative() {
     native_source_file_chooser(640, 480, true);
 }
