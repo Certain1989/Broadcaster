@@ -122,8 +122,8 @@ fn playlist_exists(conn: &Connection, source_id: &str) -> Result<(), BindingErro
     }
 }
 
-/// E4 must call this constructor ONLY after the user explicitly confirms the
-/// selected guide. It cannot be obtained as the result of a matching query.
+/// This confirmation token may be constructed ONLY after the user explicitly
+/// confirms the selected guide, never as the result of a matching query.
 #[derive(Debug)]
 pub struct ConfirmedGuideSelection(());
 impl ConfirmedGuideSelection {
@@ -903,7 +903,7 @@ pub enum SemanticProgrammeState {
     },
 }
 
-/// E3's reusable semantic now/next seam; no GTK, UI focus or network operations.
+/// Reusable semantic now/next query; no GTK, UI focus or network operations.
 /// Reads a full 48-hour half-open window to include programmes starting up to
 /// 24h before now and a bounded next lookahead. Never claims full coverage.
 pub fn read_semantic_now_next(
