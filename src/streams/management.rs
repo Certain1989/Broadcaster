@@ -3500,7 +3500,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     "cancel cannot edit origin"
                 );
 
-                // B11: the nested physical caret/Cancel journey above occurred
+                // MAPPING_KEYBOARD: the nested physical caret/Cancel journey above occurred
                 // on the actual second (30+6) exact-guide search page, not
                 // merely after returning to the first page. Now physically
                 // reverse pagination before the stale-CAS negative route.
@@ -3521,7 +3521,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
                     "back to first search page",
                 );
 
-                // B14: mutate the real guide catalogue transactionally while
+                // GUIDE_CATALOGUE_STALE: mutate the real guide catalogue transactionally while
                 // preserving its successful-import second and target identity.
                 // A changed timestamp by itself would not prove a same-second
                 // reimport stale-picker conflict.
