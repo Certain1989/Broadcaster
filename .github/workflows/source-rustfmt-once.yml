@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Temporary source-only Rust formatting
+on:
+  push:
+    branches:
+      - maintenance/campaign-neutral-source-cleanup-20261103
+permissions:
+  contents: write
+jobs:
+  rustfmt:
+    if: >-
+      github.repository == 'Certain1989/Broadcaster' &&
+      github.event.head_commit.message == 'chore: run isolated formatting'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: maintenance/campaign-neutral-source-cleanup-20261103
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify scope, format source, and publish source-only commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "maintenance/campaign-neutral-source-cleanup-20261103"
+          test "$(git merge-base HEAD origin/main)" = "326ff67bef597f424ceec8ca62417efc244f19b9"
+          cargo fmt --all
+          cargo fmt --all -- --check
+          python3 tests/check_campaign_neutral_names.py
+          bash -n tests/ci-fast-smoke.sh
+          git rm -f .github/scripts/source-rustfmt-trigger.txt
+          git add src
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "style: format renamed native test diagnostics"
+          git push origin HEAD:refs/heads/maintenance/campaign-neutral-source-cleanup-20261103
