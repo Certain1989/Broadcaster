@@ -838,7 +838,7 @@ fn confirm_epg_mapping(
     }
     if matches!(action, MappingAction::ExactAlias) {
         // Literal strings, never markup. This is the exact scope a future
-        // atomic E3 API must compare under the same write transaction.
+        // atomic exact-alias API must compare under the same write transaction.
         label(
             &format!(
                 "{}: {}\n{}: {}\n{}: {}",
