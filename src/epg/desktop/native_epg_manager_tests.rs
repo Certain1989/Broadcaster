@@ -1204,7 +1204,30 @@ fn native_guide_refresh(width: i32, height: i32, negative: bool) {
     let fixture = Fixture::new(1);
     let guide_id = fixture.ids[0].clone();
     let file = fixture.home.join("fabricated-0.xml");
-    fs::write(&file, "<?xml version=\"1.0\"?><tv><channel id=\"fixture\"><display-name>Fixture</display-name></channel><programme start=\"20261101080000 +0000\" stop=\"20261101090000 +0000\" channel=\"fixture\"><title>Offline Programme</title></programme></tv>").unwrap();
+    // The importer rejects schedules whose programmes have already ended.
+    // Derive future dates rather than letting a calendar-fixed fixture expire.
+    let start = time::OffsetDateTime::now_utc() + time::Duration::days(1);
+    let stop = start + time::Duration::hours(1);
+    let xmltv_stamp = |timestamp: time::OffsetDateTime| {
+        format!(
+            "{:04}{:02}{:02}{:02}{:02}{:02} +0000",
+            timestamp.year(),
+            timestamp.month() as u8,
+            timestamp.day(),
+            timestamp.hour(),
+            timestamp.minute(),
+            timestamp.second()
+        )
+    };
+    fs::write(
+        &file,
+        format!(
+            "<?xml version=\"1.0\"?><tv><channel id=\"fixture\"><display-name>Fixture</display-name></channel><programme start=\"{}\" stop=\"{}\" channel=\"fixture\"><title>Offline Programme</title></programme></tv>",
+            xmltv_stamp(start),
+            xmltv_stamp(stop)
+        ),
+    )
+    .unwrap();
     adw::init().expect("native GTK");
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
