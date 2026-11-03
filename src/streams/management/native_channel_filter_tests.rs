@@ -486,7 +486,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     wait_count(5, "restore all sources");
     choose_by_keys(source, filter_choice(source, "NATIVE_FOCUS Source B"));
     wait_count(3, "return to source B");
-    // B10: intersect group + language + country through real GTK controls.
+    // FILTER_INTERSECTION: intersect group + language + country through real GTK controls.
     choose_by_keys(group, filter_choice(group, "News"));
     wait_count(2, "source B and News");
     choose_by_keys(country, filter_choice(country, "DE"));
@@ -509,7 +509,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     // The explicit Clear Filters button must restore the complete result
     // catalogue and every filter's visible selection without a direct setter.
     let clear = targets[7].clone().downcast::<gtk::Button>().unwrap();
-    assert!(clear.grab_focus(), "B10 native Clear Filters focus");
+    assert!(clear.grab_focus(), "FILTER_INTERSECTION native Clear Filters focus");
     // Use physical Space so the shared Return injector does not move X11
     // input focus onto an unmapped dropdown popup after it has closed.
     inject("space");
@@ -520,7 +520,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         ("language", language),
         ("country", country),
     ] {
-        assert_eq!(control.selected(), 0, "B10 Clear Filters resets {name}");
+        assert_eq!(control.selected(), 0, "FILTER_INTERSECTION Clear Filters resets {name}");
     }
     // Then reapply and undo individual facets via physical keys as a
     // separate reversible path, rather than relying on Clear alone.
@@ -547,7 +547,7 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     );
     assert_eq!(view.remote_action_test_visible_count(), 5);
 
-    // FILTER_POPUP/D05: expand the source picker beyond the initial two-source
+    // FILTER_POPUP/FILTER_TOOLBAR_REVERSIBILITY: expand the source picker beyond the initial two-source
     // boundary. Every new source owns a different SQLite UUID; physical
     // keyboard selection must still resolve the final mapped source and
     // return to the preceding source on the same focused dropdown.
@@ -595,44 +595,44 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         owner.type_().name()
     );
 
-    // D05: actual mapped toolbar and footer directional reversibility.
+    // FILTER_TOOLBAR_REVERSIBILITY: actual mapped toolbar and footer directional reversibility.
     // Spatial layout is responsive; do not assert an invented fixed adjacent
     // control after a GTK source popover is dismissed.
     inject("Escape");
-    assert!(source.grab_focus(), "D05 focused source toolbar origin");
+    assert!(source.grab_focus(), "FILTER_TOOLBAR_REVERSIBILITY focused source toolbar origin");
     inject("Down");
-    let down = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 Down must leave mapped owner");
+    let down = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY Down must leave mapped owner");
     assert!(
         down.is_mapped() && targets.iter().any(|w| down == *w || down.is_ancestor(w)),
-        "D05 Down must remain in actual toolbar rather than escape the page"
+        "FILTER_TOOLBAR_REVERSIBILITY Down must remain in actual toolbar rather than escape the page"
     );
     inject("Up");
-    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 reverse focus");
+    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY reverse focus");
     assert!(
         source.has_focus() || back.is_ancestor(source.upcast_ref::<gtk::Widget>()),
-        "D05 reverse Up must restore source portal"
+        "FILTER_TOOLBAR_REVERSIBILITY reverse Up must restore source portal"
     );
-    assert!(clear.grab_focus(), "D05 populated footer entry");
+    assert!(clear.grab_focus(), "FILTER_TOOLBAR_REVERSIBILITY populated footer entry");
     inject("Down");
-    let footer = gtk::prelude::GtkWindowExt::focus(&win).expect("D05 native footer Down owner");
+    let footer = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY native footer Down owner");
     assert!(
         footer.is_mapped()
             && (targets
                 .iter()
                 .any(|w| footer == *w || footer.is_ancestor(w))
                 || view.contains_results_focus(&footer)),
-        "D05 footer Down must stay on the current page's actions or results"
+        "FILTER_TOOLBAR_REVERSIBILITY footer Down must stay on the current page's actions or results"
     );
     inject("Up");
     let returned = gtk::prelude::GtkWindowExt::focus(&win)
-        .expect("D05 inverse from populated result or footer");
+        .expect("FILTER_TOOLBAR_REVERSIBILITY inverse from populated result or footer");
     assert!(
         returned.is_mapped()
             && (targets
                 .iter()
                 .any(|w| returned == *w || returned.is_ancestor(w))
                 || view.contains_results_focus(&returned)),
-        "D05 Up may return to another mapped header action but not a detached row"
+        "FILTER_TOOLBAR_REVERSIBILITY Up may return to another mapped header action but not a detached row"
     );
 
     // F05: start a native text Search debounce while a source/group/country/
@@ -1080,7 +1080,7 @@ fn native_scale_negative() {
     native_large_catalogue(284, 640, 480, true);
 }
 
-// NATIVE_FOCUS F10/E10: a real recycled row disappears while its focused Play
+// NATIVE_FOCUS CHANNEL_REBIND/CHANNEL_REBIND_FOCUS: a real recycled row disappears while its focused Play
 // descendant is active.  The source is removed using the same revision-bound
 // confirmed deletion contract as Source Manager, then the live view reloads
 // asynchronously.  No fake list model or test-only rebind replaces SQLite.
@@ -1220,14 +1220,14 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
             .items
             .iter()
             .any(|row| row.id == selected && row.source_id == surviving),
-        "F10 rebind must select a surviving source-qualified SQLite channel"
+        "CHANNEL_REBIND rebind must select a surviving source-qualified SQLite channel"
     );
     let focus = gtk::prelude::GtkWindowExt::focus(&win).expect("rebind retains focus");
     assert!(
         focus.is_mapped() && view.contains_results_focus(&focus),
-        "F10 recycled row must leave a mapped current-results focus owner"
+        "CHANNEL_REBIND recycled row must leave a mapped current-results focus owner"
     );
-    // E10: after the actual disappearing-row rebind, physically re-enter the
+    // CHANNEL_REBIND_FOCUS: after the actual disappearing-row rebind, physically re-enter the
     // selected surviving card, walk Right ten times, and reject focus escape
     // into another source, the global switcher or an unmapped recycled child.
     inject("Return");
@@ -1235,12 +1235,12 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     view.assert_remote_action_focus_owner(&entered, &selected);
     for _ in 0..10 {
         inject("Right");
-        let owner = gtk::prelude::GtkWindowExt::focus(&win).expect("E10 focus owner");
+        let owner = gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS focus owner");
         assert!(owner.is_mapped() && owner.is_sensitive());
         view.assert_remote_action_focus_owner(&owner, &selected);
     }
     inject("XF86Back");
-    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("E10 Back row owner");
+    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS Back row owner");
     assert!(back.is_mapped() && view.contains_results_focus(&back));
     inject("Home");
     for _ in 0..55 {
@@ -1252,7 +1252,7 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     assert_eq!(
         view.remote_action_test_selected_id().as_deref(),
         Some(survive_first.as_str()),
-        "F10 physical Home must still reach the first surviving source row"
+        "CHANNEL_REBIND physical Home must still reach the first surviving source row"
     );
     assert!(store.get_source(&disappearing).is_err());
     assert_eq!(
@@ -1265,12 +1265,12 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     if negative {
         assert_eq!(
             selected, disappearing_last,
-            "NATIVE_FOCUS_F10_EXPECTED_NEGATIVE_ORACLE: removed source UUID cannot retain selected focus"
+            "NATIVE_FOCUS_CHANNEL_REBIND_EXPECTED_NEGATIVE_ORACLE: removed source UUID cannot retain selected focus"
         );
         unreachable!("wrong removed-source owner oracle unexpectedly survived");
     }
     eprintln!(
-        "NATIVE_FOCUS_F10_REBIND_PASS viewport={width}x{height} initial=284 after=144 selected={selected}"
+        "NATIVE_FOCUS_CHANNEL_REBIND_REBIND_PASS viewport={width}x{height} initial=284 after=144 selected={selected}"
     );
     win.destroy();
 }
@@ -1298,17 +1298,17 @@ fn native_popup_facet_negative() {
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS F10 native real source removal, focused 284-row rebind compact"]
+#[ignore = "NATIVE_FOCUS CHANNEL_REBIND native real source removal, focused 284-row rebind compact"]
 fn native_recycle_removed_source_640_480() {
     native_recycle_removed_source(640, 480, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS F10 native real source removal, focused 284-row rebind TV"]
+#[ignore = "NATIVE_FOCUS CHANNEL_REBIND native real source removal, focused 284-row rebind TV"]
 fn native_recycle_removed_source_1280_800() {
     native_recycle_removed_source(1280, 800, false);
 }
 #[test]
-#[ignore = "NATIVE_FOCUS F10 deliberately wrong deleted-source focus identity"]
+#[ignore = "NATIVE_FOCUS CHANNEL_REBIND deliberately wrong deleted-source focus identity"]
 fn native_recycle_removed_source_negative() {
     native_recycle_removed_source(640, 480, true);
 }
