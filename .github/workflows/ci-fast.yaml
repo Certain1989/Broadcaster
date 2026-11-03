@@ -42,5 +42,7 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Ordinary Rust tests
         run: cargo test --locked
+      - name: Reject ambiguous or empty native-test selectors
+        run: bash tests/test-ci-require-one-ignored.sh
       - name: Real GTK/SQLite/XTest canaries and negative-control marker
         run: bash tests/ci-fast-smoke.sh
