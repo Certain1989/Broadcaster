@@ -66,7 +66,7 @@ do
       grep -E "UX02 (geometry|compact)" "$log_file" || :
     fi
     if [ "$case" = osk_mapped_gtk_channel_menus_all_rows_and_sort_focus_containment ]; then
-      grep 'F02 .*GtkModelButton' "$log_file" || :
+      grep 'POPUP_MENU_FOCUS .*GtkModelButton' "$log_file" || :
     fi
   else
     failed=1
