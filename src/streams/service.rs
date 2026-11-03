@@ -562,7 +562,7 @@ impl StreamsService {
 
     /// Reselecting a revoked portal file grant or changing a configured URL
     /// uses the same preview/approval as refresh, but commits the new origin
-    /// and catalogue together using S1's D1 transaction.
+    /// and catalogue together in one atomic source-and-catalogue transaction.
     pub(crate) async fn replace_origin(
         &self,
         id: &str,
