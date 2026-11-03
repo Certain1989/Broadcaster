@@ -484,7 +484,7 @@ fn native_mediathek_three_rows_negative_identity() {
     focus_navigation_mediathek_three_row_inverse(640, 480, true);
 }
 
-// NATIVE_FOCUS D08/D09: actual application Menu keys, every mapped GtkModelButton,
+// NATIVE_FOCUS APPLICATION_MENU/MENU_DISMISSAL: actual application Menu keys, every mapped GtkModelButton,
 // and Escape/Back/Home dismissal semantics. No menu item is activated.
 fn focus_navigation_app_menu_native(width: i32, height: i32, negative: bool) {
     adw::init().expect("native GTK display");
@@ -534,7 +534,7 @@ fn focus_navigation_app_menu_native(width: i32, height: i32, negative: bool) {
         }
         assert_eq!(visited.len(), 6, "every real app menu action must be physically traversable");
         if negative {
-            assert_eq!(visited.len(), 7, "NATIVE_FOCUS_D08_EXPECTED_NEGATIVE_ORACLE: phantom seventh action must be rejected");
+            assert_eq!(visited.len(), 7, "NATIVE_FOCUS_APPLICATION_MENU_EXPECTED_NEGATIVE_ORACLE: phantom seventh action must be rejected");
         }
         for _ in 0..buttons.len() {
             inject("Up", false);
@@ -546,20 +546,20 @@ fn focus_navigation_app_menu_native(width: i32, height: i32, negative: bool) {
         let owner = win.focused_widget().expect("menu dismissal yields mapped app focus");
         assert!(owner.is_mapped() && owner.is_sensitive(), "{key} restores a valid GTK focus owner");
     }
-    eprintln!("NATIVE_FOCUS_D08_D09 real six-item app menu {width}x{height} native XTest, 3 dismissals");
+    eprintln!("NATIVE_FOCUS_APPLICATION_MENU_MENU_DISMISSAL real six-item app menu {width}x{height} native XTest, 3 dismissals");
     win.destroy();
 }
 #[test]
-#[ignore = "NATIVE_FOCUS D08/D09 real native application menu and Escape Back Home compact"]
+#[ignore = "NATIVE_FOCUS APPLICATION_MENU/MENU_DISMISSAL real native application menu and Escape Back Home compact"]
 fn native_app_menu_640_480() { focus_navigation_app_menu_native(640,480,false); }
 #[test]
-#[ignore = "NATIVE_FOCUS D08/D09 real native application menu and Escape Back Home TV"]
+#[ignore = "NATIVE_FOCUS APPLICATION_MENU/MENU_DISMISSAL real native application menu and Escape Back Home TV"]
 fn native_app_menu_1280_800() { focus_navigation_app_menu_native(1280,800,false); }
 #[test]
-#[ignore = "NATIVE_FOCUS D08 deliberately false enabled app-menu item count"]
+#[ignore = "NATIVE_FOCUS APPLICATION_MENU deliberately false enabled app-menu item count"]
 fn native_app_menu_negative() { focus_navigation_app_menu_native(640,480,true); }
 
-// NATIVE_FOCUS D03/D04/D10: one completely connected loaded Mediathek route. Unlike
+// NATIVE_FOCUS MEDIATHEK_ROW_NAVIGATION/MEDIATHEK_LOADED_ACTION/MEDIATHEK_SORT_RETURN: one completely connected loaded Mediathek route. Unlike
 // focus-grabbing each control independently, the only seeded owner is Search;
 // every subsequent filter, populated row, and inverse is a native XTest key.
 fn focus_navigation_mediathek_loaded_vertical(width: i32, height: i32, negative: bool) {
@@ -583,13 +583,13 @@ fn focus_navigation_mediathek_loaded_vertical(width: i32, height: i32, negative:
     assert!(toolbar[0].grab_focus(), "initial Search native focus seed");
     settle();
     let focused_in = |target: &gtk::Widget, context: &str| {
-        let owner = win.focused_widget().expect("D03/D04 live window owner");
+        let owner = win.focused_widget().expect("MEDIATHEK_ROW_NAVIGATION/MEDIATHEK_LOADED_ACTION live window owner");
         let found = toolbar.iter().position(|w| TvWindow::is_within(&owner, w));
-        eprintln!("NATIVE_FOCUS_D03_GRAPH {width}x{height} expected={context} mapped_index={found:?} owner={} target={}", owner.type_().name(), target.type_().name());
+        eprintln!("NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_GRAPH {width}x{height} expected={context} mapped_index={found:?} owner={} target={}", owner.type_().name(), target.type_().name());
         assert!(
             owner.is_mapped() && owner.is_visible() && owner.is_sensitive()
                 && TvWindow::is_within(&owner, target),
-            "D03/D04 {context}: wrong or invisible GTK target {}",
+            "MEDIATHEK_ROW_NAVIGATION/MEDIATHEK_LOADED_ACTION {context}: wrong or invisible GTK target {}",
             owner.type_().name()
         );
     };
@@ -620,9 +620,9 @@ fn focus_navigation_mediathek_loaded_vertical(width: i32, height: i32, negative:
         assert_eq!(
             med.focus_navigation_result_id(2).as_deref(),
             Some("Offline wrong show"),
-            "NATIVE_FOCUS_D03_EXPECTED_NEGATIVE_ORACLE: final loaded-row identity"
+            "NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_EXPECTED_NEGATIVE_ORACLE: final loaded-row identity"
         );
-        unreachable!("D03 wrong-row oracle unexpectedly survived");
+        unreachable!("MEDIATHEK_ROW_NAVIGATION wrong-row oracle unexpectedly survived");
     }
     // An expanded result's primary Play action must reverse to its exact
     // loaded row using Back, with no backend/media network activation.
@@ -640,7 +640,7 @@ fn focus_navigation_mediathek_loaded_vertical(width: i32, height: i32, negative:
     }
     inject("Up", false);
     focused_in(&toolbar[6], "results Up returns to Sort");
-    // D09/D10: Back dismisses the *actual* Sort popover; Up while the
+    // MENU_DISMISSAL/MEDIATHEK_SORT_RETURN: Back dismisses the *actual* Sort popover; Up while the
     // menu is open stays inside that native menu rather than escaping to
     // toolbar/results. No sort action or remote service is triggered.
     let sort = toolbar[6]
@@ -664,7 +664,7 @@ fn focus_navigation_mediathek_loaded_vertical(width: i32, height: i32, negative:
     inject("Left", false);
     focused_in(&toolbar[0], "Keyboard Left returns Search");
     eprintln!(
-        "NATIVE_FOCUS_D03_D04_D10 {width}x{height}: populated physical Search->filters->3 results->Play/Back->Sort/Duration->Search inverse PASS"
+        "NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_MEDIATHEK_LOADED_ACTION_MEDIATHEK_SORT_RETURN {width}x{height}: populated physical Search->filters->3 results->Play/Back->Sort/Duration->Search inverse PASS"
     );
     win.destroy();
 }
@@ -687,7 +687,7 @@ fn native_mediathek_loaded_vertical_negative() {
     focus_navigation_mediathek_loaded_vertical(640, 480, true);
 }
 
-// E03: the real Live row's first OK enters Play without starting playback;
+// LIVE_PLAY_ENTRY: the real Live row's first OK enters Play without starting playback;
 // second OK goes through the real application action and its explicitly
 // disposable failed managed-player boundary. The test-only backend performs
 // no URL fetch, system-player launch or alteration of a real playlist.
@@ -741,7 +741,7 @@ fn focus_navigation_live_player_failed_return(width: i32, height: i32, negative:
     if negative {
         assert_eq!(
             app.focus_navigation_test_managed_player_attempts(), 2,
-            "NATIVE_FOCUS_E03_EXPECTED_NEGATIVE_ORACLE: a single second OK cannot start two players"
+            "NATIVE_FOCUS_LIVE_PLAY_ENTRY_EXPECTED_NEGATIVE_ORACLE: a single second OK cannot start two players"
         );
     }
     assert_eq!(win.imp().stack.visible_child_name().as_deref(), Some("live"));
@@ -751,7 +751,7 @@ fn focus_navigation_live_player_failed_return(width: i32, height: i32, negative:
     inject("XF86Back", false);
     assert!(row.has_focus(), "Back after failed playback returns to exact Live row");
     assert_eq!(live.native_channel_id(0).as_deref(), Some(origin.as_str()));
-    eprintln!("NATIVE_FOCUS_E03_NATIVE {width}x{height} first OK -> Play; second OK -> fake failure -> exact Play/row return");
+    eprintln!("NATIVE_FOCUS_LIVE_PLAY_ENTRY_NATIVE {width}x{height} first OK -> Play; second OK -> fake failure -> exact Play/row return");
     win.destroy();
 }
 
@@ -773,7 +773,7 @@ fn native_live_player_failure_negative() {
     focus_navigation_live_player_failed_return(640, 480, true);
 }
 
-// E06: a real enabled Mediathek Load More action submits an asynchronous
+// MEDIATHEK_PAGING: a real enabled Mediathek Load More action submits an asynchronous
 // disposable page, retires its own footer on the final page and restores
 // source-qualified row focus. No provider URL, stream or mpv is touched.
 fn focus_navigation_mediathek_paged_focus(width: i32, height: i32, negative: bool) {
@@ -822,7 +822,7 @@ fn focus_navigation_mediathek_paged_focus(width: i32, height: i32, negative: boo
     assert_eq!(med.focus_navigation_result_id(3).as_deref(), Some("Offline show 3"));
     if negative {
         assert_eq!(med.focus_navigation_result_id(3).as_deref(), Some("Wrong show"),
-            "NATIVE_FOCUS_E06_EXPECTED_NEGATIVE_ORACLE: wrong new-page identity must fail");
+            "NATIVE_FOCUS_MEDIATHEK_PAGING_EXPECTED_NEGATIVE_ORACLE: wrong new-page identity must fail");
     }
     inject("Return", false);
     let owner = win.focused_widget().expect("new Mediathek row opens Play");
@@ -847,44 +847,44 @@ fn focus_navigation_mediathek_paged_focus(width: i32, height: i32, negative: boo
     .expect("real paginated Copy Video URL menu button");
     let mut reached_copy = false;
     for _ in 0..5 {
-        let owner = win.focused_widget().expect("E06 focused native card action");
+        let owner = win.focused_widget().expect("MEDIATHEK_PAGING focused native card action");
         if TvWindow::is_within(&owner, copy.upcast_ref()) {
             reached_copy = true;
             break;
         }
         inject("Right", false);
     }
-    assert!(reached_copy, "E06 real paged result Copy menu must be D-pad reachable");
+    assert!(reached_copy, "MEDIATHEK_PAGING real paged result Copy menu must be D-pad reachable");
     inject("Return", false);
     let popover = copy.popover().expect("real copy-quality menu popover");
     assert!(popover.is_mapped(), "physical OK opens the real card menu");
     inject("XF86Back", false);
     assert!(!popover.is_mapped(), "physical Back dismisses only the card menu");
-    let owner = win.focused_widget().expect("E06 focus after card menu dismissal");
+    let owner = win.focused_widget().expect("MEDIATHEK_PAGING focus after card menu dismissal");
     assert!(
         TvWindow::is_within(&owner, copy.upcast_ref()),
-        "E06 nested menu Back must return to exact Copy opener"
+        "MEDIATHEK_PAGING nested menu Back must return to exact Copy opener"
     );
     inject("XF86Back", false);
     assert!(
-        TvWindow::is_within(&win.focused_widget().expect("E06 final row restoration"), new_first.upcast_ref()),
-        "E06 second Back restores same paged card"
+        TvWindow::is_within(&win.focused_widget().expect("MEDIATHEK_PAGING final row restoration"), new_first.upcast_ref()),
+        "MEDIATHEK_PAGING second Back restores same paged card"
     );
-    eprintln!("NATIVE_FOCUS_E06 {width}x{height} native 3+3 paging, Copy URL menu/Back, exact row restoration PASS");
+    eprintln!("NATIVE_FOCUS_MEDIATHEK_PAGING {width}x{height} native 3+3 paging, Copy URL menu/Back, exact row restoration PASS");
     win.destroy();
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS E06 real disposable Mediathek Load More and async focus 640x480"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_PAGING real disposable Mediathek Load More and async focus 640x480"]
 fn native_mediathek_paged_640_480() { focus_navigation_mediathek_paged_focus(640, 480, false); }
 #[test]
-#[ignore = "NATIVE_FOCUS E06 real disposable Mediathek Load More and async focus 1280x800"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_PAGING real disposable Mediathek Load More and async focus 1280x800"]
 fn native_mediathek_paged_1280_800() { focus_navigation_mediathek_paged_focus(1280, 800, false); }
 #[test]
-#[ignore = "NATIVE_FOCUS E06 intentionally false newly loaded result identity"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_PAGING intentionally false newly loaded result identity"]
 fn native_mediathek_paged_negative() { focus_navigation_mediathek_paged_focus(640, 480, true); }
 
-// E07: the app's real Reload action is exercised through its actual Retry
+// MEDIATHEK_RETRY: the app's real Reload action is exercised through its actual Retry
 // widget after a disposable asynchronous failed request, with no provider
 // traffic. This is distinct from simply manually focusing a fake Retry button.
 fn focus_navigation_mediathek_error_retry_focus(width: i32, height: i32, negative: bool) {
@@ -954,28 +954,28 @@ fn focus_navigation_mediathek_error_retry_focus(width: i32, height: i32, negativ
     assert_eq!(med.focus_navigation_offline_search_calls(), 2, "exactly one physical Retry request");
     if negative {
         assert_eq!(med.focus_navigation_offline_search_calls(), 3,
-            "NATIVE_FOCUS_E07_EXPECTED_NEGATIVE_ORACLE: extra phantom Retry request must fail");
+            "NATIVE_FOCUS_MEDIATHEK_RETRY_EXPECTED_NEGATIVE_ORACLE: extra phantom Retry request must fail");
     }
     assert!(!med.focus_navigation_offline_error_is_mapped(), "recovered results replace previous error page");
     let owner = win.focused_widget().expect("post-retry meaningful focus owner");
     assert!(owner.is_mapped() && owner.is_sensitive() && TvWindow::is_within(&owner, med.upcast_ref()),
         "retry dismissal may not strand keyboard focus on an off-page button");
     assert_eq!(med.focus_navigation_result_id(0).as_deref(), Some("Offline show 0"));
-    eprintln!("NATIVE_FOCUS_E07 {width}x{height}: actual error page native Retry, disposable async success and mapped focus PASS");
+    eprintln!("NATIVE_FOCUS_MEDIATHEK_RETRY {width}x{height}: actual error page native Retry, disposable async success and mapped focus PASS");
     win.destroy();
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS E07 real retry error/loading/async focus compact"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_RETRY real retry error/loading/async focus compact"]
 fn native_mediathek_retry_640_480() { focus_navigation_mediathek_error_retry_focus(640,480,false); }
 #[test]
-#[ignore = "NATIVE_FOCUS E07 real retry error/loading/async focus TV"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_RETRY real retry error/loading/async focus TV"]
 fn native_mediathek_retry_1280_800() { focus_navigation_mediathek_error_retry_focus(1280,800,false); }
 #[test]
-#[ignore = "NATIVE_FOCUS E07 deliberate phantom third retry rejected"]
+#[ignore = "NATIVE_FOCUS MEDIATHEK_RETRY deliberate phantom third retry rejected"]
 fn native_mediathek_retry_negative() { focus_navigation_mediathek_error_retry_focus(640,480,true); }
 
-// E11: while a managed fullscreen player owns input, its Back key must not
+// FULLSCREEN_CANCEL_FOCUS: while a managed fullscreen player owns input, its Back key must not
 // navigate the underlying application.  This uses the production player
 // return-token lifecycle with a real focused Live Play control, but a
 // disposable fake player boundary: no mpv process or provider URL is used.
@@ -1039,7 +1039,7 @@ fn focus_navigation_live_fake_fullscreen_cancel(width: i32, height: i32, negativ
     if negative {
         assert!(
             row.has_focus(),
-            "NATIVE_FOCUS_E11_EXPECTED_NEGATIVE_ORACLE: wrong focus after player cancellation"
+            "NATIVE_FOCUS_FULLSCREEN_CANCEL_FOCUS_EXPECTED_NEGATIVE_ORACLE: wrong focus after player cancellation"
         );
     }
     // The same Back key, now after the player exited, must reverse into
@@ -1058,24 +1058,24 @@ fn focus_navigation_live_fake_fullscreen_cancel(width: i32, height: i32, negativ
     assert_eq!(win.focused_widget().as_ref(), Some(&play));
     win.finish_playback(current);
     assert_eq!(win.focused_widget().as_ref(), Some(&play));
-    eprintln!("NATIVE_FOCUS_E11_NATIVE {width}x{height}: fake fullscreen Back swallowed, cancel and stale watcher preserve exact Play/row");
+    eprintln!("NATIVE_FOCUS_FULLSCREEN_CANCEL_FOCUS_NATIVE {width}x{height}: fake fullscreen Back swallowed, cancel and stale watcher preserve exact Play/row");
     win.destroy();
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS E11 native fake-fullscreen cancellation and focus at compact size"]
+#[ignore = "NATIVE_FOCUS FULLSCREEN_CANCEL_FOCUS native fake-fullscreen cancellation and focus at compact size"]
 fn native_fake_fullscreen_cancel_640_480() {
     focus_navigation_live_fake_fullscreen_cancel(640, 480, false);
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS E11 native fake-fullscreen cancellation and focus at TV size"]
+#[ignore = "NATIVE_FOCUS FULLSCREEN_CANCEL_FOCUS native fake-fullscreen cancellation and focus at TV size"]
 fn native_fake_fullscreen_cancel_1280_800() {
     focus_navigation_live_fake_fullscreen_cancel(1280, 800, false);
 }
 
 #[test]
-#[ignore = "NATIVE_FOCUS E11 deliberately wrong focus owner on fake-player cancellation"]
+#[ignore = "NATIVE_FOCUS FULLSCREEN_CANCEL_FOCUS deliberately wrong focus owner on fake-player cancellation"]
 fn native_fake_fullscreen_cancel_negative() {
     focus_navigation_live_fake_fullscreen_cancel(640, 480, true);
 }
