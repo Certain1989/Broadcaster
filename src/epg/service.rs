@@ -835,6 +835,7 @@ mod epg_cache_admission_tests {
     #[tokio::test]
     async fn dropped_download_waiter_keeps_kernel_lock_until_detached_worker_exits() {
         use tokio::sync::oneshot;
+        let rendezvous_timeout = std::time::Duration::from_secs(5);
         let (dir, manager) = manager();
         let capacity = Arc::new(
             manager
@@ -866,9 +867,15 @@ mod epg_cache_admission_tests {
             ))
             .await;
         });
-        started_rx.await.unwrap();
+        tokio::time::timeout(rendezvous_timeout, started_rx)
+            .await
+            .expect("download worker did not start within timeout")
+            .expect("download worker start signal channel closed");
         caller.abort();
-        assert!(caller.await.is_err());
+        let cancelled_waiter = tokio::time::timeout(rendezvous_timeout, caller)
+            .await
+            .expect("aborted download waiter did not join within timeout");
+        assert!(cancelled_waiter.is_err());
         drop(owner);
         drop(capacity); // caller disappeared; only its detached worker may hold it.
         assert_eq!(manager.inner.heavy_imports.available_permits(), 0);
@@ -885,7 +892,10 @@ mod epg_cache_admission_tests {
             0
         );
         release_tx.send(()).unwrap();
-        finished_rx.await.unwrap();
+        tokio::time::timeout(rendezvous_timeout, finished_rx)
+            .await
+            .expect("download worker did not finish within timeout")
+            .expect("download worker completion signal channel closed");
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while path.exists()
                 || lock_path.exists()
@@ -910,6 +920,7 @@ mod epg_cache_admission_tests {
     #[tokio::test]
     async fn dropped_parser_waiter_keeps_kernel_lock_until_blocking_worker_exits() {
         use tokio::sync::oneshot;
+        let rendezvous_timeout = std::time::Duration::from_secs(5);
         let (dir, manager) = manager();
         let capacity = Arc::new(
             manager
@@ -925,7 +936,7 @@ mod epg_cache_admission_tests {
         fs::write(&path, b"parsing").unwrap();
         make_attempt_stale(&path);
         let (started_tx, started_rx) = oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::sync_channel::<()>(0);
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let (finished_tx, finished_rx) = oneshot::channel();
         let task_owner = owner.clone();
         let worker_capacity = capacity.clone();
@@ -941,9 +952,15 @@ mod epg_cache_admission_tests {
             })
             .await;
         });
-        started_rx.await.unwrap();
+        tokio::time::timeout(rendezvous_timeout, started_rx)
+            .await
+            .expect("parser worker did not start within timeout")
+            .expect("parser worker start signal channel closed");
         caller.abort();
-        assert!(caller.await.is_err());
+        let cancelled_waiter = tokio::time::timeout(rendezvous_timeout, caller)
+            .await
+            .expect("aborted parser waiter did not join within timeout");
+        assert!(cancelled_waiter.is_err());
         drop(owner);
         drop(capacity); // caller disappeared; only its detached worker may hold it.
         assert_eq!(manager.inner.heavy_imports.available_permits(), 0);
@@ -960,7 +977,10 @@ mod epg_cache_admission_tests {
             0
         );
         release_tx.send(()).unwrap();
-        finished_rx.await.unwrap();
+        tokio::time::timeout(rendezvous_timeout, finished_rx)
+            .await
+            .expect("parser worker did not finish within timeout")
+            .expect("parser worker completion signal channel closed");
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while path.exists()
                 || lock_path.exists()
