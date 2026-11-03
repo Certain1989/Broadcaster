@@ -1,1 +1,0 @@
-Single-use trigger for isolated source-only formatting. Removed by its own job.

@@ -509,7 +509,10 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     // The explicit Clear Filters button must restore the complete result
     // catalogue and every filter's visible selection without a direct setter.
     let clear = targets[7].clone().downcast::<gtk::Button>().unwrap();
-    assert!(clear.grab_focus(), "FILTER_INTERSECTION native Clear Filters focus");
+    assert!(
+        clear.grab_focus(),
+        "FILTER_INTERSECTION native Clear Filters focus"
+    );
     // Use physical Space so the shared Return injector does not move X11
     // input focus onto an unmapped dropdown popup after it has closed.
     inject("space");
@@ -520,7 +523,11 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
         ("language", language),
         ("country", country),
     ] {
-        assert_eq!(control.selected(), 0, "FILTER_INTERSECTION Clear Filters resets {name}");
+        assert_eq!(
+            control.selected(),
+            0,
+            "FILTER_INTERSECTION Clear Filters resets {name}"
+        );
     }
     // Then reapply and undo individual facets via physical keys as a
     // separate reversible path, rather than relying on Clear alone.
@@ -599,22 +606,31 @@ fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: b
     // Spatial layout is responsive; do not assert an invented fixed adjacent
     // control after a GTK source popover is dismissed.
     inject("Escape");
-    assert!(source.grab_focus(), "FILTER_TOOLBAR_REVERSIBILITY focused source toolbar origin");
+    assert!(
+        source.grab_focus(),
+        "FILTER_TOOLBAR_REVERSIBILITY focused source toolbar origin"
+    );
     inject("Down");
-    let down = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY Down must leave mapped owner");
+    let down = gtk::prelude::GtkWindowExt::focus(&win)
+        .expect("FILTER_TOOLBAR_REVERSIBILITY Down must leave mapped owner");
     assert!(
         down.is_mapped() && targets.iter().any(|w| down == *w || down.is_ancestor(w)),
         "FILTER_TOOLBAR_REVERSIBILITY Down must remain in actual toolbar rather than escape the page"
     );
     inject("Up");
-    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY reverse focus");
+    let back = gtk::prelude::GtkWindowExt::focus(&win)
+        .expect("FILTER_TOOLBAR_REVERSIBILITY reverse focus");
     assert!(
         source.has_focus() || back.is_ancestor(source.upcast_ref::<gtk::Widget>()),
         "FILTER_TOOLBAR_REVERSIBILITY reverse Up must restore source portal"
     );
-    assert!(clear.grab_focus(), "FILTER_TOOLBAR_REVERSIBILITY populated footer entry");
+    assert!(
+        clear.grab_focus(),
+        "FILTER_TOOLBAR_REVERSIBILITY populated footer entry"
+    );
     inject("Down");
-    let footer = gtk::prelude::GtkWindowExt::focus(&win).expect("FILTER_TOOLBAR_REVERSIBILITY native footer Down owner");
+    let footer = gtk::prelude::GtkWindowExt::focus(&win)
+        .expect("FILTER_TOOLBAR_REVERSIBILITY native footer Down owner");
     assert!(
         footer.is_mapped()
             && (targets
@@ -1235,12 +1251,14 @@ fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     view.assert_remote_action_focus_owner(&entered, &selected);
     for _ in 0..10 {
         inject("Right");
-        let owner = gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS focus owner");
+        let owner =
+            gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS focus owner");
         assert!(owner.is_mapped() && owner.is_sensitive());
         view.assert_remote_action_focus_owner(&owner, &selected);
     }
     inject("XF86Back");
-    let back = gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS Back row owner");
+    let back =
+        gtk::prelude::GtkWindowExt::focus(&win).expect("CHANNEL_REBIND_FOCUS Back row owner");
     assert!(back.is_mapped() && view.contains_results_focus(&back));
     inject("Home");
     for _ in 0..55 {
