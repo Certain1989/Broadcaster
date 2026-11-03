@@ -16,10 +16,12 @@ use rusqlite::{
 };
 
 pub const APPLICATION_ID: i64 = 0x42524354;
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 5;
 pub const MIGRATION_001: &str = include_str!("migrations/001_initial.sql");
 pub const MIGRATION_002: &str = include_str!("migrations/002_epg.sql");
 pub const MIGRATION_003: &str = include_str!("migrations/003_favourites.sql");
+pub const MIGRATION_004: &str = include_str!("migrations/004_epg_playlist_optouts.sql");
+pub const MIGRATION_005: &str = include_str!("migrations/005_playlist_auto_refresh.sql");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageError {
@@ -105,7 +107,12 @@ impl Storage {
         self.path == Self::new().path
     }
 
+    pub(crate) fn database_path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn initialize(&self) -> StorageResult<()> {
+        super::backup::check_startup_restore(self)?;
         let path = &self.path;
         ensure_private_parent(path)?;
         match fs::symlink_metadata(path) {
@@ -114,6 +121,16 @@ impl Storage {
                 initialize_new(path, None)
             }
             Err(_) => Err(StorageError::PermissionDenied),
+        }
+    }
+
+    /// Best-effort EPG orphan recovery; only for the single production database.
+    /// Do not sweep test/import paths or arbitrary neighbouring files.
+    pub(crate) fn reclaim_epg_orphans(&self) {
+        if self.uses_default_database() {
+            if let Some(parent) = self.path.parent() {
+                let _ = super::epg_spool::sweep_stale(parent, std::time::SystemTime::now());
+            }
         }
     }
 
@@ -136,6 +153,8 @@ impl Storage {
         validate_v1_schema_shape(&conn)?;
         validate_v2_schema_shape(&conn)?;
         validate_v3_schema_shape(&conn)?;
+        validate_v4_schema_shape(&conn)?;
+        validate_v5_schema_shape(&conn)?;
         Ok(conn)
     }
 
@@ -302,6 +321,69 @@ impl Storage {
             "UPDATE iptv_sources SET name=?1, revision=revision+1,updated_at=?2 WHERE id=?3",
             params![new_name, at, id],
         )
+    }
+
+    /// Persist consent as source-local state; edits invalidate stale refresh
+    /// previews and clear only a previously pending attention hold.
+    pub fn set_source_schedule(
+        &self,
+        id: &str,
+        enabled: bool,
+        interval: i64,
+        at: i64,
+    ) -> StorageResult<()> {
+        if !(21600..=604800).contains(&interval) {
+            return Err(StorageError::InvalidInput);
+        }
+        self.update_source(
+            "UPDATE iptv_sources SET auto_refresh=?1,refresh_interval_seconds=?2,
+             last_error_code=CASE WHEN last_error_code='approval_required' THEN NULL ELSE last_error_code END,
+             revision=revision+1,updated_at=?3 WHERE id=?4",
+            params![enabled as i32, interval, at, id],
+        )
+    }
+
+    /// Scan in stable due order, filtering busy/manual generations *before*
+    /// applying the two real admission slots. LIMIT before exclusion would
+    /// repeatedly return the same two waiting-for-confirmation sources and
+    /// starve all later due sources. SQLite rows are streamed: no unbounded
+    /// in-memory list or queued refresh tasks are created.
+    pub fn due_source_ids_excluding(
+        &self,
+        at: i64,
+        limit: i64,
+        active: &HashSet<String>,
+    ) -> StorageResult<Vec<String>> {
+        let cap = limit.clamp(0, 2) as usize;
+        if cap == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.connect()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id FROM iptv_sources WHERE enabled=1 AND auto_refresh=1
+             AND COALESCE(last_error_code,'') != 'approval_required'
+             AND (last_success_at IS NULL OR last_success_at <= ?1-refresh_interval_seconds)
+             AND (last_attempt_at IS NULL OR last_attempt_at <= ?1-MAX(21600,refresh_interval_seconds))
+             ORDER BY COALESCE(last_attempt_at,0),id",
+            )
+            .map_err(map_sql)?;
+        let mut rows = statement.query(params![at]).map_err(map_sql)?;
+        let mut ids = Vec::with_capacity(cap);
+        while let Some(row) = rows.next().map_err(map_sql)? {
+            let id: String = row.get(0).map_err(map_sql)?;
+            if !active.contains(&id) {
+                ids.push(id);
+                if ids.len() == cap {
+                    break;
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    pub fn due_source_ids(&self, at: i64, limit: i64) -> StorageResult<Vec<String>> {
+        self.due_source_ids_excluding(at, limit, &HashSet::new())
     }
 
     pub fn set_source_enabled(&self, id: &str, enabled: bool, at: i64) -> StorageResult<()> {
@@ -501,6 +583,9 @@ pub struct ConfirmedSourceDeletion {
     revision: i64,
 }
 impl ConfirmedSourceDeletion {
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
     pub fn after_user_confirmation(source: &Source) -> Self {
         Self {
             id: source.id.clone(),
@@ -516,6 +601,7 @@ pub enum ErrorCode {
     Reauthorization,
     Cancelled,
     Write,
+    ApprovalRequired,
 }
 impl ErrorCode {
     fn sql(self) -> &'static str {
@@ -526,6 +612,7 @@ impl ErrorCode {
             Self::Reauthorization => "reauthorization",
             Self::Cancelled => "cancelled",
             Self::Write => "write",
+            Self::ApprovalRequired => "approval_required",
         }
     }
 }
@@ -570,8 +657,14 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
     if version >= 2 {
         validate_v2_schema_shape(&probe)?;
     }
-    if version == SCHEMA_VERSION {
+    if version >= 3 {
         validate_v3_schema_shape(&probe)?;
+    }
+    if version >= 4 {
+        validate_v4_schema_shape(&probe)?;
+    }
+    if version >= 5 {
+        validate_v5_schema_shape(&probe)?;
     }
     validate_integrity(&probe)?;
     drop(probe);
@@ -584,6 +677,8 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
         validate_v1_schema_shape(&reopened)?;
         validate_v2_schema_shape(&reopened)?;
         validate_v3_schema_shape(&reopened)?;
+        validate_v4_schema_shape(&reopened)?;
+        validate_v5_schema_shape(&reopened)?;
         validate_integrity(&reopened)?;
         let version: i64 = reopened
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -599,22 +694,27 @@ fn validate_existing(path: &Path) -> StorageResult<()> {
 /// published v1 migration. Preserve an independently reopenable recovery copy.
 /// This function must only run on a blocking worker, never the GTK thread.
 fn upgrade_existing(path: &Path, from_version: i64) -> StorageResult<()> {
-    match from_version {
-        1 => {
-            // Both migrations share ONE transaction. A v3 failure rolls back to v1.
-            let second = MIGRATION_002
-                .trim_end()
-                .strip_suffix("COMMIT;")
-                .ok_or(StorageError::IncompatibleDatabase)?;
-            let third = MIGRATION_003
-                .split_once("BEGIN IMMEDIATE;")
-                .map(|(_, body)| body)
-                .ok_or(StorageError::IncompatibleDatabase)?;
-            upgrade_existing_with(path, 1, &format!("{second}\n{third}"), false)
-        }
-        2 => upgrade_existing_with(path, 2, MIGRATION_003, false),
-        _ => Err(StorageError::IncompatibleDatabase),
+    // One IMMEDIATE transaction for the entire pending version chain.
+    // The unchanged v2/v3 scripts remain historical; v4 is appended only.
+    let chain: Vec<&str> = match from_version {
+        1 => vec![MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005],
+        2 => vec![MIGRATION_003, MIGRATION_004, MIGRATION_005],
+        3 => vec![MIGRATION_004, MIGRATION_005],
+        4 => vec![MIGRATION_005],
+        _ => return Err(StorageError::IncompatibleDatabase),
+    };
+    let mut sql = String::from("BEGIN IMMEDIATE;\n");
+    for part in chain {
+        let body = part
+            .split_once("BEGIN IMMEDIATE;")
+            .and_then(|(_, body)| body.rsplit_once("COMMIT;"))
+            .map(|(body, _)| body)
+            .ok_or(StorageError::IncompatibleDatabase)?;
+        sql.push_str(body);
+        sql.push('\n');
     }
+    sql.push_str("COMMIT;");
+    upgrade_existing_with(path, from_version, &sql, false)
 }
 
 fn upgrade_existing_with(
@@ -668,8 +768,11 @@ fn upgrade_existing_with(
             return Err(StorageError::IncompatibleDatabase);
         }
         validate_v1_schema_shape(&dest)?;
-        if from_version == 2 {
+        if from_version >= 2 {
             validate_v2_schema_shape(&dest)?;
+        }
+        if from_version >= 3 {
+            validate_v3_schema_shape(&dest)?;
         }
         validate_integrity(&dest)?;
         dest.close().map_err(|_| StorageError::StorageFailure)?;
@@ -698,8 +801,11 @@ fn upgrade_existing_with(
         return Err(StorageError::IncompatibleDatabase);
     }
     validate_v1_schema_shape(&conn)?;
-    if from_version == 2 {
+    if from_version >= 2 {
         validate_v2_schema_shape(&conn)?;
+    }
+    if from_version >= 3 {
+        validate_v3_schema_shape(&conn)?;
     }
     validate_integrity(&conn)?;
     conn.execute_batch(migration_sql).map_err(|_| {
@@ -708,6 +814,8 @@ fn upgrade_existing_with(
     })?;
     validate_v2_schema_shape(&conn)?;
     validate_v3_schema_shape(&conn)?;
+    validate_v4_schema_shape(&conn)?;
+    validate_v5_schema_shape(&conn)?;
     validate_integrity(&conn)?;
     // The recovery copy is intentionally retained, never silently deleted.
     // A failure after commit leaves the copy available for operator recovery.
@@ -805,7 +913,17 @@ fn initialize_new_with(
             })?;
         }
         validate_v2_schema_shape(&connection)?;
+        connection.execute_batch(MIGRATION_004).map_err(|_| {
+            let _ = connection.execute_batch("ROLLBACK");
+            StorageError::StorageFailure
+        })?;
         validate_v3_schema_shape(&connection)?;
+        validate_v4_schema_shape(&connection)?;
+        connection.execute_batch(MIGRATION_005).map_err(|_| {
+            let _ = connection.execute_batch("ROLLBACK");
+            StorageError::StorageFailure
+        })?;
+        validate_v5_schema_shape(&connection)?;
         validate_integrity(&connection)?;
         let id: i64 = connection
             .query_row("PRAGMA application_id", [], |r| r.get(0))
@@ -891,9 +1009,24 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
         "idx_iptv_source_default_facet_filter",
         "idx_iptv_sources_enabled_order",
     ];
+    const INDEXES_V5: &[&str] = &[
+        "idx_iptv_channels_missing",
+        "idx_iptv_channels_source_group",
+        "idx_iptv_channels_source_present_order",
+        "idx_iptv_channels_source_tvgid",
+        "idx_iptv_imported_facet_filter",
+        "idx_iptv_override_facet_filter",
+        "idx_iptv_source_default_facet_filter",
+        "idx_iptv_sources_enabled_order",
+        "idx_iptv_sources_refresh_due",
+    ];
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(|_| StorageError::IncompatibleDatabase)?;
+    let expected_indexes = if version >= 5 { INDEXES_V5 } else { INDEXES };
     for (kind, prefix, expected) in [
         ("table", "iptv_%", TABLES),
-        ("index", "idx_iptv_%", INDEXES),
+        ("index", "idx_iptv_%", expected_indexes),
     ] {
         let mut stmt = conn
             .prepare(
@@ -916,7 +1049,15 @@ fn validate_v1_schema_shape(conn: &Connection) -> StorageResult<()> {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
-    validate_reference_schema(conn, TABLES, false)
+    if version >= 5 {
+        // v5 legally adds two source columns and a due index. Retain the
+        // exact v1 shape for every unaffected table and validate the full
+        // changed source shape against the canonical v1..v5 SQL chain.
+        validate_reference_schema(conn, &TABLES[..TABLES.len() - 1], false)?;
+        validate_v5_schema_shape(conn)
+    } else {
+        validate_reference_schema(conn, TABLES, false)
+    }
 }
 
 fn validate_v3_schema_shape(conn: &Connection) -> StorageResult<()> {
@@ -955,6 +1096,61 @@ fn validate_v3_schema_shape(conn: &Connection) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_v4_schema_shape(conn: &Connection) -> StorageResult<()> {
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_001).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_002).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_003).map_err(map_sql)?;
+    reference.execute_batch(MIGRATION_004).map_err(map_sql)?;
+    if table_shape(conn, "epg_playlist_guide_optouts")?
+        != table_shape(&reference, "epg_playlist_guide_optouts")?
+    {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    let bad: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts o
+                    JOIN epg_playlist_links l USING(playlist_source_id))",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(map_sql)?;
+    if bad != 0 {
+        return Err(StorageError::CorruptDatabase);
+    }
+    Ok(())
+}
+
+/// Compare the complete source table including both v5 CHECK clauses and its
+/// due index against the independently constructed canonical migration chain.
+fn validate_v5_schema_shape(conn: &Connection) -> StorageResult<()> {
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    for migration in [
+        MIGRATION_001,
+        MIGRATION_002,
+        MIGRATION_003,
+        MIGRATION_004,
+        MIGRATION_005,
+    ] {
+        reference.execute_batch(migration).map_err(map_sql)?;
+    }
+    if table_shape(conn, "iptv_sources")? != table_shape(&reference, "iptv_sources")? {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    let bad: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM iptv_sources WHERE auto_refresh NOT IN (0,1)
+             OR refresh_interval_seconds NOT BETWEEN 21600 AND 604800)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(map_sql)?;
+    if bad != 0 {
+        return Err(StorageError::CorruptDatabase);
+    }
+    Ok(())
+}
+
 fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
     const TABLES: &[&str] = &[
         "epg_channel_overrides",
@@ -986,6 +1182,7 @@ fn validate_v2_schema_shape(conn: &Connection) -> StorageResult<()> {
         if !actual
             .iter()
             .map(String::as_str)
+            .filter(|name| *name != "epg_playlist_guide_optouts")
             .eq(expected.iter().copied())
         {
             return Err(StorageError::IncompatibleDatabase);
@@ -1281,7 +1478,7 @@ fn validate_integrity(conn: &Connection) -> StorageResult<()> {
     }
     Ok(())
 }
-fn ensure_private_parent(path: &Path) -> StorageResult<()> {
+pub(super) fn ensure_private_parent(path: &Path) -> StorageResult<()> {
     let parent = path.parent().ok_or(StorageError::InvalidInput)?;
     if !parent.exists() {
         #[cfg(unix)]
@@ -1315,7 +1512,7 @@ fn ensure_private_parent(path: &Path) -> StorageResult<()> {
 extern "C" {
     fn geteuid() -> u32;
 }
-fn require_private_file(path: &Path) -> StorageResult<()> {
+pub(super) fn require_private_file(path: &Path) -> StorageResult<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -1341,7 +1538,8 @@ pub(crate) fn load_source(conn: &Connection, id: &str) -> StorageResult<Source> 
         .query_row(
             "SELECT name,origin_kind,origin_locator,enabled,source_order,
                 default_region_code,default_region_label,revision,created_at,updated_at,
-                last_attempt_at,last_success_at,last_error_code FROM iptv_sources WHERE id=?1",
+                last_attempt_at,last_success_at,last_error_code,auto_refresh,refresh_interval_seconds
+                FROM iptv_sources WHERE id=?1",
             [id],
             |r| {
                 Ok((
@@ -1358,6 +1556,8 @@ pub(crate) fn load_source(conn: &Connection, id: &str) -> StorageResult<Source> 
                     r.get::<_, Option<i64>>(10)?,
                     r.get::<_, Option<i64>>(11)?,
                     r.get::<_, Option<String>>(12)?,
+                    r.get::<_, i64>(13)? == 1,
+                    r.get::<_, i64>(14)?,
                 ))
             },
         )
@@ -1378,6 +1578,8 @@ pub(crate) fn load_source(conn: &Connection, id: &str) -> StorageResult<Source> 
         last_attempt_at,
         last_success_at,
         last_error_code,
+        auto_refresh,
+        refresh_interval_seconds,
     ) = source;
     Ok(Source {
         id: id.to_owned(),
@@ -1415,6 +1617,8 @@ pub(crate) fn load_source(conn: &Connection, id: &str) -> StorageResult<Source> 
         last_attempt_at,
         last_success_at,
         last_error_code,
+        auto_refresh,
+        refresh_interval_seconds,
     })
 }
 pub(crate) fn load_facets(
@@ -1997,4 +2201,71 @@ mod schema_check_lexer_tests {
             assert!(check_clauses(malformed).is_err(), "{malformed}");
         }
     }
+}
+
+/// Strict, read-only import validation at the actual source format version.
+pub(super) fn validate_snapshot_schema(conn: &Connection, version: i64) -> StorageResult<()> {
+    if !(3..=SCHEMA_VERSION).contains(&version) {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    validate_v1_schema_shape(conn)?;
+    validate_v2_schema_shape(conn)?;
+    validate_v3_schema_shape(conn)?;
+    if version >= 4 {
+        validate_v4_schema_shape(conn)?;
+    }
+    if version >= 5 {
+        validate_v5_schema_shape(conn)?;
+    }
+    validate_integrity(conn)?;
+    // An imported file cannot introduce SQL triggers, views or alternate
+    // shadow objects, even when ordinary table/index names seem correct.
+    let reference = Connection::open_in_memory().map_err(map_sql)?;
+    for sql in [MIGRATION_001, MIGRATION_002, MIGRATION_003] {
+        reference.execute_batch(sql).map_err(map_sql)?;
+    }
+    if version >= 4 {
+        reference.execute_batch(MIGRATION_004).map_err(map_sql)?;
+    }
+    if version >= 5 {
+        reference.execute_batch(MIGRATION_005).map_err(map_sql)?;
+    }
+    fn object_names(conn: &Connection) -> StorageResult<Vec<(String, String)>> {
+        let mut stmt = conn.prepare("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name")
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        let names = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|_| StorageError::IncompatibleDatabase)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        Ok(names)
+    }
+    if object_names(conn)? != object_names(&reference)? {
+        return Err(StorageError::IncompatibleDatabase);
+    }
+    Ok(())
+}
+
+/// Migrations on disposable imported staging only. No writes to the selected
+/// original or to the running application's database.
+pub(super) fn upgrade_import_stage(path: &Path, version: i64) -> StorageResult<()> {
+    let migration = match version {
+        3 => [Some(MIGRATION_004), Some(MIGRATION_005)],
+        4 => [Some(MIGRATION_005), None],
+        _ => return Err(StorageError::IncompatibleDatabase),
+    };
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(map_sql)?;
+    configure(&connection)?;
+    for sql in migration.into_iter().flatten() {
+        connection.execute_batch(sql).map_err(map_sql)?;
+    }
+    validate_snapshot_schema(&connection, SCHEMA_VERSION)?;
+    connection
+        .close()
+        .map_err(|_| StorageError::StorageFailure)?;
+    fs::File::open(path)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| StorageError::StorageFailure)?;
+    Ok(())
 }

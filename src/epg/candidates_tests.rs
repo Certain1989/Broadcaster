@@ -183,7 +183,7 @@ fn indexed_15k_catalogue_10k_playlist_reuses_full_guide_without_per_row_scan() {
     assert_eq!(batch.len(), 10_000);
     assert!(batch.iter().all(|s| s.candidate.default_review_eligible));
     eprintln!(
-        "M1 indexed 15000x10000 synthetic candidate build+preview: {:?}",
+        "GUIDE_MATCHING indexed 15000x10000 synthetic candidate build+preview: {:?}",
         start.elapsed()
     );
 }
@@ -208,20 +208,25 @@ fn indexed_20k_repeated_iptv_rows_are_grouped_once_per_original_id() {
     assert_eq!(batch.len(), 15_000);
     assert_eq!(batch.iter().map(|c| c.affected_rows).sum::<usize>(), 20_000);
     eprintln!(
-        "M1 indexed 15000-channel x 20000-row batch lookup: {:?}",
+        "GUIDE_MATCHING indexed 15000-channel x 20000-row batch lookup: {:?}",
         start.elapsed()
     );
 }
 
 #[test]
 fn bounded_selected_guide_review_preserves_case_and_excludes_explicit_links() {
-    use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+    use crate::streams::storage::{
+        MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
+    };
     use rusqlite::{params, Connection};
     use std::sync::atomic::AtomicBool;
     let mut conn = Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     conn.execute_batch(MIGRATION_001).unwrap();
     conn.execute_batch(MIGRATION_002).unwrap();
+    conn.execute_batch(MIGRATION_003).unwrap();
+    conn.execute_batch(MIGRATION_004).unwrap();
+    conn.execute_batch(MIGRATION_005).unwrap();
     conn.execute(
         "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
          VALUES ('test','Demo','local_file','/fake',1,1)",

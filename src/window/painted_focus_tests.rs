@@ -5,17 +5,17 @@
 // conditional styling is a scoped TEST-ONLY suppression of the selected
 // widget's outline. Compare focused, suppressed, and restored images without
 // changing GtkWindow::focus or selecting a different widget.
-pub(crate) const R07_CAPTURE_X11: &str = r#"
+pub(crate) const NATIVE_FOCUS_CAPTURE_X11: &str = r#"
 import ctypes as c,sys
 x=c.CDLL('libX11.so.6')
 x.XOpenDisplay.argtypes=[c.c_char_p];x.XOpenDisplay.restype=c.c_void_p
-d=x.XOpenDisplay(None);assert d, 'R07_PIXEL_DISPLAY_UNAVAILABLE'
+d=x.XOpenDisplay(None);assert d, 'NATIVE_FOCUS_PIXEL_DISPLAY_UNAVAILABLE'
 x.XDefaultRootWindow.argtypes=[c.c_void_p];x.XDefaultRootWindow.restype=c.c_ulong
 x.XQueryTree.argtypes=[c.c_void_p,c.c_ulong,c.POINTER(c.c_ulong),c.POINTER(c.c_ulong),c.POINTER(c.POINTER(c.c_ulong)),c.POINTER(c.c_uint)]
 x.XQueryTree.restype=c.c_int
 root=x.XDefaultRootWindow(d)
 a,b,n=c.c_ulong(),c.c_ulong(),c.c_uint();ch=c.POINTER(c.c_ulong)()
-assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(ch),c.byref(n)) and n.value, 'R07_PIXEL_NO_WINDOW'
+assert x.XQueryTree(d,root,c.byref(a),c.byref(b),c.byref(ch),c.byref(n)) and n.value, 'NATIVE_FOCUS_PIXEL_NO_WINDOW'
 window=ch[n.value-1]
 x.XTranslateCoordinates.argtypes=[c.c_void_p,c.c_ulong,c.c_ulong,c.c_int,c.c_int,c.POINTER(c.c_int),c.POINTER(c.c_int),c.POINTER(c.c_ulong)]
 x.XTranslateCoordinates.restype=c.c_int
@@ -40,7 +40,7 @@ ex,ey=min(rx+w,sw),min(ry+h,sh)
 pixels=bytearray(w*h*3)
 if ex>sx and ey>sy:
  im=x.XGetImage(d,root,sx,sy,ex-sx,ey-sy,0xffffffffffffffff,2)
- assert im, 'R07_PIXEL_VISIBLE_XGETIMAGE_FAILED'
+ assert im, 'NATIVE_FOCUS_PIXEL_VISIBLE_XGETIMAGE_FAILED'
  x.XGetPixel.argtypes=[c.c_void_p,c.c_int,c.c_int];x.XGetPixel.restype=c.c_ulong
  for yy in range(ey-sy):
   for xx in range(ex-sx):
@@ -53,7 +53,7 @@ sys.stdout.buffer.write(pixels)
 "#;
 
 #[derive(Clone, Copy)]
-struct R07PaintBox {
+struct NativeFocusPaintBox {
     x: i32,
     y: i32,
     w: usize,
@@ -65,11 +65,11 @@ struct R07PaintBox {
     bottom: i32,
 }
 
-impl R07PaintBox {
+impl NativeFocusPaintBox {
     fn new(win: &TvWindow, widget: &gtk::Widget) -> Self {
         let rect = widget
             .compute_bounds(win.upcast_ref::<gtk::Widget>())
-            .expect("R07 painted control is inside window");
+            .expect("NATIVE_FOCUS painted control is inside window");
         let (left, top, right, bottom) = (
             rect.x().floor() as i32,
             rect.y().floor() as i32,
@@ -97,17 +97,17 @@ impl R07PaintBox {
         let output = std::process::Command::new("python3")
             .args([
                 "-c",
-                R07_CAPTURE_X11,
+                NATIVE_FOCUS_CAPTURE_X11,
                 &self.x.to_string(),
                 &self.y.to_string(),
                 &self.w.to_string(),
                 &self.h.to_string(),
             ])
             .output()
-            .expect("R07 real X11 screenshot process");
+            .expect("NATIVE_FOCUS real X11 screenshot process");
         assert!(
             output.status.success(),
-            "R07 screenshot failed (not a focus oracle): {}",
+            "NATIVE_FOCUS screenshot failed (not a focus oracle): {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(output.stdout.len(), self.w * self.h * 3, "X11 RGB screenshot size");
@@ -149,17 +149,17 @@ impl R07PaintBox {
     }
 }
 
-pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize {
+pub(crate) fn focus_navigation_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &str) -> usize {
     assert!(widget.is_mapped() && widget.is_visible() && widget.is_sensitive());
-    let focused = win.focused_widget().expect("R07 painted focus owner");
-    assert!(TvWindow::is_within(&focused, widget), "R07 painted {label} logical owner");
-    let box_ = R07PaintBox::new(win, widget);
-    eprintln!("R07_GEOM {label}: crop=({},{} {}x{}) control=({},{},{},{}) mapped={} css={:?}",box_.x,box_.y,box_.w,box_.h,box_.left,box_.top,box_.right,box_.bottom,widget.is_mapped(),widget.css_classes());
+    let focused = win.focused_widget().expect("NATIVE_FOCUS painted focus owner");
+    assert!(TvWindow::is_within(&focused, widget), "NATIVE_FOCUS painted {label} logical owner");
+    let box_ = NativeFocusPaintBox::new(win, widget);
+    eprintln!("NATIVE_FOCUS_GEOM {label}: crop=({},{} {}x{}) control=({},{},{},{}) mapped={} css={:?}",box_.x,box_.y,box_.w,box_.h,box_.left,box_.top,box_.right,box_.bottom,widget.is_mapped(),widget.css_classes());
     settle();
     let positive = box_.capture();
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
-        ".r07-suppress-paint, .r07-suppress-paint:focus, .r07-suppress-paint:focus-within, .r07-suppress-paint:focus-visible, .r07-suppress-paint * { outline: none; outline-width: 0; box-shadow: none; }",
+        ".focus-navigation-suppress-paint, .focus-navigation-suppress-paint:focus, .focus-navigation-suppress-paint:focus-within, .focus-navigation-suppress-paint:focus-visible, .focus-navigation-suppress-paint * { outline: none; outline-width: 0; box-shadow: none; }",
     );
     let display = gtk::prelude::WidgetExt::display(widget);
     gtk::style_context_add_provider_for_display(
@@ -167,7 +167,7 @@ pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &st
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_USER + 100,
     );
-    widget.add_css_class("r07-suppress-paint");
+    widget.add_css_class("focus-navigation-suppress-paint");
     settle();
     assert!(TvWindow::is_within(
         &win.focused_widget().expect("negative paint retained focus"),
@@ -178,7 +178,7 @@ pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &st
     // leave a composite Adw button with a cached suppressed snapshot. Keep
     // the provider installed (but its selector inactive) through the actual
     // restored-frame capture, then remove it after the oracle.
-    widget.remove_css_class("r07-suppress-paint");
+    widget.remove_css_class("focus-navigation-suppress-paint");
     widget.queue_draw();
     settle();
     // Changes of the GTK CSS provider can coincide with the final frame of
@@ -224,7 +224,7 @@ pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &st
         widget.set_focusable(false);
         settle();
         widget.set_focusable(true);
-        assert!(widget.grab_focus(), "R07 {label} focus re-entry after CSS invalidation");
+        assert!(widget.grab_focus(), "NATIVE_FOCUS {label} focus re-entry after CSS invalidation");
         settle();
         for _ in 0..4 {
             let frame = box_.capture();
@@ -235,12 +235,12 @@ pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &st
             settle();
         }
     }
-    eprintln!("R07_PIXEL {label}: suppressed_changed={changed} restored_changed={reversible} crop={}x{}", box_.w, box_.h);
+    eprintln!("NATIVE_FOCUS_PIXEL {label}: suppressed_changed={changed} restored_changed={reversible} crop={}x{}", box_.w, box_.h);
     // Collect all measured controls before reporting missing painted outlines.
     // No logical focus assertion alone can turn a blank ring into PASS.
     assert!(
         reversible <= (changed / 3).max(12),
-        "R07 {label}: outline did not return after removing test-only suppression"
+        "NATIVE_FOCUS {label}: outline did not return after removing test-only suppression"
     );
     changed
 }
@@ -249,7 +249,7 @@ pub(crate) fn r07_painted_probe(win: &TvWindow, widget: &gtk::Widget, label: &st
 /// back using caller-supplied physical keyboard input. Unlike a synthetic
 /// CSS-provider removal, this negative image oracle measures the normal
 /// unfocused state GTK paints during real remote navigation.
-pub(crate) fn r07_painted_probe_physical_inverse(
+pub(crate) fn focus_navigation_painted_probe_physical_inverse(
     win: &TvWindow,
     widget: &gtk::Widget,
     label: &str,
@@ -260,29 +260,29 @@ pub(crate) fn r07_painted_probe_physical_inverse(
     assert!(
         widget.is_mapped() && widget.is_visible() && widget.is_sensitive()
             && TvWindow::is_within(&focused, widget),
-        "R07 {label}: starting mapped target and owner"
+        "NATIVE_FOCUS {label}: starting mapped target and owner"
     );
-    let box_ = R07PaintBox::new(win, widget);
+    let box_ = NativeFocusPaintBox::new(win, widget);
     settle();
     let positive = box_.capture();
     away();
     let unfocused = win.focused_widget().expect("native unfocused owner");
     assert!(
         unfocused.is_mapped() && !TvWindow::is_within(&unfocused, widget),
-        "R07 {label}: real physical key must move focus off target"
+        "NATIVE_FOCUS {label}: real physical key must move focus off target"
     );
     settle();
     let suppressed = box_.capture();
     let changed = box_.outline_differences(&positive, &suppressed);
     assert!(
         changed >= 15,
-        "R07 {label}: physically unfocusing the control removed no painted pixels"
+        "NATIVE_FOCUS {label}: physically unfocusing the control removed no painted pixels"
     );
     back();
     let restored_owner = win.focused_widget().expect("native restored focus owner");
     assert!(
         TvWindow::is_within(&restored_owner, widget),
-        "R07 {label}: real inverse key must restore the same control"
+        "NATIVE_FOCUS {label}: real inverse key must restore the same control"
     );
     let mut restored_delta = usize::MAX;
     for _ in 0..8 {
@@ -292,15 +292,15 @@ pub(crate) fn r07_painted_probe_physical_inverse(
             break;
         }
     }
-    eprintln!("R07_PHYSICAL_PIXEL {label}: unfocused_delta={changed} restored_delta={restored_delta}");
+    eprintln!("NATIVE_FOCUS_PHYSICAL_PIXEL {label}: unfocused_delta={changed} restored_delta={restored_delta}");
     assert!(
         restored_delta <= (changed / 3).max(12),
-        "R07 {label}: native physical focus inverse did not restore painted pixels"
+        "NATIVE_FOCUS {label}: native physical focus inverse did not restore painted pixels"
     );
     changed
 }
 
-fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
+fn native_painted_focus(width: i32, height: i32, negative: bool) {
     adw::init().expect("mapped GTK display");
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
@@ -310,7 +310,7 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
     let css = gtk::CssProvider::new();
     css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
     gtk::style_context_add_provider_for_display(
-        &gtk::gdk::Display::default().expect("R07 painted GTK display"),
+        &gtk::gdk::Display::default().expect("NATIVE_FOCUS painted GTK display"),
         &css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
@@ -334,22 +334,22 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
             "streams" => win.imp().streams_view.toolbar_focus_targets(),
             _ => unreachable!(),
         };
-        assert!(targets.len() >= 2, "R07 {page} Search and button targets");
+        assert!(targets.len() >= 2, "NATIVE_FOCUS {page} Search and button targets");
         let search = &targets[0];
-        assert!(search.grab_focus(), "R07 {page} Search entry");
+        assert!(search.grab_focus(), "NATIVE_FOCUS {page} Search entry");
         settle();
         inject("Right", true);
         inject("Left", false);
-        let search_delta = r07_painted_probe(&win, search, &format!("{page}:Search"));
+        let search_delta = focus_navigation_painted_probe(&win, search, &format!("{page}:Search"));
         if search_delta < 15 {
             missing_paint.push(format!("{page}:Search"));
         }
         if negative {
             assert_eq!(
                 search_delta, 0,
-                "R07_G01_EXPECTED_NEGATIVE_ORACLE: suppressed real Search pixels must differ"
+                "NATIVE_FOCUS_PAINTED_FOCUS_EXPECTED_NEGATIVE_ORACLE: suppressed real Search pixels must differ"
             );
-            unreachable!("R07 negative painted-focus oracle unexpectedly passed");
+            unreachable!("NATIVE_FOCUS negative painted-focus oracle unexpectedly passed");
         }
         inject("Right", false);
         let button = targets
@@ -360,39 +360,39 @@ fn r07_native_painted_focus(width: i32, height: i32, negative: bool) {
                     .is_some_and(|focused| TvWindow::is_within(&focused, candidate))
             })
             .expect("real next toolbar control after native Right");
-        let button_delta = r07_painted_probe(&win, button, &format!("{page}:button"));
+        let button_delta = focus_navigation_painted_probe(&win, button, &format!("{page}:button"));
         if button_delta < 15 {
             missing_paint.push(format!("{page}:button"));
         }
     }
     assert!(
         missing_paint.is_empty(),
-        "R07_PAINTED_FOCUS_MISSING: {missing_paint:?}"
+        "NATIVE_FOCUS_PAINTED_FOCUS_MISSING: {missing_paint:?}"
     );
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 real X11 painted search/button outline, 640x480"]
-fn r07_native_painted_focus_640_480() {
-    r07_native_painted_focus(640, 480, false);
+#[ignore = "NATIVE_FOCUS real X11 painted search/button outline, 640x480"]
+fn native_painted_focus_640_480() {
+    native_painted_focus(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 real X11 painted search/button outline, 1280x800"]
-fn r07_native_painted_focus_1280_800() {
-    r07_native_painted_focus(1280, 800, false);
+#[ignore = "NATIVE_FOCUS real X11 painted search/button outline, 1280x800"]
+fn native_painted_focus_1280_800() {
+    native_painted_focus(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberately wrong X11 pixel screenshot oracle"]
-fn r07_native_painted_focus_negative_pixels() {
-    r07_native_painted_focus(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately wrong X11 pixel screenshot oracle"]
+fn native_painted_focus_negative_pixels() {
+    native_painted_focus(640, 480, true);
 }
-// R07 G03: compare real framebuffer focus paint on the actual source-card
-// actions, not merely their GTK focus classes. Reuse G01's reversible
+// NATIVE_FOCUS PAINTED_CARDS: compare real framebuffer focus paint on the actual source-card
+// actions, not merely their GTK focus classes. Reuse PAINTED_FOCUS's reversible
 // test-only CSS suppression and bounded screenshot oracle.
-fn r07_native_painted_cards(width: i32, height: i32) {
+fn native_painted_cards(width: i32, height: i32) {
     adw::init().expect("native display");
     let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
         .expect("real Broadcaster resources");
@@ -400,7 +400,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
     let css = gtk::CssProvider::new();
     css.load_from_resource("/io/github/Certain1989/Broadcaster/broadcaster.css");
     gtk::style_context_add_provider_for_display(
-        &gtk::gdk::Display::default().expect("R07 painted display"),
+        &gtk::gdk::Display::default().expect("NATIVE_FOCUS painted display"),
         &css,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
@@ -415,7 +415,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
     win.imp().stack.set_visible_child_name("live");
     let live = &win.imp().live_view;
     live.show_toolbar_for_test();
-    live.install_r07_native_channel_rows();
+    live.install_native_channel_rows();
     settle();
     assert!(live.toolbar_focus_targets()[0].grab_focus());
     settle();
@@ -430,7 +430,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
         Some("card.play"));
     deltas.push((
         "Live Play",
-        r07_painted_probe_physical_inverse(
+        focus_navigation_painted_probe_physical_inverse(
             &win,
             &play,
             "live:card.Play",
@@ -442,17 +442,17 @@ fn r07_native_painted_cards(width: i32, height: i32) {
 
     win.imp().stack.set_visible_child_name("mediathek");
     let med = &win.imp().mediathek_view;
-    med.r07_install_offline_result_cards();
+    med.focus_navigation_install_offline_result_cards();
     settle();
     assert!(med.toolbar_focus_targets()[0].grab_focus());
     settle();
     for _ in 0..10 {
-        if med.r07_result_row(0).has_focus() { break; }
+        if med.focus_navigation_result_row(0).has_focus() { break; }
         inject("Down", false);
     }
-    assert!(med.r07_result_row(0).has_focus());
+    assert!(med.focus_navigation_result_row(0).has_focus());
     inject("Return", false);
-    let row = med.r07_result_row(0);
+    let row = med.focus_navigation_result_row(0);
     let targets = [
         ("Mediathek Play", TvWindow::find_descendant(row.upcast_ref(), &|w| w.is::<adw::SplitButton>()).unwrap()),
         ("Mediathek Copy", TvWindow::find_descendant(row.upcast_ref(), &|w| w.is::<gtk::MenuButton>()).unwrap()),
@@ -469,7 +469,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
             inject("Right", false);
         }
         let focused = win.focused_widget().expect("Mediathek action owner");
-        assert!(TvWindow::is_within(&focused, &target), "G03 physically reach {label}");
+        assert!(TvWindow::is_within(&focused, &target), "PAINTED_CARDS physically reach {label}");
         // A display-wide test CSS suppression can leave Adw's composite
         // button snapshot stale after restoration. Use the user's actual
         // inverse D-pad route as the negative focus image instead. The
@@ -483,7 +483,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
             "Mediathek Website" => (&["Left"], &["Right"]),
             _ => (&["Right"], &["Left"]),
         };
-        let pixels = r07_painted_probe_physical_inverse(
+        let pixels = focus_navigation_painted_probe_physical_inverse(
             &win,
             &target,
             label,
@@ -518,7 +518,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
     assert!(star.has_focus());
     deltas.push((
         "My Channels Star",
-        r07_painted_probe_physical_inverse(
+        focus_navigation_painted_probe_physical_inverse(
             &win,
             star.upcast_ref(),
             "streams:star",
@@ -543,7 +543,7 @@ fn r07_native_painted_cards(width: i32, height: i32) {
         };
         deltas.push((
             label,
-            r07_painted_probe_physical_inverse(
+            focus_navigation_painted_probe_physical_inverse(
                 &win,
                 &focused,
                 &format!("streams:{label}"),
@@ -554,14 +554,14 @@ fn r07_native_painted_cards(width: i32, height: i32) {
         if label != "Programme mapping" { inject("Down", false); }
     }
     assert!(deltas.iter().all(|(_, pixels)| *pixels >= 15),
-        "R07_G03_MISSING_PAINTED_CARD: {deltas:?}");
+        "NATIVE_FOCUS_PAINTED_CARDS_MISSING_PAINTED_CARD: {deltas:?}");
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 G03 physical card actions and painted pixel contrast 640x480"]
-fn r07_native_painted_cards_640_480() { r07_native_painted_cards(640, 480); }
+#[ignore = "NATIVE_FOCUS PAINTED_CARDS physical card actions and painted pixel contrast 640x480"]
+fn native_painted_cards_640_480() { native_painted_cards(640, 480); }
 
 #[test]
-#[ignore = "R07 G03 physical card actions and painted pixel contrast 1280x800"]
-fn r07_native_painted_cards_1280_800() { r07_native_painted_cards(1280, 800); }
+#[ignore = "NATIVE_FOCUS PAINTED_CARDS physical card actions and painted pixel contrast 1280x800"]
+fn native_painted_cards_1280_800() { native_painted_cards(1280, 800); }

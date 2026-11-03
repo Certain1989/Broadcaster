@@ -379,11 +379,13 @@ pub(crate) fn review_in_transaction(
                  JOIN iptv_sources s ON s.id=c.source_id
                  JOIN epg_settings settings ON settings.singleton=1
                  LEFT JOIN epg_playlist_links l ON l.playlist_source_id=c.source_id
+                 LEFT JOIN epg_playlist_guide_optouts opt ON opt.playlist_source_id=c.source_id
                  LEFT JOIN epg_channel_overrides eo ON eo.iptv_channel_id=c.id
                  LEFT JOIN epg_global_id_aliases a ON a.guide_source_id=?1 AND a.iptv_tvg_id=c.tvg_id
                  LEFT JOIN iptv_channel_overrides co ON co.channel_id=c.id
                  WHERE c.is_present=1 AND s.enabled=1
-                   AND COALESCE(eo.guide_source_id,l.guide_source_id,settings.shared_guide_source_id)=?1
+                   AND COALESCE(eo.guide_source_id,l.guide_source_id,
+                     CASE WHEN opt.playlist_source_id IS NULL THEN settings.shared_guide_source_id END)=?1
                  ORDER BY c.source_id,c.id",
             )
             .map_err(|_| ReviewLoadError::Storage)?;

@@ -6,7 +6,9 @@ use super::{
     matching::{MatchDecision, MatchMethod},
     model::{Certainty, EpgError},
 };
-use crate::streams::storage::{MIGRATION_001, MIGRATION_002};
+use crate::streams::storage::{
+    MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004, MIGRATION_005,
+};
 use rusqlite::{params, Connection};
 use std::sync::atomic::AtomicBool;
 
@@ -15,6 +17,9 @@ fn setup() -> Connection {
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     c.execute_batch(MIGRATION_001).unwrap();
     c.execute_batch(MIGRATION_002).unwrap();
+    c.execute_batch(MIGRATION_003).unwrap();
+    c.execute_batch(MIGRATION_004).unwrap();
+    c.execute_batch(MIGRATION_005).unwrap();
     for playlist in ["playlist-a", "playlist-b"] {
         c.execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -424,7 +429,7 @@ fn now_next_half_open_gap_overlap_stale_and_cancellation() {
 
 #[test]
 fn large_guide_indexed_targets_and_bounded_suggestions() {
-    // These sizes cover the original boundary and both E2 capacity scenarios.
+    // These sizes cover the original boundary and both EPG_CACHE capacity scenarios.
     for size in [10_000_usize, 10_001, 12_511, 16_796] {
         let mut c = setup();
         selected(&mut c, "g");
@@ -639,6 +644,9 @@ fn snapshot_generation_and_locked_mapping_write_do_not_mix_or_partially_commit()
         .unwrap();
     reader.execute_batch(MIGRATION_001).unwrap();
     reader.execute_batch(MIGRATION_002).unwrap();
+    reader.execute_batch(MIGRATION_003).unwrap();
+    reader.execute_batch(MIGRATION_004).unwrap();
+    reader.execute_batch(MIGRATION_005).unwrap();
     reader
         .execute(
             "INSERT INTO iptv_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
@@ -957,7 +965,8 @@ fn name_hint_rejects_new_exact_alias_or_manual_override_after_review() {
 }
 
 #[test]
-fn d35_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feeds_now_next() {
+fn guide_picker_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feeds_now_next(
+) {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1014,7 +1023,7 @@ fn d35_verified_station_resolution_precedes_10000_name_suggestion_limit_and_feed
 }
 
 #[test]
-fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
+fn guide_picker_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "first", "Synthetic ABC Station");
@@ -1070,7 +1079,7 @@ fn d35_picker_one_click_cas_can_replace_existing_row_but_never_replay_stale() {
 // successful full-import transaction can replace same-ID metadata and
 // programme rows within a single second while increasing the source revision.
 #[test]
-fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
+fn guide_revision_picker_rejects_same_second_reimport_with_same_target_id() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Old station display");
@@ -1157,9 +1166,9 @@ fn m1_016_picker_rejects_same_second_reimport_with_same_target_id() {
     fk_ok(&c);
 }
 
-// R07 B12/B13: negative transactional controls complement the mapped picker
+// NATIVE_FOCUS GUIDE_PICKER/GUIDE_PICKER: negative transactional controls complement the mapped picker
 // XTest journeys. They do not alone establish the whole modal/async clauses.
-fn r07_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
+fn focus_navigation_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
     let playlist_revision: i64 = conn
         .query_row(
             "SELECT revision FROM iptv_sources WHERE id='playlist-a'",
@@ -1182,11 +1191,11 @@ fn r07_picker_snapshot(conn: &Connection) -> PickerMappingSnapshot {
 }
 
 #[test]
-fn r07_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
+fn picker_rejects_disappeared_playlist_row_after_source_removal() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");
-    let snapshot = r07_picker_snapshot(&conn);
+    let snapshot = focus_navigation_picker_snapshot(&conn);
     // A real source deletion cascades its IPTV rows while a stale picker can
     // still hold a snapshot. It must never resurrect that row or write an
     // override for another playlist's same-name channel.
@@ -1212,11 +1221,11 @@ fn r07_b12_picker_rejects_disappeared_playlist_row_after_source_removal() {
 }
 
 #[test]
-fn r07_b13_picker_rejects_guide_removed_and_other_guide_selected() {
+fn picker_rejects_removed_guide_and_reselection() {
     let mut conn = setup();
     selected(&mut conn, "g");
     add_channel(&conn, "g", "target", "Station");
-    let snapshot = r07_picker_snapshot(&conn);
+    let snapshot = focus_navigation_picker_snapshot(&conn);
     // A manager-confirmed guide removal cascades guide data and clears the
     // shared selection. A different guide with the *same channel ID* must
     // not silently capture the stale old-guide choice.
@@ -1245,7 +1254,7 @@ fn r07_b13_picker_rejects_guide_removed_and_other_guide_selected() {
 }
 
 #[test]
-fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
+fn guide_revision_hint_rejects_same_second_reimport_with_same_target_id() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Old station display");
@@ -1281,7 +1290,7 @@ fn m1_016_hint_rejects_same_second_reimport_with_same_target_id() {
 }
 
 #[test]
-fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
+fn guide_revision_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
     let mut c = setup();
     selected(&mut c, "g");
     add_channel(&c, "g", "target", "Station");
@@ -1335,7 +1344,7 @@ fn m1_016_guide_revision_rejects_rename_and_reopen_but_accepts_current_token() {
 }
 
 #[test]
-fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
+fn quality_guide_de_neg_01_sqlite_abstains_until_manual_override() {
     // The guide's contradictory broadcaster label must not populate Now/Next.
     // A separate deliberate one-row override may still select this exact ID.
     let mut c = setup();
@@ -1398,7 +1407,7 @@ fn m1_019_de_neg_01_sqlite_abstains_until_manual_override() {
 }
 
 #[test]
-fn m1_019_colliding_quality_target_can_only_be_suggested_by_name() {
+fn quality_guide_colliding_quality_target_can_only_be_suggested_by_name() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1428,7 +1437,7 @@ fn m1_019_colliding_quality_target_can_only_be_suggested_by_name() {
 }
 
 #[test]
-fn m1_019_sqlite_quality_collision_vetoes_derived_target() {
+fn quality_guide_sqlite_quality_collision_vetoes_derived_target() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1448,25 +1457,25 @@ fn m1_019_sqlite_quality_collision_vetoes_derived_target() {
 }
 
 // Minimal public-safe inline reproductions derived from the fabricated
-// M1-019 archive (SHA-256 7330418b5cc55e2e404f8cb52cbf513ab80c4eba38b7985bb1db793bac99f666).
+// GUIDE_MATCHING-019 archive (SHA-256 7330418b5cc55e2e404f8cb52cbf513ab80c4eba38b7985bb1db793bac99f666).
 // Production streaming importer -> SQLite -> actual Now/Next; no network inputs.
-const M1_019_VALID_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_VALID_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>3sat</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
   <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>3SAT NEXT [synthetic]</title></programme>
 </tv>"#;
-const M1_019_POISONED_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_POISONED_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>ZDF - deliberately inconsistent</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>WRONG ZDF NOW [synthetic]</title></programme>
   <programme channel="3sat.de" start="20261029133000 +0000" stop="20261029140000 +0000"><title>WRONG ZDF NEXT [synthetic]</title></programme>
 </tv>"#;
-const M1_019_DUPLICATE_XMLTV: &str = r#"<tv>
+const QUALITY_GUIDE_DUPLICATE_XMLTV: &str = r#"<tv>
   <channel id="3sat.de"><display-name>3sat</display-name></channel>
   <channel id="3sat.de"><display-name>ZDF - contradictory duplicate</display-name></channel>
   <programme channel="3sat.de" start="20261029130000 +0000" stop="20261029133000 +0000"><title>3SAT NOW [synthetic]</title></programme>
 </tv>"#;
 
-fn m1_019_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), EpgError> {
+fn quality_guide_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), EpgError> {
     let rev: i64 = c
         .query_row("SELECT updated_at FROM epg_sources WHERE id='g'", [], |r| {
             r.get(0)
@@ -1485,7 +1494,7 @@ fn m1_019_import_inline(c: &mut Connection, xml: &str, at: i64) -> Result<(), Ep
 }
 
 #[test]
-fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
+fn quality_guide_actual_stream_import_to_now_next_and_poisoned_projection() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1494,7 +1503,7 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
     )
     .unwrap();
     let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
-    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_VALID_XMLTV, now).unwrap();
     match read_semantic_now_next(&c, "a1", now, &AtomicBool::new(false)).unwrap() {
         SemanticProgrammeState::Matched {
             method: MatchMethod::AutomaticIdentity,
@@ -1507,7 +1516,7 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
         other => panic!("synthetic good guide should project the real fixture titles: {other:?}"),
     }
     // A successful poisoned refresh cannot silently project another station.
-    m1_019_import_inline(&mut c, M1_019_POISONED_XMLTV, now + 1).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_POISONED_XMLTV, now + 1).unwrap();
     assert!(matches!(
         read_semantic_now_next(&c, "a1", now + 1, &AtomicBool::new(false)).unwrap(),
         SemanticProgrammeState::Unmatched
@@ -1516,13 +1525,13 @@ fn m1_019_actual_stream_import_to_now_next_and_poisoned_projection() {
 }
 
 #[test]
-fn m1_019_duplicate_channel_import_refused_and_last_good_retained() {
+fn quality_guide_duplicate_channel_import_refused_and_last_good_retained() {
     let mut c = setup();
     selected(&mut c, "g");
     let now = super::xmltv::parse_timestamp("20261029131500 +0000").unwrap();
-    m1_019_import_inline(&mut c, M1_019_VALID_XMLTV, now).unwrap();
+    quality_guide_import_inline(&mut c, QUALITY_GUIDE_VALID_XMLTV, now).unwrap();
     assert_eq!(
-        m1_019_import_inline(&mut c, M1_019_DUPLICATE_XMLTV, now + 1),
+        quality_guide_import_inline(&mut c, QUALITY_GUIDE_DUPLICATE_XMLTV, now + 1),
         Err(EpgError::DuplicateChannel)
     );
     assert_eq!(
@@ -1547,7 +1556,7 @@ fn m1_019_duplicate_channel_import_refused_and_last_good_retained() {
 }
 
 #[test]
-fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
+fn quality_guide_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
     let first = super::xmltv::parse_timestamp("20261025020000 +0200").unwrap();
     let second = super::xmltv::parse_timestamp("20261025020000 +0100").unwrap();
     assert_eq!(second - first, 3600);
@@ -1562,7 +1571,7 @@ fn m1_019_dst_repeated_local_hour_keeps_two_separate_utc_instants() {
 }
 
 #[test]
-fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
+fn matching_guard_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
     for stem in ["ABC[1]", "ABC*1", "ABC?1"] {
         let mut c = setup();
         selected(&mut c, "g");
@@ -1605,7 +1614,7 @@ fn r02_sqlite_glob_metacharacters_cannot_hide_or_invent_quality_collisions() {
 }
 
 #[test]
-fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() {
+fn matching_guard_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() {
     let mut c = setup();
     selected(&mut c, "g");
     c.execute(
@@ -1715,4 +1724,481 @@ fn r02_unicode_quality_abstention_blocks_sqlite_now_next_until_manual_mapping() 
         other => panic!("explicit one-row mapping must remain usable: {other:?}"),
     }
     fk_ok(&c);
+}
+
+#[test]
+fn guide_no_guide_blocks_inherited_matching_without_erasing_manual_targets() {
+    let mut c = setup();
+    add_channel(&c, "g", "TVG.EXACT", "Example");
+    selected(&mut c, "g");
+    assert_eq!(
+        selected_guide_for_row(&c, "a1").unwrap().as_deref(),
+        Some("g")
+    );
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::NoGuide,
+        42,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::NoGuide
+    );
+    assert!(matches!(resolve(&c, "a1"), MatchDecision::Unconfigured));
+    assert_eq!(selected_guide_for_row(&c, "a1").unwrap(), None);
+    assert_eq!(
+        selected_guide_for_row(&c, "b1").unwrap().as_deref(),
+        Some("g")
+    );
+    set_row_mapping(
+        &mut c,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "a1",
+        "g",
+        "TVG.EXACT",
+        43,
+    )
+    .unwrap();
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::Inherit,
+        44,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    assert!(matches!(
+        resolve(&c, "a1"),
+        MatchDecision::Matched {
+            method: MatchMethod::RowOverride,
+            ..
+        }
+    ));
+    fk_ok(&c);
+}
+
+#[test]
+fn guide_named_selection_isolated_and_mutually_exclusive_with_optout() {
+    let mut c = setup();
+    add_guide(&c, "australia", true);
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::Named("australia".into()),
+        3,
+    )
+    .unwrap();
+    assert_eq!(
+        selected_guide_for_row(&c, "a1").unwrap().as_deref(),
+        Some("australia")
+    );
+    assert_eq!(selected_guide_for_row(&c, "b1").unwrap(), None);
+    assert_eq!(
+        set_playlist_guide_choice(
+            &mut c,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "playlist-a",
+            PlaylistGuideChoice::Named("not-there".into()),
+            4
+        ),
+        Err(BindingError::NotFound)
+    );
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a").unwrap(),
+        PlaylistGuideChoice::Named("australia".into())
+    );
+    set_playlist_guide_choice(
+        &mut c,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "playlist-a",
+        PlaylistGuideChoice::NoGuide,
+        5,
+    )
+    .unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM epg_playlist_links WHERE playlist_source_id='playlist-a'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM epg_playlist_guide_optouts WHERE playlist_source_id='playlist-a'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        set_playlist_guide_choice(
+            &mut c,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "playlist-a",
+            PlaylistGuideChoice::NoGuide,
+            -1
+        ),
+        Err(BindingError::InvalidInput)
+    );
+    c.execute("DELETE FROM iptv_sources WHERE id='playlist-a'", [])
+        .unwrap();
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    fk_ok(&c);
+}
+
+// Reproduce both independent review races with actual WAL reader/writer
+// connections and the production chooser API, not fabricated SQL-only mocks.
+fn guide_wal_connections() -> (std::path::PathBuf, Connection, Connection) {
+    let path = std::env::temp_dir().join(format!(
+        "broadcaster-guide-races-{}.sqlite3",
+        uuid::Uuid::new_v4()
+    ));
+    let a = Connection::open(&path).unwrap();
+    a.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    for migration in [
+        MIGRATION_001,
+        MIGRATION_002,
+        MIGRATION_003,
+        MIGRATION_004,
+        MIGRATION_005,
+    ] {
+        a.execute_batch(migration).unwrap();
+    }
+    a.execute(
+        "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+         VALUES('p','Example','local_file','/synthetic',1,1)",
+        [],
+    )
+    .unwrap();
+    add_guide(&a, "guide-a", true);
+    add_guide(&a, "guide-b", true);
+    let b = Connection::open(&path).unwrap();
+    b.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+    (path, a, b)
+}
+
+fn guide_preview(conn: &Connection, desired: &PlaylistGuideChoice) -> PlaylistGuidePreview {
+    let choice = playlist_guide_choice(conn, "p").unwrap();
+    let shared: Option<String> = conn
+        .query_row(
+            "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let id = match desired {
+        PlaylistGuideChoice::Named(id) => Some(id.as_str()),
+        PlaylistGuideChoice::Inherit => shared.as_deref(),
+        PlaylistGuideChoice::NoGuide => None,
+    };
+    let target = id.map(|id| {
+        conn.query_row(
+            "SELECT id,name,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
+            [id],
+            |r| {
+                Ok(GuideStatePreview {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    enabled: r.get(2)?,
+                    imported: r.get(3)?,
+                })
+            },
+        )
+        .unwrap()
+    });
+    PlaylistGuidePreview {
+        choice,
+        shared,
+        target,
+    }
+}
+
+#[test]
+fn guide_selection_selector_has_single_generation_across_wal_writers() {
+    let (path, mut reader, mut writer) = guide_wal_connections();
+    set_playlist_guide_choice(
+        &mut reader,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::Named("guide-a".into()),
+        10,
+    )
+    .unwrap();
+    // Hold a read snapshot. A second WAL writer commits a complete Named ->
+    // No Guide transition. Neither state is corrupt, and the reader must see
+    // exactly one of them, never a synthetic dual-selection error.
+    let snapshot = reader.unchecked_transaction().unwrap();
+    assert_eq!(
+        playlist_guide_choice(&snapshot, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-a".into())
+    );
+    set_playlist_guide_choice(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::NoGuide,
+        11,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&snapshot, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-a".into())
+    );
+    snapshot.commit().unwrap();
+    assert_eq!(
+        playlist_guide_choice(&reader, "p").unwrap(),
+        PlaylistGuideChoice::NoGuide
+    );
+    drop(writer);
+    drop(reader);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn guide_choice_stale_confirmation_cannot_overwrite_another_owner_choice() {
+    let (path, mut stale, mut writer) = guide_wal_connections();
+    let desired = PlaylistGuideChoice::Inherit;
+    let preview = guide_preview(&stale, &desired);
+    set_playlist_guide_choice(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        PlaylistGuideChoice::Named("guide-b".into()),
+        12,
+    )
+    .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            desired.clone(),
+            &preview,
+            13
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Named("guide-b".into())
+    );
+    let new_preview = guide_preview(&stale, &desired);
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        desired,
+        &new_preview,
+        14,
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+
+    // A shared default affects Inherit's result even if choice is unchanged.
+    let inherit = PlaylistGuideChoice::Inherit;
+    let shared_preview = guide_preview(&stale, &inherit);
+    set_shared_guide(
+        &mut writer,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide-a"),
+    )
+    .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            inherit,
+            &shared_preview,
+            15
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn guide_choice_stale_guide_disable_and_removal_require_fresh_confirmation() {
+    let (path, mut stale, writer) = guide_wal_connections();
+    let named = PlaylistGuideChoice::Named("guide-a".into());
+    let preview = guide_preview(&stale, &named);
+    writer
+        .execute("UPDATE epg_sources SET enabled=0 WHERE id='guide-a'", [])
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            named.clone(),
+            &preview,
+            16
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&stale, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    let fresh = guide_preview(&stale, &named);
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        named.clone(),
+        &fresh,
+        17,
+    )
+    .unwrap();
+    assert_eq!(playlist_guide_choice(&stale, "p").unwrap(), named);
+    writer
+        .execute("DELETE FROM epg_sources WHERE id='guide-a'", [])
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            PlaylistGuideChoice::Named("guide-a".into()),
+            &fresh,
+            18
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&stale, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn guide_choice_stale_displayed_guide_name_requires_new_confirmation() {
+    let (path, mut stale, writer) = guide_wal_connections();
+    let named = PlaylistGuideChoice::Named("guide-a".into());
+    let before = guide_preview(&stale, &named);
+    let old_name = before.target.as_ref().unwrap().name.clone();
+    writer
+        .execute(
+            "UPDATE epg_sources SET name='Renamed while dialog open' WHERE id='guide-a'",
+            [],
+        )
+        .unwrap();
+    // The ID and availability are unchanged. The user did not confirm the
+    // new display label, so the original snapshot must not authorize Apply.
+    let now = guide_preview(&writer, &named);
+    assert_ne!(now.target.as_ref().unwrap().name, old_name);
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            named.clone(),
+            &before,
+            21,
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(
+        playlist_guide_choice(&writer, "p").unwrap(),
+        PlaylistGuideChoice::Inherit
+    );
+    set_playlist_guide_choice_if_unchanged(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        "p",
+        named.clone(),
+        &now,
+        22,
+    )
+    .unwrap();
+    assert_eq!(playlist_guide_choice(&writer, "p").unwrap(), named);
+
+    // Inherit is affected by a renamed shared guide too. The old name
+    // cannot be silently applied even if the shared ID did not change.
+    set_shared_guide(
+        &mut stale,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide-b"),
+    )
+    .unwrap();
+    let inherit = PlaylistGuideChoice::Inherit;
+    let old_shared = guide_preview(&stale, &inherit);
+    writer
+        .execute(
+            "UPDATE epg_sources SET name='Other renamed guide' WHERE id='guide-b'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        set_playlist_guide_choice_if_unchanged(
+            &mut stale,
+            ConfirmedGuideSelection::after_user_confirmation(),
+            "p",
+            inherit,
+            &old_shared,
+            23,
+        ),
+        Err(BindingError::ApprovalRequired)
+    );
+    assert_eq!(playlist_guide_choice(&writer, "p").unwrap(), named);
+    drop(writer);
+    drop(stale);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn guide_corrupt_link_and_optout_is_not_accepted_as_valid_selection() {
+    let c = setup();
+    c.execute(
+        "INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
+         VALUES('playlist-a','g',11)",
+        [],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO epg_playlist_guide_optouts(playlist_source_id,updated_at)
+         VALUES('playlist-a',12)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-a"),
+        Err(BindingError::Storage)
+    );
+    assert_eq!(
+        playlist_guide_choice(&c, "playlist-b"),
+        Ok(PlaylistGuideChoice::Inherit)
+    );
 }

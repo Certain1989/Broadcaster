@@ -371,9 +371,9 @@ fn epg_capacity_de_plain_streamed_success() {
 }
 
 #[test]
-#[ignore = "R08 D33 approved 15k / 1.5m exact-floor real-importer gate"]
-fn epg_capacity_r08_d33_support_floor_streamed() {
-    streamed_capacity_case("r08-floor-gzip", 15_000, 1_500_000, true);
+#[ignore = "IMPORT_CAPACITY SUPPORTED_FLOOR approved 15k / 1.5m exact-floor real-importer gate"]
+fn epg_capacity_supported_floor_streamed() {
+    streamed_capacity_case("capacity-floor-gzip", 15_000, 1_500_000, true);
 }
 
 #[test]

@@ -122,8 +122,8 @@ fn playlist_exists(conn: &Connection, source_id: &str) -> Result<(), BindingErro
     }
 }
 
-/// E4 must call this constructor ONLY after the user explicitly confirms the
-/// selected guide. It cannot be obtained as the result of a matching query.
+/// This confirmation token may be constructed ONLY after the user explicitly
+/// confirms the selected guide, never as the result of a matching query.
 #[derive(Debug)]
 pub struct ConfirmedGuideSelection(());
 impl ConfirmedGuideSelection {
@@ -173,35 +173,215 @@ pub fn set_shared_guide(
     }
     tx.commit().map_err(db)
 }
-pub fn set_playlist_exception(
+/// The three explicitly approved playlist-level guide policies. Manual channel
+/// overrides are independent and always take precedence over a playlist opt-out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaylistGuideChoice {
+    Inherit,
+    Named(String),
+    NoGuide,
+}
+
+/// A single SQLite statement observes link and opt-out from the same read
+/// generation. Separate autocommit SELECTs can fabricate an impossible
+/// (Named, NoGuide) pair when another connection commits between them.
+pub fn playlist_guide_choice(
+    conn: &Connection,
+    playlist_source_id: &str,
+) -> Result<PlaylistGuideChoice, BindingError> {
+    id(playlist_source_id, 64)?;
+    let state: Option<(Option<String>, bool)> = conn
+        .query_row(
+            "SELECT l.guide_source_id, o.playlist_source_id IS NOT NULL
+             FROM iptv_sources p
+             LEFT JOIN epg_playlist_links l ON l.playlist_source_id=p.id
+             LEFT JOIN epg_playlist_guide_optouts o ON o.playlist_source_id=p.id
+             WHERE p.id=?1",
+            [playlist_source_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(db)?;
+    let (named, optout) = state.ok_or(BindingError::NotFound)?;
+    match (named, optout) {
+        (Some(_), true) => Err(BindingError::Storage),
+        (Some(id), false) => Ok(PlaylistGuideChoice::Named(id)),
+        (None, true) => Ok(PlaylistGuideChoice::NoGuide),
+        (None, false) => Ok(PlaylistGuideChoice::Inherit),
+    }
+}
+
+/// Values the user actually saw before confirming a change. A writer verifies
+/// them while holding the IMMEDIATE transaction, not after the dialog opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuideStatePreview {
+    pub id: String,
+    /// Name displayed when the user made this guide choice. A concurrent
+    /// rename invalidates the original on-screen confirmation.
+    pub name: String,
+    pub enabled: bool,
+    pub imported: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistGuidePreview {
+    pub choice: PlaylistGuideChoice,
+    pub shared: Option<String>,
+    /// Status of the guide that the proposed choice would use, if any.
+    pub target: Option<GuideStatePreview>,
+}
+
+fn shared_guide(conn: &Connection) -> Result<Option<String>, BindingError> {
+    conn.query_row(
+        "SELECT shared_guide_source_id FROM epg_settings WHERE singleton=1",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db)
+}
+
+fn target_guide_state(
+    conn: &Connection,
+    guide_id: &str,
+) -> Result<Option<GuideStatePreview>, BindingError> {
+    conn.query_row(
+        "SELECT id,name,enabled,last_success_at IS NOT NULL FROM epg_sources WHERE id=?1",
+        [guide_id],
+        |r| {
+            Ok(GuideStatePreview {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                enabled: r.get(2)?,
+                imported: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db)
+}
+
+/// Compare-and-set against the preview, including the shared guide's identity
+/// and selected guide availability. Reject a stale dialog rather than silently
+/// overwriting a more recently confirmed selection.
+pub fn set_playlist_guide_choice_if_unchanged(
     conn: &mut Connection,
     _: ConfirmedGuideSelection,
+    playlist_source_id: &str,
+    desired: PlaylistGuideChoice,
+    preview: &PlaylistGuidePreview,
+    at: i64,
+) -> Result<(), BindingError> {
+    if at < 0 {
+        return Err(BindingError::InvalidInput);
+    }
+    fk(conn)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    if playlist_guide_choice(&tx, playlist_source_id)? != preview.choice
+        || shared_guide(&tx)? != preview.shared
+    {
+        return Err(BindingError::ApprovalRequired);
+    }
+    let target_id = match &desired {
+        PlaylistGuideChoice::Named(id) => Some(id.as_str()),
+        PlaylistGuideChoice::Inherit => preview.shared.as_deref(),
+        PlaylistGuideChoice::NoGuide => None,
+    };
+    let current_target = target_id
+        .map(|id| target_guide_state(&tx, id))
+        .transpose()?
+        .flatten();
+    if current_target != preview.target {
+        return Err(BindingError::ApprovalRequired);
+    }
+    if let PlaylistGuideChoice::Named(ref id) = desired {
+        guide_exists(&tx, id)?;
+    }
+    write_playlist_guide_choice(&tx, playlist_source_id, desired, at)?;
+    tx.commit().map_err(db)
+}
+
+fn write_playlist_guide_choice(
+    conn: &Connection,
+    playlist_source_id: &str,
+    choice: PlaylistGuideChoice,
+    at: i64,
+) -> Result<(), BindingError> {
+    conn.execute(
+        "DELETE FROM epg_playlist_links WHERE playlist_source_id=?1",
+        [playlist_source_id],
+    )
+    .map_err(db)?;
+    conn.execute(
+        "DELETE FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1",
+        [playlist_source_id],
+    )
+    .map_err(db)?;
+    match choice {
+        PlaylistGuideChoice::Named(id) => {
+            conn.execute(
+                "INSERT INTO epg_playlist_links (playlist_source_id,guide_source_id,updated_at)
+                VALUES (?1,?2,?3)",
+                params![playlist_source_id, id, at],
+            )
+            .map_err(db)?;
+        }
+        PlaylistGuideChoice::NoGuide => {
+            conn.execute(
+                "INSERT INTO epg_playlist_guide_optouts (playlist_source_id,updated_at)
+                VALUES (?1,?2)",
+                params![playlist_source_id, at],
+            )
+            .map_err(db)?;
+        }
+        PlaylistGuideChoice::Inherit => {}
+    }
+    Ok(())
+}
+
+pub fn set_playlist_guide_choice(
+    conn: &mut Connection,
+    _: ConfirmedGuideSelection,
+    playlist_source_id: &str,
+    choice: PlaylistGuideChoice,
+    at: i64,
+) -> Result<(), BindingError> {
+    if at < 0 {
+        return Err(BindingError::InvalidInput);
+    }
+    fk(conn)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db)?;
+    playlist_exists(&tx, playlist_source_id)?;
+    if let PlaylistGuideChoice::Named(ref source_id) = choice {
+        guide_exists(&tx, source_id)?;
+    }
+    // IMMEDIATE prevents a second writer observing a temporary ambiguous state.
+    write_playlist_guide_choice(&tx, playlist_source_id, choice, at)?;
+    tx.commit().map_err(db)
+}
+
+/// Compatibility API for existing per-channel mapping/editor flows.
+pub fn set_playlist_exception(
+    conn: &mut Connection,
+    confirmation: ConfirmedGuideSelection,
     playlist_source_id: &str,
     guide_source_id: Option<&str>,
     at: i64,
 ) -> Result<(), BindingError> {
-    fk(conn)?;
-    let tx = conn.transaction().map_err(db)?;
-    playlist_exists(&tx, playlist_source_id)?;
-    if let Some(source_id) = guide_source_id {
-        guide_exists(&tx, source_id)?;
-        tx.execute(
-            "INSERT INTO epg_playlist_links (playlist_source_id,guide_source_id,updated_at)
-             VALUES (?1,?2,?3)
-             ON CONFLICT(playlist_source_id) DO UPDATE
-             SET guide_source_id=excluded.guide_source_id,updated_at=excluded.updated_at",
-            params![playlist_source_id, source_id, at],
-        )
-        .map_err(db)?;
-    } else {
-        tx.execute(
-            "DELETE FROM epg_playlist_links WHERE playlist_source_id=?1",
-            [playlist_source_id],
-        )
-        .map_err(db)?;
-    }
-    tx.commit().map_err(db)
+    set_playlist_guide_choice(
+        conn,
+        confirmation,
+        playlist_source_id,
+        guide_source_id.map_or(PlaylistGuideChoice::Inherit, |id| {
+            PlaylistGuideChoice::Named(id.to_owned())
+        }),
+        at,
+    )
 }
+
 pub fn set_row_mapping(
     conn: &mut Connection,
     _: ConfirmedRowMapping,
@@ -570,7 +750,17 @@ fn resolve_source_id(
             |r| r.get(0),
         )
         .map_err(db)?;
-    Ok(manual.or(exception).or(shared))
+    if manual.is_some() || exception.is_some() {
+        return Ok(manual.or(exception));
+    }
+    let opted_out: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1)",
+            [playlist],
+            |r| r.get(0),
+        )
+        .map_err(db)?;
+    Ok(if opted_out { None } else { shared })
 }
 
 // A SAVEPOINT can be nested under a caller-owned transaction, unlike BEGIN.
@@ -671,7 +861,18 @@ fn resolve_row_inner(
             |r| r.get(0),
         )
         .map_err(|_| EpgError::Storage)?;
-    let chosen = choose_source(manual.as_ref(), exception.as_deref(), shared.as_deref());
+    let opted_out: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM epg_playlist_guide_optouts WHERE playlist_source_id=?1)",
+            [&row.playlist_source_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| EpgError::Storage)?;
+    let chosen = choose_source(
+        manual.as_ref(),
+        exception.as_deref(),
+        if opted_out { None } else { shared.as_deref() },
+    );
     let Some(chosen_source) = chosen.as_ref() else {
         return Ok(MatchDecision::Unconfigured);
     };
@@ -903,7 +1104,7 @@ pub enum SemanticProgrammeState {
     },
 }
 
-/// E3's reusable semantic now/next seam; no GTK, UI focus or network operations.
+/// Reusable semantic now/next query; no GTK, UI focus or network operations.
 /// Reads a full 48-hour half-open window to include programmes starting up to
 /// 24h before now and a bounded next lookahead. Never claims full coverage.
 pub fn read_semantic_now_next(

@@ -15,7 +15,7 @@ use super::{
     },
     xmltv::StreamedRows,
 };
-use crate::streams::storage::Storage;
+use crate::streams::{epg_spool::AttemptSpool, storage::Storage};
 use adw::{gio, glib, prelude::*};
 use std::{
     collections::HashMap,
@@ -28,7 +28,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuideStage {
@@ -95,12 +95,6 @@ impl From<GuideFetchError> for GuideServiceError {
         }
     }
 }
-struct AttemptSpool(PathBuf);
-impl Drop for AttemptSpool {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
 
 fn clock() -> i64 {
     SystemTime::now()
@@ -132,6 +126,34 @@ impl fmt::Debug for GlobalGuideManager {
         f.write_str("GlobalGuideManager(<private>)")
     }
 }
+// The GLib caller may disappear while Tokio's independently spawned task is
+// still running. Both the spool lock and the single-heavy-import capacity
+// permit must remain owned by the actual worker, not only its waiter.
+async fn hold_spool_for_async<T>(
+    spool: Arc<AttemptSpool>,
+    capacity: Arc<OwnedSemaphorePermit>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    let _spool = spool;
+    let _capacity = capacity;
+    future.await
+}
+
+// spawn_blocking keeps running after its JoinHandle is dropped. Both guards
+// must live in the blocking closure, not merely in the Tokio adapter.
+async fn hold_spool_for_blocking<T: Send + 'static>(
+    spool: Arc<AttemptSpool>,
+    capacity: Arc<OwnedSemaphorePermit>,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || {
+        let _spool = spool;
+        let _capacity = capacity;
+        task()
+    })
+    .await
+}
+
 impl GlobalGuideManager {
     /// Shared service must be instantiated once by the application.
     pub async fn open() -> Result<Self, GuideServiceError> {
@@ -140,10 +162,14 @@ impl GlobalGuideManager {
     pub async fn with_storage(storage: Storage) -> Result<Self, GuideServiceError> {
         let init = storage.clone();
         crate::utils::tokio(async move {
-            tokio::task::spawn_blocking(move || init.initialize())
-                .await
-                .map_err(|_| GuideServiceError::WorkerFailed)?
-                .map_err(|_| GuideServiceError::Storage)
+            tokio::task::spawn_blocking(move || {
+                init.initialize()?;
+                init.reclaim_epg_orphans();
+                Ok::<(), crate::streams::storage::StorageError>(())
+            })
+            .await
+            .map_err(|_| GuideServiceError::WorkerFailed)?
+            .map_err(|_| GuideServiceError::Storage)
         })
         .await?;
         let service = Self {
@@ -155,7 +181,9 @@ impl GlobalGuideManager {
                 heavy_imports: Arc::new(Semaphore::new(1)),
             }),
         };
-        service.start_opt_in_scheduler();
+        if !crate::streams::backup::suppress_automatic_refresh_this_startup() {
+            service.start_opt_in_scheduler();
+        }
         Ok(service)
     }
     /// An application-lifetime timer runs only for sources whose user
@@ -464,22 +492,27 @@ impl GlobalGuideManager {
     ) -> Result<(), GuideServiceError> {
         // Heavy EPG imports cannot multiply to exhaust the application's RAM.
         // Deny rather than creating an unbounded pending-job queue.
-        let _heavy = self
-            .inner
-            .heavy_imports
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| GuideServiceError::AlreadyRunning)?;
+        let heavy = Arc::new(
+            self.inner
+                .heavy_imports
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| GuideServiceError::AlreadyRunning)?,
+        );
         let path = self.inner.registry.spool_path();
-        let _cleanup = AttemptSpool(path.clone());
+        let cleanup = Arc::new(AttemptSpool::new(path.clone()).map_err(local_spool_error)?);
         let expected_revision = source.view.updated_at;
         let gzip = match source.origin {
             SourceOrigin::RemoteUrl { locator, trust } => {
                 let cancellation = transfer.clone();
                 let target = path.clone();
-                crate::utils::tokio(async move {
-                    network::fetch_guide_spooled(&locator, trust, &cancellation, &target).await
-                })
+                crate::utils::tokio(hold_spool_for_async(
+                    cleanup.clone(),
+                    heavy.clone(),
+                    async move {
+                        network::fetch_guide_spooled(&locator, trust, &cancellation, &target).await
+                    },
+                ))
                 .await?
             }
             SourceOrigin::LocalFile(locator) => {
@@ -495,7 +528,7 @@ impl GlobalGuideManager {
         let source_id = id.to_owned();
         let cancelled = parser_cancel.clone();
         let rows = crate::utils::tokio(async move {
-            tokio::task::spawn_blocking(move || {
+            hold_spool_for_blocking(cleanup, heavy, move || {
                 let file =
                     std::fs::File::open(&path).map_err(|_| GuideServiceError::LocalAccess)?;
                 let staged_size = file.metadata().map_err(local_spool_error)?.len();
@@ -670,7 +703,7 @@ async fn read_local_spooled_inner(
 }
 
 #[cfg(test)]
-mod e2_admission_tests {
+mod epg_cache_admission_tests {
     use super::*;
     use crate::epg::sources::DEFAULT_REFRESH_SECONDS;
     use std::{fs, path::PathBuf};
@@ -702,7 +735,7 @@ mod e2_admission_tests {
         fs::create_dir(&dir).unwrap();
         let path = dir.join("partial.xmltv");
         {
-            let _cleanup = AttemptSpool(path.clone());
+            let _cleanup = AttemptSpool::new(path.clone()).unwrap();
             let mut file = std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -720,7 +753,7 @@ mod e2_admission_tests {
         }
         assert!(!path.exists(), "failure must remove the partial stage");
         {
-            let _cleanup = AttemptSpool(path.clone());
+            let _cleanup = AttemptSpool::new(path.clone()).unwrap();
             let mut file = std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -785,6 +818,187 @@ mod e2_admission_tests {
             )
             .await
             .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn make_attempt_stale(path: &Path) {
+        let old = SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old))
+            .unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropped_download_waiter_keeps_kernel_lock_until_detached_worker_exits() {
+        use tokio::sync::oneshot;
+        let rendezvous_timeout = std::time::Duration::from_secs(5);
+        let (dir, manager) = manager();
+        let capacity = Arc::new(
+            manager
+                .inner
+                .heavy_imports
+                .clone()
+                .try_acquire_owned()
+                .unwrap(),
+        );
+        let path = dir.join(format!(".epg-{}.part", Uuid::new_v4()));
+        let lock_path = path.with_extension("lock");
+        let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
+        fs::write(&path, b"active").unwrap();
+        make_attempt_stale(&path);
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let task_owner = owner.clone();
+        let worker_capacity = capacity.clone();
+        let caller = tokio::spawn(async move {
+            crate::utils::tokio(hold_spool_for_async(
+                task_owner,
+                worker_capacity,
+                async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    let _ = finished_tx.send(());
+                },
+            ))
+            .await;
+        });
+        tokio::time::timeout(rendezvous_timeout, started_rx)
+            .await
+            .expect("download worker did not start within timeout")
+            .expect("download worker start signal channel closed");
+        caller.abort();
+        let cancelled_waiter = tokio::time::timeout(rendezvous_timeout, caller)
+            .await
+            .expect("aborted download waiter did not join within timeout");
+        assert!(cancelled_waiter.is_err());
+        drop(owner);
+        drop(capacity); // caller disappeared; only its detached worker may hold it.
+        assert_eq!(manager.inner.heavy_imports.available_permits(), 0);
+        assert!(manager
+            .inner
+            .heavy_imports
+            .clone()
+            .try_acquire_owned()
+            .is_err());
+        assert!(path.exists());
+        assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        assert_eq!(
+            crate::streams::epg_spool::sweep_stale(&dir, SystemTime::now()).removed,
+            0
+        );
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(rendezvous_timeout, finished_rx)
+            .await
+            .expect("download worker did not finish within timeout")
+            .expect("download worker completion signal channel closed");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while path.exists()
+                || lock_path.exists()
+                || manager.inner.heavy_imports.available_permits() != 1
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // A subsequent import may enter only once the detached download exits.
+        let _next = manager
+            .inner
+            .heavy_imports
+            .clone()
+            .try_acquire_owned()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropped_parser_waiter_keeps_kernel_lock_until_blocking_worker_exits() {
+        use tokio::sync::oneshot;
+        let rendezvous_timeout = std::time::Duration::from_secs(5);
+        let (dir, manager) = manager();
+        let capacity = Arc::new(
+            manager
+                .inner
+                .heavy_imports
+                .clone()
+                .try_acquire_owned()
+                .unwrap(),
+        );
+        let path = dir.join(format!(".epg-{}.part", Uuid::new_v4()));
+        let lock_path = path.with_extension("lock");
+        let owner = Arc::new(AttemptSpool::new(path.clone()).unwrap());
+        fs::write(&path, b"parsing").unwrap();
+        make_attempt_stale(&path);
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        let task_owner = owner.clone();
+        let worker_capacity = capacity.clone();
+        let caller = tokio::spawn(async move {
+            crate::utils::tokio(async move {
+                hold_spool_for_blocking(task_owner, worker_capacity, move || {
+                    let _ = started_tx.send(());
+                    release_rx.recv().unwrap();
+                    let _ = finished_tx.send(());
+                })
+                .await
+                .unwrap();
+            })
+            .await;
+        });
+        tokio::time::timeout(rendezvous_timeout, started_rx)
+            .await
+            .expect("parser worker did not start within timeout")
+            .expect("parser worker start signal channel closed");
+        caller.abort();
+        let cancelled_waiter = tokio::time::timeout(rendezvous_timeout, caller)
+            .await
+            .expect("aborted parser waiter did not join within timeout");
+        assert!(cancelled_waiter.is_err());
+        drop(owner);
+        drop(capacity); // caller disappeared; only its detached worker may hold it.
+        assert_eq!(manager.inner.heavy_imports.available_permits(), 0);
+        assert!(manager
+            .inner
+            .heavy_imports
+            .clone()
+            .try_acquire_owned()
+            .is_err());
+        assert!(path.exists());
+        assert!(fs::File::open(&lock_path).unwrap().try_lock().is_err());
+        assert_eq!(
+            crate::streams::epg_spool::sweep_stale(&dir, SystemTime::now()).removed,
+            0
+        );
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(rendezvous_timeout, finished_rx)
+            .await
+            .expect("parser worker did not finish within timeout")
+            .expect("parser worker completion signal channel closed");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while path.exists()
+                || lock_path.exists()
+                || manager.inner.heavy_imports.available_permits() != 1
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // A subsequent import may enter only once the detached parser exits.
+        let _next = manager
+            .inner
+            .heavy_imports
+            .clone()
+            .try_acquire_owned()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

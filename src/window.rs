@@ -1015,8 +1015,8 @@ fn modal_remote_action(
 }
 
 #[cfg(test)]
-#[path = "window/r07_native_focus_tests.rs"]
-pub(crate) mod r07_native_focus_tests;
+#[path = "window/native_focus_navigation_tests.rs"]
+pub(crate) mod native_focus_navigation_tests;
 
 #[cfg(test)]
 mod remote_dialog_tests {
@@ -1103,13 +1103,13 @@ mod playback_navigation_tests {
         window.finish_playback(mediathek_token);
         assert_eq!(stack.visible_child_name().as_deref(), Some("mediathek"));
 
-        // S4: actual third page and fake GTK ListView activation protocol.
+        // Exercise the actual My Channels page and synthetic GTK ListView activation.
         stack.set_visible_child_name("streams");
         assert_eq!(stack.visible_child_name().as_deref(), Some("streams"));
         window.imp().streams_view.assert_fake_player_navigation();
-        crate::streams::assert_s5_form_controls();
+        crate::streams::assert_native_stream_form_controls();
 
-        // S5: exercise the actual mapped virtualized ListView and window
+        // Exercise the actual mapped virtualized ListView and window
         // focus router on GTK/Xvfb. Physical Wayland remote validation remains
         // a separate owner/device check.
         window.set_default_size(1280, 720);
@@ -1326,7 +1326,7 @@ mod playback_navigation_tests {
             "hidden region must not steal focus"
         );
 
-        // E4 owner regression: the real mapped GtkListView contains two
+        // Remote-action regression: the real mapped GtkListView contains two
         // fabricated My Channels entries. Exercise the same window capture
         // router as a remote; GTK event synthesis is not claimed here.
         let ids = streams.install_remote_action_test_rows();
@@ -1339,15 +1339,18 @@ mod playback_navigation_tests {
         );
         assert_eq!(streams.remote_action_test_counts(), (0, 0, 0));
         eprintln!(
-            "E4 before activation: {}",
+            "CHANNEL_ROW_ACTIVATION before activation: {}",
             streams.remote_action_test_state()
         );
         eprintln!(
-            "C4 after Right entry: {}",
+            "GUIDE_MAPPING after Right entry: {}",
             streams.remote_action_test_state()
         );
         spin();
-        eprintln!("E4 after animation: {}", streams.remote_action_test_state());
+        eprintln!(
+            "CHANNEL_ROW_ACTIVATION after animation: {}",
+            streams.remote_action_test_state()
+        );
         // GtkListView may still retain an unbound/recycled ListItem with the
         // same *position* as the selected row. Its detached buttons are
         // correctly unmapped, but are not the actions rendered on screen.
@@ -1436,7 +1439,7 @@ mod playback_navigation_tests {
         let star = streams
             .remote_action_test_row_star(&ids[0])
             .expect("mapped favourite Star for the selected expanded row");
-        // G09: Right from Play now deliberately enters the same channel's Star;
+        // FOCUS_GRAPH: Right from Play now deliberately enters the same channel's Star;
         // Left from Star must return to Play, never a stale recycled row.
         // Exercise the real window capture router, not direct grab_focus() on Star.
         for _ in 0..10 {

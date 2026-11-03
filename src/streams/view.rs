@@ -39,7 +39,7 @@ use super::{
     service::StreamsService,
 };
 
-// Only E4 presentation uses these time labels. UTC matching remains in E3.
+// These time labels are for presentation only; guide matching remains in UTC.
 // Injecting the zone makes fall-back/repeated-hour cases testable without
 // mutating the process-wide TZ or relying on a CI runner's local timezone.
 #[derive(Clone)]
@@ -2305,17 +2305,17 @@ impl TvStreamsView {
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_install_test_service(&self, service: StreamsService) {
+    pub(crate) fn source_manager_install_test_service(&self, service: StreamsService) {
         self.imp().service.replace(Some(service));
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_test_manage_button(&self) -> gtk::Button {
+    pub(crate) fn source_manager_test_manage_button(&self) -> gtk::Button {
         self.imp().manage_button.get()
     }
 
     #[cfg(test)]
-    pub(crate) fn c1_test_manager_list(&self) -> Option<gtk::ListBox> {
+    pub(crate) fn source_manager_test_manager_list(&self) -> Option<gtk::ListBox> {
         self.imp()
             .manager_list
             .borrow()
@@ -2371,7 +2371,7 @@ impl TvStreamsView {
             );
             assert_eq!(model.cached_pages(), 0);
             eprintln!(
-                "S4 detached lazy model {count} positions: 1 slot, duration={:?}",
+                "LAZY_STREAM_MODEL detached {count} positions: 1 slot, duration={:?}",
                 start.elapsed()
             );
         }

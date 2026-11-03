@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Real manager, private SQLite service, and physical XTest keys (not signal emission).
-use super::c1_mapped_native_diagnostic::{find_view, inject, spin};
+use super::native_navigation_test_support::{find_view, inject, spin};
 use super::*;
 use crate::{application::TvApplication, streams::storage::Storage};
 use rusqlite::params;
@@ -20,7 +20,10 @@ struct Fixture {
 }
 impl Fixture {
     fn new(count: usize) -> Self {
-        let dir = std::env::temp_dir().join(format!("broadcaster-c1-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "broadcaster-source-manager-{}",
+            uuid::Uuid::new_v4()
+        ));
         let storage = Storage::at(dir.join("test.sqlite3"));
         storage.initialize().expect("private SQLite schema");
         let mut ids = Vec::new();
@@ -71,7 +74,7 @@ fn until(label: &str, mut predicate: impl FnMut() -> bool) {
         }
         thread::sleep(Duration::from_millis(10));
     }
-    panic!("native C1 deadline: {label}");
+    panic!("native SOURCE_MANAGER deadline: {label}");
 }
 fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
     fn visit(w: &gtk::Widget, out: &mut Vec<gtk::Widget>) {
@@ -107,7 +110,16 @@ fn controls(list: &gtk::ListBox, index: i32) -> Option<Controls> {
         .into_iter()
         .filter_map(|w| w.downcast::<gtk::Button>().ok())
         .collect::<Vec<_>>();
-    assert_eq!(buttons.len(), 7, "seven real row actions");
+    assert_eq!(
+        buttons.len(),
+        9,
+        "seven source actions plus Programme Guide and Automatic Refresh"
+    );
+    assert_eq!(
+        buttons[8].label().as_deref(),
+        Some(gettext("Automatic Refresh").as_str()),
+        "P1 automatic-refresh action follows the existing Guide action"
+    );
     Some(Controls {
         row,
         enabled,
@@ -120,20 +132,20 @@ fn open(
     count: usize,
 ) -> (adw::Dialog, gtk::ListBox) {
     assert!(
-        view.c1_test_manage_button().grab_focus(),
+        view.source_manager_test_manage_button().grab_focus(),
         "real toolbar manager entry"
     );
     inject("Return");
     until("real manager rows loaded", || {
         manager_dialog(win).is_some_and(|d| d.is_mapped())
-            && view.c1_test_manager_list().is_some_and(|l| {
+            && view.source_manager_test_manager_list().is_some_and(|l| {
                 (0..count).all(|i| l.row_at_index(i as i32).is_some())
                     && l.row_at_index(count as i32).is_none()
             })
     });
     (
         manager_dialog(win).unwrap(),
-        view.c1_test_manager_list().unwrap(),
+        view.source_manager_test_manager_list().unwrap(),
     )
 }
 fn back(dialog: &adw::Dialog, row: Option<&gtk::ListBoxRow>) {
@@ -173,7 +185,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real My Channels view");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
 
     let (dialog, list) = open(&view, &win, count);
     if count == 0 {
@@ -187,7 +199,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     assert!(!first.buttons[5].is_sensitive(), "first Move Up disabled");
     assert!(!last.buttons[6].is_sensitive(), "last Move Down disabled");
     assert!(first.row.grab_focus(), "row portal");
-    // G09 owner report: a one-source manager trapped remote focus inside the
+    // FOCUS_GRAPH owner report: a one-source manager trapped remote focus inside the
     // first card, making Add Playlist/Programme Guides/Close unreachable.
     let header = view.manager_header_add().expect("live Add Playlist header");
     inject("Up");
@@ -202,6 +214,11 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
         .find(|button| button.label().as_deref() == Some(gettext("Programme Guides").as_str()))
         .expect("manager Programme Guides action");
+    let header_backup = descendants(dialog.upcast_ref())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(gettext("Backup / Restore").as_str()))
+        .expect("database manager backup/restore action");
     let header_close = descendants(dialog.upcast_ref())
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
@@ -210,7 +227,17 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     inject("Right");
     assert!(header_guides.has_focus(), "header Right must reach Guides");
     inject("Right");
+    assert!(
+        header_backup.has_focus(),
+        "header Right must reach the new Backup / Restore action"
+    );
+    inject("Right");
     assert!(header_close.has_focus(), "header Right must reach Close");
+    inject("Left");
+    assert!(
+        header_backup.has_focus(),
+        "header Left must return to Backup / Restore"
+    );
     inject("Left");
     assert!(
         header_guides.has_focus(),
@@ -232,7 +259,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
         assert_eq!(
             view.manager_focus().map(|(_, slot, _)| slot),
             Some(MANAGER_ROW),
-            "C1_EXPECTED_NEGATIVE_ORACLE: a real Switch focus cannot be portal slot 8"
+            "SOURCE_MANAGER_EXPECTED_NEGATIVE_ORACLE: a real Switch focus cannot be portal slot 8"
         );
         unreachable!("test oracle did not reject incorrect expectation");
     }
@@ -255,7 +282,7 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
     inject("Up");
     assert!(
         first.buttons[0].has_focus(),
-        "R01-F01: fresh Delete -> Refresh, not stale Defaults"
+        "SOURCE_DELETE_ACTION: fresh Delete -> Refresh, not stale Defaults"
     );
     back(&dialog, Some(&first.row));
 
@@ -295,9 +322,9 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .block_on(reopened.source(&id))
             .unwrap()
             .enabled,
-        "R01-F02 persisted Switch must stay disabled after service reopen"
+        "SOURCE_DISABLE_REOPEN persisted Switch must stay disabled after service reopen"
     );
-    // AS04/AS05: perform the *inverse* native Switch change on the newly
+    // SOURCE_DISABLE_TOGGLE/SOURCE_REENABLE_TOGGLE: perform the *inverse* native Switch change on the newly
     // rebound widget. The same persisted UUID and semantic Switch slot must
     // be retained across both asynchronous rebuilds and a fresh service read.
     let current = controls(&list, index).unwrap();
@@ -322,41 +349,44 @@ fn run(count: usize, width: i32, height: i32, negative: bool) {
             .block_on(reopened.source(&id))
             .unwrap()
             .enabled,
-        "R07 AS04/AS05 source enabled state must survive roundtrip"
+        "NATIVE_FOCUS SOURCE_DISABLE_TOGGLE/SOURCE_REENABLE_TOGGLE source enabled state must survive roundtrip"
     );
     let restored = controls(&list, index).unwrap();
     back(&dialog, Some(&restored.row));
     win.destroy();
 }
 
-// R07: prove that actual physical D-pad events traverse *different* persisted
+// NATIVE_FOCUS: prove that actual physical D-pad events traverse *different* persisted
 // sources in the real manager, rather than just entering a test-selected row.
-fn r07_assert_source_row(
+fn focus_navigation_assert_source_row(
     view: &TvStreamsView,
     win: &crate::window::TvWindow,
     row: &gtk::ListBoxRow,
     id: &str,
     index: i32,
 ) {
-    assert!(row.is_mapped(), "R07 source row {index} remains mapped");
+    assert!(
+        row.is_mapped(),
+        "NATIVE_FOCUS source row {index} remains mapped"
+    );
     assert!(
         row.has_focus(),
-        "R07 physical key must focus source row {index}"
+        "NATIVE_FOCUS physical key must focus source row {index}"
     );
-    let owner = gtk::prelude::GtkWindowExt::focus(win).expect("R07 window focus owner");
+    let owner = gtk::prelude::GtkWindowExt::focus(win).expect("NATIVE_FOCUS window focus owner");
     assert_eq!(
         owner,
         row.clone().upcast::<gtk::Widget>(),
-        "R07 focus must own the actual indexed source row"
+        "NATIVE_FOCUS focus must own the actual indexed source row"
     );
     assert_eq!(
         view.manager_focus(),
         Some((id.to_owned(), MANAGER_ROW, index)),
-        "R07 focus record must match the persisted source UUID and row"
+        "NATIVE_FOCUS focus record must match the persisted source UUID and row"
     );
 }
 
-fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
+fn native_source_rows(width: i32, height: i32, negative: bool) {
     adw::init().expect("native display");
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
@@ -379,16 +409,22 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real My Channels view");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
 
-    // The existing C1 test already verifies physical Return on the real
+    // The existing SOURCE_MANAGER test already verifies physical Return on the real
     // manager launcher. Seed only its first row, not the middle/last.
     let (dialog, list) = open(&view, &win, 3);
     let rows = [0, 1, 2].map(|index| controls(&list, index).expect("bound source row"));
     assert!(rows[0].row.grab_focus(), "initial source-row portal");
     spin();
     for (index, row) in rows.iter().enumerate() {
-        r07_assert_source_row(&view, &win, &row.row, &fixture.ids[index], index as i32);
+        focus_navigation_assert_source_row(
+            &view,
+            &win,
+            &row.row,
+            &fixture.ids[index],
+            index as i32,
+        );
         if index != 2 {
             inject("Down");
         }
@@ -397,14 +433,14 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
         assert_eq!(
             view.manager_focus(),
             Some((fixture.ids[1].clone(), MANAGER_ROW, 1)),
-            "R07_EXPECTED_NEGATIVE_ORACLE: third source cannot masquerade as second"
+            "NATIVE_FOCUS_EXPECTED_NEGATIVE_ORACLE: third source cannot masquerade as second"
         );
-        unreachable!("R07 source identity negative oracle unexpectedly survived");
+        unreachable!("NATIVE_FOCUS source identity negative oracle unexpectedly survived");
     }
 
     for index in (0..2).rev() {
         inject("Up");
-        r07_assert_source_row(
+        focus_navigation_assert_source_row(
             &view,
             &win,
             &rows[index].row,
@@ -426,10 +462,10 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
     inject("Left");
     assert!(rows[0].enabled.has_focus(), "Refresh -> Switch");
     inject("Left");
-    r07_assert_source_row(&view, &win, &rows[0].row, &fixture.ids[0], 0);
+    focus_navigation_assert_source_row(&view, &win, &rows[0].row, &fixture.ids[0], 0);
 
     inject("Down");
-    r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
+    focus_navigation_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
     inject("Return");
     assert!(rows[1].enabled.has_focus(), "source 1 must own Switch");
     assert_eq!(view.manager_focus(), Some((fixture.ids[1].clone(), 0, 1)));
@@ -438,15 +474,15 @@ fn r07_native_source_rows(width: i32, height: i32, negative: bool) {
         "pure navigation never mutates persisted enabled state"
     );
     inject("XF86Back");
-    r07_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
+    focus_navigation_assert_source_row(&view, &win, &rows[1].row, &fixture.ids[1], 1);
     back(&dialog, None);
     win.destroy();
 }
 
-// R07 AS03/AS15: traverse the entire two-line, real three-source GTK
+// NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID: traverse the entire two-line, real three-source GTK
 // action grid without activating Delete/Refresh/Move. Disabled first/last
 // movement edges are skipped by real XTest keys, not helper focus seeding.
-fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
+fn native_source_grid(width: i32, height: i32, negative: bool) {
     adw::init().expect("native GTK display");
     let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
         .expect("application resources");
@@ -469,13 +505,13 @@ fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("actual My Channels view");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
     let (dialog, list) = open(&view, &win, 3);
     let rows = [0, 1, 2].map(|i| controls(&list, i).expect("bound SQLite source"));
     assert!(rows[0].row.grab_focus());
     spin();
     for (i, r) in rows.iter().enumerate() {
-        r07_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
+        focus_navigation_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
         inject("Return");
         assert!(r.enabled.has_focus(), "Return enters same-row Switch");
         // Upper line: Switch, Refresh, Defaults, Rename; all non-destructive
@@ -495,7 +531,7 @@ fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
         if negative {
             assert!(
                 r.buttons[5].has_focus(),
-                "R07_AS03_EXPECTED_NEGATIVE_ORACLE: disabled first Move Up must not own focus"
+                "NATIVE_FOCUS_SOURCE_GRID_EXPECTED_NEGATIVE_ORACLE: disabled first Move Up must not own focus"
             );
             unreachable!("source-grid wrong-edge negative unexpectedly survived");
         }
@@ -511,14 +547,14 @@ fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
         inject("Left");
         assert!(r.buttons[3].has_focus(), "Delete Left returns to Replace");
         inject("Left");
-        r07_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
+        focus_navigation_assert_source_row(&view, &win, &r.row, &fixture.ids[i], i as i32);
         if i < 2 {
             inject("Down");
         }
     }
     for i in (0..2).rev() {
         inject("Up");
-        r07_assert_source_row(&view, &win, &rows[i].row, &fixture.ids[i], i as i32);
+        focus_navigation_assert_source_row(&view, &win, &rows[i].row, &fixture.ids[i], i as i32);
     }
     assert!(
         fixture.ids.iter().all(|id| fixture.enabled(id)),
@@ -546,45 +582,45 @@ fn r07_native_source_grid(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "R07 AS03/AS15 actual source-manager two-line D-pad graph at 640"]
-fn r07_native_source_grid_640_480() {
-    r07_native_source_grid(640, 480, false);
+#[ignore = "NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID actual source-manager two-line D-pad graph at 640"]
+fn native_source_grid_640_480() {
+    native_source_grid(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 AS03/AS15 actual source-manager two-line D-pad graph at 1280"]
-fn r07_native_source_grid_1280_800() {
-    r07_native_source_grid(1280, 800, false);
+#[ignore = "NATIVE_FOCUS SOURCE_GRID/SOURCE_MANAGER_GRID actual source-manager two-line D-pad graph at 1280"]
+fn native_source_grid_1280_800() {
+    native_source_grid(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 AS03 wrong disabled movement edge must fail"]
-fn r07_native_source_grid_negative_edge() {
-    r07_native_source_grid(640, 480, true);
+#[ignore = "NATIVE_FOCUS SOURCE_GRID wrong disabled movement edge must fail"]
+fn native_source_grid_negative_edge() {
+    native_source_grid(640, 480, true);
 }
 
 #[test]
-#[ignore = "R07 genuine XTest source-row traversal, disposable SQLite"]
-fn r07_native_source_rows_640_480() {
-    r07_native_source_rows(640, 480, false);
+#[ignore = "NATIVE_FOCUS genuine XTest source-row traversal, disposable SQLite"]
+fn native_source_rows_640_480() {
+    native_source_rows(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 genuine XTest source-row traversal, disposable SQLite"]
-fn r07_native_source_rows_1280_800() {
-    r07_native_source_rows(1280, 800, false);
+#[ignore = "NATIVE_FOCUS genuine XTest source-row traversal, disposable SQLite"]
+fn native_source_rows_1280_800() {
+    native_source_rows(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberately wrong source UUID/index must fail"]
-fn r07_native_negative_row_identity() {
-    r07_native_source_rows(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately wrong source UUID/index must fail"]
+fn native_negative_row_identity() {
+    native_source_rows(640, 480, true);
 }
 
-// R07 AS12/AS13: actual 3-source SQLite order changes from native D-pad,
+// NATIVE_FOCUS SOURCE_REORDER/SOURCE_REORDER_GRAPH: actual 3-source SQLite order changes from native D-pad,
 // with row/action focus restored by source UUID after each async rebuild.
-// This complements, rather than replaces, C1's switch and Back tests.
-fn r07_native_source_reorder(width: i32, height: i32, negative: bool) {
+// This complements, rather than replaces, SOURCE_MANAGER's switch and Back tests.
+fn native_source_reorder(width: i32, height: i32, negative: bool) {
     adw::init().expect("native GTK display");
     let resource = gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES))
         .expect("resource");
@@ -606,7 +642,7 @@ fn r07_native_source_reorder(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("real My Channels");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
     let (dialog, list) = open(&view, &win, 3);
     let id = fixture.ids[1].clone();
     let orders = || {
@@ -650,9 +686,9 @@ fn r07_native_source_reorder(width: i32, height: i32, negative: bool) {
         assert_eq!(
             orders()[0],
             fixture.ids[0],
-            "R07_AS12_EXPECTED_NEGATIVE_ORACLE: unchanged source order"
+            "NATIVE_FOCUS_SOURCE_REORDER_EXPECTED_NEGATIVE_ORACLE: unchanged source order"
         );
-        unreachable!("R07 reorder negative must fail");
+        unreachable!("NATIVE_FOCUS reorder negative must fail");
     }
     let first = controls(&list, 0).expect("rebound moved source");
     assert!(!middle.row.is_mapped(), "old GTK row unmapped after rebind");
@@ -695,62 +731,62 @@ fn r07_native_source_reorder(width: i32, height: i32, negative: bool) {
 }
 
 #[test]
-#[ignore = "R07 mapped SQLite manager Move Up and Move Down 640x480"]
-fn r07_native_source_reorder_640_480() {
-    r07_native_source_reorder(640, 480, false);
+#[ignore = "NATIVE_FOCUS mapped SQLite manager Move Up and Move Down 640x480"]
+fn native_source_reorder_640_480() {
+    native_source_reorder(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 mapped SQLite manager Move Up and Move Down 1280x800"]
-fn r07_native_source_reorder_1280_800() {
-    r07_native_source_reorder(1280, 800, false);
+#[ignore = "NATIVE_FOCUS mapped SQLite manager Move Up and Move Down 1280x800"]
+fn native_source_reorder_1280_800() {
+    native_source_reorder(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberately false source order after physical Move Up"]
-fn r07_native_source_reorder_negative_order() {
-    r07_native_source_reorder(640, 480, true);
+#[ignore = "NATIVE_FOCUS deliberately false source order after physical Move Up"]
+fn native_source_reorder_negative_order() {
+    native_source_reorder(640, 480, true);
 }
 
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_0_640_480() {
+fn native_source_manager_0_640_480() {
     run(0, 640, 480, false);
 }
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_1_640_480() {
+fn native_source_manager_1_640_480() {
     run(1, 640, 480, false);
 }
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_3_640_480() {
+fn native_source_manager_3_640_480() {
     run(3, 640, 480, false);
 }
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_0_1280_800() {
+fn native_source_manager_0_1280_800() {
     run(0, 1280, 800, false);
 }
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_1_1280_800() {
+fn native_source_manager_1_1280_800() {
     run(1, 1280, 800, false);
 }
 #[test]
 #[ignore = "real GTK/XTest and SQLite service"]
-fn c1_native_manager_3_1280_800() {
+fn native_source_manager_3_1280_800() {
     run(3, 1280, 800, false);
 }
 #[test]
 #[ignore = "intentionally broken real GTK oracle; CI must see RED"]
-fn c1_native_negative_oracle() {
+fn source_manager_native_negative_oracle() {
     run(1, 640, 480, true);
 }
 
-// R07 AS16: differentiate real remote Back, native Escape, and remote Home
+// NATIVE_FOCUS SOURCE_MODAL_HOME: differentiate real remote Back, native Escape, and remote Home
 // across three fresh manager modal sessions, with no source mutation.
-fn r07_native_source_modal_semantics(width: i32, height: i32, negative: bool) {
+fn native_source_modal_semantics(width: i32, height: i32, negative: bool) {
     adw::init().expect("native GTK display");
     let resource =
         gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
@@ -773,7 +809,7 @@ fn r07_native_source_modal_semantics(width: i32, height: i32, negative: bool) {
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("actual My Channels view");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
 
     // Back from the action moves to the owning source row; a second Back
     // dismisses the dialog but leaves the original Streams page selected.
@@ -784,7 +820,7 @@ fn r07_native_source_modal_semantics(width: i32, height: i32, negative: bool) {
     inject("Return");
     assert!(row.enabled.has_focus(), "real middle source Switch");
     inject("XF86Back");
-    r07_assert_source_row(&view, &win, &row.row, &fixture.ids[1], 1);
+    focus_navigation_assert_source_row(&view, &win, &row.row, &fixture.ids[1], 1);
     assert!(back_dialog.is_mapped(), "first Back cannot close manager");
     inject("XF86Back");
     until("second Back dismisses source manager", || {
@@ -816,33 +852,35 @@ fn r07_native_source_modal_semantics(width: i32, height: i32, negative: bool) {
         assert_eq!(
             stack.visible_child_name().as_deref(),
             Some("streams"),
-            "R07_AS16_EXPECTED_NEGATIVE_ORACLE: Home must not behave like Back"
+            "NATIVE_FOCUS_SOURCE_MODAL_HOME_EXPECTED_NEGATIVE_ORACLE: Home must not behave like Back"
         );
-        unreachable!("R07 AS16 deliberate wrong Home oracle unexpectedly survived");
+        unreachable!(
+            "NATIVE_FOCUS SOURCE_MODAL_HOME deliberate wrong Home oracle unexpectedly survived"
+        );
     }
     assert!(fixture.ids.iter().all(|id| fixture.enabled(id)));
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 AS16 real source modal Back Escape Home 640x480"]
-fn r07_native_source_modal_640_480() {
-    r07_native_source_modal_semantics(640, 480, false);
+#[ignore = "NATIVE_FOCUS SOURCE_MODAL_HOME real source modal Back Escape Home 640x480"]
+fn native_source_modal_640_480() {
+    native_source_modal_semantics(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 AS16 real source modal Back Escape Home 1280x800"]
-fn r07_native_source_modal_1280_800() {
-    r07_native_source_modal_semantics(1280, 800, false);
+#[ignore = "NATIVE_FOCUS SOURCE_MODAL_HOME real source modal Back Escape Home 1280x800"]
+fn native_source_modal_1280_800() {
+    native_source_modal_semantics(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 AS16 deliberately false Home equals Back oracle"]
-fn r07_native_source_modal_negative_home() {
-    r07_native_source_modal_semantics(640, 480, true);
+#[ignore = "NATIVE_FOCUS SOURCE_MODAL_HOME deliberately false Home equals Back oracle"]
+fn native_source_modal_negative_home() {
+    native_source_modal_semantics(640, 480, true);
 }
 
-// Source-manager R07 batch: exercise the real mapped dialog sequence rather
+// Source-manager NATIVE_FOCUS batch: exercise the real mapped dialog sequence rather
 // than invoking service callbacks or constructing detached buttons.
 fn source_sheet(win: &crate::window::TvWindow, title: &str) -> Option<adw::Dialog> {
     descendants(win.upcast_ref())
@@ -856,7 +894,7 @@ fn source_sheet_button(dialog: &adw::Dialog, text: &str) -> gtk::Button {
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
         .find(|button| button.label().as_deref() == Some(text))
-        .unwrap_or_else(|| panic!("R07 mapped {text} action in {}", dialog.title()))
+        .unwrap_or_else(|| panic!("NATIVE_FOCUS mapped {text} action in {}", dialog.title()))
 }
 
 fn source_sheet_entries(dialog: &adw::Dialog) -> Vec<gtk::Entry> {
@@ -928,7 +966,7 @@ fn source_fixture_window(
     stack.set_visible_child_name("streams");
     spin();
     let view = find_view(win.upcast_ref()).expect("actual My Channels category");
-    view.c1_install_test_service(service);
+    view.source_manager_install_test_service(service);
     let (dialog, list) = open(&view, &win, count);
     (fixture, win, view, dialog, list)
 }
@@ -939,7 +977,7 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
     let middle_id = fixture.ids[1].clone();
     let last_id = fixture.ids[2].clone();
 
-    // AS09: source-qualified Rename has a validation failure that leaves
+    // SOURCE_RENAME_VALIDATION: source-qualified Rename has a validation failure that leaves
     // SQLite untouched, followed by a real save and asynchronously rebound
     // same-row action.  The physical key activates the actual dialog button.
     let rename = source_action(&win, &list, 0, 2, "Rename Source");
@@ -955,14 +993,14 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
         fixture.storage.get_source(&first_id).unwrap().name,
         "Fixture 0"
     );
-    name.set_text("R07 native renamed source");
+    name.set_text("NATIVE_FOCUS native renamed source");
     press_sheet(&rename, "Save");
     until("source Rename persists and closes editor", || {
         !rename.is_mapped()
             && fixture
                 .storage
                 .get_source(&first_id)
-                .is_ok_and(|source| source.name == "R07 native renamed source")
+                .is_ok_and(|source| source.name == "NATIVE_FOCUS native renamed source")
     });
     until("source Rename restores mapped same-source focus", || {
         controls(&list, 0).is_some_and(|row| {
@@ -979,12 +1017,12 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
     if negative {
         assert_eq!(
             fixture.storage.get_source(&middle_id).unwrap().name,
-            "R07 native renamed source",
-            "R07_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE: rename may not mutate another UUID"
+            "NATIVE_FOCUS native renamed source",
+            "NATIVE_FOCUS_SOURCE_DIALOG_EXPECTED_NEGATIVE_ORACLE: rename may not mutate another UUID"
         );
     }
 
-    // AS08: Defaults form is the production long-form scroll/Expander
+    // SOURCE_DEFAULTS_DIALOG: Defaults form is the production long-form scroll/Expander
     // with typed region fields. Invalid oversized code must not write;
     // valid code+label persists to a new SQLite connection and rebinds.
     let defaults = source_action(&win, &list, 1, 1, "Edit Source Defaults");
@@ -1026,7 +1064,7 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
         .region
         .is_none());
 
-    // AS11 and AS10: Replace chooser must offer local/remote paths; an
+    // SOURCE_KEYBOARD and SOURCE_FILE_CHOOSER: Replace chooser must offer local/remote paths; an
     // invalid non-HTTP remote address must not alter a local source or
     // reach the network. Cancel returns to the populated source manager.
     let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
@@ -1068,7 +1106,7 @@ fn native_source_editors(width: i32, height: i32, negative: bool) {
     assert!(fixture.storage.get_source(&first_id).is_ok());
     manager.close();
     until("source manager tear down", || !manager.is_mapped());
-    view.c1_test_manage_button().grab_focus();
+    view.source_manager_test_manage_button().grab_focus();
     win.destroy();
 }
 
@@ -1111,7 +1149,7 @@ fn native_source_delete_ordinal(width: i32, height: i32, index: i32, negative: b
     if negative {
         assert!(
             fixture.storage.get_source(&removed_id).is_ok(),
-            "R07_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE: confirmed removal must delete exact UUID"
+            "NATIVE_FOCUS_SOURCE_DELETE_EXPECTED_NEGATIVE_ORACLE: confirmed removal must delete exact UUID"
         );
     }
     manager.close();
@@ -1121,7 +1159,7 @@ fn native_source_delete_ordinal(width: i32, height: i32, index: i32, negative: b
     win.destroy();
 }
 
-// Connected AS08/AS09/AS11/C06 regression: operate the production K2 OSK
+// Connected SOURCE_DEFAULTS_DIALOG/SOURCE_RENAME_VALIDATION/SOURCE_KEYBOARD/KEYBOARD_CONFIRMATION regression: operate the production ON_SCREEN_KEYBOARD OSK
 // through mapped launcher/buttons, not by emitting signal handlers. Every
 // source ID is real SQLite and each modal belongs to an actual manager row.
 fn osk_for_source_field(win: &crate::window::TvWindow, entry: &gtk::Entry) -> adw::Dialog {
@@ -1135,7 +1173,7 @@ fn osk_for_source_field(win: &crate::window::TvWindow, entry: &gtk::Entry) -> ad
         .expect("mapped real OSK launcher beside editable");
     assert!(launcher.grab_focus(), "physical OSK launcher focus");
     inject("Return");
-    until("real K2 OSK opened", || {
+    until("real ON_SCREEN_KEYBOARD OSK opened", || {
         source_sheet(win, "On-screen keyboard").is_some()
     });
     let osk = source_sheet(win, "On-screen keyboard").unwrap();
@@ -1160,7 +1198,7 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
     ];
 
     // Rename: Cancel an edited draft without mutating the source, then
-    // re-open and type a new name using actual K2 key buttons/Done.
+    // re-open and type a new name using actual ON_SCREEN_KEYBOARD key buttons/Done.
     let rename = source_action(&win, &list, 0, 2, "Rename Source");
     let name = source_sheet_entries(&rename)[0].clone();
     let osk = osk_for_source_field(&win, &name);
@@ -1173,7 +1211,7 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
     osk_key(&osk, "→");
     assert_eq!(preview.position(), 1, "real OSK caret right");
     osk_key(&osk, "Cancel");
-    until("K2 Rename cancel", || !osk.is_mapped());
+    until("ON_SCREEN_KEYBOARD Rename cancel", || !osk.is_mapped());
     assert_eq!(
         name.text().as_str(),
         "Fixture 0",
@@ -1188,18 +1226,21 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
     osk_key(&osk, "q");
     osk_key(&osk, "w");
     osk_key(&osk, "Done");
-    until("K2 Rename commits editable", || {
+    until("ON_SCREEN_KEYBOARD Rename commits editable", || {
         !osk.is_mapped() && name.text().as_str() == "qw"
     });
     press_sheet(&rename, "Save");
-    until("K2 Rename SQLite save and focus restoration", || {
-        !rename.is_mapped()
-            && fixture
-                .storage
-                .get_source(&first)
-                .is_ok_and(|s| s.name == "qw")
-            && gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|f| f.is_mapped())
-    });
+    until(
+        "ON_SCREEN_KEYBOARD Rename SQLite save and focus restoration",
+        || {
+            !rename.is_mapped()
+                && fixture
+                    .storage
+                    .get_source(&first)
+                    .is_ok_and(|s| s.name == "qw")
+                && gtk::prelude::GtkWindowExt::focus(&win).is_some_and(|f| f.is_mapped())
+        },
+    );
     assert_eq!(
         fixture.storage.get_source(&middle).unwrap().name,
         "Fixture 1"
@@ -1208,7 +1249,7 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
         assert_eq!(
             fixture.storage.get_source(&middle).unwrap().name,
             "qw",
-            "R07_SOURCE_OSK_EXPECTED_NEGATIVE_ORACLE: OSK Rename must not target foreign UUID"
+            "NATIVE_FOCUS_SOURCE_OSK_EXPECTED_NEGATIVE_ORACLE: OSK Rename must not target foreign UUID"
         );
     }
 
@@ -1226,12 +1267,12 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
     osk_key(&osk, "d");
     osk_key(&osk, "e");
     osk_key(&osk, "Done");
-    until("K2 region draft committed", || {
+    until("ON_SCREEN_KEYBOARD region draft committed", || {
         !osk.is_mapped() && code.text().as_str() == "de"
     });
     region_label.set_text("Germany");
     press_sheet(&defaults, "Save");
-    until("K2 source region persisted", || {
+    until("ON_SCREEN_KEYBOARD source region persisted", || {
         !defaults.is_mapped()
             && fixture.storage.get_source(&middle).is_ok_and(|s| {
                 s.defaults.region.as_ref().is_some_and(|r| {
@@ -1240,11 +1281,11 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
             })
     });
 
-    // Replace URL: K2's URL validator rejects a non-HTTP draft before any
+    // Replace URL: ON_SCREEN_KEYBOARD's URL validator rejects a non-HTTP draft before any
     // network call or SQLite mutation, and Back/Cancel cannot commit it.
     let replace = source_action(&win, &list, 2, 3, "Replace Playlist");
     press_sheet(&replace, "Replace HTTP(S) URL");
-    until("K2 Replace URL editor", || {
+    until("ON_SCREEN_KEYBOARD Replace URL editor", || {
         source_sheet(&win, "Replace Playlist URL").is_some()
     });
     let url = source_sheet(&win, "Replace Playlist URL").unwrap();
@@ -1253,105 +1294,112 @@ fn native_source_osk_forms(width: i32, height: i32, negative: bool) {
     let preview = source_sheet_entries(&osk)[0].clone();
     preview.set_text("file:///blocked.m3u");
     osk_key(&osk, "Done");
-    assert!(osk.is_mapped(), "K2 rejects non-HTTP URL without saving");
+    assert!(
+        osk.is_mapped(),
+        "ON_SCREEN_KEYBOARD rejects non-HTTP URL without saving"
+    );
     assert!(
         entry.text().is_empty(),
         "failed URL validator cannot write origin"
     );
     osk_key(&osk, "Cancel");
-    until("K2 URL cancel", || !osk.is_mapped());
+    until("ON_SCREEN_KEYBOARD URL cancel", || !osk.is_mapped());
     assert!(entry.text().is_empty());
     press_sheet(&url, "Cancel");
-    until("K2 replacement URL editor closed", || !url.is_mapped());
+    until("ON_SCREEN_KEYBOARD replacement URL editor closed", || {
+        !url.is_mapped()
+    });
     assert_eq!(
         fixture.storage.get_source(&last).unwrap().origin.kind,
         OriginKind::LocalFile
     );
     assert!(
         manager.is_mapped(),
-        "source manager remains after K2 cancel"
+        "source manager remains after ON_SCREEN_KEYBOARD cancel"
     );
     manager.close();
-    until("source manager closed after K2", || !manager.is_mapped());
+    until("source manager closed after ON_SCREEN_KEYBOARD", || {
+        !manager.is_mapped()
+    });
     win.destroy();
 }
 
 #[test]
-#[ignore = "R07 real source Rename Defaults Replace K2 OSK physical compact"]
-fn r07_native_source_osk_640_480() {
+#[ignore = "NATIVE_FOCUS real source Rename Defaults Replace ON_SCREEN_KEYBOARD OSK physical compact"]
+fn native_source_osk_640_480() {
     native_source_osk_forms(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 real source Rename Defaults Replace K2 OSK physical TV"]
-fn r07_native_source_osk_1280_800() {
+#[ignore = "NATIVE_FOCUS real source Rename Defaults Replace ON_SCREEN_KEYBOARD OSK physical TV"]
+fn native_source_osk_1280_800() {
     native_source_osk_forms(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 deliberate foreign UUID after real K2 source Rename"]
-fn r07_native_source_osk_negative() {
+#[ignore = "NATIVE_FOCUS deliberate foreign UUID after real ON_SCREEN_KEYBOARD source Rename"]
+fn native_source_osk_negative() {
     native_source_osk_forms(640, 480, true);
 }
 
 #[test]
-#[ignore = "R07 source manager connected Rename/Defaults/Replace/Refresh, 640x480 XTest"]
-fn r07_native_source_editors_640_480() {
+#[ignore = "NATIVE_FOCUS source manager connected Rename/Defaults/Replace/Refresh, 640x480 XTest"]
+fn native_source_editors_640_480() {
     native_source_editors(640, 480, false);
 }
 
 #[test]
-#[ignore = "R07 source manager connected Rename/Defaults/Replace/Refresh, 1280x800 XTest"]
-fn r07_native_source_editors_1280_800() {
+#[ignore = "NATIVE_FOCUS source manager connected Rename/Defaults/Replace/Refresh, 1280x800 XTest"]
+fn native_source_editors_1280_800() {
     native_source_editors(1280, 800, false);
 }
 
 #[test]
-#[ignore = "R07 negative wrong UUID during mapped source Rename"]
-fn r07_native_source_editors_negative() {
+#[ignore = "NATIVE_FOCUS negative wrong UUID during mapped source Rename"]
+fn native_source_editors_negative() {
     native_source_editors(640, 480, true);
 }
 
 #[test]
-#[ignore = "R07 physical first-source Keep/Delete and focus fallback compact"]
-fn r07_native_source_delete_first_640_480() {
+#[ignore = "NATIVE_FOCUS physical first-source Keep/Delete and focus fallback compact"]
+fn native_source_delete_first_640_480() {
     native_source_delete_ordinal(640, 480, 0, false);
 }
 #[test]
-#[ignore = "R07 physical middle-source Keep/Delete and focus fallback compact"]
-fn r07_native_source_delete_middle_640_480() {
+#[ignore = "NATIVE_FOCUS physical middle-source Keep/Delete and focus fallback compact"]
+fn native_source_delete_middle_640_480() {
     native_source_delete_ordinal(640, 480, 1, false);
 }
 #[test]
-#[ignore = "R07 physical last-source Keep/Delete and focus fallback compact"]
-fn r07_native_source_delete_last_640_480() {
+#[ignore = "NATIVE_FOCUS physical last-source Keep/Delete and focus fallback compact"]
+fn native_source_delete_last_640_480() {
     native_source_delete_ordinal(640, 480, 2, false);
 }
 #[test]
-#[ignore = "R07 physical first-source Keep/Delete and focus fallback TV"]
-fn r07_native_source_delete_first_1280_800() {
+#[ignore = "NATIVE_FOCUS physical first-source Keep/Delete and focus fallback TV"]
+fn native_source_delete_first_1280_800() {
     native_source_delete_ordinal(1280, 800, 0, false);
 }
 #[test]
-#[ignore = "R07 physical middle-source Keep/Delete and focus fallback TV"]
-fn r07_native_source_delete_middle_1280_800() {
+#[ignore = "NATIVE_FOCUS physical middle-source Keep/Delete and focus fallback TV"]
+fn native_source_delete_middle_1280_800() {
     native_source_delete_ordinal(1280, 800, 1, false);
 }
 #[test]
-#[ignore = "R07 physical last-source Keep/Delete and focus fallback TV"]
-fn r07_native_source_delete_last_1280_800() {
+#[ignore = "NATIVE_FOCUS physical last-source Keep/Delete and focus fallback TV"]
+fn native_source_delete_last_1280_800() {
     native_source_delete_ordinal(1280, 800, 2, false);
 }
 #[test]
-#[ignore = "R07 wrong persisted source deletion negative control"]
-fn r07_native_source_deletions_negative() {
+#[ignore = "NATIVE_FOCUS wrong persisted source deletion negative control"]
+fn native_source_deletions_negative() {
     native_source_delete_ordinal(640, 480, 1, true);
 }
 
-// R07 G05: real painted source-manager upper/lower/confirm focus in two
+// NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS: real painted source-manager upper/lower/confirm focus in two
 // viewports. All navigation/confirm entry uses XTest, never fake GTK signals.
-fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: bool) {
-    use crate::window::r07_native_focus_tests::r07_painted_probe_physical_inverse;
+fn native_painted_manager(width: i32, height: i32, target: &str, negative: bool) {
+    use crate::window::native_focus_navigation_tests::focus_navigation_painted_probe_physical_inverse;
     let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
     // Fixed GTK animation setting avoids a stale X11 transition-frame capture.
     if let Some(settings) = gtk::Settings::default() {
@@ -1376,10 +1424,10 @@ fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: b
         "physical upper Refresh"
     );
     let upper_px = if target == "upper" {
-        r07_painted_probe_physical_inverse(
+        focus_navigation_painted_probe_physical_inverse(
             &win,
             upper.upcast_ref(),
-            "G05 source Refresh upper",
+            "SOURCE_MANAGER_PAINTED_FOCUS source Refresh upper",
             || inject("Left"),
             || inject("Right"),
         )
@@ -1393,10 +1441,10 @@ fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: b
         "physical lower Delete"
     );
     let lower_px = if target == "lower" {
-        r07_painted_probe_physical_inverse(
+        focus_navigation_painted_probe_physical_inverse(
             &win,
             lower.upcast_ref(),
-            "G05 source Delete lower",
+            "SOURCE_MANAGER_PAINTED_FOCUS source Delete lower",
             || inject("Up"),
             || inject("Down"),
         )
@@ -1428,10 +1476,10 @@ fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: b
     // Render the safe, selected confirmation after first proving that the
     // destructive peer was reachable. Never press the destructive action.
     let confirm_px = if target == "confirm" {
-        r07_painted_probe_physical_inverse(
+        focus_navigation_painted_probe_physical_inverse(
             &win,
             safe.upcast_ref(),
-            "G05 nested Keep Source",
+            "SOURCE_MANAGER_PAINTED_FOCUS nested Keep Source",
             || inject("Right"),
             || inject("Left"),
         )
@@ -1447,25 +1495,25 @@ fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: b
             .ids
             .iter()
             .all(|id| fixture.storage.get_source(id).is_ok()),
-        "G05 cancelled nested confirmation must never delete any source"
+        "SOURCE_MANAGER_PAINTED_FOCUS cancelled nested confirmation must never delete any source"
     );
-    eprintln!("R07_G05_PAINTED viewport={width}x{height} upper={upper_px} lower={lower_px} nested={confirm_px}");
+    eprintln!("NATIVE_FOCUS_SOURCE_MANAGER_PAINTED_FOCUS_PAINTED viewport={width}x{height} upper={upper_px} lower={lower_px} nested={confirm_px}");
     if negative {
         assert_eq!(
             upper_px, 0,
-            "R07_G05_EXPECTED_NEGATIVE_PAINT: real upper action focus must have pixels"
+            "NATIVE_FOCUS_SOURCE_MANAGER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT: real upper action focus must have pixels"
         );
-        unreachable!("R07 G05 false pixel oracle was accepted");
+        unreachable!("NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS false pixel oracle was accepted");
     }
     let measured = match target {
         "upper" => upper_px,
         "lower" => lower_px,
         "confirm" => confirm_px,
-        _ => panic!("unexpected G05 painted target"),
+        _ => panic!("unexpected SOURCE_MANAGER_PAINTED_FOCUS painted target"),
     };
     assert!(
         measured >= 15,
-        "G05 selected actual native action focus was not visibly painted"
+        "SOURCE_MANAGER_PAINTED_FOCUS selected actual native action focus was not visibly painted"
     );
     manager.close();
     win.destroy();
@@ -1477,45 +1525,45 @@ fn r07_native_painted_manager(width: i32, height: i32, target: &str, negative: b
 // in every test, while each individual button has a real positive/negative
 // and restored pixel oracle on its own isolated X11 process.
 #[test]
-#[ignore = "R07 G05 X11 source upper focus pixels compact"]
-fn r07_native_manager_paint_upper_640_480() {
-    r07_native_painted_manager(640, 480, "upper", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 source upper focus pixels compact"]
+fn native_manager_paint_upper_640_480() {
+    native_painted_manager(640, 480, "upper", false);
 }
 #[test]
-#[ignore = "R07 G05 X11 source upper focus pixels TV"]
-fn r07_native_manager_paint_upper_1280_800() {
-    r07_native_painted_manager(1280, 800, "upper", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 source upper focus pixels TV"]
+fn native_manager_paint_upper_1280_800() {
+    native_painted_manager(1280, 800, "upper", false);
 }
 #[test]
-#[ignore = "R07 G05 X11 source lower focus pixels compact"]
-fn r07_native_manager_paint_lower_640_480() {
-    r07_native_painted_manager(640, 480, "lower", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 source lower focus pixels compact"]
+fn native_manager_paint_lower_640_480() {
+    native_painted_manager(640, 480, "lower", false);
 }
 #[test]
-#[ignore = "R07 G05 X11 source lower focus pixels TV"]
-fn r07_native_manager_paint_lower_1280_800() {
-    r07_native_painted_manager(1280, 800, "lower", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 source lower focus pixels TV"]
+fn native_manager_paint_lower_1280_800() {
+    native_painted_manager(1280, 800, "lower", false);
 }
 #[test]
-#[ignore = "R07 G05 X11 nested source confirmation focus pixels compact"]
-fn r07_native_manager_paint_confirm_640_480() {
-    r07_native_painted_manager(640, 480, "confirm", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 nested source confirmation focus pixels compact"]
+fn native_manager_paint_confirm_640_480() {
+    native_painted_manager(640, 480, "confirm", false);
 }
 #[test]
-#[ignore = "R07 G05 X11 nested source confirmation focus pixels TV"]
-fn r07_native_manager_paint_confirm_1280_800() {
-    r07_native_painted_manager(1280, 800, "confirm", false);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS X11 nested source confirmation focus pixels TV"]
+fn native_manager_paint_confirm_1280_800() {
+    native_painted_manager(1280, 800, "confirm", false);
 }
 #[test]
-#[ignore = "R07 G05 intentionally false source-manager pixel oracle"]
-fn r07_native_manager_paint_negative() {
-    r07_native_painted_manager(640, 480, "upper", true);
+#[ignore = "NATIVE_FOCUS SOURCE_MANAGER_PAINTED_FOCUS intentionally false source-manager pixel oracle"]
+fn native_manager_paint_negative() {
+    native_painted_manager(640, 480, "upper", true);
 }
 
-// R07 AS06/AS07/AS17/AS18: complete offline source refresh and major
+// NATIVE_FOCUS SOURCE_OFFLINE_REFRESH/SOURCE_REFRESH_PERSISTENCE/SOURCE_REFRESH_MODAL/SOURCE_REFRESH_CANCEL: complete offline source refresh and major
 // reduction Keep Existing. Synthetic local M3U bytes are stored in a
 // disposable private directory: this must never issue external network I/O.
-fn r07_native_source_refresh_paths(width: i32, height: i32, count: usize, negative: bool) {
+fn native_source_refresh_paths(width: i32, height: i32, count: usize, negative: bool) {
     let (fixture, win, _view, manager, list) = source_fixture_window(count, width, height);
     let index = if count == 3 { 1 } else { 0 };
     let id = fixture.ids[index].clone();
@@ -1572,9 +1620,9 @@ fn r07_native_source_refresh_paths(width: i32, height: i32, count: usize, negati
         assert_eq!(
             fixture.storage.query_channels(&crate::streams::model::ChannelQuery::default()).unwrap().total,
             0,
-            "R07_AS07_EXPECTED_NEGATIVE_ORACLE: successful native Refresh must actually persist twenty channels"
+            "NATIVE_FOCUS_SOURCE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE: successful native Refresh must actually persist twenty channels"
         );
-        unreachable!("R07 AS07 intentionally wrong source-refresh oracle escaped");
+        unreachable!("NATIVE_FOCUS SOURCE_REFRESH_PERSISTENCE intentionally wrong source-refresh oracle escaped");
     }
 
     // Replace the same source file with an 95%-smaller catalogue. A second
@@ -1669,25 +1717,25 @@ fn r07_native_source_refresh_paths(width: i32, height: i32, count: usize, negati
 }
 
 #[test]
-#[ignore = "R07 offline one-source refresh success/failure and major-reduction Keep Existing compact"]
-fn r07_native_source_refresh_one_640_480() {
-    r07_native_source_refresh_paths(640, 480, 1, false);
+#[ignore = "NATIVE_FOCUS offline one-source refresh success/failure and major-reduction Keep Existing compact"]
+fn native_source_refresh_one_640_480() {
+    native_source_refresh_paths(640, 480, 1, false);
 }
 #[test]
-#[ignore = "R07 offline three-source refresh success/failure and major-reduction Keep Existing TV"]
-fn r07_native_source_refresh_three_1280_800() {
-    r07_native_source_refresh_paths(1280, 800, 3, false);
+#[ignore = "NATIVE_FOCUS offline three-source refresh success/failure and major-reduction Keep Existing TV"]
+fn native_source_refresh_three_1280_800() {
+    native_source_refresh_paths(1280, 800, 3, false);
 }
 #[test]
-#[ignore = "R07 deliberately wrong real SQLite source-refresh result"]
-fn r07_native_source_refresh_negative() {
-    r07_native_source_refresh_paths(640, 480, 1, true);
+#[ignore = "NATIVE_FOCUS deliberately wrong real SQLite source-refresh result"]
+fn native_source_refresh_negative() {
+    native_source_refresh_paths(640, 480, 1, true);
 }
 
-// R07 AS10: use the production GtkFileDialog, its real mapped native X11
+// NATIVE_FOCUS SOURCE_FILE_CHOOSER: use the production GtkFileDialog, its real mapped native X11
 // chooser and XTest keyboard input. This tests permission-scoped local file
 // selection, not a constructed GFile returned directly to the service.
-fn r07_native_source_file_chooser(width: i32, height: i32, negative: bool) {
+fn native_source_file_chooser(width: i32, height: i32, negative: bool) {
     const PHYSICAL_CHOOSER: &str = r#"
 import ctypes as c,sys,time
 x=c.CDLL('libX11.so.6');t=c.CDLL('libXtst.so.6')
@@ -1720,7 +1768,7 @@ for char in sys.argv[1]:
 x.XFlush(d);time.sleep(.15)
 press('Return');x.XFlush(d);time.sleep(.6)
 press('Return');x.XFlush(d)
-print('R07_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
+print('NATIVE_FOCUS_SOURCE_FILE_CHOOSER_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 "#;
     let (fixture, win, _view, manager, list) = source_fixture_window(3, width, height);
     let id = fixture.ids[2].clone();
@@ -1758,7 +1806,7 @@ print('R07_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
         assert_eq!(
             fixture.storage.get_source(&sibling).unwrap().origin.locator,
             fixture.storage.get_source(&id).unwrap().origin.locator,
-            "R07_AS10_EXPECTED_NEGATIVE_ORACLE: a real file chooser must not replace another source"
+            "NATIVE_FOCUS_SOURCE_FILE_CHOOSER_EXPECTED_NEGATIVE_ORACLE: a real file chooser must not replace another source"
         );
         unreachable!("false selected-source oracle passed");
     }
@@ -1779,17 +1827,151 @@ print('R07_AS10_ACTUAL_XTEST_FILE_CHOOSER_TYPED',flush=True)
 }
 
 #[test]
-#[ignore = "R07 AS10 genuine GTK file chooser compact, XTest local M3U selection"]
-fn r07_native_source_file_chooser_640_480() {
-    r07_native_source_file_chooser(640, 480, false);
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER genuine GTK file chooser compact, XTest local M3U selection"]
+fn native_source_file_chooser_640_480() {
+    native_source_file_chooser(640, 480, false);
 }
 #[test]
-#[ignore = "R07 AS10 genuine GTK file chooser TV, XTest local M3U selection"]
-fn r07_native_source_file_chooser_1280_800() {
-    r07_native_source_file_chooser(1280, 800, false);
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER genuine GTK file chooser TV, XTest local M3U selection"]
+fn native_source_file_chooser_1280_800() {
+    native_source_file_chooser(1280, 800, false);
 }
 #[test]
-#[ignore = "R07 AS10 intentionally wrong selected-source UUID oracle"]
-fn r07_native_source_file_chooser_negative() {
-    r07_native_source_file_chooser(640, 480, true);
+#[ignore = "NATIVE_FOCUS SOURCE_FILE_CHOOSER intentionally wrong selected-source UUID oracle"]
+fn native_source_file_chooser_negative() {
+    native_source_file_chooser(640, 480, true);
+}
+
+#[test]
+fn guide_manager_batch_uses_one_validated_snapshot_for_many_playlists() {
+    let fixture = Fixture::new(48);
+    let conn = fixture.storage.connect().unwrap();
+    // A nonempty catalogue exposes quadratic allocations from Vec::clone:
+    // all 48 summaries must share one allocation, even with 64 guides.
+    for i in 0..64 {
+        conn.execute(
+            "INSERT INTO epg_sources
+             (id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+             VALUES (?1,?2,'local_file','/synthetic/guide',1,1,1,1000)",
+            params![format!("guide-{i}"), format!("Synthetic Guide {i}")],
+        )
+        .unwrap();
+    }
+    let values = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(values.len(), fixture.ids.len());
+    let first = &values[0].as_ref().unwrap().options;
+    assert_eq!(first.len(), 64);
+    for value in &values {
+        let value = value.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(first, &value.options));
+        assert_eq!(
+            value.choice,
+            crate::epg::bindings::PlaylistGuideChoice::Inherit
+        );
+        assert_eq!((value.total, value.matched), (0, 0));
+    }
+    assert!(
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+            .unwrap()
+            == "ok"
+    );
+}
+
+#[test]
+fn guide_manager_coverage_respects_optout_manual_target_and_other_playlist() {
+    use crate::epg::bindings::{
+        set_playlist_guide_choice, set_row_mapping, set_shared_guide, ConfirmedGuideSelection,
+        ConfirmedRowMapping, PlaylistGuideChoice,
+    };
+    let fixture = Fixture::new(2);
+    let mut conn = fixture.storage.connect().unwrap();
+    let first = &fixture.ids[0];
+    let second = &fixture.ids[1];
+    conn.execute(
+        "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,enabled,created_at,updated_at,last_success_at)
+         VALUES ('guide','Synthetic','local_file','/fabricated/guide',1,1,1,1000)",
+        [],
+    )
+    .unwrap();
+    for target in ["exact", "manual"] {
+        conn.execute(
+            "INSERT INTO epg_channels(source_id,channel_id,display_name)
+             VALUES('guide',?1,'Synthetic')",
+            [target],
+        )
+        .unwrap();
+    }
+    for (row, playlist) in [("first-row", first), ("second-row", second)] {
+        conn.execute(
+            "INSERT INTO iptv_channels(
+                id,source_id,playlist_order,imported_name,stream_url,tvg_id,created_at,updated_at)
+             VALUES (?1,?2,0,'Synthetic','https://invalid.example/stream','exact',1,1)",
+            params![row, playlist],
+        )
+        .unwrap();
+    }
+    set_shared_guide(
+        &mut conn,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        Some("guide"),
+    )
+    .unwrap();
+    set_playlist_guide_choice(
+        &mut conn,
+        ConfirmedGuideSelection::after_user_confirmation(),
+        first,
+        PlaylistGuideChoice::NoGuide,
+        1001,
+    )
+    .unwrap();
+    set_row_mapping(
+        &mut conn,
+        ConfirmedRowMapping::after_user_confirmation_for_this_stream(),
+        "first-row",
+        "guide",
+        "manual",
+        1002,
+    )
+    .unwrap();
+    let counts = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(
+        (
+            counts[0].as_ref().unwrap().total,
+            counts[0].as_ref().unwrap().matched
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        (
+            counts[1].as_ref().unwrap().total,
+            counts[1].as_ref().unwrap().matched
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        counts[0].as_ref().unwrap().choice,
+        PlaylistGuideChoice::NoGuide
+    );
+    assert_eq!(
+        counts[1].as_ref().unwrap().choice,
+        PlaylistGuideChoice::Inherit
+    );
+    conn.execute("UPDATE epg_sources SET enabled=0 WHERE id='guide'", [])
+        .unwrap();
+    let disabled = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(disabled[0].as_ref().unwrap().matched, 0);
+    assert_eq!(disabled[1].as_ref().unwrap().matched, 0);
+    conn.execute("DELETE FROM epg_sources WHERE id='guide'", [])
+        .unwrap();
+    let deleted = super::read_playlist_guide_details_batch(&conn, &fixture.ids).unwrap();
+    assert_eq!(
+        deleted[0].as_ref().unwrap().choice,
+        PlaylistGuideChoice::NoGuide
+    );
+    assert_eq!(
+        deleted[1].as_ref().unwrap().choice,
+        PlaylistGuideChoice::Inherit
+    );
+    assert_eq!(deleted[0].as_ref().unwrap().matched, 0);
+    assert_eq!(deleted[1].as_ref().unwrap().matched, 0);
 }

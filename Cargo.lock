@@ -82,6 +82,7 @@ dependencies = [
  "gtk4",
  "indexmap",
  "libadwaita",
+ "libc",
  "mediathekviewweb",
  "phf",
  "quick-xml",

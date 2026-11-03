@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Broadcaster contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! GTK-owned on-demand editing for TV remotes. K2 binds the remaining fields.
+//! GTK-owned on-demand editing for TV remotes. ON_SCREEN_KEYBOARD binds the remaining fields.
 //! No per-key change escapes the separate draft GtkEntry before Done.
 
 use adw::{glib, gtk, prelude::*};
@@ -32,7 +32,7 @@ pub enum KeyboardLayout {
     Url,
 }
 
-/// Typed K2 registration contract: a caller supplies a *particular editable*,
+/// Typed ON_SCREEN_KEYBOARD registration contract: a caller supplies a *particular editable*,
 /// its intended layout and an optional error-only validator (never log drafts).
 pub type KeyboardValidator = dyn Fn(&str) -> Result<(), String>;
 

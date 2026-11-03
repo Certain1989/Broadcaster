@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Disposable on-disk migration fixtures using the actual published v1 SQL.
-use super::storage::{Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, SCHEMA_VERSION};
+use super::storage::{
+    Storage, APPLICATION_ID, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
+    MIGRATION_005, SCHEMA_VERSION,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{fs, path::PathBuf};
 
@@ -70,7 +73,7 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
 }
 
 #[test]
-fn clean_new_database_is_schema_v3_after_reopening() {
+fn clean_new_database_is_schema_v5_after_reopening() {
     let dir = Sandbox::new();
     let storage = Storage::at(dir.path());
     storage.initialize().unwrap();
@@ -463,7 +466,7 @@ fn epg_manual_override_survives_ninety_day_missing_purge_until_real_guide_deleti
 
 #[cfg(unix)]
 #[test]
-fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
+fn guide_picker_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Sandbox::new();
     let path = dir.path();
@@ -494,7 +497,7 @@ fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        SCHEMA_VERSION
     );
     let alias: String = conn
         .query_row(
@@ -532,4 +535,260 @@ fn d35_v2_upgrade_retains_alias_and_produces_independent_v2_backup() {
         .unwrap(),
         0
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn guide_v3_to_v4_preserves_user_data_and_recovery_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(MIGRATION_002).unwrap();
+        c.execute_batch(MIGRATION_003).unwrap();
+        c.execute(
+            "INSERT INTO iptv_channel_favourites(channel_id) VALUES('stream-one')",
+            [],
+        )
+        .unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    let c = storage.connect().unwrap();
+    let version: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM iptv_channel_favourites", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let backups: Vec<_> = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("-v3-recovery-")
+        })
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let recover = Connection::open(&backups[0]).unwrap();
+    assert_eq!(
+        recover
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    storage.initialize().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn guide_invalid_v4_optout_schema_rejected_without_mutation() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(MIGRATION_002).unwrap();
+        c.execute_batch(MIGRATION_003).unwrap();
+        let invalid = MIGRATION_004.replace(
+            "updated_at INTEGER NOT NULL CHECK (updated_at >= 0)",
+            "updated_at INTEGER NOT NULL",
+        );
+        c.execute_batch(&invalid).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let original = fs::read(&path).unwrap();
+    assert!(Storage::at(&path).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn guide_reopening_corrupt_dual_selection_is_rejected() {
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    {
+        let conn = storage.connect().unwrap();
+        conn.execute(
+            "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('source','Synthetic','local_file','/fabricated/source',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+             VALUES('guide','Synthetic','local_file','/fabricated/guide',1,1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
+             VALUES('source','guide',5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO epg_playlist_guide_optouts(playlist_source_id,updated_at)
+             VALUES('source',6)",
+            [],
+        )
+        .unwrap();
+    }
+    assert!(
+        storage.connect().is_err(),
+        "dual selection corruption must fail validation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn playlist_refresh_v4_to_v5_preserves_guide_optout_channel_and_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let conn = Connection::open(&path).unwrap();
+        for part in [MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+            conn.execute_batch(part).unwrap();
+        }
+        conn.execute("INSERT INTO epg_playlist_guide_optouts (playlist_source_id,updated_at) VALUES('playlist-one',200)",[]).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let storage = Storage::at(&path);
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    let source = storage.get_source("playlist-one").unwrap();
+    assert!(!source.auto_refresh);
+    assert_eq!(source.refresh_interval_seconds, 86400);
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM epg_playlist_guide_optouts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM iptv_channels", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM iptv_channel_overrides", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    let copies: Vec<_> = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.to_string_lossy().contains("-v4-recovery-"))
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(
+        Connection::open(&copies[0])
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+}
+
+#[test]
+fn playlist_refresh_schedule_opt_in_backoff_attention_and_isolation() {
+    use super::storage::ErrorCode;
+    let dir = Sandbox::new();
+    let storage = Storage::at(dir.path());
+    storage.initialize().unwrap();
+    let conn = storage.connect().unwrap();
+    for id in ["playlist-a", "playlist-b"] {
+        conn.execute("INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at) VALUES(?1,?1,'local_file','/fabricated/source',1,1)",[id]).unwrap();
+    }
+    drop(conn);
+    let t = 1_800_000_000;
+    assert!(storage.due_source_ids(t, 2).unwrap().is_empty());
+    assert!(storage
+        .set_source_schedule("playlist-a", true, 5 * 3600, t)
+        .is_err());
+    assert!(storage
+        .set_source_schedule("playlist-a", true, 169 * 3600, t)
+        .is_err());
+    storage
+        .set_source_schedule("playlist-a", true, 6 * 3600, t)
+        .unwrap();
+    assert_eq!(storage.due_source_ids(t, 2).unwrap(), vec!["playlist-a"]);
+    storage
+        .record_refresh_failure("playlist-a", ErrorCode::Network, t)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 21599, 2).unwrap().is_empty());
+    assert_eq!(
+        storage.due_source_ids(t + 21600, 2).unwrap(),
+        vec!["playlist-a"]
+    );
+    storage
+        .record_refresh_failure("playlist-a", ErrorCode::ApprovalRequired, t + 21600)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 172800, 2).unwrap().is_empty());
+    storage
+        .set_source_schedule("playlist-a", true, 6 * 3600, t + 172800)
+        .unwrap();
+    assert_eq!(
+        storage.due_source_ids(t + 172800, 2).unwrap(),
+        vec!["playlist-a"]
+    );
+    storage
+        .set_source_enabled("playlist-a", false, t + 172801)
+        .unwrap();
+    assert!(storage.due_source_ids(t + 999999, 2).unwrap().is_empty());
+    assert!(!storage.get_source("playlist-b").unwrap().auto_refresh);
+}
+
+#[cfg(unix)]
+#[test]
+fn playlist_refresh_invalid_v5_shape_is_rejected_without_mutating_db() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Sandbox::new();
+    let path = dir.path();
+    seed_real_v1(&path);
+    {
+        let c = Connection::open(&path).unwrap();
+        for sql in [MIGRATION_002, MIGRATION_003, MIGRATION_004] {
+            c.execute_batch(sql).unwrap();
+        }
+        let malicious = MIGRATION_005.replace(
+            "CHECK (auto_refresh IN (0,1))",
+            "CHECK (auto_refresh IN (0,1,2))",
+        );
+        c.execute_batch(&malicious).unwrap();
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert!(Storage::at(&path).initialize().is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
 }

@@ -321,13 +321,13 @@ mod imp {
         pub(super) broadcasters: RefCell<Vec<Broadcaster>>,
         pub(super) pending_broadcasters: RefCell<Option<Vec<Broadcaster>>>,
         #[cfg(test)]
-        pub(super) r07_disposable_paging: Cell<bool>,
+        pub(super) focus_navigation_disposable_paging: Cell<bool>,
         // Disposable fake two-stage request: error page, then successful Retry.
         // Intercepts only the test binary and never calls the remote provider.
         #[cfg(test)]
-        pub(super) r07_offline_search_state: Cell<u8>,
+        pub(super) focus_navigation_offline_search_state: Cell<u8>,
         #[cfg(test)]
-        pub(super) r07_offline_search_calls: Cell<u32>,
+        pub(super) focus_navigation_offline_search_calls: Cell<u32>,
         pub(super) updating_broadcaster_model: Cell<bool>,
         /// Only choose automatic focus on the first mapping.
         initial_focus_assigned: Cell<bool>,
@@ -731,14 +731,14 @@ impl TvMediathekView {
         controls
     }
 
-    /// R07 offline source identity is the same across first and second pages.
+    /// NATIVE_FOCUS offline source identity is the same across first and second pages.
     /// The test-only transport never fetches MediathekViewWeb or streams.
     #[cfg(test)]
-    fn r07_offline_item(index: usize) -> ShowObject {
+    fn focus_navigation_offline_item(index: usize) -> ShowObject {
         use mediathekviewweb::models::Item;
         ShowObject::new(Item {
-            id: format!("r07-show-{index}"),
-            channel: "R07".to_owned(),
+            id: format!("focus-navigation-show-{index}"),
+            channel: "NATIVE_FOCUS".to_owned(),
             topic: "Offline navigation".to_owned(),
             title: format!("Offline show {index}"),
             description: Some("Disposable GTK focus fixture".to_owned()),
@@ -754,77 +754,77 @@ impl TvMediathekView {
         })
     }
 
-    /// R07 isolated offline real Mediathek cards. No provider traffic or playback.
+    /// NATIVE_FOCUS isolated offline real Mediathek cards. No provider traffic or playback.
     #[cfg(test)]
-    pub(crate) fn r07_install_offline_result_cards(&self) {
+    pub(crate) fn focus_navigation_install_offline_result_cards(&self) {
         let imp = self.imp();
         imp.requests.borrow_mut().begin_search();
-        imp.r07_disposable_paging.set(false);
+        imp.focus_navigation_disposable_paging.set(false);
         let model = imp.shows_model();
         model.remove_all();
         for index in 0..3 {
-            model.append(&Self::r07_offline_item(index));
+            model.append(&Self::focus_navigation_offline_item(index));
         }
         imp.show_results();
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_install_offline_paging(&self) {
+    pub(crate) fn focus_navigation_install_offline_paging(&self) {
         let imp = self.imp();
-        self.r07_install_offline_result_cards();
-        imp.r07_disposable_paging.set(true);
+        self.focus_navigation_install_offline_result_cards();
+        imp.focus_navigation_disposable_paging.set(true);
         self.set_total_results(6);
         imp.show_results();
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_enable_offline_error_retry(&self) {
+    pub(crate) fn focus_navigation_enable_offline_error_retry(&self) {
         let imp = self.imp();
-        imp.r07_offline_search_state.set(1);
-        imp.r07_offline_search_calls.set(0);
+        imp.focus_navigation_offline_search_state.set(1);
+        imp.focus_navigation_offline_search_calls.set(0);
         self.reload();
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_offline_search_calls(&self) -> u32 {
-        self.imp().r07_offline_search_calls.get()
+    pub(crate) fn focus_navigation_offline_search_calls(&self) -> u32 {
+        self.imp().focus_navigation_offline_search_calls.get()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_offline_error_is_mapped(&self) -> bool {
+    pub(crate) fn focus_navigation_offline_error_is_mapped(&self) -> bool {
         self.imp().error_view.is_mapped()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_offline_initial_empty_is_mapped(&self) -> bool {
+    pub(crate) fn focus_navigation_offline_initial_empty_is_mapped(&self) -> bool {
         self.imp().status_page.is_mapped()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_offline_loading_is_mapped(&self) -> bool {
+    pub(crate) fn focus_navigation_offline_loading_is_mapped(&self) -> bool {
         self.imp().loading_view.is_mapped()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_load_more_button(&self) -> gtk::Button {
+    pub(crate) fn focus_navigation_load_more_button(&self) -> gtk::Button {
         self.imp().load_more_button.get()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_offline_result_count(&self) -> u32 {
+    pub(crate) fn focus_navigation_offline_result_count(&self) -> u32 {
         self.imp().shows_model().n_items()
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_result_row(&self, index: i32) -> gtk::ListBoxRow {
+    pub(crate) fn focus_navigation_result_row(&self, index: i32) -> gtk::ListBoxRow {
         self.imp()
             .results_list
             .row_at_index(index)
-            .expect("R07 actual Mediathek result row")
+            .expect("NATIVE_FOCUS actual Mediathek result row")
     }
 
     #[cfg(test)]
-    pub(crate) fn r07_result_id(&self, index: i32) -> Option<String> {
+    pub(crate) fn focus_navigation_result_id(&self, index: i32) -> Option<String> {
         self.imp()
             .results_list
             .row_at_index(index)?
@@ -955,27 +955,27 @@ impl TvMediathekView {
         self.set_more_available(false);
         self.action_set_enabled("mediathek.load-more", false);
 
-        // E07 native contract: the actual reload/search action transitions
+        // MEDIATHEK_RETRY native contract: the actual reload/search action transitions
         // through a pending spinner, a failed request and a subsequent Retry
         // success. The synthetic result is generated only in this test-only
         // branch, without contacting any provider.
         #[cfg(test)]
-        if imp.r07_offline_search_state.get() != 0 {
-            let current_state = imp.r07_offline_search_state.get();
-            imp.r07_offline_search_calls
-                .set(imp.r07_offline_search_calls.get() + 1);
+        if imp.focus_navigation_offline_search_state.get() != 0 {
+            let current_state = imp.focus_navigation_offline_search_state.get();
+            imp.focus_navigation_offline_search_calls
+                .set(imp.focus_navigation_offline_search_calls.get() + 1);
             imp.show_loading();
             glib::timeout_future(Duration::from_millis(30)).await;
             if !imp.requests.borrow().is_current(generation) {
                 return;
             }
             if current_state == 1 {
-                imp.r07_offline_search_state.set(2);
+                imp.focus_navigation_offline_search_state.set(2);
                 imp.show_error_page();
             } else {
                 let model = imp.shows_model();
                 for index in 0..3 {
-                    model.append(&Self::r07_offline_item(index));
+                    model.append(&Self::focus_navigation_offline_item(index));
                 }
                 self.set_total_results(3);
                 imp.show_results();
@@ -1045,7 +1045,7 @@ impl TvMediathekView {
         // asynchronous request ledger and exactly the production focus-return
         // rule, without ever invoking a remote provider or building URLs.
         #[cfg(test)]
-        if imp.r07_disposable_paging.get() {
+        if imp.focus_navigation_disposable_paging.get() {
             let model = imp.shows_model();
             let offset = model.n_items();
             let had_focus = imp.load_more_button.has_focus();
@@ -1058,7 +1058,7 @@ impl TvMediathekView {
                 return;
             }
             for index in offset..6 {
-                model.append(&Self::r07_offline_item(index as usize));
+                model.append(&Self::focus_navigation_offline_item(index as usize));
             }
             imp.show_results();
             if had_focus {
@@ -1460,7 +1460,7 @@ mod tests {
             let entry_bounds = entry.compute_bounds(panel).expect("mapped entry");
             let button_bounds = keyboard.compute_bounds(panel).expect("mapped keyboard");
             println!(
-                "UX02 geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
+                "MAPPED_TOOLBAR_LAYOUT geometry {name} width={width} panel={}x{} row={} entry={}x{} at {:.0},{:.0} keyboard={}x{} at {:.0},{:.0} second_row={}",
                 panel.width(), panel.height(), search_row.height(), entry.width(), entry.height(),
                 entry_bounds.x(), entry_bounds.y(), keyboard.width(), keyboard.height(),
                 button_bounds.x(), button_bounds.y(), second_row.map_or(0, gtk::Widget::height)
@@ -1563,7 +1563,7 @@ mod tests {
             // entries) establish the visual parity; the two Mediathek toggles
             // must also match the keyboard in the narrow-allocation test.
             println!(
-                "UX02 launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
+                "MAPPED_TOOLBAR_LAYOUT launcher width={width} mapped Mediathek={mediathek_keyboard_size:?} adjacent={mediathek_icon_sizes:?} Live={live_keyboard_size:?} My Channels={streams_keyboard_size:?}"
             );
             let mediathek_gap = mediathek_entry_height - mediathek_keyboard_size.1;
             for (name, reference, reference_gap) in [
@@ -1594,7 +1594,7 @@ mod tests {
             // must expose identical content widths; Live's 6px margins leave
             // exactly 12px more available for its corresponding content.
             println!(
-                "UX02 compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
+                "MAPPED_TOOLBAR_LAYOUT compact width={width} panel content widths: Mediathek={mediathek_panel_width}, Live={live_panel_width}, My Channels={streams_panel_width}; heights: channel={mediathek_channel_height}, duration={mediathek_duration_height}, sort={mediathek_sort_height}, toggles={mediathek_toggle_heights:?}; reference: filter={streams_filter_height}, sort={streams_sort_height}, action={streams_action_height}"
             );
             assert!(
                 mediathek_panel_width == streams_panel_width
