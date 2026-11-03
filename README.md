@@ -52,7 +52,7 @@ In **My Channels → Manage Sources → Backup / Restore**, select **Export Comp
 
 ## Screenshots
 
-The following screenshots show Broadcaster v0.2.5. Programme titles, times and IPTV availability come from third-party sources and can change.
+The following screenshots were captured in v0.2.5 and remain representative of the largely unchanged v0.3.0 interface. New playlist-refresh and database backup/restore dialogs are not pictured. Programme titles, times and IPTV availability come from third-party sources and can change.
 
 ### Mediathek search
 
