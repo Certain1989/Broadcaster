@@ -11,13 +11,19 @@
     MediathekView Zapp service are available as well. The fullscreen interface
     supports directional television remotes alongside mouse and keyboard.</p>
     <p>My Channels adds user-managed local and HTTP(S) M3U playlists,
-    channel search and metadata filters, manual refresh and editable channel
-    information. Available raster logos are loaded on demand.</p>
+    channel search and metadata filters, manual or optional scheduled per-source
+    refresh, and editable channel information. Available raster logos are loaded
+    on demand.</p>
     <p>Optional XMLTV programme guides from local files or explicitly configured
     HTTP(S) sources can supply Now/Next information for confirmed matches in
-    My Channels. Select a shared default guide or a playlist-specific guide,
-    review uncertain channel matches, and mark favourite channels. A guide
+    My Channels. A playlist may inherit the shared default guide, choose a
+    particular guide, or explicitly disable guide information. Review uncertain
+    channel matches and mark favourite channels. A guide
     failure does not prevent normal video playback.</p>
+    <p>Back up the complete local channel and guide database to a user-selected
+    folder. Restore a compatible database only with explicit confirmation;
+    restoration replaces all database entries after the app restarts. A normal
+    application upgrade does not require importing a backup.</p>
     <p>Broadcaster was substantially developed with the assistance of large
     language models. It is a personal project distributed as-is, without a
     guaranteed response to issues or a regular maintenance commitment.</p>
