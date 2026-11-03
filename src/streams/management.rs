@@ -2223,7 +2223,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         let data_home =
             std::env::var("XDG_DATA_HOME").expect("isolated GUIDE_MAPPING XDG_DATA_HOME");
         assert!(
-            data_home.contains("broadcaster-guide_mapping-fixture-"),
+            data_home.contains("broadcaster-guide-mapping-fixture-"),
             "refusing to use a real user's My Channels database"
         );
         let store = Storage::new();
@@ -2707,7 +2707,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
             Ok("1")
         );
         let home = std::env::var("XDG_DATA_HOME").expect("private GUIDE_MAPPING data directory");
-        assert!(home.contains("broadcaster-guide_mapping-fixture-"));
+        assert!(home.contains("broadcaster-guide-mapping-fixture-"));
         let storage = crate::streams::storage::Storage::new();
         storage
             .initialize()
@@ -2879,7 +2879,7 @@ x.XFlush.argtypes=[c.c_void_p];x.XFlush(d);x.XCloseDisplay.argtypes=[c.c_void_p]
         use std::collections::BTreeSet;
 
         let data_home = std::env::var("XDG_DATA_HOME").expect("isolated XDG_DATA_HOME");
-        assert!(data_home.contains("broadcaster-guide_mapping-fixture-"));
+        assert!(data_home.contains("broadcaster-guide-mapping-fixture-"));
         let store = Storage::new();
         store.initialize().unwrap();
         let playlist_id = uuid::Uuid::new_v4().to_string();
