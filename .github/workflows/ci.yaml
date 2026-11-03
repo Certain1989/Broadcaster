@@ -228,7 +228,7 @@ jobs:
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -698,7 +698,7 @@ jobs:
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
               GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -706,7 +706,7 @@ jobs:
               bash tests/ci-require-one-ignored.sh "$case_name"
             rm -rf "$data_dir"
           done
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GDK_SCALE=1 GTK_ENABLE_ANIMATIONS=0 \
             GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -787,7 +787,7 @@ jobs:
               *_640_480) geometry=640x480 ;;
               *) geometry=1280x800 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
             xvfb-run -a -s "-screen 0 "$geometry"x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
@@ -807,7 +807,7 @@ jobs:
             echo "GUIDE_MAPPING negative oracle failed for the wrong reason" >&2
             exit 1
           fi
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -824,7 +824,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "NATIVE_FOCUS CHANNEL_CARD_JOURNEY false-row identity rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -841,7 +841,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "GUIDE_MAPPING deliberately incorrect Play-entry expectation rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-XXXXXXXX)
           if xvfb-run -a -s "-screen 0 640x480x24" \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -858,7 +858,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "NATIVE_FOCUS source-qualified facet focus negative oracle rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -875,7 +875,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "NATIVE_FOCUS searched popup selection negative oracle rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -892,7 +892,7 @@ jobs:
           fi
           rm -rf "$negative_data_dir"
           echo "NATIVE_FOCUS false French popup identity correctly rejected"
-          negative_data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+          negative_data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
           if xvfb-run -a -s '-screen 0 640x480x24' \
             env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
             XDG_DATA_HOME="$negative_data_dir" \
@@ -979,7 +979,7 @@ jobs:
               *_1280_800|native_scale_1484|native_scale_15000) geometry=1280x800 ;;
               *) geometry=640x480 ;;
             esac
-            data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
             echo "NATIVE_FOCUS native positive: $case_name ($geometry)"
             xvfb-run -a -s "-screen 0 ${geometry}x24" \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
@@ -1014,7 +1014,7 @@ jobs:
             native_scale_negative:NATIVE_FOCUS_SCALE_EXPECTED_NEGATIVE_ORACLE; do
             case_name=${item%%:*}
             marker=${item#*:}
-            data_dir=$(mktemp -d -t broadcaster-guide_mapping-fixture-focus-navigation-XXXXXXXX)
+            data_dir=$(mktemp -d -t broadcaster-guide-mapping-fixture-focus-navigation-XXXXXXXX)
             if xvfb-run -a -s '-screen 0 640x480x24' \
               env GDK_BACKEND=x11 GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR="$schema_dir" \
               XDG_DATA_HOME="$data_dir" \
