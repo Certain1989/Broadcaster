@@ -21,7 +21,7 @@ struct Fixture {
 impl Fixture {
     fn new(count: usize) -> Self {
         let dir = std::env::temp_dir().join(format!(
-            "broadcaster-source_manager-{}",
+            "broadcaster-source-manager-{}",
             uuid::Uuid::new_v4()
         ));
         let storage = Storage::at(dir.join("test.sqlite3"));
