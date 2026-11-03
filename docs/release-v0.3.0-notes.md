@@ -13,6 +13,31 @@ Broadcaster v0.3.0 adds optional automatic refresh for user-managed M3U playlist
 - **XMLTV compatibility:** Problematic control characters in programme titles can be omitted safely, with broader regression and large-guide coverage. External listings may still be incomplete or inaccurate.
 - **Storage maintenance and remote interaction:** Abandoned XMLTV download staging files receive bounded, lock-aware cleanup. Historical database migration recovery copies remain available. Additional regression checks cover source-management and remote-navigation behaviour.
 
+
+## Screenshots
+
+These screenshots were captured in v0.2.5 and remain representative of the v0.3.0 interface. New playlist-refresh and database backup/restore dialogs are not pictured.
+
+### Mediathek search
+
+<img width="960" alt="Mediathek search with channel and duration filters" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/mediathek-search.png" />
+
+### Live TV
+
+<img width="960" alt="Live TV programme list with progress and descriptions" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/live-tv.png" />
+
+### On-screen keyboard
+
+<img width="960" alt="On-screen keyboard over the Live TV programme list" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/live-tv-onscreen-keyboard.png" />
+
+### My Channels with Now/Next
+
+<img width="960" alt="IPTV channel lists with favourites and XMLTV Now/Next information" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/my-channels-now-next.png" />
+
+### Programme Guides
+
+<img width="960" alt="Programme Guides manager with guide sources and shared default" src="https://raw.githubusercontent.com/Certain1989/Broadcaster/9edfefc4aa819c0d6312265b81b96ea8cb8dea2f/docs/screenshots/v0.2.5/programme-guides.png" />
+
 ## Database backup and restore
 
 Open **My Channels → Manage Sources → Backup / Restore**.
