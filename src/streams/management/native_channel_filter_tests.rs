@@ -179,7 +179,7 @@ fn focus_navigation_popup_search_and_cancel(
 
 fn run(width: i32, height: i32, wrong_id: bool, popup_only: bool, wrong_facet: bool) {
     let home = std::env::var("XDG_DATA_HOME").expect("isolated native facet data dir");
-    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
+    assert!(home.contains("broadcaster-guide-mapping-fixture-"));
     let store = Storage::new();
     store.initialize().expect("disposable SQLite database");
     let a = fixture_source(
@@ -801,7 +801,7 @@ fn native_facets_negative() {
 fn native_large_catalogue(total: u32, width: i32, height: i32, negative: bool) {
     let home =
         std::env::var("XDG_DATA_HOME").expect("NATIVE_FOCUS isolated scaling data directory");
-    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
+    assert!(home.contains("broadcaster-guide-mapping-fixture-"));
     let storage = Storage::new();
     storage.initialize().expect("real scale SQLite schema");
     let start_seed = std::time::Instant::now();
@@ -1087,7 +1087,7 @@ fn native_scale_negative() {
 fn native_recycle_removed_source(width: i32, height: i32, negative: bool) {
     use crate::streams::storage::ConfirmedSourceDeletion;
     let home = std::env::var("XDG_DATA_HOME").expect("isolated native recycled-row data dir");
-    assert!(home.contains("broadcaster-guide_mapping-fixture-"));
+    assert!(home.contains("broadcaster-guide-mapping-fixture-"));
     let store = Storage::new();
     store.initialize().expect("real disposable SQLite database");
     let surviving = fixture_source(
