@@ -955,7 +955,7 @@ impl TvMediathekView {
         self.set_more_available(false);
         self.action_set_enabled("mediathek.load-more", false);
 
-        // E07 native contract: the actual reload/search action transitions
+        // MEDIATHEK_RETRY native contract: the actual reload/search action transitions
         // through a pending spinner, a failed request and a subsequent Retry
         // success. The synthetic result is generated only in this test-only
         // branch, without contacting any provider.
