@@ -993,21 +993,21 @@ jobs:
             focus_navigation_osk_native_grid_negative_owner:NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_ORACLE \
             focus_navigation_osk_native_paint_negative:NATIVE_FOCUS_OSK_EXPECTED_NEGATIVE_PAINT \
             native_source_refresh_negative:NATIVE_FOCUS_SOURCE_REFRESH_PERSISTENCE_EXPECTED_NEGATIVE_ORACLE \
-            native_source_file_chooser_negative:NATIVE_FOCUS_AS10_EXPECTED_NEGATIVE_ORACLE \
+            native_source_file_chooser_negative:NATIVE_FOCUS_SOURCE_FILE_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
             native_guide_add_url_negative:NATIVE_FOCUS_GUIDE_ADD_URL_EXPECTED_NEGATIVE_ORACLE \
             native_guide_refresh_negative:NATIVE_FOCUS_APAINTED_CARDS_EXPECTED_NEGATIVE_ORACLE \
             native_guide_local_chooser_negative:NATIVE_FOCUS_GUIDE_LOCAL_CHOOSER_EXPECTED_NEGATIVE_ORACLE \
             native_guide_manager_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
             native_picker_osk_paint_negative:NATIVE_FOCUS_GUIDE_PICKER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
             native_nested_guide_osk_negative:NATIVE_FOCUS_C09_EXPECTED_NEGATIVE_ORACLE \
-            native_app_menu_negative:NATIVE_FOCUS_D08_EXPECTED_NEGATIVE_ORACLE \
-            native_mediathek_loaded_vertical_negative:NATIVE_FOCUS_D03_EXPECTED_NEGATIVE_ORACLE \
-            native_recycle_removed_source_negative:NATIVE_FOCUS_F10_EXPECTED_NEGATIVE_ORACLE \
+            native_app_menu_negative:NATIVE_FOCUS_APPLICATION_MENU_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_loaded_vertical_negative:NATIVE_FOCUS_MEDIATHEK_ROW_NAVIGATION_EXPECTED_NEGATIVE_ORACLE \
+            native_recycle_removed_source_negative:NATIVE_FOCUS_CHANNEL_REBIND_EXPECTED_NEGATIVE_ORACLE \
             native_manager_paint_negative:NATIVE_FOCUS_SOURCE_MANAGER_PAINTED_FOCUS_EXPECTED_NEGATIVE_PAINT \
-            native_live_player_failure_negative:NATIVE_FOCUS_E03_EXPECTED_NEGATIVE_ORACLE \
-            native_mediathek_paged_negative:NATIVE_FOCUS_E06_EXPECTED_NEGATIVE_ORACLE \
-            native_mediathek_retry_negative:NATIVE_FOCUS_E07_EXPECTED_NEGATIVE_ORACLE \
-            native_fake_fullscreen_cancel_negative:NATIVE_FOCUS_E11_EXPECTED_NEGATIVE_ORACLE \
+            native_live_player_failure_negative:NATIVE_FOCUS_LIVE_PLAY_ENTRY_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_paged_negative:NATIVE_FOCUS_MEDIATHEK_PAGING_EXPECTED_NEGATIVE_ORACLE \
+            native_mediathek_retry_negative:NATIVE_FOCUS_MEDIATHEK_RETRY_EXPECTED_NEGATIVE_ORACLE \
+            native_fake_fullscreen_cancel_negative:NATIVE_FOCUS_FULLSCREEN_CANCEL_FOCUS_EXPECTED_NEGATIVE_ORACLE \
             native_three_page_loaded_negative:NATIVE_FOCUS_PAGE_SWITCHER_CONNECTED_EXPECTED_NEGATIVE \
             native_picker_guide_removed_negative:NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE \
             native_picker_source_refreshed_negative:NATIVE_FOCUS_GUIDE_PICKER_EXPECTED_NEGATIVE_ORACLE \
