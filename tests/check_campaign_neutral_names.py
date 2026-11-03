@@ -14,7 +14,11 @@ PATTERN = re.compile(
     + "|".join((
         r"r0[0-9]", r"g0[0-9]", r"focus[-_]0[0-9]+",
         r"m1[-_]", r"d(?:29|35|38)[-_]", r"c[124][-_]",
-        r"e[234][-_]", r"b0[0-9][-_]", r"p1[-_]",
+        # Standalone stage references also occur in comments and test logs:
+        # require a word or separator boundary, not only a suffix underscore.
+        r"e[234](?=[_./-]|\b)", r"s[145](?=[_./-]|\b)",
+        r"ux02(?=[_./-]|\b)", r"d1(?=[_./-]|\b)",
+        r"b0[0-9][-_]", r"p1[-_]",
         r"g1[-_]", r"d1[-_]", r"u1[-_]", r"r08",
         r"ops[-_]0[0-9]",
         r"as(?:10|13|15)(?=[_-]|\b)",
@@ -76,6 +80,16 @@ def self_test() -> None:
         assert violations(".github/workflows/ci.yaml", f'cargo test --locked native_{label}_action_graph'), label
         assert violations(f"src/native_{label}_focus.rs", 'fn clear_focus() {}'), label
     assert violations("src/test.rs", "// F06–F11 mapped catalogue focus")
+    for label in ("E3", "E4", "S1", "S4", "S5", "UX02", "D1"):
+        # Cover bare stage names, filenames, selectors, diagnostic consumers,
+        # and gettext source comments; ensure case-folded spellings fail too.
+        assert violations("src/test.rs", f"// {label} legacy stage"), label
+        assert violations("src/test.rs", f'println!("{label} geometry");'), label
+        assert violations(f"src/native_{label}_navigation.rs", "fn focus() {}"), label
+        assert violations(".github/workflows/ci.yaml", f"cargo test native_{label}_focus"), label
+        assert violations("tests/osk/run-mapped.sh", f'grep "{label} geometry" "$log_file"'), label
+        assert violations("po/de.po", f"#: Broadcaster v0.2.0 {label} interim strings"), label
+        assert violations("src/test.rs", f"// {label.lower()}'s legacy name"), label
     assert violations("src/test.rs", 'let status = "G09_EXPECTED_NEGATIVE";')
     assert violations(".github/workflows/ci.yaml", "cargo test c4_native_guide")
     assert violations("src/epg/xmltv.rs", "fn r07_unrelated() {}")
