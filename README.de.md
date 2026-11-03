@@ -52,7 +52,7 @@ Unter **Eigene Sender → Quellen verwalten → Backup / Restore** mit **Export 
 
 ## Screenshots
 
-Die folgenden Screenshots zeigen Broadcaster v0.2.5. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
+Die folgenden Screenshots stammen aus v0.2.5 und zeigen weiterhin die im Wesentlichen unveränderte Oberfläche von v0.3.0. Die neuen Dialoge für die automatische Playlist-Aktualisierung und die Datenbanksicherung sind nicht abgebildet. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
 
 ### Mediathek-Suche
 
