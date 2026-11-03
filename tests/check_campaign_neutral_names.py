@@ -17,6 +17,11 @@ PATTERN = re.compile(
         r"e[234][-_]", r"b0[0-9][-_]", r"p1[-_]",
         r"g1[-_]", r"d1[-_]", r"u1[-_]", r"r08",
         r"ops[-_]0[0-9]",
+        r"as(?:10|13|15)(?=[_\\-]|\\b)",
+        r"d(?:01|02|03|04|05|08|09|10)(?=[_\\-]|\\b)",
+        r"e(?:01|03|06|07|10|11)(?=[_\\-]|\\b)",
+        r"b(?:10|11|14)(?=[_\\-]|\\b)",
+        r"f(?:02|10)(?=[_\\-]|\\b)",
     ))
     + r")",
     re.IGNORECASE,
@@ -52,6 +57,7 @@ def violations(rel: str, contents: str) -> list[str]:
 
 def self_test() -> None:
     assert violations("src/window/r07_focus.rs", "fn r07_focus() {}")
+    assert violations("src/test.rs", "NATIVE_FOCUS_AS10_EXPECTED_NEGATIVE_ORACLE")
     assert violations("src/test.rs", 'let status = "G09_EXPECTED_NEGATIVE";')
     assert violations(".github/workflows/ci.yaml", "cargo test c4_native_guide")
     assert violations("src/epg/xmltv.rs", "fn r07_unrelated() {}")
