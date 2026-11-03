@@ -82,7 +82,7 @@ https://example.invalid/a
 }
 
 #[test]
-fn metadata_facets_and_region_are_normalized_by_s1() {
+fn metadata_facets_and_region_are_normalized() {
     let fixture = r#"#EXTM3U
 #EXTINF:-1 tvg-id="station" tvg-language="DE; en; pt-br; sr-latn-rs;bad_#" tvg-country="de;US;gb;UK;ZZ" tvg-region-code="DE-BY" tvg-region="Bayern" ,Name
 https://example.invalid/watch
@@ -112,7 +112,7 @@ https://example.invalid/watch
 }
 
 #[test]
-fn duplicates_remain_separate_for_s1_identity_matching() {
+fn duplicates_remain_separate_for_catalogue_identity_matching() {
     let fixture = "#EXTM3U\n#EXTINF:-1 tvg-id=\"dup\",First\nhttps://example.invalid/a\n#EXTINF:-1 tvg-id=\"dup\",Second\nhttps://example.invalid/b\n";
     let actual = parsed(fixture);
     assert_eq!(actual.channels.len(), 2);
