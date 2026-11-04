@@ -88,11 +88,8 @@ pub struct SourceOrigin {
 impl SourceOrigin {
     pub fn validate(&self) -> StorageResult<()> {
         bounded(&self.locator, 8192)?;
-        if self.kind == OriginKind::RemoteUrl {
-            let url = reqwest::Url::parse(&self.locator).map_err(|_| StorageError::InvalidInput)?;
-            if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-                return Err(StorageError::InvalidInput);
-            }
+        if self.kind == OriginKind::RemoteUrl && !valid_imported_http_url(&self.locator) {
+            return Err(StorageError::InvalidInput);
         }
         Ok(())
     }
@@ -196,8 +193,7 @@ impl IncomingChannel {
     pub fn validate(&self) -> StorageResult<()> {
         bounded(&self.imported_name, 512)?;
         bounded(&self.stream_url, 8192)?;
-        let url = reqwest::Url::parse(&self.stream_url).map_err(|_| StorageError::InvalidInput)?;
-        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        if !valid_imported_http_url(&self.stream_url) {
             return Err(StorageError::InvalidInput);
         }
         optional_with_empty(&self.tvg_id, 512)?;
@@ -584,6 +580,17 @@ fn validate_facets(values: &BTreeSet<String>, dimension: FacetDimension) -> Stor
     }
     Ok(())
 }
+/// Shared IPTV URL admission rule at import, restored-data and playback boundaries.
+/// Keep this aligned with the existing HTTP(S) playlist contract. Checking the
+/// original bytes matters: URL parsers can remove literal control characters.
+pub(crate) fn valid_imported_http_url(value: &str) -> bool {
+    value.len() <= 8192
+        && !value.trim().is_empty()
+        && !value.chars().any(char::is_control)
+        && reqwest::Url::parse(value)
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
+}
+
 pub(crate) fn bounded(value: &str, max: usize) -> StorageResult<()> {
     if value.trim().is_empty() || value.len() > max || value.chars().any(char::is_control) {
         return Err(StorageError::InvalidInput);

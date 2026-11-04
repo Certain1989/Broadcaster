@@ -217,6 +217,17 @@ impl TvApplication {
             return;
         };
 
+        // A restored database can contain channel URLs that bypass M3U
+        // ingestion. Keep imported-stream admission aligned with that importer
+        // for both managed mpv and externally selected players, without
+        // changing Live/Mediathek or deliberately user-specified mpv options.
+        if matches!(video, VideoInfo::Stream { .. })
+            && !crate::streams::model::valid_imported_http_url(uri)
+        {
+            show_error(&gettext("The video or subtitle URL is invalid."));
+            return;
+        }
+
         // Deliberate failure only in a native, disposable acceptance fixture.
         // Exercise the exact request and window return sequence without an
         // actual mpv process or any network/URI access.
@@ -628,6 +639,28 @@ mod tests {
             headers: super::StreamHeaders::default(),
         };
         assert_eq!(empty.uri(), None);
+    }
+
+    #[test]
+    fn restored_iptv_playback_uses_the_same_http_url_admission_as_import() {
+        let accepted = [
+            "https://example.invalid/live/master.m3u8?auth=fake",
+            "http://example.invalid/live/manifest.mpd",
+        ];
+        let rejected = [
+            "file:///etc/passwd",
+            "concat:https://example.invalid/a|file:///etc/passwd",
+            "edl://file:///etc/passwd",
+            "lavfi://testsrc",
+            "https://example.invalid/live\nfile:///etc/passwd",
+            "",
+        ];
+        for uri in accepted {
+            assert!(crate::streams::model::valid_imported_http_url(uri));
+        }
+        for uri in rejected {
+            assert!(!crate::streams::model::valid_imported_http_url(uri));
+        }
     }
 
     #[test]
