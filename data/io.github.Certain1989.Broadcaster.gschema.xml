@@ -68,6 +68,11 @@
 			</choices>
 			<default>"high"</default>
 		</key>
+		<!-- Per-source, locator-bound opt-in for LAN playlist fetching. The
+		     entries contain only source UUIDs and SHA-256 digests, never URLs. -->
+		<key name="playlist-lan-consents" type="as">
+			<default>[]</default>
+		</key>
 		<key name="live-channels" type="as">
 			<default>[]</default>
 		</key>

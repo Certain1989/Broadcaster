@@ -357,10 +357,7 @@ impl TvMediathekCard {
                     .expect("action must only be enabled if url is not None");
                 // A third-party programme URL is only a website link. Do
                 // not invoke desktop handlers for arbitrary URI schemes.
-                if !matches!(
-                    reqwest::Url::parse(&url),
-                    Ok(parsed) if matches!(parsed.scheme(), "http" | "https")
-                ) {
+                if !crate::application::valid_provider_http_url(&url) {
                     show_error(&gettext("Invalid programme website URL"));
                     return;
                 }

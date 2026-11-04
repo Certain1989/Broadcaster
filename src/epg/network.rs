@@ -12,7 +12,7 @@ use reqwest::{
 };
 use std::{
     fmt,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -235,52 +235,13 @@ fn validate_redirect_location(base: &Url, location: &str) -> Result<Url, GuideFe
     validate_remote_url(&raw).map_err(|_| GuideFetchError::RedirectDenied)
 }
 
-fn ipv4_class(ip: Ipv4Addr) -> Option<AddressClass> {
-    let [a, b, c, _] = ip.octets();
-    if a == 127 || a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168) {
-        return Some(AddressClass::Lan);
-    }
-    // Reject RFC6890 special-use, CGNAT, link-local/metadata, docs, multicast
-    // and future-use rather than guessing whether an address is reachable.
-    if a == 0
-        || a >= 224
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 0 && c == 2)
-        || (a == 192 && b == 88 && c == 99)
-        || (a == 198 && matches!(b, 18 | 19))
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-    {
-        return None;
-    }
-    Some(AddressClass::Public)
-}
-fn ipv6_class(ip: Ipv6Addr) -> Option<AddressClass> {
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return ipv4_class(mapped);
-    }
-    if ip.is_loopback() || ip.is_unique_local() {
-        return Some(AddressClass::Lan);
-    }
-    if ip.is_unspecified() || ip.is_unicast_link_local() {
-        return None;
-    }
-    let [first, second, ..] = ip.segments();
-    if first & 0xe000 != 0x2000
-        || (first == 0x2001 && (second <= 0x01ff || second == 0x0db8))
-        || first == 0x2002
-        || first == 0x3fff
-    {
-        return None;
-    }
-    Some(AddressClass::Public)
-}
 fn address_class(ip: IpAddr) -> Option<AddressClass> {
-    match ip {
-        IpAddr::V4(v4) => ipv4_class(v4),
-        IpAddr::V6(v6) => ipv6_class(v6),
+    match crate::network_scope::classify(ip) {
+        crate::network_scope::Destination::Public => Some(AddressClass::Public),
+        crate::network_scope::Destination::Lan | crate::network_scope::Destination::Loopback => {
+            Some(AddressClass::Lan)
+        }
+        _ => None,
     }
 }
 fn authorize_addresses(addrs: &[SocketAddr], trust: TrustScope) -> Result<(), GuideFetchError> {
@@ -426,6 +387,46 @@ pub async fn fetch_guide_with<R: GuideResolver, T: GuideTransport>(
             fetch_hops(url, scope, resolver, transport)) => r.map_err(|_| GuideFetchError::Timeout)?,
     }
 }
+/// Shared policy for legacy buffered reads and production spooled reads.
+/// Every hop gets a freshly pinned client; this helper validates the *next*
+/// authority before the caller tries to resolve or connect to it.
+fn validated_guide_redirect(
+    current: &Url,
+    response: &Response,
+    redirect_count: usize,
+    scope: TrustScope,
+) -> Result<Url, GuideFetchError> {
+    if redirect_count == 3 || scope == TrustScope::ExplicitLan {
+        return Err(GuideFetchError::RedirectDenied);
+    }
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .ok_or(GuideFetchError::RedirectDenied)?
+        .to_str()
+        .map_err(|_| GuideFetchError::RedirectDenied)?;
+    let next = validate_redirect_location(current, location)?;
+    if current.scheme() == "https" && next.scheme() != "https" {
+        return Err(GuideFetchError::RedirectDenied);
+    }
+    Ok(next)
+}
+
+/// Identical Content-Encoding policy for both paths; body-size limits differ.
+fn validated_response_encoding(response: &Response) -> Result<String, GuideFetchError> {
+    let encoding = response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .map(|v| v.to_str().map_err(|_| GuideFetchError::Encoding))
+        .transpose()?
+        .unwrap_or("identity")
+        .to_owned();
+    if !matches!(encoding.as_str(), "identity" | "gzip") {
+        return Err(GuideFetchError::Encoding);
+    }
+    Ok(encoding)
+}
+
 async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
     mut url: Url,
     scope: TrustScope,
@@ -437,37 +438,13 @@ async fn fetch_hops<R: GuideResolver, T: GuideTransport>(
         let client = pinned_client(&url, scope, resolver).await?;
         let mut response = transport.send(&client, &url).await?;
         if response.status().is_redirection() {
-            if redirects == 3 || scope == TrustScope::ExplicitLan {
-                return Err(GuideFetchError::RedirectDenied);
-            }
-            let location = response
-                .headers()
-                .get(LOCATION)
-                .ok_or(GuideFetchError::RedirectDenied)?
-                .to_str()
-                .map_err(|_| GuideFetchError::RedirectDenied)?;
-            let next = validate_redirect_location(&url, location)?;
-            if url.scheme() == "https" && next.scheme() != "https" {
-                return Err(GuideFetchError::RedirectDenied);
-            }
-            // Public redirects cannot acquire LAN consent, even when the
-            // subsequent hostname resolves to a local or mixed address set.
-            url = next;
+            url = validated_guide_redirect(&url, &response, redirects, scope)?;
             continue;
         }
         if !response.status().is_success() {
             return Err(GuideFetchError::HttpStatus);
         }
-        let encoding = response
-            .headers()
-            .get(CONTENT_ENCODING)
-            .map(|v| v.to_str().map_err(|_| GuideFetchError::Encoding))
-            .transpose()?
-            .unwrap_or("identity")
-            .to_owned();
-        if !matches!(encoding.as_str(), "identity" | "gzip") {
-            return Err(GuideFetchError::Encoding);
-        }
+        let encoding = validated_response_encoding(&response)?;
         if response
             .headers()
             .get(CONTENT_LENGTH)
@@ -530,7 +507,7 @@ pub async fn fetch_guide_spooled(
     }
 }
 
-async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
+pub(super) async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
     mut url: Url,
     scope: TrustScope,
     resolver: &R,
@@ -542,35 +519,13 @@ async fn fetch_spooled_hops<R: GuideResolver, T: GuideTransport>(
         let client = pinned_client(&url, scope, resolver).await?;
         let mut response = transport.send(&client, &url).await?;
         if response.status().is_redirection() {
-            if redirects == 3 || scope == TrustScope::ExplicitLan {
-                return Err(GuideFetchError::RedirectDenied);
-            }
-            let location = response
-                .headers()
-                .get(LOCATION)
-                .ok_or(GuideFetchError::RedirectDenied)?
-                .to_str()
-                .map_err(|_| GuideFetchError::RedirectDenied)?;
-            let next = validate_redirect_location(&url, location)?;
-            if url.scheme() == "https" && next.scheme() != "https" {
-                return Err(GuideFetchError::RedirectDenied);
-            }
-            url = next;
+            url = validated_guide_redirect(&url, &response, redirects, scope)?;
             continue;
         }
         if !response.status().is_success() {
             return Err(GuideFetchError::HttpStatus);
         }
-        let encoding = response
-            .headers()
-            .get(CONTENT_ENCODING)
-            .map(|v| v.to_str().map_err(|_| GuideFetchError::Encoding))
-            .transpose()?
-            .unwrap_or("identity")
-            .to_owned();
-        if !matches!(encoding.as_str(), "identity" | "gzip") {
-            return Err(GuideFetchError::Encoding);
-        }
+        let encoding = validated_response_encoding(&response)?;
         let declared = response
             .headers()
             .get(CONTENT_LENGTH)

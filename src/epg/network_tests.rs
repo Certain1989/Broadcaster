@@ -4,8 +4,8 @@
 //! Adversarial synthetic redirect and explicit-LAN transport tests. No
 //! external HTTP requests or real subscriptions are used.
 use super::network::{
-    fetch_guide, fetch_guide_with, GuideCancellation, GuideFetchError, GuideResolver,
-    GuideTransport, ReqwestGuideTransport, TrustScope,
+    fetch_guide, fetch_guide_with, fetch_spooled_hops, GuideCancellation, GuideFetchError,
+    GuideResolver, GuideTransport, ReqwestGuideTransport, TrustScope,
 };
 use reqwest::{redirect::Policy, Client, Response, Url};
 use std::{
@@ -325,4 +325,96 @@ async fn production_https_keeps_origin_name_in_tls_sni_at_pinned_peer() {
         Err(GuideFetchError::Network | GuideFetchError::Timeout)
     ));
     server.await.unwrap();
+}
+
+/// The production spooled path must enforce the same redirect trust boundary
+/// as the older buffered fetch path, *before* touching the spool file.
+#[tokio::test]
+async fn spooled_public_redirect_denies_private_and_mixed_dns_before_second_send() {
+    for target in ["private-fixture.invalid", "mixed-fixture.invalid"] {
+        let reply = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://{target}/private\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ).into_bytes();
+        let (port, server) = serve_once(reply).await;
+        let sent = Arc::new(AtomicUsize::new(0));
+        let transport = ReplyTransport {
+            response_port: port,
+            outgoing: sent.clone(),
+        };
+        let spool = std::env::temp_dir().join(format!(
+            "broadcaster-epg-denied-{}.part",
+            uuid::Uuid::new_v4()
+        ));
+        let result = fetch_spooled_hops(
+            Url::parse("http://public-fixture.invalid/start").unwrap(),
+            TrustScope::Public,
+            &FixtureResolver,
+            &transport,
+            &spool,
+        )
+        .await;
+        assert!(matches!(result, Err(GuideFetchError::NetworkScopeDenied)));
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        assert!(
+            !spool.exists(),
+            "a rejected redirect cannot publish a spool"
+        );
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn spooled_fixture_accepts_identity_and_never_replaces_existing_path() {
+    let body = b"<tv><channel id=\"synthetic\"/></tv>";
+    let mut reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len(),
+    )
+    .into_bytes();
+    reply.extend_from_slice(body);
+    let (port, server) = serve_once(reply).await;
+    let sent = Arc::new(AtomicUsize::new(0));
+    let transport = ReplyTransport {
+        response_port: port,
+        outgoing: sent.clone(),
+    };
+    let path = std::env::temp_dir().join(format!(
+        "broadcaster-epg-safe-{}.part",
+        uuid::Uuid::new_v4()
+    ));
+    let gzip = fetch_spooled_hops(
+        Url::parse("http://public-fixture.invalid/start").unwrap(),
+        TrustScope::Public,
+        &FixtureResolver,
+        &transport,
+        &path,
+    )
+    .await
+    .unwrap();
+    assert!(!gzip);
+    assert_eq!(std::fs::read(&path).unwrap(), body);
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
+    server.await.unwrap();
+
+    // Existing spools must not be truncated even if a subsequent request succeeds.
+    let (retry_port, retry_server) = serve_once(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nEVIL".to_vec(),
+    )
+    .await;
+    let retry = ReplyTransport {
+        response_port: retry_port,
+        outgoing: Arc::new(AtomicUsize::new(0)),
+    };
+    let result = fetch_spooled_hops(
+        Url::parse("http://public-fixture.invalid/start").unwrap(),
+        TrustScope::Public,
+        &FixtureResolver,
+        &retry,
+        &path,
+    )
+    .await;
+    assert!(matches!(result, Err(GuideFetchError::Storage)));
+    assert_eq!(std::fs::read(&path).unwrap(), body);
+    std::fs::remove_file(&path).unwrap();
+    retry_server.await.unwrap();
 }

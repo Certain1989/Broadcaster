@@ -1258,6 +1258,38 @@ fn native_iptv_restored_url_dispatch_gate() {
             "invalid Stream must not enter either player's dispatch boundary"
         );
     }
+    // Exercise the additional untrusted Live and Mediathek origins through
+    // the *same real GTK async dispatcher*, before external or managed launch.
+    for video in [
+        VideoInfo::Live {
+            title: "Synthetic Live".into(),
+            uri: "file:///private/synthetic".into(),
+        },
+        VideoInfo::Live {
+            title: "Synthetic RTMP".into(),
+            uri: "rtmp://example.invalid/live".into(),
+        },
+        VideoInfo::Mediathek {
+            title: "Synthetic Mediathek".into(),
+            preferred_quality: crate::settings::VideoQuality::High,
+            uri_high: Some("av://lavfi:testsrc".into()),
+            uri_medium: None,
+            uri_low: None,
+            subtitle_url: None,
+        },
+        VideoInfo::Mediathek {
+            title: "Synthetic dangerous subtitle".into(),
+            preferred_quality: crate::settings::VideoQuality::High,
+            uri_high: Some("https://example.invalid/valid.m3u8".into()),
+            uri_medium: None,
+            uri_low: None,
+            subtitle_url: Some("file:///private/synthetic.srt".into()),
+        },
+    ] {
+        let serial = app.begin_playback_request();
+        glib::MainContext::default().block_on(app.play_requested(video, serial));
+        assert_eq!(app.focus_navigation_test_managed_player_attempts(), 0);
+    }
     // The exact handler must reach the sentinel for a valid imported URL,
     // ruling out a false-green test that never dispatches any request.
     let valid = VideoInfo::Stream {
@@ -1268,4 +1300,11 @@ fn native_iptv_restored_url_dispatch_gate() {
     let serial = app.begin_playback_request();
     glib::MainContext::default().block_on(app.play_requested(valid, serial));
     assert_eq!(app.focus_navigation_test_managed_player_attempts(), 1);
+    let valid_live = VideoInfo::Live {
+        title: "Synthetic allowed Live".into(),
+        uri: "https://example.invalid/live.m3u8".into(),
+    };
+    let serial = app.begin_playback_request();
+    glib::MainContext::default().block_on(app.play_requested(valid_live, serial));
+    assert_eq!(app.focus_navigation_test_managed_player_attempts(), 2);
 }

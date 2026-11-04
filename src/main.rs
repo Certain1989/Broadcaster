@@ -18,6 +18,7 @@ mod launcher;
 mod live;
 mod mediathek;
 mod mpv;
+mod network_scope;
 mod preferences;
 mod programme_markup;
 mod settings;

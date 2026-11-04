@@ -452,6 +452,28 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
     } else {
         None
     };
+    // Explicit opt-in is per source and exact locator. Existing sources and
+    // imported backups have no inherited consent unless previously approved.
+    let lan_consent = if (is_new && file.is_none())
+        || defaults_for
+            .as_ref()
+            .is_some_and(|s| s.origin.kind == OriginKind::RemoteUrl)
+    {
+        let check = gtk::CheckButton::with_label(&gettext(
+            "Allow this playlist to connect to private LAN addresses (explicit opt-in)",
+        ));
+        if let Some(source) = defaults_for.as_ref() {
+            check.set_active(
+                crate::settings::TvSettings::get()
+                    .playlist_lan_allowed(&source.id, &source.origin.locator),
+            );
+        }
+        check.set_halign(gtk::Align::Start);
+        body.append(&check);
+        Some(check)
+    } else {
+        None
+    };
     // Ordinary imports need no metadata defaults.
     let advanced = gtk::Expander::new(Some(&gettext(
         "Advanced · Source metadata defaults (optional)",
@@ -486,6 +508,9 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
         #[weak]
         save,
         move |_| {
+            let requested_lan_consent = lan_consent
+                .as_ref()
+                .is_some_and(gtk::CheckButton::is_active);
             let new_defaults = match defaults.collect() {
                 Ok(v) => v,
                 Err(text) => {
@@ -530,10 +555,15 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                 status,
                 async move {
                     let result = if let Some(source) = source {
-                        service
-                            .set_source_defaults(&source.id, new_defaults)
-                            .await
-                            .map(|_| ())
+                        let change = service.set_source_defaults(&source.id, new_defaults).await;
+                        if change.is_ok() && source.origin.kind == OriginKind::RemoteUrl {
+                            let _ = crate::settings::TvSettings::get().set_playlist_lan_consent(
+                                &source.id,
+                                &source.origin.locator,
+                                requested_lan_consent,
+                            );
+                        }
+                        change.map(|_| ())
                     } else {
                         let order = service
                             .list_sources()
@@ -549,7 +579,13 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                                 .map(|_| ())
                         } else if let Some(url_value) = url_value {
                             service
-                                .add_url(&new_name, url_value, order, new_defaults)
+                                .add_url_with_lan(
+                                    &new_name,
+                                    url_value,
+                                    order,
+                                    new_defaults,
+                                    requested_lan_consent,
+                                )
                                 .await
                                 .map(|_| ())
                         } else {
@@ -2046,6 +2082,11 @@ fn rename_source(view: &TvStreamsView, source: Source) {
         &body,
         crate::keyboard::KeyboardOptions::default(),
     );
+    let lan_consent = gtk::CheckButton::with_label(&gettext(
+        "Allow the replacement playlist to connect to private LAN addresses",
+    ));
+    lan_consent.set_halign(gtk::Align::Start);
+    body.append(&lan_consent);
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
     let save = button(&gettext("Save"), &actions);
@@ -2190,7 +2231,14 @@ fn replace_url_form(view: &TvStreamsView, id: String) {
                 return;
             }
             dialog.close();
-            replace_origin(&view, id.clone(), SourceSelection::Remote(value));
+            replace_origin(
+                &view,
+                id.clone(),
+                SourceSelection::Remote {
+                    locator: value,
+                    allow_lan: lan_consent.is_active(),
+                },
+            );
         }
     ));
     dialog.present(Some(&window));
