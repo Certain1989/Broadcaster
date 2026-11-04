@@ -20,6 +20,11 @@ meson test -C _build --print-errorlogs
 reuse lint
 ```
 
+For dependency monitoring, RustSec checks, provenance verification and manual
+review of Flatpak upstream pins, see [dependency maintenance](docs/dependency-maintenance.md)
+and [release verification](docs/release-verification.md). Security reports must
+follow the private channel described in [SECURITY.md](SECURITY.md).
+
 Release candidates additionally need both architecture-specific Flatpak builds and real remote-control testing where relevant. CI is a check, not a guarantee of hardware behaviour.
 
 Respect existing copyright headers, third-party attribution and SPDX declarations; contributions must be compatible with the applicable GPL-3.0-or-later and third-party licences. See `REUSE.toml` and [artwork provenance](docs/artwork-and-attribution.md). Do not replace inherited copyright notices with new project branding.

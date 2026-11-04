@@ -226,10 +226,42 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Attest ONLY the two checked bundles from an owner-created release tag.
+  # Build/assemble and PR-candidate jobs keep read-only tokens; the extra OIDC
+  # and attestation permissions exist only in this tag-gated verifier.
+  attest-release:
+    name: Attest checked tagged Flatpak bundles
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'Certain1989/Broadcaster'
+    needs: [assemble, source-check]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: broadcaster-release-${{ github.sha }}
+          path: dist
+      - name: Check both attestation subjects against assembled SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          test -s broadcaster-${{ needs.source-check.outputs.version }}-x86_64.flatpak
+          test -s broadcaster-${{ needs.source-check.outputs.version }}-aarch64.flatpak
+          test "$(find . -maxdepth 1 -type f -name '*.flatpak' | wc -l)" -eq 2
+          sha256sum -c SHA256SUMS
+      - name: Publish build provenance for the exact checked bundles
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: 'dist/broadcaster-${{ needs.source-check.outputs.version }}-*.flatpak'
+          create-storage-record: false
+
   draft-release:
     name: Attach verified assets to draft release
     if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'Certain1989/Broadcaster'
-    needs: [assemble, source-check]
+    needs: [assemble, source-check, attest-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
