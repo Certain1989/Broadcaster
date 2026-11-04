@@ -79,6 +79,49 @@ impl From<ParseError> for ServiceError {
     }
 }
 
+// Also used by the normal new-import path. Keeping this seam injectable
+// makes a refused settings write distinguishable from a successful SQLite
+// commit without depending on a global, process-wide test setting backend.
+fn complete_new_source_consent<T>(
+    committed: Result<T, ServiceError>,
+    consent_requested: bool,
+    persist: impl FnOnce(&T) -> bool,
+) -> Result<T, ServiceError> {
+    if consent_requested && committed.as_ref().is_ok_and(|source| !persist(source)) {
+        Err(ServiceError::ConsentWrite)
+    } else {
+        committed
+    }
+}
+
+#[cfg(test)]
+mod initial_consent_tests {
+    use super::{complete_new_source_consent, ServiceError};
+
+    #[test]
+    fn committed_import_with_refused_lan_grant_reports_non_success() {
+        assert!(matches!(
+            complete_new_source_consent(Ok("new-source"), true, |_| false),
+            Err(ServiceError::ConsentWrite)
+        ));
+        assert_eq!(
+            complete_new_source_consent(Ok("new-source"), true, |_| true).unwrap(),
+            "new-source"
+        );
+        assert_eq!(
+            complete_new_source_consent(Ok("new-source"), false, |_| panic!("unrequested grant"))
+                .unwrap(),
+            "new-source"
+        );
+        assert!(matches!(
+            complete_new_source_consent::<&str>(Err(ServiceError::Cancelled), true, |_| {
+                panic!("failed import must not write settings")
+            }),
+            Err(ServiceError::Cancelled)
+        ));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefreshStage {
     Idle,
@@ -669,18 +712,20 @@ impl StreamsService {
             .await
         }
         .await;
-        if let Ok(source) = &result {
-            // Only persist user consent after the source itself committed.
-            // A preference write failure leaves the source safely unapproved.
-            if requested_lan_consent && !(cfg!(test) && !self.inner.storage.uses_default_database())
-            {
-                let _ = crate::settings::TvSettings::get().set_playlist_lan_consent(
+        // A source may already have committed, but an explicitly requested
+        // LAN grant is not complete unless its settings write is confirmed.
+        // Never report "Playlist saved" on a partial consent failure.
+        let result = complete_new_source_consent(
+            result,
+            requested_lan_consent && !(cfg!(test) && !self.inner.storage.uses_default_database()),
+            |source| {
+                crate::settings::TvSettings::get().set_playlist_lan_consent(
                     &source.id,
                     &source.origin.locator,
                     true,
-                );
-            }
-        }
+                )
+            },
+        );
         self.finish(
             &id,
             generation,

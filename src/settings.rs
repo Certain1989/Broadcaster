@@ -6,12 +6,9 @@
 
 use std::{
     cell::OnceCell,
-    collections::HashMap,
+    collections::HashSet,
     ops::Deref,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Mutex, OnceLock,
-    },
+    sync::{Mutex, OnceLock},
 };
 
 use adw::{gio, glib, prelude::*};
@@ -246,16 +243,16 @@ impl TvSettings {
     bind_setting!(bind_is_fullscreen, "is-fullscreen");
 }
 
-// A failed revocation cannot be durably saved in a locked/unavailable
-// GSettings backend. Fence the source immediately and across threads for this
-// process, and never acknowledge a successful revoke until readback confirms.
-// The caller also surfaces failure, so a restart is not misrepresented as a
-// persisted revocation. An explicit successful grant can clear the fence.
-static DENIED_LAN_SOURCES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
-static LAN_CONSENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Serialise LAN permission writes across the GTK and service threads. A failed
+// revocation fences access immediately for the current process; it remains a
+// documented, explicit failure until the owner decides restart persistence.
+// The operation mutex (separate from the deny set) avoids an older setter
+// overwriting a later revocation and prevents stale read-modify-write updates.
+static DENIED_LAN_SOURCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static LAN_CONSENT_WRITES: OnceLock<Mutex<()>> = OnceLock::new();
 
-fn denied_lan_sources() -> &'static Mutex<HashMap<String, u64>> {
-    DENIED_LAN_SOURCES.get_or_init(|| Mutex::new(HashMap::new()))
+fn denied_lan_sources() -> &'static Mutex<HashSet<String>> {
+    DENIED_LAN_SOURCES.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 fn lan_consent_effective(id: &str, stored: bool) -> bool {
@@ -263,30 +260,29 @@ fn lan_consent_effective(id: &str, stored: bool) -> bool {
         && !denied_lan_sources()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(id)
+            .contains(id)
 }
 
 fn update_lan_consent_with_write(id: &str, allowed: bool, persist: impl FnOnce() -> bool) -> bool {
-    // The sequence prevents an earlier successful grant racing a later failed
-    // revocation from clearing its deny fence on another thread.
-    let sequence = LAN_CONSENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    // Keep the deny-set mutex independent of the GSettings callback: readers
+    // never wait on a backend write while testing whether a source is fenced.
+    // Writes are rare, so one small global operation mutex is sufficient.
+    let _operation = LAN_CONSENT_WRITES
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !allowed {
         denied_lan_sources()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.to_owned(), sequence);
+            .insert(id.to_owned());
     }
     let persisted = persist();
     if persisted && allowed {
-        let mut denied = denied_lan_sources()
+        denied_lan_sources()
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if denied
-            .get(id)
-            .is_some_and(|revocation| *revocation < sequence)
-        {
-            denied.remove(id);
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
     }
     persisted
 }
@@ -351,6 +347,43 @@ mod lan_consent_tests {
         assert!(simulate_lan_consent_write(&id, true, true));
         assert!(stale_lan_consent_effective(&id));
         assert!(simulate_lan_consent_write(&id, false, true));
+        assert!(!stale_lan_consent_effective(&id));
+    }
+
+    #[test]
+    fn older_cross_thread_grant_cannot_clear_newer_failed_revocation() {
+        use std::sync::{mpsc, Arc, Barrier};
+        use std::time::Duration;
+
+        // Hold an earlier writer inside its persistence callback while a
+        // later revoke begins on another thread. The revoke must run after
+        // that writer; a stale successful grant must not clear the deny.
+        let id = format!("race-{}", uuid::Uuid::new_v4());
+        let start = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let grant_id = id.clone();
+        let grant_start = start.clone();
+        let grant_release = release.clone();
+        let grant = std::thread::spawn(move || {
+            super::update_lan_consent_with_write(&grant_id, true, || {
+                grant_start.wait();
+                grant_release.wait();
+                true
+            })
+        });
+        start.wait();
+        let (started_sender, started_receiver) = mpsc::channel();
+        let revoke_id = id.clone();
+        let revoke = std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
+            simulate_lan_consent_write(&revoke_id, false, false)
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        release.wait();
+        assert!(grant.join().unwrap());
+        assert!(!revoke.join().unwrap());
         assert!(!stale_lan_consent_effective(&id));
     }
 }
