@@ -2082,11 +2082,6 @@ fn rename_source(view: &TvStreamsView, source: Source) {
         &body,
         crate::keyboard::KeyboardOptions::default(),
     );
-    let lan_consent = gtk::CheckButton::with_label(&gettext(
-        "Allow the replacement playlist to connect to private LAN addresses",
-    ));
-    lan_consent.set_halign(gtk::Align::Start);
-    body.append(&lan_consent);
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
     let save = button(&gettext("Save"), &actions);
@@ -2204,6 +2199,11 @@ fn replace_url_form(view: &TvStreamsView, id: String) {
         &body,
         crate::keyboard::KeyboardOptions::url(),
     );
+    let lan_consent = gtk::CheckButton::with_label(&gettext(
+        "Allow the replacement playlist to connect to private LAN addresses",
+    ));
+    lan_consent.set_halign(gtk::Align::Start);
+    body.append(&lan_consent);
     let actions = line(&body);
     let cancel = button(&gettext("Cancel"), &actions);
     let save = button(&gettext("Replace"), &actions);
