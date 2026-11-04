@@ -22,7 +22,10 @@ fn row(order: u32, name: &str, group: &str, lang: &str, country: &str) -> Incomi
     IncomingChannel {
         order,
         imported_name: name.to_owned(),
-        stream_url: format!("https://example.invalid/focus-navigation-facet/{order}-{name}.m3u8"),
+        stream_url: format!(
+            "https://example.invalid/focus-navigation-facet/{order}-{}.m3u8",
+            name.replace(' ', "-")
+        ),
         tvg_id: Some(format!("focus-navigation-{name}-{order}")),
         tvg_name: None,
         group_title: Some(group.to_owned()),
