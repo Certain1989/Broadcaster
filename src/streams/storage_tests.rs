@@ -792,3 +792,58 @@ fn playlist_refresh_invalid_v5_shape_is_rejected_without_mutating_db() {
     assert_eq!(fs::read(&path).unwrap(), before);
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
 }
+
+/// Manual deterministic host benchmark of the *real* connection path. The
+/// ignored selector prevents large fixture creation in ordinary CI. This is
+/// not a physical N100/eMMC or full GTK startup measurement.
+#[test]
+#[ignore = "manual synthetic SQLite profile; run explicitly with --ignored --nocapture"]
+fn profile_storage_initialization_and_connections() {
+    use std::time::Instant;
+    for programmes in [0_i64, 50_000, 250_000] {
+        let dir = Sandbox::new();
+        let storage = Storage::at(dir.path());
+        let cold = Instant::now();
+        storage.initialize().unwrap();
+        let first_create_ms = cold.elapsed().as_secs_f64() * 1_000.0;
+        if programmes > 0 {
+            let mut conn = storage.connect().unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(
+                "INSERT INTO epg_sources
+                 (id,name,origin_kind,origin_locator,created_at,updated_at)
+                 VALUES ('synthetic','Synthetic','local_file','/synthetic/fixture.xml',1,1);
+                 INSERT INTO epg_channels(source_id,channel_id,display_name)
+                 VALUES ('synthetic','sample','Synthetic channel');",
+            )
+            .unwrap();
+            tx.execute(
+                "WITH RECURSIVE n(x) AS
+                 (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?1)
+                 INSERT INTO epg_programmes(source_id,channel_id,start_utc,stop_utc,title)
+                 SELECT 'synthetic','sample',x*1800,x*1800+1700,
+                        'Synthetic ' || x FROM n",
+                [programmes],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let bytes = fs::metadata(dir.path()).unwrap().len();
+        let warm_start = Instant::now();
+        storage.initialize().unwrap();
+        let warm_start_ms = warm_start.elapsed().as_secs_f64() * 1_000.0;
+        let mut elapsed_ms = Vec::with_capacity(30);
+        for _ in 0..30 {
+            let now = Instant::now();
+            drop(storage.connect().unwrap());
+            elapsed_ms.push(now.elapsed().as_secs_f64() * 1_000.0);
+        }
+        elapsed_ms.sort_by(f64::total_cmp);
+        let mean = elapsed_ms.iter().sum::<f64>() / elapsed_ms.len() as f64;
+        println!(
+            "STORAGE_PROFILE programmes={programmes} bytes={bytes} cold_create_ms={first_create_ms:.2} \
+             warm_start_ms={warm_start_ms:.2} connect_mean_ms={mean:.2} connect_p50_ms={:.2} connect_p95_ms={:.2}",
+            elapsed_ms[15], elapsed_ms[28]
+        );
+    }
+}
