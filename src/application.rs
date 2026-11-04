@@ -220,7 +220,7 @@ impl TvApplication {
         // Validate at the common use boundary *before* selecting either
         // managed mpv or a D-Bus player. Provider-supplied Live/Mediathek URLs
         // and subtitles are untrusted, unlike explicit user mpv preferences.
-        // Imported IPTV keeps S1's existing raw M3U admission predicate.
+        // Imported IPTV retains the existing raw M3U admission predicate.
         if !video.acceptable_remote_inputs() {
             show_error(&gettext("The video or subtitle URL is invalid."));
             return;
@@ -571,7 +571,7 @@ pub enum VideoInfo {
 }
 
 /// Provider-controlled URLs must be raw, unambiguous network HTTP(S)
-/// addresses. Reuse S1's M3U raw-text filter and EPG's strict authority and
+/// addresses. Reuse the M3U raw-text filter and EPG's strict authority and
 /// userinfo validation; neither parser normalizes a rejected string into an
 /// allowed scheme/host. No URLs or tokens appear in diagnostics.
 pub(crate) fn valid_provider_http_url(uri: &str) -> bool {
