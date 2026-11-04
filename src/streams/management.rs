@@ -555,15 +555,31 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                 status,
                 async move {
                     let result = if let Some(source) = source {
-                        let change = service.set_source_defaults(&source.id, new_defaults).await;
-                        if change.is_ok() && source.origin.kind == OriginKind::RemoteUrl {
-                            let _ = crate::settings::TvSettings::get().set_playlist_lan_consent(
+                        if source.origin.kind == OriginKind::RemoteUrl {
+                            let settings = crate::settings::TvSettings::get();
+                            if settings.playlist_lan_consent_needs_update(
                                 &source.id,
                                 &source.origin.locator,
                                 requested_lan_consent,
-                            );
+                            ) {
+                                // Revoke before allowing any subsequent fetch;
+                                // a failed backend write fences the source and
+                                // must not be presented as a successful save.
+                                if !requested_lan_consent {
+                                    service.cancel(&source.id).await;
+                                }
+                                if !settings.set_playlist_lan_consent(
+                                    &source.id,
+                                    &source.origin.locator,
+                                    requested_lan_consent,
+                                ) {
+                                    status.set_text(&gettext("LAN permission could not be saved; LAN access is blocked for this session. Retry before restarting."));
+                                    save.set_sensitive(true);
+                                    return;
+                                }
+                            }
                         }
-                        change.map(|_| ())
+                        service.set_source_defaults(&source.id, new_defaults).await
                     } else {
                         let order = service
                             .list_sources()

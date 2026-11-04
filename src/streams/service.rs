@@ -41,6 +41,7 @@ pub(crate) enum ServiceError {
     NeedsReauthorization,
     Cancelled,
     Declined,
+    ConsentWrite,
     WorkerFailed,
 }
 impl fmt::Display for ServiceError {
@@ -52,6 +53,7 @@ impl fmt::Display for ServiceError {
             Self::NeedsReauthorization => "Please reselect the local playlist",
             Self::Cancelled => "Playlist operation cancelled",
             Self::Declined => "Refresh was declined",
+            Self::ConsentWrite => "Playlist data may have changed, but LAN permission was not saved. LAN access is blocked for this session; retry before restarting.",
             Self::WorkerFailed => "Playlist worker failed",
         })
     }
@@ -940,15 +942,23 @@ impl StreamsService {
                 committed.map_err(ServiceError::Storage)
             })
             .await;
-        if let (Ok(source), Some(allowed)) = (&result, replacement_lan_consent) {
-            if !(cfg!(test) && !self.inner.storage.uses_default_database()) {
-                let _ = crate::settings::TvSettings::get().set_playlist_lan_consent(
+        let result = if let (Ok(source), Some(allowed)) = (&result, replacement_lan_consent) {
+            if !(cfg!(test) && !self.inner.storage.uses_default_database())
+                && !crate::settings::TvSettings::get().set_playlist_lan_consent(
                     &source.id,
                     &source.origin.locator,
                     allowed,
-                );
+                )
+            {
+                // SQLite may already have committed a new locator. Never
+                // report a completed consent change if its save/readback failed.
+                Err(ServiceError::ConsentWrite)
+            } else {
+                result
             }
-        }
+        } else {
+            result
+        };
         if result.is_ok() {
             // Source snapshots are authoritative only after commit. Never
             // remove cached images on cancelled/declined/failed previews.
@@ -975,7 +985,9 @@ impl StreamsService {
                 ServiceError::NeedsReauthorization => ErrorCode::Reauthorization,
                 ServiceError::Parse(_) => ErrorCode::InvalidPlaylist,
                 ServiceError::Fetch(FetchError::LocalAccess) => ErrorCode::Permission,
-                ServiceError::Storage(_) | ServiceError::WorkerFailed => ErrorCode::Write,
+                ServiceError::Storage(_)
+                | ServiceError::ConsentWrite
+                | ServiceError::WorkerFailed => ErrorCode::Write,
                 _ => ErrorCode::Network,
             };
             let _ = self

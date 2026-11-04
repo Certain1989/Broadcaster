@@ -345,7 +345,10 @@ pub(super) async fn fetch_redirects_with_transport<R: PlaylistResolver, T: Playl
     fetch_redirects_with_transport_policy(url, resolver, transport, false).await
 }
 
-async fn fetch_redirects_with_transport_policy<R: PlaylistResolver, T: PlaylistTransport>(
+pub(super) async fn fetch_redirects_with_transport_policy<
+    R: PlaylistResolver,
+    T: PlaylistTransport,
+>(
     url: &mut Url,
     resolver: &R,
     transport: &T,

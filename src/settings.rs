@@ -4,7 +4,15 @@
 // SPDX-FileContributor: Claude (Anthropic)
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{cell::OnceCell, ops::Deref};
+use std::{
+    cell::OnceCell,
+    collections::HashMap,
+    ops::Deref,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex, OnceLock,
+    },
+};
 
 use adw::{gio, glib, prelude::*};
 
@@ -109,37 +117,74 @@ impl TvSettings {
             return false;
         };
         let key = playlist_lan_consent_key(id, locator, &db_identity);
-        self.0
-            .strv("playlist-lan-consents")
-            .iter()
-            .any(|consent| consent.as_str() == key)
+        lan_consent_effective(
+            id,
+            self.0
+                .strv("playlist-lan-consents")
+                .iter()
+                .any(|consent| consent.as_str() == key),
+        )
+    }
+
+    /// Retry revocation if an old persisted entry remains, even when an
+    /// earlier failed write already fenced the source for this process.
+    pub(crate) fn playlist_lan_consent_needs_update(
+        &self,
+        id: &str,
+        locator: &str,
+        requested: bool,
+    ) -> bool {
+        if requested {
+            !self.playlist_lan_allowed(id, locator)
+        } else {
+            let prefix = format!("{id}:");
+            self.0
+                .strv("playlist-lan-consents")
+                .iter()
+                .any(|entry| entry.starts_with(&prefix))
+        }
     }
 
     /// A failed preference write must not silently grant LAN access.
     pub(crate) fn set_playlist_lan_consent(&self, id: &str, locator: &str, allowed: bool) -> bool {
-        let Some(db_identity) = playlist_database_identity() else {
-            return false;
-        };
-        let prefix = format!("{id}:");
-        let mut entries: Vec<String> = self
-            .0
-            .strv("playlist-lan-consents")
-            .iter()
-            .filter(|entry| !entry.starts_with(&prefix))
-            .map(ToString::to_string)
-            .collect();
-        if allowed {
-            // Limit stale entries without promoting any unapproved source;
-            // dropped entries simply require fresh user consent.
-            if entries.len() >= 1024 {
-                entries.drain(..entries.len() - 1023);
+        update_lan_consent_with_write(id, allowed, || {
+            let Some(db_identity) = playlist_database_identity() else {
+                return false;
+            };
+            let prefix = format!("{id}:");
+            let mut entries: Vec<String> = self
+                .0
+                .strv("playlist-lan-consents")
+                .iter()
+                .filter(|entry| !entry.starts_with(&prefix))
+                .map(ToString::to_string)
+                .collect();
+            if allowed {
+                // Limit stale entries without promoting any unapproved source;
+                // dropped entries simply require fresh user consent.
+                if entries.len() >= 1024 {
+                    entries.drain(..entries.len() - 1023);
+                }
+                entries.push(playlist_lan_consent_key(id, locator, &db_identity));
             }
-            entries.push(playlist_lan_consent_key(id, locator, &db_identity));
-        }
-        let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
-        self.0
-            .set_strv("playlist-lan-consents", refs.as_slice())
-            .is_ok()
+            let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
+            if self
+                .0
+                .set_strv("playlist-lan-consents", refs.as_slice())
+                .is_err()
+            {
+                return false;
+            }
+            // Do not claim success merely because a setter returned Ok: the
+            // retained grant must really have disappeared for revocation.
+            let stored = self.0.strv("playlist-lan-consents");
+            if allowed {
+                let key = playlist_lan_consent_key(id, locator, &db_identity);
+                stored.iter().any(|entry| entry.as_str() == key)
+            } else {
+                !stored.iter().any(|entry| entry.starts_with(&prefix))
+            }
+        })
     }
 
     pub fn live_channels(&self) -> Vec<ChannelId> {
@@ -201,6 +246,61 @@ impl TvSettings {
     bind_setting!(bind_is_fullscreen, "is-fullscreen");
 }
 
+// A failed revocation cannot be durably saved in a locked/unavailable
+// GSettings backend. Fence the source immediately and across threads for this
+// process, and never acknowledge a successful revoke until readback confirms.
+// The caller also surfaces failure, so a restart is not misrepresented as a
+// persisted revocation. An explicit successful grant can clear the fence.
+static DENIED_LAN_SOURCES: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+static LAN_CONSENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn denied_lan_sources() -> &'static Mutex<HashMap<String, u64>> {
+    DENIED_LAN_SOURCES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lan_consent_effective(id: &str, stored: bool) -> bool {
+    stored
+        && !denied_lan_sources()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(id)
+}
+
+fn update_lan_consent_with_write(id: &str, allowed: bool, persist: impl FnOnce() -> bool) -> bool {
+    // The sequence prevents an earlier successful grant racing a later failed
+    // revocation from clearing its deny fence on another thread.
+    let sequence = LAN_CONSENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    if !allowed {
+        denied_lan_sources()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.to_owned(), sequence);
+    }
+    let persisted = persist();
+    if persisted && allowed {
+        let mut denied = denied_lan_sources()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if denied
+            .get(id)
+            .is_some_and(|revocation| *revocation < sequence)
+        {
+            denied.remove(id);
+        }
+    }
+    persisted
+}
+
+#[cfg(test)]
+pub(crate) fn simulate_lan_consent_write(id: &str, allowed: bool, success: bool) -> bool {
+    update_lan_consent_with_write(id, allowed, || success)
+}
+
+#[cfg(test)]
+pub(crate) fn stale_lan_consent_effective(id: &str) -> bool {
+    lan_consent_effective(id, true)
+}
+
 fn playlist_database_identity() -> Option<String> {
     use std::os::unix::fs::MetadataExt;
     let storage = crate::streams::storage::Storage::new();
@@ -222,7 +322,9 @@ fn playlist_lan_consent_key(id: &str, locator: &str, db_identity: &str) -> Strin
 
 #[cfg(test)]
 mod lan_consent_tests {
-    use super::playlist_lan_consent_key;
+    use super::{
+        playlist_lan_consent_key, simulate_lan_consent_write, stale_lan_consent_effective,
+    };
 
     #[test]
     fn consent_fingerprint_never_contains_locator_and_is_bound_to_source_id() {
@@ -236,6 +338,20 @@ mod lan_consent_tests {
             key,
             playlist_lan_consent_key("source-id", "http://10.0.0.2/", "1:100")
         );
+    }
+
+    #[test]
+    fn write_failed_revoke_stays_denied_until_a_verified_explicit_grant() {
+        let id = format!("source-{}", uuid::Uuid::new_v4());
+        assert!(stale_lan_consent_effective(&id));
+        assert!(!simulate_lan_consent_write(&id, false, false));
+        assert!(!stale_lan_consent_effective(&id));
+        assert!(!simulate_lan_consent_write(&id, true, false));
+        assert!(!stale_lan_consent_effective(&id));
+        assert!(simulate_lan_consent_write(&id, true, true));
+        assert!(stale_lan_consent_effective(&id));
+        assert!(simulate_lan_consent_write(&id, false, true));
+        assert!(!stale_lan_consent_effective(&id));
     }
 }
 

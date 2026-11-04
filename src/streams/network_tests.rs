@@ -17,8 +17,9 @@ use reqwest::{redirect::Policy, Client, Proxy, Url};
 
 use super::fetch::{
     authorize_hop, classify_addresses, fetch_redirects_with_resolver,
-    fetch_redirects_with_transport, fetch_remote, http_client, AddressClass, Cancellation,
-    FetchError, PinnedResolver, PlaylistResolver, PlaylistTransport,
+    fetch_redirects_with_transport, fetch_redirects_with_transport_policy, fetch_remote,
+    http_client, AddressClass, Cancellation, FetchError, PinnedResolver, PlaylistResolver,
+    PlaylistTransport,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -103,6 +104,45 @@ impl PlaylistResolver for FixtureResolver {
 
 fn endpoint(address: &str, port: u16) -> SocketAddr {
     SocketAddr::new(address.parse().unwrap(), port)
+}
+
+struct DeniedLanGet(Arc<AtomicUsize>);
+impl PlaylistTransport for DeniedLanGet {
+    async fn send(
+        &self,
+        _client: &Client,
+        _url: &Url,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("LAN GET reached transport after failed consent revocation")
+    }
+}
+
+#[tokio::test]
+async fn failed_consent_revoke_prevents_subsequent_lan_playlist_get() {
+    // Simulate a GSettings write refusal with an old persisted consent entry.
+    // The production transition must keep a process-local deny fence even
+    // though the old entry remains present. Drive the real per-hop fetch path;
+    // it must reject the LAN destination *before* the transport sends a GET.
+    let id = format!("source-{}", uuid::Uuid::new_v4());
+    assert!(crate::settings::stale_lan_consent_effective(&id));
+    assert!(!crate::settings::simulate_lan_consent_write(
+        &id, false, false
+    ));
+    let allow_lan = crate::settings::stale_lan_consent_effective(&id);
+    let gets = Arc::new(AtomicUsize::new(0));
+    let transport = DeniedLanGet(gets.clone());
+    let resolver = FixtureResolver {
+        answers: HashMap::from([(
+            "local-fixture.invalid".to_owned(),
+            vec![endpoint("10.2.3.4", 80)],
+        )]),
+    };
+    let mut url = Url::parse("http://local-fixture.invalid/playlist").unwrap();
+    let result =
+        fetch_redirects_with_transport_policy(&mut url, &resolver, &transport, allow_lan).await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
+    assert_eq!(gets.load(Ordering::SeqCst), 0);
 }
 
 #[test]
