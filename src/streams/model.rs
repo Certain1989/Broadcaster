@@ -580,15 +580,20 @@ fn validate_facets(values: &BTreeSet<String>, dimension: FacetDimension) -> Stor
     }
     Ok(())
 }
-/// Shared IPTV URL admission rule at import, restored-data and playback boundaries.
-/// Keep this aligned with the existing HTTP(S) playlist contract. Checking the
-/// original bytes matters: URL parsers can remove literal control characters.
+/// Apply the exact M3U absolute-URL rule before using an untrusted stored
+/// channel or remote playlist locator. No normalized replacement is stored.
 pub(crate) fn valid_imported_http_url(value: &str) -> bool {
-    value.len() <= 8192
-        && !value.trim().is_empty()
+    super::parser::valid_absolute_media_url(value)
+}
+
+/// Match the existing user-selected file URI admission (including document
+/// portal file:// paths) without granting new filesystem access. This is a
+/// syntax check only; GIO/portal permission is still checked at use time.
+pub(crate) fn valid_local_file_locator(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 8192
+        && value.starts_with("file://")
         && !value.chars().any(char::is_control)
-        && reqwest::Url::parse(value)
-            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
 }
 
 pub(crate) fn bounded(value: &str, max: usize) -> StorageResult<()> {

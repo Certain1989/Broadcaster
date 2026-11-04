@@ -652,6 +652,10 @@ mod tests {
             "concat:https://example.invalid/a|file:///etc/passwd",
             "edl://file:///etc/passwd",
             "lavfi://testsrc",
+            "https://example.invalid/live master.m3u8",
+            "http:////example.invalid/live",
+            "https://example.invalid/$(fake)",
+            "https://example.invalid/\\evil.example/live",
             "https://example.invalid/live\nfile:///etc/passwd",
             "",
         ];

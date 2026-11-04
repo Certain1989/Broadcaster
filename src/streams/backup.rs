@@ -213,6 +213,23 @@ fn validate_snapshot_inputs(conn: &Connection) -> StorageResult<()> {
             return Err(StorageError::IncompatibleDatabase);
         }
     }
+    // Reject local origins that could never have come from the GTK file
+    // selector. Keep previously selected file:/// and portal URIs valid.
+    for table in ["iptv_sources", "epg_sources"] {
+        let query = format!("SELECT origin_locator FROM {table} WHERE origin_kind='local_file'");
+        let mut stmt = conn
+            .prepare(&query)
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| StorageError::IncompatibleDatabase)?;
+        for row in rows {
+            let uri = row.map_err(|_| StorageError::IncompatibleDatabase)?;
+            if !super::model::valid_local_file_locator(&uri) {
+                return Err(StorageError::IncompatibleDatabase);
+            }
+        }
+    }
     let mut stmt = conn
         .prepare("SELECT origin_locator FROM epg_sources WHERE origin_kind='remote_url'")
         .map_err(|_| StorageError::IncompatibleDatabase)?;
@@ -805,7 +822,7 @@ mod tests {
             VALUES ('channel-1','playlist-1',0,'Fictional channel','https://invalid.example/live',100,100)", []).unwrap();
         db.execute(
             "INSERT INTO epg_sources (id,name,origin_kind,origin_locator,created_at,updated_at)
-            VALUES ('guide-1','Fake guide','local_file','/nonexistent/guide.xml',100,100)",
+            VALUES ('guide-1','Fake guide','local_file','file:///nonexistent/guide.xml',100,100)",
             [],
         )
         .unwrap();
@@ -1110,9 +1127,39 @@ mod tests {
             if old_version == 4 {
                 connection.execute_batch(storage::MIGRATION_004).unwrap();
             }
+            connection.execute_batch(
+                "INSERT INTO iptv_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+                 VALUES ('legacy-local','Legacy playlist','local_file','file:///run/user/1000/doc/legacy.m3u',1,1);
+                 INSERT INTO iptv_channels(id,source_id,playlist_order,imported_name,stream_url,created_at,updated_at)
+                 VALUES ('legacy-channel','legacy-local',0,'Legacy','https://example.invalid/legacy/master.m3u8',1,1);
+                 INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
+                 VALUES ('legacy-guide','Legacy guide','local_file','file:///run/user/1000/doc/legacy.xml',1,1);
+                 INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
+                 VALUES ('legacy-local','legacy-guide',1);"
+            ).unwrap();
             connection.close().unwrap();
+            let original = fs::read(&path).unwrap();
             let prepared = prepare_import(&live, &path).unwrap();
-            let (_, actual_version) = verify_snapshot(&prepared.candidate.path, false).unwrap();
+            assert_eq!(prepared.counts.channels, 1);
+            assert_eq!(prepared.counts.playlists, 1);
+            assert_eq!(prepared.counts.guides, 1);
+            let (upgraded, actual_version) =
+                verify_snapshot(&prepared.candidate.path, false).unwrap();
+            let restored_url: String = upgraded
+                .query_row(
+                    "SELECT stream_url FROM iptv_channels WHERE id='legacy-channel'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(restored_url, "https://example.invalid/legacy/master.m3u8");
+            assert_eq!(
+                upgraded
+                    .query_row("SELECT COUNT(*) FROM epg_playlist_links", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
             assert_eq!(actual_version, 5);
             let source_version: i64 =
                 Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1123,7 +1170,32 @@ mod tests {
                 source_version, old_version,
                 "original backup must stay unchanged"
             );
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                original,
+                "legacy input must not change"
+            );
+            drop(upgraded);
             drop(prepared);
+            // Schema-valid legacy rows bypassing M3U admission must fail
+            // before live replacement, too.
+            let adversarial = sandbox.0.join(format!("bad-v{old_version}.sqlite3"));
+            fs::copy(&path, &adversarial).unwrap();
+            let changed = Connection::open(&adversarial).unwrap();
+            changed
+                .execute(
+                    "UPDATE iptv_channels SET stream_url='http:////example.invalid/legacy'",
+                    [],
+                )
+                .unwrap();
+            drop(changed);
+            let malicious_bytes = fs::read(&adversarial).unwrap();
+            assert_eq!(
+                prepare_import(&live, &adversarial).err(),
+                Some(StorageError::IncompatibleDatabase)
+            );
+            assert_eq!(fs::read(&adversarial).unwrap(), malicious_bytes);
+            assert!(!sandbox.0.join(REQUEST).exists());
             assert_eq!(
                 live.connect()
                     .unwrap()
@@ -1405,6 +1477,12 @@ mod tests {
             ("edl-media", "UPDATE iptv_channels SET stream_url='edl://https://invalid.example/live'"),
             ("remote-playlist", "UPDATE iptv_sources SET origin_locator='file:///private/list.m3u'"),
             ("remote-guide", "UPDATE epg_sources SET origin_kind='remote_url', origin_locator='file:///private/guide.xml'"),
+            ("local-playlist-remote-uri", "UPDATE iptv_sources SET origin_kind='local_file', origin_locator='https://example.invalid/unexpected'"),
+            ("local-guide-remote-uri", "UPDATE epg_sources SET origin_kind='local_file', origin_locator='https://example.invalid/unexpected'"),
+            ("normalized-media-space", "UPDATE iptv_channels SET stream_url='https://example.invalid/live master.m3u8'"),
+            ("normalized-media-slashes", "UPDATE iptv_channels SET stream_url='http:////example.invalid/live'"),
+            ("embedded-shell-text", "UPDATE iptv_channels SET stream_url='https://example.invalid/$(fake)'"),
+            ("backslash-media", "UPDATE iptv_channels SET stream_url='https://example.invalid\\evil.example/live'"),
             ("guide-authority", "UPDATE epg_sources SET origin_kind='remote_url', origin_locator='http://%31%32%37.0.0.1/guide.xml'"),
         ] {
             let path = sandbox.0.join(format!("{name}.sqlite3"));
