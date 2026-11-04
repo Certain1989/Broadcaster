@@ -107,6 +107,7 @@ impl TvSettings {
     /// host/URL shared by unrelated sources. A source replacement, restore
     /// with a new ID, or changed locator cannot inherit old permission.
     /// Only a SHA-256 digest of the sensitive locator is stored in GSettings.
+    /// Durable revocation tombstones override an older grant after restart.
     pub(crate) fn playlist_lan_allowed(&self, id: &str, locator: &str) -> bool {
         // An imported snapshot atomically replaces the SQLite inode, so a
         // restored source cannot inherit consent from the previous database.
@@ -114,13 +115,19 @@ impl TvSettings {
             return false;
         };
         let key = playlist_lan_consent_key(id, locator, &db_identity);
-        lan_consent_effective(
-            id,
-            self.0
-                .strv("playlist-lan-consents")
-                .iter()
-                .any(|consent| consent.as_str() == key),
+        let persisted = self
+            .0
+            .strv("playlist-lan-consents")
+            .iter()
+            .any(|consent| consent.as_str() == key);
+        // An unreadable/corrupt ledger is never interpreted as permission.
+        let token = playlist_lan_revocation_token(id, &db_identity);
+        let no_durable_deny = crate::streams::consent_ledger::is_revoked(
+            &crate::streams::consent_ledger::path(),
+            &token,
         )
+        .is_ok_and(|revoked| !revoked);
+        lan_consent_effective(id, persisted && no_durable_deny)
     }
 
     /// Retry revocation if an old persisted entry remains, even when an
@@ -148,6 +155,8 @@ impl TvSettings {
             let Some(db_identity) = playlist_database_identity() else {
                 return false;
             };
+            let token = playlist_lan_revocation_token(id, &db_identity);
+            let ledger = crate::streams::consent_ledger::path();
             let prefix = format!("{id}:");
             let mut entries: Vec<String> = self
                 .0
@@ -165,22 +174,23 @@ impl TvSettings {
                 entries.push(playlist_lan_consent_key(id, locator, &db_identity));
             }
             let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
-            if self
-                .0
-                .set_strv("playlist-lan-consents", refs.as_slice())
-                .is_err()
-            {
-                return false;
-            }
-            // Do not claim success merely because a setter returned Ok: the
-            // retained grant must really have disappeared for revocation.
-            let stored = self.0.strv("playlist-lan-consents");
-            if allowed {
-                let key = playlist_lan_consent_key(id, locator, &db_identity);
-                stored.iter().any(|entry| entry.as_str() == key)
-            } else {
-                !stored.iter().any(|entry| entry.starts_with(&prefix))
-            }
+            persist_lan_consent_with_ledger(&ledger, &token, allowed, || {
+                if self
+                    .0
+                    .set_strv("playlist-lan-consents", refs.as_slice())
+                    .is_err()
+                {
+                    return false;
+                }
+                // Do not claim success merely because a setter returned Ok.
+                let stored = self.0.strv("playlist-lan-consents");
+                if allowed {
+                    let key = playlist_lan_consent_key(id, locator, &db_identity);
+                    stored.iter().any(|entry| entry.as_str() == key)
+                } else {
+                    !stored.iter().any(|entry| entry.starts_with(&prefix))
+                }
+            })
         })
     }
 
@@ -243,9 +253,28 @@ impl TvSettings {
     bind_setting!(bind_is_fullscreen, "is-fullscreen");
 }
 
+// Keep the new durable record independent of the previous GSettings grant.
+// Revocations are journaled *before* the backend write; grants clear the
+// tombstone only after their backend write/readback succeeds. If either store
+// rejects an update, no misleading success is reported.
+pub(crate) fn persist_lan_consent_with_ledger(
+    path: &std::path::Path,
+    token: &str,
+    allowed: bool,
+    backend_write: impl FnOnce() -> bool,
+) -> bool {
+    let journal_ok = allowed || crate::streams::consent_ledger::update(path, token, true).is_ok();
+    let backend_ok = backend_write();
+    if allowed {
+        backend_ok && crate::streams::consent_ledger::update(path, token, false).is_ok()
+    } else {
+        journal_ok && backend_ok
+    }
+}
+
 // Serialise LAN permission writes across the GTK and service threads. A failed
 // revocation fences access immediately for the current process; it remains a
-// documented, explicit failure until the owner decides restart persistence.
+// explicit failure if the durable ledger cannot be updated.
 // The operation mutex (separate from the deny set) avoids an older setter
 // overwriting a later revocation and prevents stale read-modify-write updates.
 static DENIED_LAN_SOURCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -306,6 +335,20 @@ fn playlist_database_identity() -> Option<String> {
         .then(|| format!("{}:{}", metadata.dev(), metadata.ino()))
 }
 
+/// Revocations cover every locator for the same source/database identity;
+/// a failed GSettings cleanup cannot reactivate a previously used URL when
+/// the user switches source locators and later switches back.
+pub(crate) fn playlist_lan_revocation_token(id: &str, db_identity: &str) -> String {
+    use ring::digest::{digest, SHA256};
+    use std::fmt::Write;
+    let mut token = String::with_capacity(64);
+    let binding = format!("broadcaster-lan-revocation-v1\0{id}\0{db_identity}");
+    for byte in digest(&SHA256, binding.as_bytes()).as_ref() {
+        write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    token
+}
+
 fn playlist_lan_consent_key(id: &str, locator: &str, db_identity: &str) -> String {
     use ring::digest::{digest, SHA256};
     use std::fmt::Write;
@@ -319,7 +362,8 @@ fn playlist_lan_consent_key(id: &str, locator: &str, db_identity: &str) -> Strin
 #[cfg(test)]
 mod lan_consent_tests {
     use super::{
-        playlist_lan_consent_key, simulate_lan_consent_write, stale_lan_consent_effective,
+        playlist_lan_consent_key, playlist_lan_revocation_token, simulate_lan_consent_write,
+        stale_lan_consent_effective,
     };
 
     #[test]
@@ -337,6 +381,15 @@ mod lan_consent_tests {
     }
 
     #[test]
+    fn durable_denial_token_has_no_locator_and_is_database_scoped() {
+        let key = playlist_lan_revocation_token("source-id", "1:100");
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(key, playlist_lan_revocation_token("different-id", "1:100"));
+        assert_ne!(key, playlist_lan_revocation_token("source-id", "1:101"));
+    }
+
+    #[test]
     fn write_failed_revoke_stays_denied_until_a_verified_explicit_grant() {
         let id = format!("source-{}", uuid::Uuid::new_v4());
         assert!(stale_lan_consent_effective(&id));
@@ -348,6 +401,34 @@ mod lan_consent_tests {
         assert!(stale_lan_consent_effective(&id));
         assert!(simulate_lan_consent_write(&id, false, true));
         assert!(!stale_lan_consent_effective(&id));
+    }
+
+    #[test]
+    fn backend_refusal_is_durably_revoked_after_simulated_restart() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("broadcaster-consent-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("deny-v1");
+        let id = format!("source-{}", uuid::Uuid::new_v4());
+        let token = playlist_lan_revocation_token(&id, "1:100");
+        // Old durable grant remains true in the refused backend; the denial
+        // must be recovered from disk without consulting the in-memory fence.
+        assert!(!super::update_lan_consent_with_write(&id, false, || {
+            super::persist_lan_consent_with_ledger(&path, &token, false, || false)
+        }));
+        assert!(crate::streams::consent_ledger::is_revoked(&path, &token).unwrap());
+        assert!(!super::update_lan_consent_with_write(&id, true, || {
+            super::persist_lan_consent_with_ledger(&path, &token, true, || false)
+        }));
+        assert!(crate::streams::consent_ledger::is_revoked(&path, &token).unwrap());
+        assert!(super::update_lan_consent_with_write(&id, true, || {
+            super::persist_lan_consent_with_ledger(&path, &token, true, || true)
+        }));
+        assert!(!crate::streams::consent_ledger::is_revoked(&path, &token).unwrap());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

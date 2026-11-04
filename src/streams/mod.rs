@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod backup;
+pub(crate) mod consent_ledger;
 mod editor;
 mod epg_projection;
 pub(crate) mod epg_spool;

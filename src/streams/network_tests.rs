@@ -145,6 +145,44 @@ async fn failed_consent_revoke_prevents_subsequent_lan_playlist_get() {
     assert_eq!(gets.load(Ordering::SeqCst), 0);
 }
 
+#[tokio::test]
+async fn failed_durable_grant_removal_survives_restart_before_lan_send() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let dir = std::env::temp_dir().join(format!("broadcaster-restart-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.join("lan-revocations-v1");
+    let id = format!("source-{}", uuid::Uuid::new_v4());
+    let token = crate::settings::playlist_lan_revocation_token(&id, "1:100");
+    // The old GSettings grant (stored=true) persists because the injected
+    // preference write refuses removal. The same production transition
+    // writes a separate durable tombstone before attempting the backend.
+    let accepted = crate::settings::persist_lan_consent_with_ledger(&path, &token, false, || false);
+    assert!(!accepted);
+    // Simulate process restart by *not* consulting the in-memory deny map.
+    // Only the reloaded file can now override the previous saved grant.
+    let old_saved_grant = true;
+    let restarted_allow_lan = old_saved_grant
+        && crate::streams::consent_ledger::is_revoked(&path, &token).is_ok_and(|revoked| !revoked);
+    assert!(!restarted_allow_lan);
+    let gets = Arc::new(AtomicUsize::new(0));
+    let transport = DeniedLanGet(gets.clone());
+    let resolver = FixtureResolver {
+        answers: HashMap::from([(
+            "local-fixture.invalid".to_owned(),
+            vec![endpoint("10.2.3.4", 80)],
+        )]),
+    };
+    let mut url = Url::parse("http://local-fixture.invalid/playlist").unwrap();
+    let result =
+        fetch_redirects_with_transport_policy(&mut url, &resolver, &transport, restarted_allow_lan)
+            .await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
+    assert_eq!(gets.load(Ordering::SeqCst), 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn mixed_answers_and_special_destinations_never_gain_local_trust() {
     let global = endpoint("8.8.8.8", 80);

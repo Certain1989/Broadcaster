@@ -29,6 +29,19 @@ Stored consent is specific to that source and exact URL and is invalidated
 when the database file is replaced during snapshot recovery. Existing sources
 and restored backups are not automatically consented.
 
+Revoking access writes a separate, atomic and fsynced denial ledger in the
+private application data directory before removing the previous GSettings
+grant. This prevents a stale grant from being reactivated after a normal
+restart when GSettings rejects the removal. The ledger contains hashed
+source/database identities, not playlist URLs, and is not part of the SQLite
+backup. A new explicit grant replaces the denial only after its setting has
+been saved. If the ledger is corrupt or unreadable, playlist LAN access is
+denied; if revocation cannot be persisted, the application reports an error
+and denies access for the current process. **When all durable writes fail, an
+old grant may reappear after restarting**; retry the revocation while storage
+is writable before exiting. This guarantee does not extend to deliberate
+out-of-band deletion or rollback of both local permission stores.
+
 A public-looking DNS name resolving to private LAN addresses also requires
 this consent before the first request. DNS answers are checked for mixed
 classes, and every HTTP(S) hop uses the checked address set for its actual

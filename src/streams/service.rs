@@ -53,7 +53,7 @@ impl fmt::Display for ServiceError {
             Self::NeedsReauthorization => "Please reselect the local playlist",
             Self::Cancelled => "Playlist operation cancelled",
             Self::Declined => "Refresh was declined",
-            Self::ConsentWrite => "Playlist data may have changed, but LAN permission was not saved. LAN access is blocked for this session; retry before restarting.",
+            Self::ConsentWrite => "Playlist data may have changed, but LAN permission was not saved. Retry the permission change; if revocation storage failed, the old grant may remain after restart.",
             Self::WorkerFailed => "Playlist worker failed",
         })
     }

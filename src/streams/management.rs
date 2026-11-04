@@ -573,7 +573,7 @@ fn show_source_form(view: &TvStreamsView, file: Option<gio::File>, defaults_for:
                                     &source.origin.locator,
                                     requested_lan_consent,
                                 ) {
-                                    status.set_text(&gettext("LAN permission could not be saved; LAN access is blocked for this session. Retry before restarting."));
+                                    status.set_text(&gettext("LAN permission could not be saved. Retry the change; if durable revocation failed, an old grant may remain after restart."));
                                     save.set_sensitive(true);
                                     return;
                                 }
