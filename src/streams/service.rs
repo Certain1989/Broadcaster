@@ -582,9 +582,9 @@ impl StreamsService {
         order: u32,
         defaults: SourceDefaults,
     ) -> Result<Source, ServiceError> {
-        // The generic API requires explicit opt-in. Synthetic integration
-        // fixtures that use 127/8 must not be treated as production consent.
-        self.add_url_with_lan(name, url, order, defaults, true)
+        // The generic API grants no LAN access in production. Isolated
+        // loopback integration fixtures use a test-only explicit exception.
+        self.add_url_with_lan(name, url, order, defaults, cfg!(test))
             .await
     }
 
