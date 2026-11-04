@@ -1134,6 +1134,8 @@ mod tests {
                  VALUES ('legacy-channel','legacy-local',0,'Legacy','https://example.invalid/legacy/master.m3u8',1,1);
                  INSERT INTO epg_sources(id,name,origin_kind,origin_locator,created_at,updated_at)
                  VALUES ('legacy-guide','Legacy guide','local_file','file:///run/user/1000/doc/legacy.xml',1,1);
+                 INSERT INTO epg_sources(id,name,origin_kind,origin_locator,trust_scope,created_at,updated_at)
+                 VALUES ('legacy-public-guide','Legacy public guide','remote_url','https://example.invalid/legacy.xml','public',1,1);
                  INSERT INTO epg_playlist_links(playlist_source_id,guide_source_id,updated_at)
                  VALUES ('legacy-local','legacy-guide',1);"
             ).unwrap();
@@ -1142,7 +1144,7 @@ mod tests {
             let prepared = prepare_import(&live, &path).unwrap();
             assert_eq!(prepared.counts.channels, 1);
             assert_eq!(prepared.counts.playlists, 1);
-            assert_eq!(prepared.counts.guides, 1);
+            assert_eq!(prepared.counts.guides, 2);
             let (upgraded, actual_version) =
                 verify_snapshot(&prepared.candidate.path, false).unwrap();
             let restored_url: String = upgraded
@@ -1161,6 +1163,17 @@ mod tests {
                 1
             );
             assert_eq!(actual_version, 5);
+            let public_guide: (String, String) = upgraded
+                .query_row(
+                    "SELECT origin_locator, trust_scope FROM epg_sources WHERE id='legacy-public-guide'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                public_guide,
+                ("https://example.invalid/legacy.xml".into(), "public".into())
+            );
             let source_version: i64 =
                 Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
                     .unwrap()
