@@ -137,7 +137,9 @@ impl TvSettings {
             entries.push(playlist_lan_consent_key(id, locator, &db_identity));
         }
         let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
-        self.0.set_strv("playlist-lan-consents", refs.as_slice()).is_ok()
+        self.0
+            .set_strv("playlist-lan-consents", refs.as_slice())
+            .is_ok()
     }
 
     pub fn live_channels(&self) -> Vec<ChannelId> {
