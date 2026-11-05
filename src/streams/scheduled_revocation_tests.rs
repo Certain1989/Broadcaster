@@ -115,7 +115,13 @@ fn real_keyfile_revocation_survives_process_restart_and_due_refresh() {
         "oracle did not actually hide the tombstone"
     );
     fs::rename(hidden, consent_ledger_path(&data)).unwrap();
-    for stage in ["negative", "grant", "positive"] {
+    for stage in [
+        "negative",
+        "grant",
+        "positive",
+        "both_fail",
+        "both_fail_restart",
+    ] {
         must_pass(stage);
     }
 }
@@ -226,6 +232,39 @@ async fn cold_process_stage() {
             assert_eq!(stored_consents().len(), 1);
             assert!(settings.playlist_lan_allowed(SOURCE, LOCATOR));
             scheduled_scan(true, &root).await;
+        }
+        "both_fail" => {
+            // Exercise the *other* policy boundary separately from the
+            // successfully persisted tombstone. No durable denial can be
+            // promised if the backend and ledger both reject publication.
+            assert_eq!(stored_consents().len(), 1);
+            assert!(settings.playlist_lan_allowed(SOURCE, LOCATOR));
+            let path = consent_ledger::path();
+            assert!(path.is_file(), "fresh grant must leave a valid ledger");
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+            std::env::set_var("BROADCASTER_T1_REFUSE_KEYFILE_WRITE", "1");
+            std::env::set_var("BROADCASTER_T1_REFUSE_KEYFILE_UNTIL_EXIT", "1");
+            assert!(!settings.set_playlist_lan_consent(SOURCE, LOCATOR, false));
+            gio::Settings::sync();
+            assert!(
+                !settings.playlist_lan_allowed(SOURCE, LOCATOR),
+                "failed revoke must fence the current process"
+            );
+        }
+        "both_fail_restart" => {
+            assert_eq!(stored_consents().len(), 1, "saved grant must survive");
+            let path = consent_ledger::path();
+            assert!(path.is_dir(), "ledger refusal was not exercised");
+            assert!(
+                !settings.playlist_lan_allowed(SOURCE, LOCATOR),
+                "invalid ledger must deny while present"
+            );
+            fs::remove_dir(&path).unwrap();
+            assert!(
+                settings.playlist_lan_allowed(SOURCE, LOCATOR),
+                "accepted limitation: without any durable denial, the old grant may recur"
+            );
         }
         _ => panic!("unknown subprocess stage"),
     }
