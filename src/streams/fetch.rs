@@ -293,7 +293,77 @@ async fn fetch_redirects(
 ) -> Result<Download, FetchError> {
     // The existing service client is retained for API compatibility; a fresh
     // per-hop pinned client is mandatory, rather than its shared connection pool.
+    #[cfg(test)]
+    if std::env::var_os("BROADCASTER_TEST_LAN_RESTART_FIXTURE").as_deref()
+        == Some(std::ffi::OsStr::new("isolated"))
+    {
+        return fetch_redirects_with_transport_policy(
+            url,
+            &LanRestartResolver,
+            &LanRestartTransport,
+            allow_lan,
+        )
+        .await;
+    }
     fetch_redirects_with_resolver_with_consent(url, &SystemResolver, allow_lan).await
+}
+
+// A restricted test-only transport probe. Every DNS answer is RFC1918; only
+// a successful production consent check permits dialling the loopback fixture.
+#[cfg(test)]
+static LAN_RESTART_RESOLVE_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+static LAN_RESTART_SEND_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(super) fn lan_restart_probe_counts() -> (usize, usize) {
+    use std::sync::atomic::Ordering;
+    (
+        LAN_RESTART_RESOLVE_COUNT.load(Ordering::SeqCst),
+        LAN_RESTART_SEND_COUNT.load(Ordering::SeqCst),
+    )
+}
+
+#[cfg(test)]
+struct LanRestartResolver;
+#[cfg(test)]
+impl PlaylistResolver for LanRestartResolver {
+    async fn addresses(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, FetchError> {
+        if hostname != "lan-fixture.invalid" {
+            return Err(FetchError::InvalidOrigin);
+        }
+        LAN_RESTART_RESOLVE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec![SocketAddr::new(
+            IpAddr::V4(std::net::Ipv4Addr::new(10, 2, 3, 4)),
+            port,
+        )])
+    }
+}
+
+#[cfg(test)]
+struct LanRestartTransport;
+#[cfg(test)]
+impl PlaylistTransport for LanRestartTransport {
+    async fn send(&self, _client: &Client, url: &Url) -> Result<reqwest::Response, reqwest::Error> {
+        assert_eq!(url.host_str(), Some("lan-fixture.invalid"));
+        assert_eq!(url.path(), "/playlist");
+        LAN_RESTART_SEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let port: u16 = std::env::var("BROADCASTER_LAN_RESTART_PORT")
+            .expect("isolated fixture port")
+            .parse()
+            .expect("numeric port");
+        assert_eq!(url.port_or_known_default(), Some(port));
+        let dial = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), port);
+        let fixture_client = Client::builder()
+            .no_proxy()
+            .redirect(Policy::none())
+            .resolve_to_addrs("lan-fixture.invalid", &[dial])
+            .build()
+            .expect("isolated HTTP client");
+        fixture_client.get(url.clone()).send().await
+    }
 }
 
 pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(

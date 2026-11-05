@@ -1223,6 +1223,11 @@ pub(crate) async fn choose_local_file(parent: &gtk::Window) -> Option<gio::File>
     gtk::FileDialog::new().open_future(Some(parent)).await.ok()
 }
 
+#[cfg(test)]
+pub(super) fn now_for_test() -> i64 {
+    now()
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

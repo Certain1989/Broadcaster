@@ -26,6 +26,8 @@ pub(crate) mod view;
 #[cfg(test)]
 mod epg_projection_tests;
 #[cfg(test)]
+mod lan_restart_tests;
+#[cfg(test)]
 mod network_tests;
 #[cfg(test)]
 mod parser_tests;
