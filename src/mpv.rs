@@ -59,12 +59,13 @@ impl StartError {
     }
 }
 
-/// Do not allow literal control characters through to mpv command-line values.
-/// Media URLs themselves remain opaque: Broadcaster must not reject supported
-/// protocols, and the `--` argument already prevents option injection.
+/// Defence in depth at the managed mpv sink. The common application dispatch
+/// additionally applies stricter no-userinfo validation to provider-controlled
+/// Live/Mediathek inputs. `--` is not a protocol sandbox; generated subtitles
+/// are separate mpv options and must never point to arbitrary local files.
 fn valid_media_inputs(uri: &str, subtitles: Option<&str>) -> bool {
-    let valid = |value: &str| !value.trim().is_empty() && !value.chars().any(char::is_control);
-    valid(uri) && subtitles.is_none_or(valid)
+    crate::streams::model::valid_imported_http_url(uri)
+        && subtitles.is_none_or(crate::application::valid_provider_http_url)
 }
 
 /// Mpv 0.41 has dedicated --user-agent and --referrer network options.
@@ -643,9 +644,17 @@ mod redaction_tests {
             "https://example.invalid/video?token=fake",
             None
         ));
-        assert!(valid_media_inputs(
+        assert!(!valid_media_inputs(
             "rtmp://example.invalid/live",
             Some("file:///subs.srt")
+        ));
+        assert!(!valid_media_inputs(
+            "https://example.invalid/video",
+            Some("file:///subs.srt")
+        ));
+        assert!(valid_media_inputs(
+            "https://example.invalid/video.mpd",
+            Some("https://example.invalid/subs.vtt")
         ));
         assert!(!valid_media_inputs("", None));
         assert!(!valid_media_inputs("--vo=null\n--script=bad", None));

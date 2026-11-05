@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod backup;
+pub(crate) mod consent_ledger;
 mod editor;
 mod epg_projection;
 pub(crate) mod epg_spool;
@@ -28,6 +29,8 @@ mod epg_projection_tests;
 mod network_tests;
 #[cfg(test)]
 mod parser_tests;
+#[cfg(test)]
+mod scheduled_revocation_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]

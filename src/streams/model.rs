@@ -88,11 +88,8 @@ pub struct SourceOrigin {
 impl SourceOrigin {
     pub fn validate(&self) -> StorageResult<()> {
         bounded(&self.locator, 8192)?;
-        if self.kind == OriginKind::RemoteUrl {
-            let url = reqwest::Url::parse(&self.locator).map_err(|_| StorageError::InvalidInput)?;
-            if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-                return Err(StorageError::InvalidInput);
-            }
+        if self.kind == OriginKind::RemoteUrl && !valid_imported_http_url(&self.locator) {
+            return Err(StorageError::InvalidInput);
         }
         Ok(())
     }
@@ -196,8 +193,7 @@ impl IncomingChannel {
     pub fn validate(&self) -> StorageResult<()> {
         bounded(&self.imported_name, 512)?;
         bounded(&self.stream_url, 8192)?;
-        let url = reqwest::Url::parse(&self.stream_url).map_err(|_| StorageError::InvalidInput)?;
-        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+        if !valid_imported_http_url(&self.stream_url) {
             return Err(StorageError::InvalidInput);
         }
         optional_with_empty(&self.tvg_id, 512)?;
@@ -584,6 +580,22 @@ fn validate_facets(values: &BTreeSet<String>, dimension: FacetDimension) -> Stor
     }
     Ok(())
 }
+/// Apply the exact M3U absolute-URL rule before using an untrusted stored
+/// channel or remote playlist locator. No normalized replacement is stored.
+pub(crate) fn valid_imported_http_url(value: &str) -> bool {
+    super::parser::valid_absolute_media_url(value)
+}
+
+/// Match the existing user-selected file URI admission (including document
+/// portal file:// paths) without granting new filesystem access. This is a
+/// syntax check only; GIO/portal permission is still checked at use time.
+pub(crate) fn valid_local_file_locator(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 8192
+        && value.starts_with("file://")
+        && !value.chars().any(char::is_control)
+}
+
 pub(crate) fn bounded(value: &str, max: usize) -> StorageResult<()> {
     if value.trim().is_empty() || value.len() > max || value.chars().any(char::is_control) {
         return Err(StorageError::InvalidInput);

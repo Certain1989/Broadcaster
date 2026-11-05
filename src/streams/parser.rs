@@ -225,14 +225,10 @@ pub(crate) fn parse_playlist(
 }
 
 fn validate_base(raw: &str) -> Result<Url, ParseError> {
-    if raw.len() > MAX_URL_BYTES || unsafe_url_text(raw) || !explicit_http_authority(raw) {
+    if !valid_absolute_media_url(raw) {
         return Err(ParseError::InvalidOrigin);
     }
-    let url = Url::parse(raw).map_err(|_| ParseError::InvalidOrigin)?;
-    if !allowed_url(&url) {
-        return Err(ParseError::InvalidOrigin);
-    }
-    Ok(url)
+    Url::parse(raw).map_err(|_| ParseError::InvalidOrigin)
 }
 
 fn unsafe_url_text(s: &str) -> bool {
@@ -259,6 +255,16 @@ fn allowed_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https") && url.host().is_some()
 }
 
+/// Exactly the same raw-URL admission used for absolute M3U media entries.
+/// URL::parse alone may normalize an invalid authority, whitespace or a
+/// backslash; restored DB rows must not bypass the parser's textual checks.
+pub(super) fn valid_absolute_media_url(raw: &str) -> bool {
+    raw.len() <= MAX_URL_BYTES
+        && !unsafe_url_text(raw)
+        && explicit_http_authority(raw)
+        && Url::parse(raw).is_ok_and(|url| allowed_url(&url))
+}
+
 fn media_url(raw: &str, base: Option<&Url>) -> Option<String> {
     let raw = raw.trim();
     if raw.len() > MAX_URL_BYTES || unsafe_url_text(raw) {
@@ -267,7 +273,7 @@ fn media_url(raw: &str, base: Option<&Url>) -> Option<String> {
     if let Ok(url) = Url::parse(raw) {
         // Keep the original absolute string, including every auth query token;
         // parsing or normalizing it for storage could alter the playlist identity key.
-        return (allowed_url(&url) && explicit_http_authority(raw)).then(|| raw.to_owned());
+        return (allowed_url(&url) && valid_absolute_media_url(raw)).then(|| raw.to_owned());
     }
     let base = base?;
     let url = base.join(raw).ok()?;

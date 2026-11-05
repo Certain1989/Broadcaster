@@ -41,6 +41,7 @@ pub(crate) enum ServiceError {
     NeedsReauthorization,
     Cancelled,
     Declined,
+    ConsentWrite,
     WorkerFailed,
 }
 impl fmt::Display for ServiceError {
@@ -52,6 +53,7 @@ impl fmt::Display for ServiceError {
             Self::NeedsReauthorization => "Please reselect the local playlist",
             Self::Cancelled => "Playlist operation cancelled",
             Self::Declined => "Refresh was declined",
+            Self::ConsentWrite => "Playlist data may have changed, but LAN permission was not saved. Retry the permission change; if revocation storage failed, the old grant may remain after restart.",
             Self::WorkerFailed => "Playlist worker failed",
         })
     }
@@ -74,6 +76,49 @@ impl From<FetchError> for ServiceError {
 impl From<ParseError> for ServiceError {
     fn from(value: ParseError) -> Self {
         Self::Parse(value)
+    }
+}
+
+// Also used by the normal new-import path. Keeping this seam injectable
+// makes a refused settings write distinguishable from a successful SQLite
+// commit without depending on a global, process-wide test setting backend.
+fn complete_new_source_consent<T>(
+    committed: Result<T, ServiceError>,
+    consent_requested: bool,
+    persist: impl FnOnce(&T) -> bool,
+) -> Result<T, ServiceError> {
+    if consent_requested && committed.as_ref().is_ok_and(|source| !persist(source)) {
+        Err(ServiceError::ConsentWrite)
+    } else {
+        committed
+    }
+}
+
+#[cfg(test)]
+mod initial_consent_tests {
+    use super::{complete_new_source_consent, ServiceError};
+
+    #[test]
+    fn committed_import_with_refused_lan_grant_reports_non_success() {
+        assert!(matches!(
+            complete_new_source_consent(Ok("new-source"), true, |_| false),
+            Err(ServiceError::ConsentWrite)
+        ));
+        assert_eq!(
+            complete_new_source_consent(Ok("new-source"), true, |_| true).unwrap(),
+            "new-source"
+        );
+        assert_eq!(
+            complete_new_source_consent(Ok("new-source"), false, |_| panic!("unrequested grant"))
+                .unwrap(),
+            "new-source"
+        );
+        assert!(matches!(
+            complete_new_source_consent::<&str>(Err(ServiceError::Cancelled), true, |_| {
+                panic!("failed import must not write settings")
+            }),
+            Err(ServiceError::Cancelled)
+        ));
     }
 }
 
@@ -111,7 +156,7 @@ pub(crate) enum ServiceEvent {
 
 pub(crate) enum SourceSelection {
     Local(gio::File),
-    Remote(String),
+    Remote { locator: String, allow_lan: bool },
 }
 
 pub(crate) enum RefreshOutcome {
@@ -126,6 +171,7 @@ pub(crate) struct RefreshTicket {
     pub generation: u64,
     snapshot: ValidatedSnapshot,
     replacement: Option<SourceOrigin>,
+    replacement_lan_consent: Option<bool>,
 }
 impl fmt::Debug for RefreshTicket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -544,7 +590,7 @@ impl StreamsService {
                     },
                 ))
             }
-            SourceSelection::Remote(locator) => {
+            SourceSelection::Remote { locator, allow_lan } => {
                 let origin = SourceOrigin {
                     kind: OriginKind::RemoteUrl,
                     locator,
@@ -554,7 +600,7 @@ impl StreamsService {
                 let token = cancellation.clone();
                 let request = origin.locator.clone();
                 let download = crate::utils::tokio(async move {
-                    fetch::fetch_remote(&client, &request, &token).await
+                    fetch::fetch_remote(&client, &request, &token, allow_lan).await
                 })
                 .await?;
                 Ok((download.bytes, Some(download.final_url), origin))
@@ -573,6 +619,7 @@ impl StreamsService {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn add_url(
         &self,
         name: &str,
@@ -580,8 +627,30 @@ impl StreamsService {
         order: u32,
         defaults: SourceDefaults,
     ) -> Result<Source, ServiceError> {
-        self.add(name, SourceSelection::Remote(url), order, defaults)
+        // The generic API grants no LAN access in production. Isolated
+        // loopback integration fixtures use a test-only explicit exception.
+        self.add_url_with_lan(name, url, order, defaults, cfg!(test))
             .await
+    }
+
+    pub(crate) async fn add_url_with_lan(
+        &self,
+        name: &str,
+        url: String,
+        order: u32,
+        defaults: SourceDefaults,
+        allow_lan: bool,
+    ) -> Result<Source, ServiceError> {
+        self.add(
+            name,
+            SourceSelection::Remote {
+                locator: url,
+                allow_lan,
+            },
+            order,
+            defaults,
+        )
+        .await
     }
 
     async fn add(
@@ -592,6 +661,10 @@ impl StreamsService {
         defaults: SourceDefaults,
     ) -> Result<Source, ServiceError> {
         let id = uuid::Uuid::new_v4().to_string();
+        let requested_lan_consent = match &selection {
+            SourceSelection::Remote { allow_lan, .. } => *allow_lan,
+            SourceSelection::Local(_) => false,
+        };
         let (generation, cancellation) = self.begin(&id).await;
         let result = async {
             let (bytes, base, origin) = self.load(selection, &cancellation).await?;
@@ -639,6 +712,20 @@ impl StreamsService {
             .await
         }
         .await;
+        // A source may already have committed, but an explicitly requested
+        // LAN grant is not complete unless its settings write is confirmed.
+        // Never report "Playlist saved" on a partial consent failure.
+        let result = complete_new_source_consent(
+            result,
+            requested_lan_consent && !(cfg!(test) && !self.inner.storage.uses_default_database()),
+            |source| {
+                crate::settings::TvSettings::get().set_playlist_lan_consent(
+                    &source.id,
+                    &source.origin.locator,
+                    true,
+                )
+            },
+        );
         self.finish(
             &id,
             generation,
@@ -691,7 +778,19 @@ impl StreamsService {
                 return Err(ServiceError::Cancelled);
             }
             let selection = match source.origin.kind {
-                OriginKind::RemoteUrl => SourceSelection::Remote(source.origin.locator),
+                OriginKind::RemoteUrl => {
+                    // Test-only loopback servers are synthetic service fixtures;
+                    // production always requires a stored per-source consent.
+                    let fixture =
+                        cfg!(test) && source.origin.locator.starts_with("http://127.0.0.1:");
+                    let allow_lan = fixture
+                        || crate::settings::TvSettings::get()
+                            .playlist_lan_allowed(&source.id, &source.origin.locator);
+                    SourceSelection::Remote {
+                        locator: source.origin.locator,
+                        allow_lan,
+                    }
+                }
                 OriginKind::LocalFile => {
                     let file = gio::File::for_uri(&source.origin.locator);
                     if fetch::local_locator(&file).is_err() {
@@ -711,7 +810,7 @@ impl StreamsService {
             if cancellation.is_cancelled() {
                 return Err(ServiceError::Cancelled);
             }
-            self.preview(id.clone(), generation, bytes, base, None)
+            self.preview(id.clone(), generation, bytes, base, None, None)
                 .await
         }
         .await;
@@ -759,9 +858,20 @@ impl StreamsService {
         let id = id.to_owned();
         let (generation, cancellation) = self.begin(&id).await;
         let result = async {
+            let replacement_lan_consent = match &selection {
+                SourceSelection::Remote { allow_lan, .. } => *allow_lan,
+                SourceSelection::Local(_) => false,
+            };
             let (bytes, base, origin) = self.load(selection, &cancellation).await?;
-            self.preview(id.clone(), generation, bytes, base, Some(origin))
-                .await
+            self.preview(
+                id.clone(),
+                generation,
+                bytes,
+                base,
+                Some(origin),
+                Some(replacement_lan_consent),
+            )
+            .await
         }
         .await;
         if let Err(error) = &result {
@@ -777,6 +887,7 @@ impl StreamsService {
         bytes: Vec<u8>,
         base: Option<String>,
         replacement: Option<SourceOrigin>,
+        replacement_lan_consent: Option<bool>,
     ) -> Result<RefreshOutcome, ServiceError> {
         self.progress(&id, generation, RefreshStage::Parsing)
             .await?;
@@ -803,6 +914,7 @@ impl StreamsService {
             generation,
             snapshot,
             replacement,
+            replacement_lan_consent,
         };
         if ticket.preview.requires_confirmation {
             self.progress(&id, generation, RefreshStage::AwaitingConfirmation)
@@ -834,6 +946,7 @@ impl StreamsService {
         let preview = ticket.preview;
         let snapshot = ticket.snapshot;
         let replacement = ticket.replacement;
+        let replacement_lan_consent = ticket.replacement_lan_consent;
         let commit_id = id.clone();
         let result = self
             .db(move |store| {
@@ -874,6 +987,23 @@ impl StreamsService {
                 committed.map_err(ServiceError::Storage)
             })
             .await;
+        let result = if let (Ok(source), Some(allowed)) = (&result, replacement_lan_consent) {
+            if !(cfg!(test) && !self.inner.storage.uses_default_database())
+                && !crate::settings::TvSettings::get().set_playlist_lan_consent(
+                    &source.id,
+                    &source.origin.locator,
+                    allowed,
+                )
+            {
+                // SQLite may already have committed a new locator. Never
+                // report a completed consent change if its save/readback failed.
+                Err(ServiceError::ConsentWrite)
+            } else {
+                result
+            }
+        } else {
+            result
+        };
         if result.is_ok() {
             // Source snapshots are authoritative only after commit. Never
             // remove cached images on cancelled/declined/failed previews.
@@ -900,7 +1030,9 @@ impl StreamsService {
                 ServiceError::NeedsReauthorization => ErrorCode::Reauthorization,
                 ServiceError::Parse(_) => ErrorCode::InvalidPlaylist,
                 ServiceError::Fetch(FetchError::LocalAccess) => ErrorCode::Permission,
-                ServiceError::Storage(_) | ServiceError::WorkerFailed => ErrorCode::Write,
+                ServiceError::Storage(_)
+                | ServiceError::ConsentWrite
+                | ServiceError::WorkerFailed => ErrorCode::Write,
                 _ => ErrorCode::Network,
             };
             let _ = self

@@ -17,8 +17,9 @@ use reqwest::{redirect::Policy, Client, Proxy, Url};
 
 use super::fetch::{
     authorize_hop, classify_addresses, fetch_redirects_with_resolver,
-    fetch_redirects_with_transport, fetch_remote, http_client, AddressClass, Cancellation,
-    FetchError, PinnedResolver, PlaylistResolver, PlaylistTransport,
+    fetch_redirects_with_transport, fetch_redirects_with_transport_policy, fetch_remote,
+    http_client, AddressClass, Cancellation, FetchError, PinnedResolver, PlaylistResolver,
+    PlaylistTransport,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -105,20 +106,93 @@ fn endpoint(address: &str, port: u16) -> SocketAddr {
     SocketAddr::new(address.parse().unwrap(), port)
 }
 
+struct DeniedLanGet(Arc<AtomicUsize>);
+impl PlaylistTransport for DeniedLanGet {
+    async fn send(
+        &self,
+        _client: &Client,
+        _url: &Url,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("LAN GET reached transport after failed consent revocation")
+    }
+}
+
+#[tokio::test]
+async fn failed_consent_revoke_prevents_subsequent_lan_playlist_get() {
+    // Simulate a GSettings write refusal with an old persisted consent entry.
+    // The production transition must keep a process-local deny fence even
+    // though the old entry remains present. Drive the real per-hop fetch path;
+    // it must reject the LAN destination *before* the transport sends a GET.
+    let id = format!("source-{}", uuid::Uuid::new_v4());
+    assert!(crate::settings::stale_lan_consent_effective(&id));
+    assert!(!crate::settings::simulate_lan_consent_write(
+        &id, false, false
+    ));
+    let allow_lan = crate::settings::stale_lan_consent_effective(&id);
+    let gets = Arc::new(AtomicUsize::new(0));
+    let transport = DeniedLanGet(gets.clone());
+    let resolver = FixtureResolver {
+        answers: HashMap::from([(
+            "local-fixture.invalid".to_owned(),
+            vec![endpoint("10.2.3.4", 80)],
+        )]),
+    };
+    let mut url = Url::parse("http://local-fixture.invalid/playlist").unwrap();
+    let result =
+        fetch_redirects_with_transport_policy(&mut url, &resolver, &transport, allow_lan).await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
+    assert_eq!(gets.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn failed_durable_grant_removal_survives_restart_before_lan_send() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let dir = std::env::temp_dir().join(format!("broadcaster-restart-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = dir.join("lan-revocations-v1");
+    let id = format!("source-{}", uuid::Uuid::new_v4());
+    let token = crate::settings::playlist_lan_revocation_token(&id, "1:100");
+    // The old GSettings grant (stored=true) persists because the injected
+    // preference write refuses removal. The same production transition
+    // writes a separate durable tombstone before attempting the backend.
+    let accepted = crate::settings::persist_lan_consent_with_ledger(&path, &token, false, || false);
+    assert!(!accepted);
+    // Simulate process restart by *not* consulting the in-memory deny map.
+    // Only the reloaded file can now override the previous saved grant.
+    let old_saved_grant = true;
+    let restarted_allow_lan = old_saved_grant
+        && crate::streams::consent_ledger::is_revoked(&path, &token).is_ok_and(|revoked| !revoked);
+    assert!(!restarted_allow_lan);
+    let gets = Arc::new(AtomicUsize::new(0));
+    let transport = DeniedLanGet(gets.clone());
+    let resolver = FixtureResolver {
+        answers: HashMap::from([(
+            "local-fixture.invalid".to_owned(),
+            vec![endpoint("10.2.3.4", 80)],
+        )]),
+    };
+    let mut url = Url::parse("http://local-fixture.invalid/playlist").unwrap();
+    let result =
+        fetch_redirects_with_transport_policy(&mut url, &resolver, &transport, restarted_allow_lan)
+            .await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
+    assert_eq!(gets.load(Ordering::SeqCst), 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn mixed_answers_and_special_destinations_never_gain_local_trust() {
     let global = endpoint("8.8.8.8", 80);
-    let local = endpoint("127.0.0.1", 80);
+    let local = endpoint("192.168.1.1", 80);
 
     for address in [
         "10.20.0.1",
         "172.16.0.1",
         "192.168.1.1",
-        "100.64.1.1",
-        "169.254.1.1",
-        "::1",
         "fd00::1234",
-        "fe80::1",
         "::ffff:192.168.1.1",
     ] {
         assert_eq!(
@@ -141,6 +215,11 @@ fn mixed_answers_and_special_destinations_never_gain_local_trust() {
         "198.51.100.1",
         "203.0.113.1",
         "198.18.0.1",
+        "100.64.1.1",
+        "169.254.1.1",
+        "127.0.0.1",
+        "::1",
+        "fe80::1",
         "::",
         "ff02::1",
         "2001:db8::1",
@@ -163,8 +242,8 @@ fn mixed_answers_and_special_destinations_never_gain_local_trust() {
         authorize_hop(Some(AddressClass::Global), &[local, global]),
         Err(FetchError::Redirect)
     );
-    // The original explicitly local source retains its trust through
-    // local -> global -> local; no redirected URL can grant it anew.
+    // Only a consented private-LAN source may redirect toward public,
+    // after which any public-to-LAN transition remains blocked.
     assert_eq!(
         authorize_hop(Some(AddressClass::Local), &[global]),
         Ok(AddressClass::Global)
@@ -176,55 +255,33 @@ fn mixed_answers_and_special_destinations_never_gain_local_trust() {
 }
 
 #[tokio::test]
-async fn configured_all_local_hostname_dials_only_injected_address_after_redirect() {
+async fn loopback_hostname_is_refused_before_get_even_with_lan_consent() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let requests = Arc::new(AtomicUsize::new(0));
-    let seen = requests.clone();
-    let server = tokio::spawn(async move {
-        for index in 0..2 {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut bytes = [0u8; 2048];
-            let n = stream.read(&mut bytes).await.unwrap();
-            let request = String::from_utf8_lossy(&bytes[..n]);
-            if index == 0 {
-                assert!(request.starts_with("GET /start "));
-                stream
-                    .write_all(
-                        b"HTTP/1.1 302 Found\r\nLocation: /playlist\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                    )
-                    .await
-                    .unwrap();
-            } else {
-                assert!(request.starts_with("GET /playlist "));
-                stream
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n#EXTM3U\n",
-                    )
-                    .await
-                    .unwrap();
-            }
-            seen.fetch_add(1, Ordering::SeqCst);
-        }
-    });
-
     let hostname = "nas.home.arpa";
     let resolver = FixtureResolver {
         answers: HashMap::from([(hostname.to_owned(), vec![addr])]),
     };
     let mut url = Url::parse(&format!("http://{hostname}:{}/start", addr.port())).unwrap();
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        fetch_redirects_with_resolver(&mut url, &resolver),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    server.await.unwrap();
+    let result =
+        super::fetch::fetch_redirects_with_resolver_with_consent(&mut url, &resolver, true).await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    );
+}
 
-    assert_eq!(requests.load(Ordering::SeqCst), 2);
-    assert_eq!(result.bytes, b"#EXTM3U\n");
-    assert!(result.final_url.ends_with("/playlist"));
+#[tokio::test]
+async fn initial_private_dns_requires_consent_before_any_get() {
+    let hostname = "lan-fixture.invalid";
+    let resolver = FixtureResolver {
+        answers: HashMap::from([(hostname.to_owned(), vec![endpoint("10.2.3.4", 80)])]),
+    };
+    let mut url = Url::parse(&format!("http://{hostname}/playlist")).unwrap();
+    let result = fetch_redirects_with_resolver(&mut url, &resolver).await;
+    assert!(matches!(result, Err(FetchError::InvalidOrigin)));
 }
 
 #[tokio::test]
@@ -637,6 +694,7 @@ async fn cancellation_during_active_redirect_chain_aborts_fetch() {
             &http_client().unwrap(),
             &format!("http://127.0.0.1:{port}/first"),
             &fetch_token,
+            true,
         )
         .await
     });

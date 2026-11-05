@@ -41,6 +41,8 @@ run_positive source_manager_actual_remote_back_trace_tv 1280x800
 run_positive native_epg_manager_3_1280_800 1280x800
 run_positive native_channel_favourites_640_480 640x480
 run_positive native_painted_focus_1280_800 1280x800
+# Actual application dispatch gate: malformed restored IPTV never reaches a player.
+run_positive native_iptv_restored_url_dispatch_gate 640x480
 
 # Negative: prove the real GTK oracle still rejects a deliberately wrong
 # source-manager focus assertion for its exact marker, not for an X11/setup

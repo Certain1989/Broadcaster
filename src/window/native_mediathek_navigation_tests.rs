@@ -1221,3 +1221,90 @@ fn native_three_page_loaded_1280_800() {
 fn native_three_page_loaded_negative() {
     focus_navigation_three_page_loaded_action_roundtrip(640, 480, true);
 }
+
+// The real asynchronous application handler rejects forged/restored Stream
+// URLs before the test-only managed-player launch sentinel, which sits ahead
+// of both managed-mpv and external-program selection. No player or network is
+// started in this mapped, isolated X11 smoke test.
+#[test]
+#[ignore = "NATIVE_FOCUS IPTV restored URL rejected before player selection"]
+fn native_iptv_restored_url_dispatch_gate() {
+    use crate::application::{StreamHeaders, VideoInfo};
+
+    adw::init().expect("native GTK display");
+    let resource =
+        gio::Resource::from_data(&glib::Bytes::from_static(crate::GRESOURCE_BYTES)).unwrap();
+    gio::resources_register(&resource);
+    let app = TvApplication::new();
+    app.register(None::<&gio::Cancellable>)
+        .expect("registered application");
+    app.focus_navigation_test_managed_player_failure(true);
+    for uri in [
+        "file:///private/secret",
+        "https://example.invalid/live master.m3u8",
+        "http:////example.invalid/live",
+        "https://example.invalid/$(not-a-command)",
+    ] {
+        let video = VideoInfo::Stream {
+            title: "Synthetic forged channel".into(),
+            uri: uri.into(),
+            headers: StreamHeaders::default(),
+        };
+        let serial = app.begin_playback_request();
+        glib::MainContext::default().block_on(app.play_requested(video, serial));
+        assert_eq!(
+            app.focus_navigation_test_managed_player_attempts(),
+            0,
+            "invalid Stream must not enter either player's dispatch boundary"
+        );
+    }
+    // Exercise the additional untrusted Live and Mediathek origins through
+    // the *same real GTK async dispatcher*, before external or managed launch.
+    for video in [
+        VideoInfo::Live {
+            title: "Synthetic Live".into(),
+            uri: "file:///private/synthetic".into(),
+        },
+        VideoInfo::Live {
+            title: "Synthetic RTMP".into(),
+            uri: "rtmp://example.invalid/live".into(),
+        },
+        VideoInfo::Mediathek {
+            title: "Synthetic Mediathek".into(),
+            preferred_quality: crate::settings::VideoQuality::High,
+            uri_high: Some("av://lavfi:testsrc".into()),
+            uri_medium: None,
+            uri_low: None,
+            subtitle_url: None,
+        },
+        VideoInfo::Mediathek {
+            title: "Synthetic dangerous subtitle".into(),
+            preferred_quality: crate::settings::VideoQuality::High,
+            uri_high: Some("https://example.invalid/valid.m3u8".into()),
+            uri_medium: None,
+            uri_low: None,
+            subtitle_url: Some("file:///private/synthetic.srt".into()),
+        },
+    ] {
+        let serial = app.begin_playback_request();
+        glib::MainContext::default().block_on(app.play_requested(video, serial));
+        assert_eq!(app.focus_navigation_test_managed_player_attempts(), 0);
+    }
+    // The exact handler must reach the sentinel for a valid imported URL,
+    // ruling out a false-green test that never dispatches any request.
+    let valid = VideoInfo::Stream {
+        title: "Synthetic allowed channel".into(),
+        uri: "https://example.invalid/valid.m3u8".into(),
+        headers: StreamHeaders::default(),
+    };
+    let serial = app.begin_playback_request();
+    glib::MainContext::default().block_on(app.play_requested(valid, serial));
+    assert_eq!(app.focus_navigation_test_managed_player_attempts(), 1);
+    let valid_live = VideoInfo::Live {
+        title: "Synthetic allowed Live".into(),
+        uri: "https://example.invalid/live.m3u8".into(),
+    };
+    let serial = app.begin_playback_request();
+    glib::MainContext::default().block_on(app.play_requested(valid_live, serial));
+    assert_eq!(app.focus_navigation_test_managed_player_attempts(), 2);
+}

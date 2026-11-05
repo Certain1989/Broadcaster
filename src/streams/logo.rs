@@ -8,7 +8,7 @@ use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
     io::{self, Write},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Duration,
@@ -79,47 +79,7 @@ fn semaphore() -> &'static Semaphore {
 // public-looking DNS name is checked again by PublicLogoDns for EVERY socket
 // resolution. Literal IP hosts are handled here, as hyper need not call DNS.
 fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => public_ipv4(ip),
-        IpAddr::V6(ip) => public_ipv6(ip),
-    }
-}
-
-fn public_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !matches!(
-        (a, b, c),
-        (0, _, _)                  // this network / unspecified
-            | (10, _, _)            // RFC1918
-            | (100, 64..=127, _)    // shared address space
-            | (127, _, _)           // loopback
-            | (169, 254, _)         // link-local
-            | (172, 16..=31, _)     // RFC1918
-            | (192, 0, 0)           // IETF protocol assignments (conservative)
-            | (192, 0, 2)           // documentation
-            | (192, 88, 99)         // deprecated 6to4 relay
-            | (192, 168, _)         // RFC1918
-            | (198, 18..=19, _)     // benchmark networks
-            | (198, 51, 100)        // documentation
-            | (203, 0, 113)         // documentation
-            | (224..=255, _, _) // multicast / reserved / broadcast
-    )
-}
-
-fn public_ipv6(ip: Ipv6Addr) -> bool {
-    // IPv4-mapped IPv6 and other transition/translation addresses must not
-    // evade IPv4 or global-unicast restrictions. Be deliberately conservative:
-    // unallocated and special-use prefixes simply fall back to generic icons.
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return public_ipv4(v4);
-    }
-    let segments = ip.segments();
-    let first = segments[0];
-    first & 0xe000 == 0x2000 // currently allocated global unicast 2000::/3
-        && !(first == 0x2001 && segments[1] < 0x0200) // IETF special-use /23
-        && !(first == 0x2001 && segments[1] == 0x0db8) // documentation /32
-        && first != 0x2002 // 6to4 tunneling /16
-        && !(first == 0x3fff && segments[1] & 0xf000 == 0) // documentation /20
+    crate::network_scope::classify(ip) == crate::network_scope::Destination::Public
 }
 
 // Fail closed for a mixed public/private DNS answer, even if the socket

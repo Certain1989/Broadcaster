@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: Weekly RustSec advisory audit
+
+# Read-only advisory check against the current default-branch Cargo.lock.
+# The schedule does not run until this workflow is integrated into main.
+on:
+  schedule:
+    - cron: '37 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustsec-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rustsec:
+    if: github.repository == 'Certain1989/Broadcaster'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container:
+      image: archlinux:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install RustSec advisory scanner
+        run: pacman -Syu --noconfirm --needed git cargo-audit ca-certificates
+      - name: Audit the locked dependencies against current RustSec advisories
+        run: cargo audit --deny warnings --file Cargo.lock

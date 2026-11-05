@@ -46,3 +46,13 @@ jobs:
         run: bash tests/test-ci-require-one-ignored.sh
       - name: Real GTK/SQLite/XTest canaries and negative-control marker
         run: bash tests/ci-fast-smoke.sh
+      - name: Cold-process real GSettings scheduled LAN revocation and positive control
+        run: |
+          set -euo pipefail
+          schema_dir="$(mktemp -d)"
+          trap 'rm -rf "$schema_dir"' EXIT
+          cp data/io.github.Certain1989.Broadcaster.gschema.xml "$schema_dir/"
+          glib-compile-schemas "$schema_dir"
+          BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS=120 \
+            GSETTINGS_BACKEND=keyfile GSETTINGS_SCHEMA_DIR="$schema_dir" \
+            bash tests/ci-require-one-ignored.sh real_keyfile_revocation_survives_process_restart_and_due_refresh

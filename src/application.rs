@@ -217,6 +217,15 @@ impl TvApplication {
             return;
         };
 
+        // Validate at the common use boundary *before* selecting either
+        // managed mpv or a D-Bus player. Provider-supplied Live/Mediathek URLs
+        // and subtitles are untrusted, unlike explicit user mpv preferences.
+        // Imported IPTV retains the existing raw M3U admission predicate.
+        if !video.acceptable_remote_inputs() {
+            show_error(&gettext("The video or subtitle URL is invalid."));
+            return;
+        }
+
         // Deliberate failure only in a native, disposable acceptance fixture.
         // Exercise the exact request and window return sequence without an
         // actual mpv process or any network/URI access.
@@ -308,6 +317,12 @@ impl TvApplication {
     }
 
     pub async fn download(&self, uri: String) {
+        // app.download is a public GAction: a caller can invoke it without
+        // using the Mediathek website button. Guard the actual D-Bus sink.
+        if !valid_provider_http_url(&uri) {
+            show_error(&gettext("Invalid programme website URL"));
+            return;
+        }
         let settings = TvSettings::get();
         let downloader_name = settings.video_downloader_name();
         let downloader_id = settings.video_downloader_id();
@@ -555,7 +570,32 @@ pub enum VideoInfo {
     },
 }
 
+/// Provider-controlled URLs must be raw, unambiguous network HTTP(S)
+/// addresses. Reuse the M3U raw-text filter and EPG's strict authority and
+/// userinfo validation; neither parser normalizes a rejected string into an
+/// allowed scheme/host. No URLs or tokens appear in diagnostics.
+pub(crate) fn valid_provider_http_url(uri: &str) -> bool {
+    crate::streams::model::valid_imported_http_url(uri)
+        && crate::epg::network::validate_remote_url(uri).is_ok()
+}
+
 impl VideoInfo {
+    /// Admission for every origin on both managed and external player paths.
+    /// Global user-configured mpv arguments remain a separate trust origin.
+    pub(crate) fn acceptable_remote_inputs(&self) -> bool {
+        let Some(uri) = self.uri() else {
+            return false;
+        };
+        match self {
+            Self::Stream { .. } => crate::streams::model::valid_imported_http_url(uri),
+            Self::Live { .. } => valid_provider_http_url(uri),
+            Self::Mediathek { subtitle_url, .. } => {
+                valid_provider_http_url(uri)
+                    && subtitle_url.as_deref().is_none_or(valid_provider_http_url)
+            }
+        }
+    }
+
     /// The external-program launcher deliberately ignores imported hints.
     pub fn stream_headers(&self) -> Option<&StreamHeaders> {
         match self {
@@ -628,6 +668,105 @@ mod tests {
             headers: super::StreamHeaders::default(),
         };
         assert_eq!(empty.uri(), None);
+    }
+
+    #[test]
+    fn restored_iptv_playback_uses_the_same_http_url_admission_as_import() {
+        let accepted = [
+            "https://example.invalid/live/master.m3u8?auth=fake",
+            "http://example.invalid/live/manifest.mpd",
+        ];
+        let rejected = [
+            "file:///etc/passwd",
+            "concat:https://example.invalid/a|file:///etc/passwd",
+            "edl://file:///etc/passwd",
+            "lavfi://testsrc",
+            "https://example.invalid/live master.m3u8",
+            "http:////example.invalid/live",
+            "https://example.invalid/$(fake)",
+            "https://example.invalid/\\evil.example/live",
+            "https://example.invalid/live\nfile:///etc/passwd",
+            "",
+        ];
+        for uri in accepted {
+            assert!(crate::streams::model::valid_imported_http_url(uri));
+        }
+        for uri in rejected {
+            assert!(!crate::streams::model::valid_imported_http_url(uri));
+        }
+    }
+
+    #[test]
+    fn provider_playback_inputs_reject_local_and_meta_schemes_before_dispatch() {
+        let bad = [
+            "file:///etc/passwd",
+            "edl://file:///etc/passwd",
+            "av://lavfi:testsrc",
+            "ytdl://example.invalid/a",
+            "/tmp/local.m3u8",
+            "--sub-file=file:///etc/passwd",
+            "rtmp://example.invalid/live",
+            "https://user:fake@example.invalid/video",
+            "http:////example.invalid/a",
+            "https://example.invalid/a\\b",
+            "https://example.invalid/a\n--sub-file=/tmp/a",
+            "https://example.invalid/$(fake)",
+        ];
+        for uri in bad {
+            assert!(
+                !super::valid_provider_http_url(uri),
+                "unexpectedly accepted {uri:?}"
+            );
+            assert!(!VideoInfo::Live {
+                title: String::new(),
+                uri: uri.into()
+            }
+            .acceptable_remote_inputs());
+            assert!(!VideoInfo::Mediathek {
+                title: String::new(),
+                preferred_quality: VideoQuality::High,
+                uri_high: Some(uri.into()),
+                uri_medium: None,
+                uri_low: None,
+                subtitle_url: None,
+            }
+            .acceptable_remote_inputs());
+        }
+        for uri in [
+            "https://example.invalid/master.m3u8?token=fake",
+            "http://example.invalid/manifest.mpd",
+        ] {
+            assert!(super::valid_provider_http_url(uri));
+            assert!(VideoInfo::Live {
+                title: String::new(),
+                uri: uri.into()
+            }
+            .acceptable_remote_inputs());
+        }
+        for subtitle in [
+            "file:///etc/passwd",
+            "--sub-file=edl://unsafe",
+            "ytdl://demo.invalid",
+        ] {
+            assert!(!VideoInfo::Mediathek {
+                title: String::new(),
+                preferred_quality: VideoQuality::High,
+                uri_high: Some("https://example.invalid/video.m3u8".into()),
+                uri_medium: None,
+                uri_low: None,
+                subtitle_url: Some(subtitle.into()),
+            }
+            .acceptable_remote_inputs());
+        }
+        assert!(VideoInfo::Mediathek {
+            title: String::new(),
+            preferred_quality: VideoQuality::High,
+            uri_high: Some("https://example.invalid/master.m3u8".into()),
+            uri_medium: None,
+            uri_low: None,
+            subtitle_url: Some("https://example.invalid/subs.vtt?auth=fake".into()),
+        }
+        .acceptable_remote_inputs());
     }
 
     #[test]

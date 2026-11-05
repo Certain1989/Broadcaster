@@ -6,7 +6,7 @@
 use std::{
     fmt,
     future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     time::Duration,
 };
 
@@ -93,68 +93,18 @@ pub(super) enum AddressClass {
     Local,
 }
 
-/// A conservative network-address classification. Documentation, multicast,
-/// unspecified, reserved, tunnel and otherwise ambiguous addresses are
-/// unusable. Only explicitly configured origins may earn local trust.
-fn ipv4_class(ip: Ipv4Addr) -> Option<AddressClass> {
-    let [a, b, c, _] = ip.octets();
-    if a == 0
-        || a >= 224
-        || (a == 192 && b == 0 && matches!(c, 0 | 2))
-        || (a == 192 && b == 88 && c == 99)
-        || (a == 198 && matches!(b, 18 | 19))
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-    {
-        return None;
-    }
-
-    if a == 10
-        || a == 127
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 168)
-    {
-        Some(AddressClass::Local)
-    } else {
-        Some(AddressClass::Global)
-    }
-}
-
-fn ipv6_class(ip: Ipv6Addr) -> Option<AddressClass> {
-    // Avoid treating mapped RFC1918/loopback addresses as global IPv6.
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return ipv4_class(mapped);
-    }
-    if ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local() {
-        return Some(AddressClass::Local);
-    }
-    let [first, second, ..] = ip.segments();
-    // Only native global unicast is eligible. Exclude documentation,
-    // 6to4, IETF protocol allocations, benchmarking and reserved prefixes.
-    if first & 0xe000 != 0x2000
-        || (first == 0x2001 && (second <= 0x01ff || second == 0x0db8))
-        || first == 0x2002
-        || (first == 0x3fff && second & 0xf000 == 0)
-    {
-        None
-    } else {
-        Some(AddressClass::Global)
-    }
-}
-
+/// A first hop is either public or private LAN. Loopback, link-local,
+/// CGNAT and all special ranges never qualify for playlist consent.
 pub(super) fn classify_addresses(addresses: &[SocketAddr]) -> Option<AddressClass> {
-    fn class(ip: IpAddr) -> Option<AddressClass> {
-        match ip {
-            IpAddr::V4(v4) => ipv4_class(v4),
-            IpAddr::V6(v6) => ipv6_class(v6),
-        }
-    }
-    let first = class(addresses.first()?.ip())?;
+    let mapped = |addr: &SocketAddr| match crate::network_scope::classify(addr.ip()) {
+        crate::network_scope::Destination::Public => Some(AddressClass::Global),
+        crate::network_scope::Destination::Lan => Some(AddressClass::Local),
+        _ => None,
+    };
+    let first = mapped(addresses.first()?)?;
     addresses
         .iter()
-        .all(|address| class(address.ip()) == Some(first))
+        .all(|addr| mapped(addr) == Some(first))
         .then_some(first)
 }
 
@@ -227,7 +177,8 @@ impl reqwest::dns::Resolve for PinnedResolver {
 /// Fresh per-hop clients also prevent connection-pool reuse across trust scopes.
 async fn guarded_client<R: PlaylistResolver>(
     url: &Url,
-    original: Option<AddressClass>,
+    previous: Option<AddressClass>,
+    allow_lan: bool,
     resolver: &R,
 ) -> Result<(Client, AddressClass), FetchError> {
     let hostname = url.host_str().ok_or(FetchError::InvalidOrigin)?;
@@ -246,7 +197,31 @@ async fn guarded_client<R: PlaylistResolver>(
     };
     addresses.sort_unstable();
     addresses.dedup();
-    let class = authorize_hop(original, &addresses)?;
+    // The isolated Rust integration fixtures use literal 127.0.0.1 HTTP
+    // servers. Their explicitly opted-in *test-only* transport can exercise
+    // parsing/cancellation without weakening production loopback denial.
+    #[cfg(test)]
+    let class = if allow_lan
+        && hostname == "127.0.0.1"
+        && !addresses.is_empty()
+        && addresses.iter().all(|a| a.ip().is_loopback())
+    {
+        if previous == Some(AddressClass::Global) {
+            return Err(FetchError::Redirect);
+        }
+        AddressClass::Local
+    } else {
+        authorize_hop(previous, &addresses)?
+    };
+    #[cfg(not(test))]
+    let class = authorize_hop(previous, &addresses)?;
+    if class == AddressClass::Local && !allow_lan {
+        return Err(if previous.is_some() {
+            FetchError::Redirect
+        } else {
+            FetchError::InvalidOrigin
+        });
+    }
 
     // reqwest 0.13.5's no_proxy() disables system/environment and explicitly
     // configured proxies on this playlist-only client. The per-hop DNS
@@ -278,8 +253,16 @@ pub(crate) async fn fetch_remote(
     client: &Client,
     origin: &str,
     cancellation: &Cancellation,
+    allow_lan: bool,
 ) -> Result<Download, FetchError> {
-    fetch_remote_with_timeout(client, origin, cancellation, Duration::from_secs(30)).await
+    fetch_remote_with_timeout(
+        client,
+        origin,
+        cancellation,
+        allow_lan,
+        Duration::from_secs(30),
+    )
+    .await
 }
 
 /// Testable deadline, applied to the complete request including redirects.
@@ -287,6 +270,7 @@ async fn fetch_remote_with_timeout(
     client: &Client,
     origin: &str,
     cancellation: &Cancellation,
+    allow_lan: bool,
     timeout: Duration,
 ) -> Result<Download, FetchError> {
     let mut url = Url::parse(origin).map_err(|_| FetchError::InvalidOrigin)?;
@@ -296,23 +280,107 @@ async fn fetch_remote_with_timeout(
     tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(FetchError::Cancelled),
-        result = tokio::time::timeout(timeout, fetch_redirects(client, &mut url)) => {
+        result = tokio::time::timeout(timeout, fetch_redirects(client, &mut url, allow_lan)) => {
             result.map_err(|_| FetchError::Timeout)?
         }
     }
 }
 
-async fn fetch_redirects(_client: &Client, url: &mut Url) -> Result<Download, FetchError> {
+async fn fetch_redirects(
+    _client: &Client,
+    url: &mut Url,
+    allow_lan: bool,
+) -> Result<Download, FetchError> {
     // The existing service client is retained for API compatibility; a fresh
     // per-hop pinned client is mandatory, rather than its shared connection pool.
-    fetch_redirects_with_resolver(url, &SystemResolver).await
+    #[cfg(test)]
+    if url.host_str() == Some("lan-fixture.invalid")
+        && std::env::var_os("BROADCASTER_T1_ISOLATED_NETWORK").is_some()
+    {
+        return fetch_redirects_with_transport_policy(
+            url,
+            &ScheduledTestResolver,
+            &ScheduledTestTransport,
+            allow_lan,
+        )
+        .await;
+    }
+    fetch_redirects_with_resolver_with_consent(url, &SystemResolver, allow_lan).await
+}
+
+// Only in test binaries. The production guard classifies RFC1918 DNS answers;
+// the fake transport maps an *admitted* request to a loopback HTTP fixture.
+// No real RFC1918 or Internet socket is ever opened by this fixture.
+#[cfg(test)]
+fn scheduled_test_mark(message: &str) {
+    use std::io::Write;
+    let path = std::env::var("BROADCASTER_T1_MARKERS").expect("isolated marker path");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(message.as_bytes())
+        .unwrap();
+}
+
+#[cfg(test)]
+struct ScheduledTestResolver;
+#[cfg(test)]
+impl PlaylistResolver for ScheduledTestResolver {
+    async fn addresses(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, FetchError> {
+        assert_eq!(hostname, "lan-fixture.invalid");
+        scheduled_test_mark("resolver\n");
+        Ok(vec![SocketAddr::new("10.23.4.5".parse().unwrap(), port)])
+    }
+}
+
+#[cfg(test)]
+struct ScheduledTestTransport;
+#[cfg(test)]
+impl PlaylistTransport for ScheduledTestTransport {
+    async fn send(
+        &self,
+        _guarded: &Client,
+        url: &Url,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        assert_eq!(url.host_str(), Some("lan-fixture.invalid"));
+        scheduled_test_mark("transport\n");
+        let port: u16 = std::env::var("BROADCASTER_T1_LOCAL_PORT")
+            .expect("positive fixture must provide a loopback port")
+            .parse()
+            .unwrap();
+        http_client()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/playlist"))
+            .send()
+            .await
+    }
 }
 
 pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(
     url: &mut Url,
     resolver: &R,
 ) -> Result<Download, FetchError> {
-    fetch_redirects_with_transport(url, resolver, &ReqwestTransport).await
+    fetch_redirects_with_resolver_with_consent(url, resolver, false).await
+}
+
+#[cfg(test)]
+pub(super) async fn fetch_redirects_with_resolver_with_consent<R: PlaylistResolver>(
+    url: &mut Url,
+    resolver: &R,
+    allow_lan: bool,
+) -> Result<Download, FetchError> {
+    fetch_redirects_with_transport_policy(url, resolver, &ReqwestTransport, allow_lan).await
+}
+
+#[cfg(not(test))]
+async fn fetch_redirects_with_resolver_with_consent<R: PlaylistResolver>(
+    url: &mut Url,
+    resolver: &R,
+    allow_lan: bool,
+) -> Result<Download, FetchError> {
+    fetch_redirects_with_transport_policy(url, resolver, &ReqwestTransport, allow_lan).await
 }
 
 /// Production always sends through the guarded, per-hop reqwest client.
@@ -336,12 +404,29 @@ pub(super) async fn fetch_redirects_with_transport<R: PlaylistResolver, T: Playl
     resolver: &R,
     transport: &T,
 ) -> Result<Download, FetchError> {
-    let mut original_class = None;
+    fetch_redirects_with_transport_policy(url, resolver, transport, false).await
+}
+
+pub(super) async fn fetch_redirects_with_transport_policy<
+    R: PlaylistResolver,
+    T: PlaylistTransport,
+>(
+    url: &mut Url,
+    resolver: &R,
+    transport: &T,
+    allow_lan: bool,
+) -> Result<Download, FetchError> {
+    let mut previous_class = None;
+    let original_origin = url.origin();
     for redirects in 0..=3 {
-        let (client, hop_class) = guarded_client(url, original_class, resolver).await?;
-        if original_class.is_none() {
-            original_class = Some(hop_class);
+        let (client, hop_class) = guarded_client(url, previous_class, allow_lan, resolver).await?;
+        if hop_class == AddressClass::Local
+            && previous_class == Some(AddressClass::Local)
+            && url.origin() != original_origin
+        {
+            return Err(FetchError::Redirect);
         }
+        previous_class = Some(hop_class);
         let mut response = transport.send(&client, url).await.map_err(|e| {
             if e.is_timeout() {
                 FetchError::Timeout
@@ -553,6 +638,7 @@ mod tests {
             &client,
             &format!("http://{address}/redirect"),
             &cancellation,
+            true,
         )
         .await
         .unwrap();
@@ -562,6 +648,7 @@ mod tests {
             &client,
             &format!("http://{address}/oversize"),
             &cancellation,
+            true,
         )
         .await;
         assert!(matches!(too_big, Err(FetchError::BodyTooLarge)));
@@ -609,7 +696,8 @@ mod tests {
             ("chain-0", FetchError::Redirect),
             ("forbidden", FetchError::HttpStatus),
         ] {
-            let answer = fetch_remote(&client, &format!("http://{address}/{path}"), &token).await;
+            let answer =
+                fetch_remote(&client, &format!("http://{address}/{path}"), &token, true).await;
             assert!(matches!(answer, Err(error) if error == expected));
         }
         server.await.unwrap();
@@ -636,10 +724,10 @@ mod tests {
         let token = Cancellation::new();
         let url = format!("http://{address}/slow");
         let timed_out =
-            fetch_remote_with_timeout(&client, &url, &token, Duration::from_millis(30)).await;
+            fetch_remote_with_timeout(&client, &url, &token, true, Duration::from_millis(30)).await;
         assert!(matches!(timed_out, Err(FetchError::Timeout)));
         token.cancel();
-        let cancelled = fetch_remote(&client, &url, &token).await;
+        let cancelled = fetch_remote(&client, &url, &token, true).await;
         assert!(matches!(cancelled, Err(FetchError::Cancelled)));
         server.await.unwrap();
     }
@@ -651,6 +739,7 @@ mod tests {
             &client,
             "http://synthetic-user:SECRET-CANARY@127.0.0.1:0/list",
             &Cancellation::new(),
+            true,
         )
         .await;
         assert!(matches!(result, Err(FetchError::Network)));
@@ -693,6 +782,7 @@ mod tests {
             &client,
             &format!("http://{address}/stream"),
             &Cancellation::new(),
+            true,
         )
         .await;
         assert!(matches!(result, Err(FetchError::BodyTooLarge)));
