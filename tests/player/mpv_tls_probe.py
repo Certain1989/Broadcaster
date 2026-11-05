@@ -55,10 +55,20 @@ class TLSMediaServer(ThreadingHTTPServer):
     def handle_error(self, request, client_address):
         # A certificate-rejecting TLS client can reset an *established*
         # connection after the server-side handshake. This is not reliable
-        # proof of why the client rejected it; mpv's own stderr is the oracle.
+        # proof of why the client rejected it; mpv's own diagnostic is the oracle.
         if isinstance(sys.exc_info()[1], ConnectionResetError):
             return
         super().handle_error(request, client_address)
+
+
+def has_certificate_verification_diagnostic(result):
+    """mpv logs to stdout by default; do not discard either output channel.
+
+    mpv 0.42 common/msg.c:198–203 selects stdout unless force_stderr.
+    stream/stream_curl.c:805–812 emits this specific certificate error.
+    """
+    return any("TLS certificate verification failed." in (output or "")
+               for output in (result.stdout, result.stderr))
 
 
 def assert_tls_evidence(rejected, negative_paths, permitted, positive_paths):
@@ -69,7 +79,7 @@ def assert_tls_evidence(rejected, negative_paths, permitted, positive_paths):
         raise AssertionError("default TLS request reached the untrusted HTTPS media")
     # mpv 0.42 stream_curl.c emits this only for libcurl's certificate
     # verification failure, rather than generic DNS/connection/player errors.
-    if "TLS certificate verification failed." not in (rejected.stderr or ""):
+    if not has_certificate_verification_diagnostic(rejected):
         raise AssertionError("mpv failed without its certificate-verification diagnostic")
     if permitted.returncode != 0 or "/clip.wav" not in positive_paths:
         raise AssertionError("explicit test-only TLS bypass failed to GET the same HTTPS media")
@@ -109,10 +119,10 @@ def main():
 
             def play(extra):
                 # Only synthetic localhost data is used; never display raw
-                # stderr, URL or credentials in CI. Inspect a fixed upstream
-                # diagnostic and retain output in memory only.
+                # stdout/stderr, URLs or credentials in CI. Inspect a fixed
+                # upstream diagnostic and retain output in memory only.
                 return subprocess.run([*base, *extra, "--", url],
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                       text=True, errors="replace", timeout=20,
                                       check=False)
 
@@ -122,6 +132,15 @@ def main():
             # the negative oracle; unrelated player failures cannot pass.
             permitted = play(["--tls-verify=no"])
             positive_paths = tuple(server.paths[len(negative_paths):])
+            # Only emit fixed booleans and return codes; no raw mpv output,
+            # actual URLs or credential-bearing data leave this test process.
+            print("TLS oracle:",
+                  "negative_nonzero=", rejected.returncode != 0,
+                  "negative_no_get=", not bool(negative_paths),
+                  "certificate_diagnostic=", has_certificate_verification_diagnostic(rejected),
+                  "control_exit_ok=", permitted.returncode == 0,
+                  "control_media_get=", "/clip.wav" in positive_paths,
+                  flush=True)
             assert_tls_evidence(rejected, negative_paths, permitted, positive_paths)
             print("PASS mpv certificate-rejection diagnostic and explicit test-only same-URL TLS bypass GET")
         finally:
