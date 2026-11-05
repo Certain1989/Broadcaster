@@ -80,7 +80,7 @@ local function caption(i)
     local labels = {
         german and "−10 Sekunden" or "−10 seconds",
         pause and (german and "▶  Abspielen" or "▶  Play") or "Ⅱ  Pause",
-        "+10 seconds", german and "Ton" or "Audio",
+        german and "+10 Sekunden" or "+10 seconds", german and "Ton" or "Audio",
         german and "Untertitel" or "Subtitles",
         german and "Tempo" or "Speed",
         german and "Vollbild" or "Fullscreen",
