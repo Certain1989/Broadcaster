@@ -330,6 +330,9 @@ fn update_lan_consent_with_write(id: &str, allowed: bool, persist: impl FnOnce()
 struct BackendWriteRefusal {
     original_limit: libc::rlimit,
     original_signal: libc::sighandler_t,
+    // Keyfile GSettings can defer a flush until the owning process exits.
+    // The isolated revoke subprocess must never restore write permission.
+    until_process_exit: bool,
 }
 
 #[cfg(test)]
@@ -348,6 +351,8 @@ impl BackendWriteRefusal {
             Self {
                 original_limit,
                 original_signal,
+                until_process_exit: std::env::var_os("BROADCASTER_T1_REFUSE_KEYFILE_UNTIL_EXIT")
+                    .is_some(),
             }
         }
     }
@@ -356,6 +361,11 @@ impl BackendWriteRefusal {
 #[cfg(test)]
 impl Drop for BackendWriteRefusal {
     fn drop(&mut self) {
+        if self.until_process_exit {
+            // Dedicated one-stage child process: let the kernel restore the
+            // limit on exit, so deferred GLib writes remain genuinely denied.
+            return;
+        }
         unsafe {
             assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &self.original_limit), 0);
             libc::signal(libc::SIGXFSZ, self.original_signal);

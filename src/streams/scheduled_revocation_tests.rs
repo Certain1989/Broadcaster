@@ -84,17 +84,30 @@ fn real_keyfile_revocation_survives_process_restart_and_due_refresh() {
             .env("XDG_DATA_HOME", &data)
             .env("XDG_CONFIG_HOME", &config)
             .env("GSETTINGS_BACKEND", "keyfile")
-            .status()
+            .output()
             .expect("child process must launch")
     };
+    let must_pass = |stage: &str| {
+        let result = run(stage);
+        assert!(
+            result.status.success(),
+            "{stage} child failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
     for stage in ["seed", "revoke"] {
-        assert!(run(stage).success(), "{stage} child failed");
+        must_pass(stage);
     }
-    // Remove *only* the test ledger in a separate process. The unchanged
-    // denial assertions must fail if their durable override is bypassed.
+    // The oracle must fail for the specifically expected missing-tombstone
+    // assertion, not an unrelated subprocess/setup error.
+    let oracle = run("oracle");
     assert!(
-        !run("oracle").success(),
+        !oracle.status.success(),
         "ledger-bypass oracle falsely passed"
+    );
+    assert!(
+        String::from_utf8_lossy(&oracle.stderr).contains("LAN_TOMBSTONE_EXPECTED_NEGATIVE_ORACLE"),
+        "oracle did not reach the expected ledger-bypass counterexample"
     );
     let hidden = root.join("oracle-ledger");
     assert!(
@@ -102,12 +115,9 @@ fn real_keyfile_revocation_survives_process_restart_and_due_refresh() {
         "oracle did not actually hide the tombstone"
     );
     fs::rename(hidden, consent_ledger_path(&data)).unwrap();
-    assert!(run("negative").success(), "cold-start denial failed");
-    assert!(run("grant").success(), "explicit regrant failed");
-    assert!(
-        run("positive").success(),
-        "cold-start positive due-refresh failed"
-    );
+    for stage in ["negative", "grant", "positive"] {
+        must_pass(stage);
+    }
 }
 
 fn consent_ledger_path(data: &Path) -> PathBuf {
@@ -158,8 +168,9 @@ async fn cold_process_stage() {
             );
             assert!(settings.playlist_lan_allowed(SOURCE, LOCATOR));
             std::env::set_var("BROADCASTER_T1_REFUSE_KEYFILE_WRITE", "1");
+            std::env::set_var("BROADCASTER_T1_REFUSE_KEYFILE_UNTIL_EXIT", "1");
             let changed = settings.set_playlist_lan_consent(SOURCE, LOCATOR, false);
-            std::env::remove_var("BROADCASTER_T1_REFUSE_KEYFILE_WRITE");
+            gio::Settings::sync();
             assert!(!changed, "the real backend must refuse the removal");
             assert!(!settings.playlist_lan_allowed(SOURCE, LOCATOR));
             let path = consent_ledger::path();
@@ -177,8 +188,12 @@ async fn cold_process_stage() {
             fs::rename(consent_ledger::path(), root.join("oracle-ledger")).unwrap();
             // This is the *same* production read/assertion as the negative
             // stage. It MUST fail when the durable ledger is absent.
+            let bypassed = settings.playlist_lan_allowed(SOURCE, LOCATOR);
+            if bypassed {
+                eprintln!("LAN_TOMBSTONE_EXPECTED_NEGATIVE_ORACLE");
+            }
             assert!(
-                !settings.playlist_lan_allowed(SOURCE, LOCATOR),
+                !bypassed,
                 "ORACLE: saved stale grant became effective without tombstone"
             );
         }
