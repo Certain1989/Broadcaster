@@ -27,6 +27,7 @@ jobs:
           BROADCASTER_V031_FIXTURE_OUT: ${{ runner.temp }}/v031-fixtures
         run: |
           set -euo pipefail
+          git config --global --add safe.directory "$PWD"
           test "$(git rev-parse HEAD)" = '0fcdcec9a17c61e053ce0c5db1a2487b8baff245'
           test "$(git rev-parse HEAD^{tree})" = '2f5c88166cab1cbb947c736f3724a01a11e53186'
           cat >> src/streams/backup.rs <<'RS_GENERATOR'
