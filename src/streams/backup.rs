@@ -788,7 +788,7 @@ fn apply_pending_with_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::params;
+    use rusqlite::{params, OptionalExtension};
 
     struct Sandbox(PathBuf);
     impl Sandbox {
