@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Opt-in local mpv 0.41 probe; never uses live media or authentic credentials.
+"""Opt-in local mpv 0.41/0.42 probe; never uses live media or authentic credentials.
 
 Run: python3 tests/player/mpv_http_probe.py [--mpv /path/to/mpv]
 A fake mpv executable argv check runs in Rust CI separately. This probe
@@ -102,6 +102,12 @@ def make_segment(folder):
     return target.read_bytes() if result.returncode == 0 else None
 
 
+def hls_fixture_present(segment, required):
+    if segment is None and required:
+        raise AssertionError("required HLS fixture unavailable: ffmpeg missing or failed")
+    return segment is not None
+
+
 def assert_request(observations, role, path, agent, referer):
     matching = [r for r in observations if r[0] == role and r[1] == path]
     if not matching:
@@ -114,20 +120,33 @@ def assert_request(observations, role, path, agent, referer):
     return matching
 
 
+def expected_mpv_version(banner, release_line):
+    """Accept both upstream `mpv v0.x.y` and older `mpv 0.x.y` banners."""
+    return re.search(r"(?m)^mpv v?" + re.escape(release_line) +
+                     r"(?:\.|\b)", banner) is not None
+
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mpv", default="mpv", help="mpv 0.41 executable")
+    parser.add_argument("--mpv", default="mpv", help="mpv executable or wrapper")
+    parser.add_argument("--expect-version", choices=("0.41", "0.42"),
+                        default="0.42", help="required mpv release line")
+    parser.add_argument("--require-hls", action="store_true",
+                        help="fail if ffmpeg cannot generate required HLS fixture")
     args = parser.parse_args()
     version = subprocess.run(
         [args.mpv, "--version"], capture_output=True, text=True,
         timeout=10, check=True,
     ).stdout
-    if not re.search(r"\bmpv 0\.41(?:\.|\b)", version):
-        raise SystemExit("NOT RUN: this fixture requires mpv 0.41")
+    if not expected_mpv_version(version, args.expect_version):
+        raise SystemExit(f"NOT RUN: expected mpv {args.expect_version}; "
+                         f"received banner {version.splitlines()[0:1]!r}")
     with tempfile.TemporaryDirectory(prefix="broadcaster-mpv_http-http-") as tmp:
         observations = []
         wav_data = synthetic_wav()
         segment = make_segment(Path(tmp))
+        hls_fixture_present(segment, args.require_hls)
         first = FixtureServer("origin", observations, wav_data, segment)
         second = FixtureServer("other-origin", observations, wav_data, segment)
         first.peer, second.peer = second, first
@@ -147,7 +166,9 @@ def main():
                 )
                 command = [
                     args.mpv, "--no-config", "--no-video", "--ao=null",
-                    "--cache=no", "--really-quiet", *flags, "--",
+                    "--cache=no", "--really-quiet",
+                    *(["--curl-enabled=yes"] if args.expect_version == "0.42" else []),
+                    *flags, "--",
                     first.origin + path,
                 ]
                 before = len(observations)
@@ -163,7 +184,7 @@ def main():
 
             redirect = play("/redirect", imported=True)
             assert_request(redirect, "origin", "/redirect", AGENT, referer)
-            other = assert_request(redirect, "other-origin", "/clip.wav", None, None)
+            other = assert_request(redirect, "other-origin", "/clip.wav", AGENT, referer)
             print(
                 "PASS redirect; cross-origin User-Agent forwarded:",
                 any(item[2] == AGENT for item in other),
@@ -182,7 +203,7 @@ def main():
             else:
                 hls = play("/master.m3u8", imported=True)
                 assert_request(hls, "origin", "/master.m3u8", AGENT, referer)
-                segments = assert_request(hls, "other-origin", "/segment.ts", None, None)
+                segments = assert_request(hls, "other-origin", "/segment.ts", AGENT, referer)
                 print(
                     "PASS HLS media fetch; cross-origin segment User-Agent forwarded:",
                     any(item[2] == AGENT for item in segments),
