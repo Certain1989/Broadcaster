@@ -83,7 +83,6 @@ fn bundled_sqlite_runtime_is_3_54_1() {
     assert_eq!(version, "3.54.1");
 }
 
-
 #[cfg(target_os = "linux")]
 fn sqlite_symbol_owner(symbol: *const ()) -> PathBuf {
     use std::ffi::{CStr, OsStr};
