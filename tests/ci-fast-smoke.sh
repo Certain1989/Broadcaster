@@ -44,6 +44,12 @@ run_positive native_painted_focus_1280_800 1280x800
 # Actual application dispatch gate: malformed restored IPTV never reaches a player.
 run_positive native_iptv_restored_url_dispatch_gate 640x480
 
+# Cold-process persisted LAN-consent regression: one exact ignored selector
+# controls its own private GSettings keyfile and two isolated test restarts.
+BROADCASTER_NATIVE_CASE_TIMEOUT_SECONDS=120 \
+  GSETTINGS_SCHEMA_DIR="$schema_dir" \
+  bash tests/ci-require-one-ignored.sh native_real_gsettings_restart_scheduled_lan_revoke
+
 # Negative: prove the real GTK oracle still rejects a deliberately wrong
 # source-manager focus assertion for its exact marker, not for an X11/setup
 # failure. Full CI retains all other negative controls unchanged.

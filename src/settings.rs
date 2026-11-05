@@ -60,6 +60,16 @@ macro_rules! bind_setting {
 
 impl TvSettings {
     pub fn new(id: &str) -> Self {
+        // Genuine GIO read-only backend only for a supervised native test.
+        #[cfg(test)]
+        if std::env::var_os("BROADCASTER_TEST_READONLY_GSETTINGS").as_deref()
+            == Some(std::ffi::OsStr::new("lan-restart"))
+        {
+            return Self(gio::Settings::with_backend(
+                id,
+                &gio::null_settings_backend_new(),
+            ));
+        }
         Self(gio::Settings::new(id))
     }
 
