@@ -9,6 +9,7 @@ no application options or persistent trust stores are changed.
 """
 import argparse
 import shutil
+import sys
 import ssl
 import subprocess
 import tempfile
@@ -47,17 +48,31 @@ class TLSMediaServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), TLSMediaHandler)
         self.paths = []
         self.audio = synthetic_wav()
-        self.handshake_errors = []
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(str(cert), str(key))
         self.socket = ctx.wrap_socket(self.socket, server_side=True)
 
-    def get_request(self):
-        try:
-            return super().get_request()
-        except ssl.SSLError as exc:
-            self.handshake_errors.append(str(exc))
-            raise
+    def handle_error(self, request, client_address):
+        # A certificate-rejecting TLS client can reset an *established*
+        # connection after the server-side handshake. This is not reliable
+        # proof of why the client rejected it; mpv's own stderr is the oracle.
+        if isinstance(sys.exc_info()[1], ConnectionResetError):
+            return
+        super().handle_error(request, client_address)
+
+
+def assert_tls_evidence(rejected, negative_paths, permitted, positive_paths):
+    """Require mpv's specific verification diagnostic AND the live control GET."""
+    if rejected.returncode == 0:
+        raise AssertionError("mpv accepted untrusted self-signed HTTPS by default")
+    if negative_paths:
+        raise AssertionError("default TLS request reached the untrusted HTTPS media")
+    # mpv 0.42 stream_curl.c emits this only for libcurl's certificate
+    # verification failure, rather than generic DNS/connection/player errors.
+    if "TLS certificate verification failed." not in (rejected.stderr or ""):
+        raise AssertionError("mpv failed without its certificate-verification diagnostic")
+    if permitted.returncode != 0 or "/clip.wav" not in positive_paths:
+        raise AssertionError("explicit test-only TLS bypass failed to GET the same HTTPS media")
 
 
 def make_certificate(folder):
@@ -90,25 +105,25 @@ def main():
         try:
             url = f"https://127.0.0.1:{server.server_port}/clip.wav"
             base = [args.mpv, "--no-config", "--no-video", "--ao=null",
-                    "--cache=no", "--really-quiet", "--curl-enabled=yes"]
+                    "--cache=no", "--msg-level=all=error", "--curl-enabled=yes"]
 
             def play(extra):
+                # Only synthetic localhost data is used; never display raw
+                # stderr, URL or credentials in CI. Inspect a fixed upstream
+                # diagnostic and retain output in memory only.
                 return subprocess.run([*base, *extra, "--", url],
-                                      stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL,
-                                      timeout=20, check=False)
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                      text=True, errors="replace", timeout=20,
+                                      check=False)
 
             rejected = play([])
-            if rejected.returncode == 0:
-                raise AssertionError("mpv accepted an untrusted self-signed HTTPS source by default")
-            if server.paths:
-                raise AssertionError("default-TLS request reached untrusted HTTPS media")
-            if not server.handshake_errors:
-                raise AssertionError("TLS verification check had no observed handshake failure")
+            negative_paths = tuple(server.paths)
+            # Always exercise the same-origin positive control before checking
+            # the negative oracle; unrelated player failures cannot pass.
             permitted = play(["--tls-verify=no"])
-            if permitted.returncode != 0 or "/clip.wav" not in server.paths:
-                raise AssertionError("test-only TLS bypass control could not play the same HTTPS media")
-            print("PASS default TLS rejects untrusted certificate; explicit test-only bypass plays same synthetic URL")
+            positive_paths = tuple(server.paths[len(negative_paths):])
+            assert_tls_evidence(rejected, negative_paths, permitted, positive_paths)
+            print("PASS mpv certificate-rejection diagnostic and explicit test-only same-URL TLS bypass GET")
         finally:
             server.shutdown()
             server.server_close()

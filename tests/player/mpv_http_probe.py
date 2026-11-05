@@ -102,6 +102,12 @@ def make_segment(folder):
     return target.read_bytes() if result.returncode == 0 else None
 
 
+def hls_fixture_present(segment, required):
+    if segment is None and required:
+        raise AssertionError("required HLS fixture unavailable: ffmpeg missing or failed")
+    return segment is not None
+
+
 def assert_request(observations, role, path, agent, referer):
     matching = [r for r in observations if r[0] == role and r[1] == path]
     if not matching:
@@ -126,6 +132,8 @@ def main():
     parser.add_argument("--mpv", default="mpv", help="mpv executable or wrapper")
     parser.add_argument("--expect-version", choices=("0.41", "0.42"),
                         default="0.42", help="required mpv release line")
+    parser.add_argument("--require-hls", action="store_true",
+                        help="fail if ffmpeg cannot generate required HLS fixture")
     args = parser.parse_args()
     version = subprocess.run(
         [args.mpv, "--version"], capture_output=True, text=True,
@@ -138,6 +146,7 @@ def main():
         observations = []
         wav_data = synthetic_wav()
         segment = make_segment(Path(tmp))
+        hls_fixture_present(segment, args.require_hls)
         first = FixtureServer("origin", observations, wav_data, segment)
         second = FixtureServer("other-origin", observations, wav_data, segment)
         first.peer, second.peer = second, first
