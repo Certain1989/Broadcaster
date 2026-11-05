@@ -40,7 +40,7 @@ mod released_v031_fixture_generator {
                  INSERT INTO epg_sources
                    (id,name,origin_kind,origin_locator,created_at,updated_at)
                    VALUES ('legacy-guide','Released guide','local_file',
-                    '/nonexistent/epg.xml',100,100);
+                    'file:///nonexistent/epg.xml',100,100);
                  INSERT INTO epg_channels(source_id,channel_id,display_name)
                    VALUES ('legacy-guide','legacy.guide.channel','Guide channel');
                  INSERT INTO epg_programmes
