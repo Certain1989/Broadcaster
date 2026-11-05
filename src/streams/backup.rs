@@ -1698,7 +1698,5 @@ mod tests {
         }
     }
 
-
     include!("legacy_sqlite_v031_tests.rs");
-
 }
