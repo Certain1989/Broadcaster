@@ -72,8 +72,8 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
     }
 }
 
-// Regression sentinel: the bundled libsqlite3-sys upgrade must actually link
-// SQLite 3.54.0, not accidentally fall back to the host's SQLite library.
+// Version canary: validates which SQLite patch level is running, not how it
+// was linked. The ELF symbol-owner test below independently guards bundling.
 #[test]
 fn bundled_sqlite_runtime_is_3_54_1() {
     let db = Connection::open_in_memory().unwrap();
@@ -81,6 +81,46 @@ fn bundled_sqlite_runtime_is_3_54_1() {
         .query_row("SELECT sqlite_version()", [], |row| row.get(0))
         .unwrap();
     assert_eq!(version, "3.54.1");
+}
+
+
+#[cfg(target_os = "linux")]
+fn sqlite_symbol_owner(symbol: *const ()) -> PathBuf {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut info = std::mem::MaybeUninit::<libc::Dl_info>::uninit();
+    // SAFETY: dladdr reads the function's code address and initializes Dl_info
+    // only on success; dli_fname then points to a NUL-terminated loader string.
+    let found = unsafe { libc::dladdr(symbol.cast(), info.as_mut_ptr()) };
+    assert_ne!(found, 0, "dynamic loader could not locate tested symbol");
+    let info = unsafe { info.assume_init() };
+    assert!(!info.dli_fname.is_null(), "dladdr returned no owner path");
+    let name = unsafe { CStr::from_ptr(info.dli_fname) };
+    PathBuf::from(OsStr::from_bytes(name.to_bytes()))
+        .canonicalize()
+        .expect("symbol owner's ELF file must exist")
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bundled_sqlite_symbol_is_owned_by_test_executable_not_system_library() {
+    let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
+    // A dynamic libsqlite3.so would own this symbol even when the installed
+    // system version equals our bundled SQLite 3.54.1. Static bundling places
+    // sqlite3_libversion in the executable's ELF image instead.
+    assert_eq!(
+        sqlite_symbol_owner(rusqlite::ffi::sqlite3_libversion as *const ()),
+        executable,
+        "sqlite3_libversion must be statically linked into this test binary"
+    );
+    // Negative control: the exact same oracle must identify a genuine system
+    // shared-library symbol as external, never mistakenly as this executable.
+    assert_ne!(
+        sqlite_symbol_owner(libc::getpid as *const ()),
+        executable,
+        "ELF owner oracle did not distinguish shared libc from executable"
+    );
 }
 
 #[test]
