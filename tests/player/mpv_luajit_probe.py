@@ -54,9 +54,28 @@ end
 for i = 1, 20 do assert(arithmetic() == 500500) end
 assert(require("jit.util").traceinfo(1), "LuaJIT did not compile a JIT trace")
 checkpoint("TRACE_COMPILED")
+-- The accelerated hotloop=1 setting is probe-only. Reset it to LuaJIT's
+-- shipped defaults before executing the real remote regression fixture.
+-- Otherwise this artificially changes the JIT policy of the application.
+require("jit.opt").start()
+jit.flush()
+checkpoint("JIT_POLICY_RESTORED")
 -- Exercise the installed production remote with its real exhaustive mock
 -- (remote OK/Back/Home, playback, subtitles, menu and overlay state).
-dofile("/app/share/broadcaster/{app_folder}/remote-tests.lua")
+local ok, failure = pcall(dofile, "/app/share/broadcaster/{app_folder}/remote-tests.lua")
+if not ok then
+    -- Whitelist only exact publicly tracked test/script filenames and numeric
+    -- source lines. Never forward script exception details, URLs or metadata.
+    local source, line = tostring(failure):match("([^/:]+%.lua):(%d+):")
+    local safe_source = source == "remote-tests.lua" and "FIXTURE"
+                     or source == "broadcaster-mpv-remote.lua" and "REMOTE"
+                     or "OTHER"
+    local safe_line = tonumber(line) or 0
+    if safe_line > 9999 then safe_line = 0 end
+    io.stderr:write(string.format("BROADCASTER_LUAJIT_TEST_FAILURE_%s_%04d\\n",
+                                  safe_source, safe_line))
+    error("packaged remote suite failed")
+end
 checkpoint("REMOTE_SUITE_PASS")
 local file = assert(io.open("/app/share/broadcaster/{app_folder}/{marker}", "w"))
 file:write("{RESULT.strip()}\\n")
@@ -66,7 +85,7 @@ checkpoint("MARKER_WRITTEN")
 
 
 STAGES = ("LOADED", "JIT_IMPORTED", "JIT_ENABLED", "TRACE_COMPILED",
-          "REMOTE_SUITE_PASS", "MARKER_WRITTEN")
+          "JIT_POLICY_RESTORED", "REMOTE_SUITE_PASS", "MARKER_WRITTEN")
 
 
 def latest_stage(output):
@@ -75,6 +94,14 @@ def latest_stage(output):
     completed = [name for name in STAGES
                  if f"BROADCASTER_LUAJIT_STAGE_{name}" in output]
     return completed[-1] if completed else "NONE"
+
+
+def safe_remote_failure(output):
+    # Report only a public-source file category and four-digit line number.
+    # All arbitrary Lua/mpv exception messages remain captured and suppressed.
+    import re
+    found = re.findall(r"BROADCASTER_LUAJIT_TEST_FAILURE_(FIXTURE|REMOTE|OTHER)_(\d{4})(?!\d)", output)
+    return f"{found[-1][0]}:{found[-1][1]}" if found else "NONE"
 
 
 def synthetic_wav(path):
@@ -124,7 +151,8 @@ def main():
         print("Packaged LuaJIT oracle:",
               "mpv_exit_ok=", result.returncode == 0,
               "jit_and_remote_marker=", passed,
-              "last_completed_stage=", latest_stage(result.stdout + result.stderr))
+              "last_completed_stage=", latest_stage(result.stdout + result.stderr),
+              "safe_remote_failure=", safe_remote_failure(result.stdout + result.stderr))
         if result.returncode != 0 or not passed:
             raise AssertionError("packaged LuaJIT JIT/remote probe failed")
         print("PASS packaged LuaJIT 2.1 JIT trace and real Broadcaster remote tests")

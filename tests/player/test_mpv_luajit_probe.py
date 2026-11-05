@@ -4,7 +4,7 @@
 """Fail-closed local assertions for the packaged LuaJIT/remote probe."""
 import unittest
 
-from mpv_luajit_probe import adapted_remote_test, lua_entry, latest_stage, RESULT
+from mpv_luajit_probe import adapted_remote_test, lua_entry, latest_stage, safe_remote_failure, RESULT
 
 
 class LuaJitProbeTests(unittest.TestCase):
@@ -35,6 +35,26 @@ class LuaJitProbeTests(unittest.TestCase):
         self.assertEqual(latest_stage("BROADCASTER_LUAJIT_STAGE_LOADED\n"
                                       "BROADCASTER_LUAJIT_STAGE_TRACE_COMPILED\n"),
                          "TRACE_COMPILED")
+
+    def test_safe_remote_failure_never_exposes_arbitrary_messages(self):
+        self.assertEqual(safe_remote_failure("file/path/secrets private"), "NONE")
+        self.assertEqual(safe_remote_failure(
+            "BROADCASTER_LUAJIT_TEST_FAILURE_FIXTURE_0123\nprivate url"), "FIXTURE:0123")
+        self.assertEqual(safe_remote_failure(
+            "BROADCASTER_LUAJIT_TEST_FAILURE_REMOTE_0350\n"), "REMOTE:0350")
+        self.assertEqual(safe_remote_failure(
+            "BROADCASTER_LUAJIT_TEST_FAILURE_OTHER_44444"), "NONE")
+        self.assertEqual(safe_remote_failure(
+            "BROADCASTER_LUAJIT_TEST_FAILURE_UNTRUSTED_0002"), "NONE")
+
+    def test_remote_runs_with_normal_jit_options_after_trace(self):
+        script = lua_entry(".probe-fixed", "result.txt")
+        self.assertIn('checkpoint("TRACE_COMPILED")', script)
+        self.assertIn('require("jit.opt").start()\njit.flush()', script)
+        self.assertIn('checkpoint("REMOTE_SUITE_PASS")', script)
+        self.assertIn('pcall(dofile', script)
+        self.assertIn(r'BROADCASTER_LUAJIT_TEST_FAILURE_%s_%04d\n', script)
+        self.assertNotIn('BROADCASTER_LUAJIT_TEST_FAILURE_%s_%04d\n', script)
 
 
 if __name__ == '__main__':
