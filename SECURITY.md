@@ -25,9 +25,9 @@ signed OSTree remote is promised. Watch the repository's Releases and Security
 Advisories for announcements; there is no guarantee of notifications or updates.
 
 A SHA256SUMS file detects a corrupted/downloaded asset against *that file*;
-alone it does not authenticate the release publisher. Future owner-created
-tags built by the proposed provenance-enabled workflow can carry GitHub
-artifact attestations. See [release verification](docs/release-verification.md)
+alone it does not authenticate the release publisher. Version-tag builds using the provenance-enabled workflow can carry GitHub
+artifact attestations once their tag jobs actually complete successfully; the
+historical v0.3.0 bundles have no such attestations. See [release verification](docs/release-verification.md)
 for digest and workflow/source-identity checks and the limitations of this
 trust model. Existing releases must not be assumed to have attestations.
 
