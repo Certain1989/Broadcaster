@@ -149,7 +149,7 @@
 
     #[cfg(unix)]
     #[test]
-    fn released_v031_sqlite_3532_live_and_d1_export_restore_with_3541() {
+    fn released_v031_sqlite_3532_live_and_backup_export_restore_with_3541() {
         use std::os::unix::fs::MetadataExt;
 
         assert_eq!(rusqlite::version(), "3.54.1");
@@ -198,7 +198,7 @@
             .unwrap();
         assert_eq!(name, "Changed after upgrade");
 
-        // Use production D1 staging, confirmation, and the exact serialized
+        // Use production backup staging, confirmation, and the exact serialized
         // primary-startup pre-open gate with a fresh isolated startup flag.
         let prepared = prepare_import(&storage, &old_export).unwrap();
         assert_eq!(
