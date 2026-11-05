@@ -1119,6 +1119,7 @@ jobs:
           chmod +x "$wrapper"
           python3 -m unittest discover -s tests/player -p 'test_mpv_probe_version.py'
           python3 tests/player/mpv_http_probe.py --mpv "$wrapper" --expect-version 0.42
+          python3 tests/player/mpv_tls_probe.py --mpv "$wrapper" --expect-version 0.42
       - name: Verify exported development desktop metadata and icon
         run: |
           app=io.github.Certain1989.Broadcaster.Devel

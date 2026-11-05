@@ -175,7 +175,7 @@ def main():
 
             redirect = play("/redirect", imported=True)
             assert_request(redirect, "origin", "/redirect", AGENT, referer)
-            other = assert_request(redirect, "other-origin", "/clip.wav", None, None)
+            other = assert_request(redirect, "other-origin", "/clip.wav", AGENT, referer)
             print(
                 "PASS redirect; cross-origin User-Agent forwarded:",
                 any(item[2] == AGENT for item in other),
@@ -194,7 +194,7 @@ def main():
             else:
                 hls = play("/master.m3u8", imported=True)
                 assert_request(hls, "origin", "/master.m3u8", AGENT, referer)
-                segments = assert_request(hls, "other-origin", "/segment.ts", None, None)
+                segments = assert_request(hls, "other-origin", "/segment.ts", AGENT, referer)
                 print(
                     "PASS HLS media fetch; cross-origin segment User-Agent forwarded:",
                     any(item[2] == AGENT for item in segments),
