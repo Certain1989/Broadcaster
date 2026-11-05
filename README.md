@@ -92,7 +92,7 @@ Manage explicitly selected XMLTV guide sources, refresh a guide or choose the sh
 
 ### Video playback
 
-The existing mpv playback interface is unchanged in v0.2.1.
+This screenshot shows an earlier version of the integrated mpv controls. In v0.3.2, directional focus follows on-screen button positions; the visible control layout is unchanged.
 
 <img width="760" alt="Broadcaster integrated mpv video player controls" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
 

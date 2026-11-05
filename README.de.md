@@ -92,7 +92,7 @@ Eigene XMLTV-Quellen verwalten, manuell aktualisieren oder einen gemeinsamen Sta
 
 ### Videowiedergabe
 
-Die bestehende mpv-Wiedergabesteuerung bleibt in v0.2.1 unverändert.
+Der Screenshot zeigt eine ältere Version der integrierten mpv-Bedienoberfläche. In v0.3.2 folgt die Fokusbewegung den Positionen der sichtbaren Schaltflächen; die Anordnung der Bedienelemente bleibt unverändert.
 
 <img width="760" alt="Broadcaster-Videoplayer mit integrierter mpv-Wiedergabesteuerung" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
 
