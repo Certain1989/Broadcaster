@@ -114,6 +114,13 @@ def assert_request(observations, role, path, agent, referer):
     return matching
 
 
+def expected_mpv_version(banner, release_line):
+    """Accept both upstream `mpv v0.x.y` and older `mpv 0.x.y` banners."""
+    return re.search(r"(?m)^mpv v?" + re.escape(release_line) +
+                     r"(?:\.|\b)", banner) is not None
+
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mpv", default="mpv", help="mpv executable or wrapper")
@@ -124,8 +131,9 @@ def main():
         [args.mpv, "--version"], capture_output=True, text=True,
         timeout=10, check=True,
     ).stdout
-    if not re.search(r"\bmpv " + re.escape(args.expect_version) + r"(?:\.|\b)", version):
-        raise SystemExit(f"NOT RUN: expected mpv {args.expect_version}")
+    if not expected_mpv_version(version, args.expect_version):
+        raise SystemExit(f"NOT RUN: expected mpv {args.expect_version}; "
+                         f"received banner {version.splitlines()[0:1]!r}")
     with tempfile.TemporaryDirectory(prefix="broadcaster-mpv_http-http-") as tmp:
         observations = []
         wav_data = synthetic_wav()
