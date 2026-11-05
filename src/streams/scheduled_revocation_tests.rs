@@ -19,7 +19,7 @@ use super::{
     storage::Storage,
 };
 use crate::{config::BASE_APP_ID, settings::TvSettings};
-use adw::{gio, prelude::*};
+use adw::{gio, glib, prelude::*};
 use rusqlite::params;
 
 const SOURCE: &str = "70d17873-5f61-46b5-a5a4-c4f8f18ab099";
