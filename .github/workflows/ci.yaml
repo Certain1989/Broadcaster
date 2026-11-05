@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Cache only Rust job compiler artifacts, not Flatpak build trees.
       # rust-cache includes rustc version and Cargo.lock in its cache keys.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-targets: true
           cache-all-crates: false
@@ -752,7 +752,7 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-targets: true
           cache-all-crates: false
@@ -954,7 +954,7 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua xorg-server-xvfb xorg-xauth python libxtst
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-targets: true
           cache-all-crates: false
@@ -1106,6 +1106,21 @@ jobs:
           # Checkpoint PR and manually dispatched builds remain downloadable;
           # main push builds do not duplicate already published release bundles.
           upload-artifact: ${{ github.event_name != 'push' }}
+      - name: Probe packaged mpv 0.42 HTTP playback and forwarded headers
+        run: |
+          set -eu
+          test -x flatpak_app/files/bin/mpv
+          wrapper=$(mktemp)
+          trap 'rm -f "$wrapper"' EXIT
+          cat > "$wrapper" <<'SH'
+          #!/bin/sh
+          exec flatpak build --share=network flatpak_app mpv "$@"
+          SH
+          chmod +x "$wrapper"
+          python3 -m unittest discover -s tests/player -p 'test_mpv_*.py'
+          python3 tests/player/mpv_http_probe.py --mpv "$wrapper" --expect-version 0.42 --require-hls
+          python3 tests/player/mpv_tls_probe.py --mpv "$wrapper" --expect-version 0.42
+          python3 tests/player/mpv_luajit_probe.py --build-root flatpak_app --expect-version 0.42
       - name: Verify exported development desktop metadata and icon
         run: |
           app=io.github.Certain1989.Broadcaster.Devel

@@ -23,7 +23,7 @@ Broadcaster is a lightweight, native Linux application for German public-service
 - **Favourites (v0.2.5):** mark IPTV channels with a star and use the favourites-only filter. Favourites and channel metadata are preserved separately from programme-guide associations.
 - **Remote navigation (v0.2.5):** improved directional focus and remote access to card actions, favourites, source and guide managers, channel editing and the on-screen keyboard.
 - **On-screen keyboard (v0.2.1):** enter text using directional remote keys wherever an editable field offers the keyboard; it is available by default and can be disabled in Settings. Mouse and physical keyboard input still work.
-- **TV controls:** fullscreen startup, remote-friendly navigation, and a dedicated mpv overlay for play/pause, seeking, playback speed, audio tracks and subtitles. Labels reflect available stream metadata.
+- **TV controls:** fullscreen startup, remote-friendly navigation, and a dedicated mpv overlay for play/pause, seeking, playback speed, audio tracks and subtitles. Labels reflect available stream metadata. In v0.3.2 the overlay's D-pad focus follows spatial button positions rather than row indices.
 - **Desktop integration:** native GTK4 interface, English and German text, optional external player and downloader, and Flatpak builds for x86-64 and ARM64.
 
 ## Network access and playlist consent (v0.3.1)
@@ -44,7 +44,7 @@ Guides are **optional**. Broadcaster does not automatically download a guide URL
 
 New guides have **automatic refresh enabled by default** in the Add Guide dialog, with a 24-hour age threshold. You can turn this off when adding a guide or change the interval (6–168 hours) in guide settings. Broadcaster checks due, enabled guides when the guide service starts and approximately once a minute **while the app is running**; it does not update them while closed. Manual guide refresh remains available. **M3U playlists have a separate optional refresh schedule**, configured for each source in Manage Sources. It is disabled by default; when enabled, the interval is 6–168 hours, and updates are checked only while Broadcaster runs. Unexpectedly large channel-list shrinkage requires manual confirmation. The XMLTV guide scheduler does not refresh M3U playlists.
 
-A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.3.1 release notes](docs/release-v0.3.1-notes.md) for the latest changes and limitations.
+A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.3.2 release notes](docs/release-v0.3.2-notes.md) for the latest changes and limitations.
 
 For details on private recovery snapshots, disk limits and abandoned guide downloads, see [EPG/SQLite storage operations](docs/epg-sqlite-storage.md).
 
@@ -54,11 +54,11 @@ In **My Channels → Manage Sources → Backup / Restore**, select **Export Comp
 
 **Import and Replace Database** validates a selected compatible snapshot and displays its playlist, channel, guide and cached-programme counts. Confirm **Replace Entire Database After Restart** only when you intend to replace **all** current database data: it is **not a merge**. Close and restart Broadcaster to apply the replacement before normal database use; do not start another source refresh between confirmation and closing. The previous database is kept as a private recovery copy, and local files may need reauthorization after restoring.
 
-**A normal application upgrade does not require database export or import.** Close Broadcaster, verify and install the newer production Flatpak into the same `--user` or `--system` scope, and start the app. Supported older SQLite data is migrated automatically. Keep a separate backup if the data matters to you; do not uninstall with data deletion as an upgrade step. See the [v0.3.1 release notes](docs/release-v0.3.1-notes.md) for details and limitations.
+**A normal application upgrade does not require database export or import.** Close Broadcaster, verify and install the newer production Flatpak into the same `--user` or `--system` scope, and start the app. Supported older SQLite data is migrated automatically. Keep a separate backup if the data matters to you; do not uninstall with data deletion as an upgrade step. See the [v0.3.2 release notes](docs/release-v0.3.2-notes.md) for details and limitations.
 
 ## Screenshots
 
-The following screenshots were captured in v0.2.5 and remain representative of the largely unchanged v0.3.0 interface. New playlist-refresh and database backup/restore dialogs are not pictured. Programme titles, times and IPTV availability come from third-party sources and can change.
+The following screenshots were captured in v0.2.5 and remain representative of the largely unchanged v0.3.2 interface. New playlist-refresh and database backup/restore dialogs are not pictured. Programme titles, times and IPTV availability come from third-party sources and can change.
 
 ### Mediathek search
 
@@ -92,7 +92,7 @@ Manage explicitly selected XMLTV guide sources, refresh a guide or choose the sh
 
 ### Video playback
 
-The existing mpv playback interface is unchanged in v0.2.1.
+This screenshot shows an earlier version of the integrated mpv controls. In v0.3.2, directional focus follows on-screen button positions; the visible control layout is unchanged.
 
 <img width="760" alt="Broadcaster integrated mpv video player controls" src="https://github.com/user-attachments/assets/a8640849-2573-4078-bd9f-053ee7fab321" />
 
@@ -102,27 +102,27 @@ To find playlists for **My Channels**, browse [IPTV-org's country, language and 
 
 Broadcaster neither hosts nor supplies media. Stream availability, channel metadata, subtitles, regional restrictions and service uptime are controlled by broadcasters and external catalogue providers. Remote key mapping depends on your desktop and hardware; Fedora KDE Plasma Bigscreen/Wayland is the primary tested TV environment. Other Linux desktops may work but are not guaranteed.
 
-The [v0.3.1 release notes](docs/release-v0.3.1-notes.md) summarize this security/stability update and its limits; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
+The [v0.3.2 release notes](docs/release-v0.3.2-notes.md) describe the maintenance update, spatial playback controls and compatibility limits; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
 
 ## Install Broadcaster
 
-Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.1 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.1) (once publication is complete). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
+Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.2 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.2) (once publication is complete). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
 
 ```bash
-grep 'broadcaster-0.3.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.3.2-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user --or-update ./broadcaster-0.3.1-x86_64.flatpak
+flatpak install --user --or-update ./broadcaster-0.3.2-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
 For ARM64 (`aarch64`), use these matching commands instead:
 
 ```bash
-grep 'broadcaster-0.3.1-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
-flatpak install --user --or-update ./broadcaster-0.3.1-aarch64.flatpak
+grep 'broadcaster-0.3.2-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
+flatpak install --user --or-update ./broadcaster-0.3.2-aarch64.flatpak
 ```
 
-The checksum command checks the downloaded bundle against the release's `SHA256SUMS`; use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install or update system-wide for a separate TV account, configure Flathub for system runtime dependencies and use `sudo flatpak install --system --or-update ./broadcaster-0.3.1-x86_64.flatpak`; start the app without sudo. Use **the same scope** as the existing installation when upgrading. `--user` and `--system` installations have separate deployment scopes; do not uninstall or delete application data to upgrade.
+The checksum command checks the downloaded bundle against the release's `SHA256SUMS`; use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install or update system-wide for a separate TV account, configure Flathub for system runtime dependencies and use `sudo flatpak install --system --or-update ./broadcaster-0.3.2-x86_64.flatpak`; start the app without sudo. Use **the same scope** as the existing installation when upgrading. `--user` and `--system` installations have separate deployment scopes; do not uninstall or delete application data to upgrade.
 
 Broadcaster uses GNOME Platform 51, which Flatpak can obtain from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable app ID above is different from `io.github.Certain1989.Broadcaster.Devel` used by CI development builds.
 

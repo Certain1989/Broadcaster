@@ -59,7 +59,7 @@
         {
           "type": "git",
           "url": "https://github.com/LuaJIT/LuaJIT.git",
-          "commit": "c6ffc141a8762b41703f9287d63d93622a13dd8f",
+          "commit": "ea9eb7edb5eac4a9d175d74523db34fac0fa5180",
           "disable-shallow-clone": true
         }
       ]
@@ -95,8 +95,8 @@
         {
           "type": "git",
           "url": "https://github.com/haasn/libplacebo.git",
-          "tag": "v7.360.1",
-          "commit": "cee9b076f2c63104ccfd497fa79c39a867293ec4",
+          "tag": "v7.387.0",
+          "commit": "275f7dea27924cdd34ab2e6c20e448b6bc4fab65",
           "x-checker-data": {
             "type": "git",
             "tag-pattern": "^v?([0-9]+\\.[0-9]+\\.[0-9]+)$",
@@ -130,8 +130,8 @@
         {
           "type": "git",
           "url": "https://github.com/mpv-player/mpv.git",
-          "tag": "v0.41.0",
-          "commit": "41f6a645068483470267271e1d09966ca3b9f413",
+          "tag": "v0.42.0",
+          "commit": "b0841e8c4d156b8403dc1876c4cbd9011eb583f3",
           "x-checker-data": {
             "type": "git",
             "tag-pattern": "^v?([0-9]+\\.[0-9]+\\.[0-9]+)$",

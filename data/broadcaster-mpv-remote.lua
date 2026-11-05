@@ -132,6 +132,58 @@ local function seek(seconds)
     end
 end
 
+
+-- Single virtual-coordinate source of truth for both drawing and D-pad focus.
+-- Y values are offsets from the panel top, independent of OSD resolution.
+local button_rectangles = {
+    {130, 114, 240, 43}, {388, 114, 504, 43}, {910, 114, 240, 43},
+    {115, 168, 181, 36}, {305, 168, 181, 36}, {495, 168, 181, 36},
+    {685, 168, 263, 36}, {957, 168, 208, 36},
+}
+
+local function neighboring_button(index, horizontal, vertical)
+    local current = button_rectangles[index]
+    local x = current[1] + current[3] / 2
+    local y = current[2] + current[4] / 2
+    local best, best_class, best_cross, best_forward
+    for candidate_index, candidate in ipairs(button_rectangles) do
+        if candidate_index ~= index then
+            local cx = candidate[1] + candidate[3] / 2
+            local cy = candidate[2] + candidate[4] / 2
+            local dx, dy = cx - x, cy - y
+            local forward = horizontal ~= 0 and horizontal * dx or vertical * dy
+            -- Require perpendicular overlap: never jump to a different row on
+            -- Left/Right, nor to a distant non-aligned button at a row edge.
+            local overlap, smaller
+            if horizontal ~= 0 then
+                overlap = math.max(0, math.min(current[2]+current[4], candidate[2]+candidate[4])
+                                  - math.max(current[2], candidate[2]))
+                smaller = math.min(current[4], candidate[4])
+            else
+                overlap = math.max(0, math.min(current[1]+current[3], candidate[1]+candidate[3])
+                                  - math.max(current[1], candidate[1]))
+                smaller = math.min(current[3], candidate[3])
+            end
+            if forward > 0 and overlap > 0 then
+                -- Strongly aligned candidates win; among those choose the
+                -- nearest perpendicular center, then forward center, then ID.
+                local alignment_class = overlap * 4 >= smaller and 0 or 1
+                local cross = horizontal ~= 0 and math.abs(dy) or math.abs(dx)
+                if not best or alignment_class < best_class
+                   or (alignment_class == best_class and
+                       (cross < best_cross or
+                        (cross == best_cross and
+                         (forward < best_forward or
+                          (forward == best_forward and candidate_index < best))))) then
+                    best, best_class, best_cross, best_forward =
+                        candidate_index, alignment_class, cross, forward
+                end
+            end
+        end
+    end
+    return best or index -- no wrapping at a directional edge
+end
+
 -- Virtual 1280-wide coordinate space, anchored to the real OSD bottom.
 -- Separate ASS events provide independent positions and crisp vector shapes.
 local function render()
@@ -171,18 +223,13 @@ local function render()
         label(parts, 640, top+86, tr("LIVE"), 19, WHITE, 5, true)
     end
 
-    local buttons = {
-        {130, top+114, 240, 43, tr("−10 seconds")},
-        {388, top+114, 504, 43, tr(paused and "▶  Play" or "Ⅱ  Pause")},
-        {910, top+114, 240, 43, tr("+10 seconds")},
-        {115, top+168, 181, 36, tr("Audio")},
-        {305, top+168, 181, 36, tr("Subtitles")},
-        {495, top+168, 181, 36, tr("Speed")},
-        {685, top+168, 263, 36, tr("Fullscreen")},
-        {957, top+168, 208, 36, tr("Exit")},
+    local captions = {
+        tr("−10 seconds"), tr(paused and "▶  Play" or "Ⅱ  Pause"),
+        tr("+10 seconds"), tr("Audio"), tr("Subtitles"), tr("Speed"),
+        tr("Fullscreen"), tr("Exit"),
     }
-    for i, button in ipairs(buttons) do
-        pill(parts, button[1], button[2], button[3], button[4], button[5],
+    for i, button in ipairs(button_rectangles) do
+        pill(parts, button[1], top+button[2], button[3], button[4], captions[i],
              selected == i and not panel, i <= 3)
     end
 
@@ -300,15 +347,10 @@ local function move(horizontal, vertical, hidden_seek)
         if horizontal ~= 0 then seek(horizontal * 10)
         elseif vertical > 0 then selected = 2
         elseif vertical < 0 then seek(60) end
-    elseif horizontal ~= 0 then
-        local first, count = selected <= 3 and 1 or 4, selected <= 3 and 3 or 5
-        selected = first + (selected-first+horizontal+count) % count
-    elseif vertical < 0 then
-        if selected <= 3 then selected = 0
-        else selected = math.min(3, math.max(1, selected-3)) end
-    elseif vertical > 0 then
-        if selected <= 3 then selected = math.min(8, selected+3)
-        else selected = 0 end
+    elseif vertical < 0 and selected <= 3 then
+        selected = 0 -- Up from the top row enters the timeline
+    elseif horizontal ~= 0 or vertical ~= 0 then
+        selected = neighboring_button(selected, horizontal, vertical)
     end
     touch()
 end
