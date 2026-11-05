@@ -75,12 +75,12 @@ fn seed_real_v1_with_sql(path: &PathBuf, migration: &str) {
 // Regression sentinel: the bundled libsqlite3-sys upgrade must actually link
 // SQLite 3.54.0, not accidentally fall back to the host's SQLite library.
 #[test]
-fn bundled_sqlite_runtime_is_3_54_0() {
+fn bundled_sqlite_runtime_is_3_54_1() {
     let db = Connection::open_in_memory().unwrap();
     let version: String = db
         .query_row("SELECT sqlite_version()", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, "3.54.0");
+    assert_eq!(version, "3.54.1");
 }
 
 #[test]
