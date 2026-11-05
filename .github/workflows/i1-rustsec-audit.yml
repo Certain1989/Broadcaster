@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+# Temporary read-only candidate audit; removed after collecting evidence.
+name: I1 RustSec candidate audit (temporary)
+on:
+  push:
+    branches:
+      - work/post031-d1-i1-rust-sqlite-20261105
+    paths:
+      - .github/workflows/i1-rustsec-audit.yml
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    container:
+      image: archlinux:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install current RustSec scanner
+        run: pacman -Syu --noconfirm --needed git cargo-audit ca-certificates
+      - name: Audit updated locked graph against current advisories
+        run: cargo audit --deny warnings --file Cargo.lock
