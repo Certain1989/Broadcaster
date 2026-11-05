@@ -1106,6 +1106,18 @@ jobs:
           # Checkpoint PR and manually dispatched builds remain downloadable;
           # main push builds do not duplicate already published release bundles.
           upload-artifact: ${{ github.event_name != 'push' }}
+      - name: Probe packaged mpv 0.42 HTTP playback and forwarded headers
+        run: |
+          set -eu
+          test -x flatpak_app/files/bin/mpv
+          wrapper=$(mktemp)
+          trap 'rm -f "$wrapper"' EXIT
+          cat > "$wrapper" <<'SH'
+          #!/bin/sh
+          exec flatpak build --share=network flatpak_app mpv "$@"
+          SH
+          chmod +x "$wrapper"
+          python3 tests/player/mpv_http_probe.py --mpv "$wrapper" --expect-version 0.42
       - name: Verify exported development desktop metadata and icon
         run: |
           app=io.github.Certain1989.Broadcaster.Devel

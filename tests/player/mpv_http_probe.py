@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Broadcaster contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Opt-in local mpv 0.41 probe; never uses live media or authentic credentials.
+"""Opt-in local mpv 0.41/0.42 probe; never uses live media or authentic credentials.
 
 Run: python3 tests/player/mpv_http_probe.py [--mpv /path/to/mpv]
 A fake mpv executable argv check runs in Rust CI separately. This probe
@@ -116,14 +116,16 @@ def assert_request(observations, role, path, agent, referer):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mpv", default="mpv", help="mpv 0.41 executable")
+    parser.add_argument("--mpv", default="mpv", help="mpv executable or wrapper")
+    parser.add_argument("--expect-version", choices=("0.41", "0.42"),
+                        default="0.42", help="required mpv release line")
     args = parser.parse_args()
     version = subprocess.run(
         [args.mpv, "--version"], capture_output=True, text=True,
         timeout=10, check=True,
     ).stdout
-    if not re.search(r"\bmpv 0\.41(?:\.|\b)", version):
-        raise SystemExit("NOT RUN: this fixture requires mpv 0.41")
+    if not re.search(r"\bmpv " + re.escape(args.expect_version) + r"(?:\.|\b)", version):
+        raise SystemExit(f"NOT RUN: expected mpv {args.expect_version}")
     with tempfile.TemporaryDirectory(prefix="broadcaster-mpv_http-http-") as tmp:
         observations = []
         wav_data = synthetic_wav()
@@ -147,7 +149,9 @@ def main():
                 )
                 command = [
                     args.mpv, "--no-config", "--no-video", "--ao=null",
-                    "--cache=no", "--really-quiet", *flags, "--",
+                    "--cache=no", "--really-quiet",
+                    *(["--curl-enabled=yes"] if args.expect_version == "0.42" else []),
+                    *flags, "--",
                     first.origin + path,
                 ]
                 before = len(observations)
