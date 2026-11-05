@@ -4,6 +4,17 @@
 //! Real persistent GSettings and scheduled-refresh restart regression.
 //! Every stage is an entirely new test process, with isolated data and a
 //! loopback HTTP response reachable only after the real private-LAN gate.
+use super::{
+    consent_ledger,
+    fetch::{self, FetchError},
+    model::{
+        IncomingChannel, OriginKind, SourceDefaults, SourceDraft, SourceOrigin, ValidatedSnapshot,
+    },
+    service::{ServiceError, StreamsService},
+    storage::Storage,
+};
+use crate::{config::BASE_APP_ID, settings::TvSettings};
+use adw::{gio, prelude::*};
 use std::{
     collections::BTreeSet,
     fs,
@@ -116,7 +127,10 @@ fn lan_restart_seed_grant() {
     let settings = TvSettings::get();
     assert!(settings.set_playlist_lan_consent(&id, &locator(), true));
     gio::Settings::sync();
-    assert!(has_saved_grant(), "real persistent GSettings grant required");
+    assert!(
+        has_saved_grant(),
+        "real persistent GSettings grant required"
+    );
     assert!(settings.playlist_lan_allowed(&id, &locator()));
     assert!(!settings.playlist_lan_allowed("other-source", &locator()));
     assert!(!settings.playlist_lan_allowed(&id, "http://lan-fixture.invalid/other"));
@@ -127,7 +141,10 @@ fn lan_restart_seed_grant() {
 fn lan_restart_refuse_backend_write() {
     let _ = root();
     let id = source_id();
-    assert!(has_saved_grant(), "grant must survive a genuine process exit");
+    assert!(
+        has_saved_grant(),
+        "grant must survive a genuine process exit"
+    );
     // The GIO-supplied null backend refuses the actual production setter.
     // The separate keyfile backend still contains the old disk-backed grant.
     let settings = TvSettings::get();
@@ -163,15 +180,25 @@ fn lan_restart_refuse_backend_write() {
 async fn lan_restart_denied_scheduled_due() {
     let _ = root();
     let id = source_id();
-    assert!(has_saved_grant(), "stale grant must survive into fresh process");
+    assert!(
+        has_saved_grant(),
+        "stale grant must survive into fresh process"
+    );
     let settings = TvSettings::get();
     assert!(!settings.playlist_lan_allowed(&id, &locator()));
     let service = StreamsService::with_storage(Storage::new()).await.unwrap();
     let state = service.source(&id).await.unwrap();
     assert!(state.enabled && state.auto_refresh);
     assert_eq!(state.origin.locator, locator());
-    let due = service.due_ids(super::service::now_for_test()).await.unwrap();
-    assert_eq!(due, vec![id.clone()], "actual scheduler scan must select source");
+    let due = service
+        .due_ids(super::service::now_for_test())
+        .await
+        .unwrap();
+    assert_eq!(
+        due,
+        vec![id.clone()],
+        "actual scheduler scan must select source"
+    );
     let result = service.refresh_scheduled(due[0].clone()).await;
     assert!(
         matches!(result, Err(ServiceError::Fetch(FetchError::InvalidOrigin))),
@@ -181,7 +208,12 @@ async fn lan_restart_denied_scheduled_due() {
     assert_eq!(resolved, 1, "must reach private DNS production guard");
     assert_eq!(sent, 0, "zero private GETs after revocation");
     assert_eq!(
-        service.source(&id).await.unwrap().last_error_code.as_deref(),
+        service
+            .source(&id)
+            .await
+            .unwrap()
+            .last_error_code
+            .as_deref(),
         Some("network")
     );
 }
@@ -238,7 +270,10 @@ async fn lan_restart_authorized_scheduled_get() {
     assert!(TvSettings::get().playlist_lan_allowed(&id, &locator()));
     let service = StreamsService::with_storage(Storage::new()).await.unwrap();
     assert_eq!(
-        service.due_ids(super::service::now_for_test()).await.unwrap(),
+        service
+            .due_ids(super::service::now_for_test())
+            .await
+            .unwrap(),
         vec![id.clone()]
     );
     let result = tokio::time::timeout(
@@ -385,7 +420,10 @@ impl Drop for HttpOnlyLoopback {
 #[test]
 #[ignore = "real keyfile-backed GSettings and cold process restart, native CI only"]
 fn native_real_gsettings_restart_scheduled_lan_revoke() {
-    assert!(std::env::var_os("GSETTINGS_SCHEMA_DIR").is_some(), "compiled schemas required");
+    assert!(
+        std::env::var_os("GSETTINGS_SCHEMA_DIR").is_some(),
+        "compiled schemas required"
+    );
     let fixture = HttpOnlyLoopback::new();
     fixture.child("lan_restart_seed_grant", false);
     fixture.child("lan_restart_refuse_backend_write", true);
