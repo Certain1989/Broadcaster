@@ -23,7 +23,7 @@ Broadcaster ist eine schlanke, native Linux-Anwendung für öffentlich-rechtlich
 - **Favoriten (v0.2.5):** IPTV-Sender mit einem Stern markieren und den Favoritenfilter verwenden. Favoriten und Sendermetadaten bleiben unabhängig von Programmführer-Zuordnungen erhalten.
 - **Fernbedienungsnavigation (v0.2.5):** Verbesserte Richtungsnavigation und Erreichbarkeit von Kartenaktionen, Favoriten, Quellenverwaltung, Senderbearbeitung und Bildschirmtastatur.
 - **Bildschirmtastatur (v0.2.1):** Texteingabe mit den Richtungstasten der Fernbedienung in bearbeitbaren Feldern. Sie ist standardmäßig verfügbar und lässt sich in den Einstellungen abschalten. Maus und physische Tastatur funktionieren weiterhin.
-- **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten.
+- **Fernbedienung:** Vollbildstart und mpv-Bedienoberfläche für Pause, Sprünge, Geschwindigkeit, Tonspuren und Untertitel. Sprachbezeichnungen richten sich nach verfügbaren Metadaten. Seit v0.3.2 folgt der Fokus der Richtungstasten den räumlichen Schaltflächenpositionen statt den Spaltennummern.
 - **Desktop:** native GTK4-Oberfläche, Englisch und Deutsch, optionaler externer Player bzw. Downloader sowie Flatpak-Pakete für x86-64 und ARM64.
 
 ## Netzwerkzugriff und Playlist-Zustimmung (v0.3.1)
@@ -44,7 +44,7 @@ Programmführer sind **optional**. Broadcaster lädt eine in einer M3U-Playlist 
 
 Bei neu hinzugefügten Programmführern ist die **automatische Aktualisierung standardmäßig aktiviert** (Voreinstellung: nach 24 Stunden). Sie lässt sich schon beim Hinzufügen ausschalten; das Intervall von 6 bis 168 Stunden ist später in den Programmführer-Einstellungen änderbar. Broadcaster prüft beim Start des Programmführer-Dienstes und ungefähr minütlich **während die Anwendung läuft**, welche aktivierten Quellen aktualisiert werden müssen. Bei geschlossener Anwendung erfolgt keine Aktualisierung. Programmführer lassen sich auch manuell aktualisieren. **M3U-Playlists haben einen getrennten, optionalen Aktualisierungszeitplan** in der Quellenverwaltung. Er ist standardmäßig ausgeschaltet; das Intervall beträgt 6–168 Stunden. Aktualisierungen werden nur bei laufender Anwendung geprüft. Unerwartet starke Senderverluste müssen manuell bestätigt werden. Der EPG-Zeitplan aktualisiert keine M3U-Playlists.
 
-Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Die aktuellen Änderungen und Einschränkungen stehen in den [Versionshinweisen zu v0.3.1](docs/release-v0.3.1-notes.de.md).
+Fehlende oder nicht importierbare EPG-Daten dürfen die normale Senderwiedergabe und Mediathek nicht beeinträchtigen. Jetzt/Nächste ist keine vollständige Programmübersicht; Angaben externer Quellen können unvollständig sein. Die aktuellen Änderungen und Einschränkungen stehen in den [Versionshinweisen zu v0.3.2](docs/release-v0.3.2-notes.de.md).
 
 Hinweise zu privaten Wiederherstellungskopien, Speichergrenzen und verbliebenen EPG-Zwischendateien stehen unter [EPG-/SQLite-Speicherbetrieb](docs/epg-sqlite-storage.de.md).
 
@@ -54,11 +54,11 @@ Unter **Eigene Sender → Quellen verwalten → Backup / Restore** mit **Export 
 
 **Import and Replace Database** überprüft eine kompatible Sicherung und zeigt die Anzahl von Playlists, Sendern, Programmführern und zwischengespeicherten Sendungen. **Replace Entire Database After Restart** nur bestätigen, wenn **alle** bisherigen Datenbankinhalte ersetzt werden sollen: Der Import ist **keine Zusammenführung**. Broadcaster schließen und neu starten, damit der Ersatz vor dem regulären Datenbankzugriff erfolgt. Zwischen Bestätigung und Schließen keine weitere Quellenaktualisierung durchführen. Die bisherige Datenbank bleibt als private Wiederherstellungskopie erhalten; lokale Dateien müssen nach dem Import möglicherweise erneut berechtigt werden.
 
-**Für ein normales Anwendungsupdate ist kein Datenbankexport oder -import erforderlich.** Broadcaster schließen, das neue geprüfte Produktions-Flatpak im gleichen `--user`- oder `--system`-Installationsbereich installieren und die Anwendung wieder starten. Eine unterstützte ältere SQLite-Datenbank wird automatisch migriert. Bei wichtigen Daten eine separate Sicherung aufbewahren; die Anwendung für ein Upgrade nicht mit Datenlöschung deinstallieren. Weitere Hinweise stehen in den [Versionshinweisen zu v0.3.1](docs/release-v0.3.1-notes.de.md).
+**Für ein normales Anwendungsupdate ist kein Datenbankexport oder -import erforderlich.** Broadcaster schließen, das neue geprüfte Produktions-Flatpak im gleichen `--user`- oder `--system`-Installationsbereich installieren und die Anwendung wieder starten. Eine unterstützte ältere SQLite-Datenbank wird automatisch migriert. Bei wichtigen Daten eine separate Sicherung aufbewahren; die Anwendung für ein Upgrade nicht mit Datenlöschung deinstallieren. Weitere Hinweise stehen in den [Versionshinweisen zu v0.3.2](docs/release-v0.3.2-notes.de.md).
 
 ## Screenshots
 
-Die folgenden Screenshots stammen aus v0.2.5 und zeigen weiterhin die im Wesentlichen unveränderte Oberfläche von v0.3.0. Die neuen Dialoge für die automatische Playlist-Aktualisierung und die Datenbanksicherung sind nicht abgebildet. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
+Die folgenden Screenshots stammen aus v0.2.5 und zeigen weiterhin die im Wesentlichen unveränderte Oberfläche von v0.3.2. Die neuen Dialoge für die automatische Playlist-Aktualisierung und die Datenbanksicherung sind nicht abgebildet. Sendungstitel, Sendezeiten und IPTV-Verfügbarkeit stammen von externen Anbietern und können sich ändern.
 
 ### Mediathek-Suche
 
@@ -102,27 +102,27 @@ Weitere ältere Screenshots, auch zum Hinzufügen von Playlists, zeigt das [Rele
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-Die [Versionshinweise zu v0.3.1](docs/release-v0.3.1-notes.de.md) erläutern dieses Sicherheits-/Stabilitätsupdate und seine Grenzen; die älteren [Hinweise zu v0.2.5 (Englisch)](docs/release-v0.2.5-notes.md) bleiben erhalten. Das veröffentlichte Produktions-Flatpak für die eigene Architektur herunterladen und vor der Installation anhand der Prüfsumme kontrollieren.
+Die [Versionshinweise zu v0.3.2](docs/release-v0.3.2-notes.de.md) beschreiben das Wartungsupdate, die räumliche mpv-Steuerung und mögliche Kompatibilitätsgrenzen; die älteren [Hinweise zu v0.2.5 (Englisch)](docs/release-v0.2.5-notes.md) bleiben erhalten. Das veröffentlichte Produktions-Flatpak für die eigene Architektur herunterladen und vor der Installation anhand der Prüfsumme kontrollieren.
 
 ## Broadcaster installieren
 
-Das Produktions-Flatpak für die passende Architektur und die zugehörige Datei `SHA256SUMS` vom [Broadcaster-Release v0.3.1](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.1) (nach der Veröffentlichung) herunterladen. Das folgende Beispiel verwendet x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen. Mit `--or-update` eignet sich derselbe Installationsbefehl für Erstinstallation und Aktualisierung im gewählten Installationsbereich.
+Das Produktions-Flatpak für die passende Architektur und die zugehörige Datei `SHA256SUMS` vom [Broadcaster-Release v0.3.2](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.2) (nach der Veröffentlichung) herunterladen. Das folgende Beispiel verwendet x86_64 (Intel/AMD); für ARM64 jeweils `aarch64` einsetzen. Mit `--or-update` eignet sich derselbe Installationsbefehl für Erstinstallation und Aktualisierung im gewählten Installationsbereich.
 
 ```bash
-grep 'broadcaster-0.3.1-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.3.2-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user --or-update ./broadcaster-0.3.1-x86_64.flatpak
+flatpak install --user --or-update ./broadcaster-0.3.2-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
 Für ARM64 (`aarch64`) stattdessen die entsprechenden Befehle verwenden:
 
 ```bash
-grep 'broadcaster-0.3.1-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
-flatpak install --user --or-update ./broadcaster-0.3.1-aarch64.flatpak
+grep 'broadcaster-0.3.2-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
+flatpak install --user --or-update ./broadcaster-0.3.2-aarch64.flatpak
 ```
 
-Die Prüfsumme gleicht das heruntergeladene Flatpak mit der `SHA256SUMS`-Datei desselben Releases ab. Für ARM64 den passenden Namen in **beiden** Befehlen verwenden. Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Für die systemweite Installation oder Aktualisierung auf einem separaten TV-Konto Flathub für die Runtime-Abhängigkeiten systemweit einrichten und `sudo flatpak install --system --or-update ./broadcaster-0.3.1-x86_64.flatpak` verwenden; die Anwendung selbst ohne sudo starten. Bei einem Upgrade **denselben Installationsbereich** wie bisher verwenden. `--user` und `--system` haben getrennte Installationen; die Anwendung nicht mit Datenlöschung deinstallieren.
+Die Prüfsumme gleicht das heruntergeladene Flatpak mit der `SHA256SUMS`-Datei desselben Releases ab. Für ARM64 den passenden Namen in **beiden** Befehlen verwenden. Entfernen: `flatpak uninstall --user io.github.Certain1989.Broadcaster`. Für die systemweite Installation oder Aktualisierung auf einem separaten TV-Konto Flathub für die Runtime-Abhängigkeiten systemweit einrichten und `sudo flatpak install --system --or-update ./broadcaster-0.3.2-x86_64.flatpak` verwenden; die Anwendung selbst ohne sudo starten. Bei einem Upgrade **denselben Installationsbereich** wie bisher verwenden. `--user` und `--system` haben getrennte Installationen; die Anwendung nicht mit Datenlöschung deinstallieren.
 
 Die Anwendung benötigt GNOME Platform 51; Flatpak kann diese Runtime von Flathub beziehen. **Broadcaster selbst wird nicht über Flathub angeboten.** Eigenständige Flatpak-Bundles richten **keine automatischen Anwendungsupdates** ein; neuere geprüfte Versionen müssen manuell installiert werden. Die stabile App-ID unterscheidet sich von `io.github.Certain1989.Broadcaster.Devel` für Entwicklungsbuilds.
 

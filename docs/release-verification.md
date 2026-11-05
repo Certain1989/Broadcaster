@@ -5,9 +5,9 @@
 
 These steps apply only to a release whose **tag-triggered workflow actually
 produced GitHub artifact attestations**. The historical v0.3.0 release predates
-that workflow change; do **not** claim it has attestations. For v0.3.1,
-verify the completed tag workflow and actual downloaded bundles before
-claiming or relying on provenance.
+that workflow change; do **not** claim it has attestations. For v0.3.1 and any later release, verify the completed tag workflow and
+actual downloaded bundles before claiming or relying on provenance. A
+v0.3.2 candidate PR is not itself a published, attested release.
 
 1. Obtain release files from the project's [GitHub Releases](https://github.com/Certain1989/Broadcaster/releases). For version `X.Y.Z`, download both `broadcaster-X.Y.Z-x86_64.flatpak` and `broadcaster-X.Y.Z-aarch64.flatpak` and the accompanying `SHA256SUMS` into the same directory. Use the appropriate architecture for installation.
 2. Run `sha256sum -c SHA256SUMS`. This only proves agreement with the downloaded checksum file; an attacker able to replace *both* can forge consistency.
