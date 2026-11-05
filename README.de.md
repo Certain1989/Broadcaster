@@ -102,7 +102,7 @@ Weitere ältere Screenshots, auch zum Hinzufügen von Playlists, zeigt das [Rele
 
 Broadcaster stellt selbst keine Medien bereit. Verfügbarkeit, regionale Sperren, Metadaten und Untertitel hängen von den Sendern und Katalogdiensten ab. Die Tastenbelegung variiert je nach Fernbedienung und Desktop. Fedora KDE Plasma Bigscreen unter Wayland ist die primär erprobte TV-Umgebung; eine Garantie für andere Linux-Desktops besteht nicht.
 
-Die [Versionshinweise zu v0.3.1](docs/release-v0.3.1-notes.de.md) erläutern dieses Sicherheits-/Stabilitätsupdate und seine Grenzen; die älteren [Hinweise zu v0.2.5](docs/release-v0.2.5-notes.de.md) bleiben erhalten. Das veröffentlichte Produktions-Flatpak für die eigene Architektur herunterladen und vor der Installation anhand der Prüfsumme kontrollieren.
+Die [Versionshinweise zu v0.3.1](docs/release-v0.3.1-notes.de.md) erläutern dieses Sicherheits-/Stabilitätsupdate und seine Grenzen; die älteren [Hinweise zu v0.2.5 (Englisch)](docs/release-v0.2.5-notes.md) bleiben erhalten. Das veröffentlichte Produktions-Flatpak für die eigene Architektur herunterladen und vor der Installation anhand der Prüfsumme kontrollieren.
 
 ## Broadcaster installieren
 
