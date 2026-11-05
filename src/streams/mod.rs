@@ -30,6 +30,8 @@ mod network_tests;
 #[cfg(test)]
 mod parser_tests;
 #[cfg(test)]
+mod scheduled_revocation_tests;
+#[cfg(test)]
 mod service_tests;
 #[cfg(test)]
 mod storage_tests;

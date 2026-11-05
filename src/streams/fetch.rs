@@ -293,7 +293,69 @@ async fn fetch_redirects(
 ) -> Result<Download, FetchError> {
     // The existing service client is retained for API compatibility; a fresh
     // per-hop pinned client is mandatory, rather than its shared connection pool.
+    #[cfg(test)]
+    if url.host_str() == Some("lan-fixture.invalid")
+        && std::env::var_os("BROADCASTER_T1_ISOLATED_NETWORK").is_some()
+    {
+        return fetch_redirects_with_transport_policy(
+            url,
+            &ScheduledTestResolver,
+            &ScheduledTestTransport,
+            allow_lan,
+        )
+        .await;
+    }
     fetch_redirects_with_resolver_with_consent(url, &SystemResolver, allow_lan).await
+}
+
+// Only in test binaries. The production guard classifies RFC1918 DNS answers;
+// the fake transport maps an *admitted* request to a loopback HTTP fixture.
+// No real RFC1918 or Internet socket is ever opened by this fixture.
+#[cfg(test)]
+fn scheduled_test_mark(message: &str) {
+    use std::io::Write;
+    let path = std::env::var("BROADCASTER_T1_MARKERS").expect("isolated marker path");
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(message.as_bytes())
+        .unwrap();
+}
+
+#[cfg(test)]
+struct ScheduledTestResolver;
+#[cfg(test)]
+impl PlaylistResolver for ScheduledTestResolver {
+    async fn addresses(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, FetchError> {
+        assert_eq!(hostname, "lan-fixture.invalid");
+        scheduled_test_mark("resolver\n");
+        Ok(vec![SocketAddr::new("10.23.4.5".parse().unwrap(), port)])
+    }
+}
+
+#[cfg(test)]
+struct ScheduledTestTransport;
+#[cfg(test)]
+impl PlaylistTransport for ScheduledTestTransport {
+    async fn send(
+        &self,
+        _guarded: &Client,
+        url: &Url,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        assert_eq!(url.host_str(), Some("lan-fixture.invalid"));
+        scheduled_test_mark("transport\n");
+        let port: u16 = std::env::var("BROADCASTER_T1_LOCAL_PORT")
+            .expect("positive fixture must provide a loopback port")
+            .parse()
+            .unwrap();
+        http_client()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/playlist"))
+            .send()
+            .await
+    }
 }
 
 pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(

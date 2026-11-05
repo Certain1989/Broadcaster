@@ -175,6 +175,13 @@ impl TvSettings {
             }
             let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
             persist_lan_consent_with_ledger(&ledger, &token, allowed, || {
+                // Test-only kernel-enforced file-size limit makes the real
+                // keyfile GSettings backend reject this write, even as root.
+                // The durable ledger was already fsynced before this point.
+                #[cfg(test)]
+                let _backend_refusal = (!allowed
+                    && std::env::var_os("BROADCASTER_T1_REFUSE_KEYFILE_WRITE").is_some())
+                .then(BackendWriteRefusal::new);
                 if self
                     .0
                     .set_strv("playlist-lan-consents", refs.as_slice())
@@ -314,6 +321,46 @@ fn update_lan_consent_with_write(id: &str, allowed: bool, persist: impl FnOnce()
             .remove(id);
     }
     persisted
+}
+
+// RLIMIT_FSIZE rejects actual filesystem writes without depending on the
+// runner's UID or directory chmod. The scope covers only the GSettings call,
+// not the preceding fsynced revocation ledger. Used by an isolated child test.
+#[cfg(test)]
+struct BackendWriteRefusal {
+    original_limit: libc::rlimit,
+    original_signal: libc::sighandler_t,
+}
+
+#[cfg(test)]
+impl BackendWriteRefusal {
+    fn new() -> Self {
+        unsafe {
+            let mut original_limit = std::mem::zeroed();
+            assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original_limit), 0);
+            let original_signal = libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+            assert_ne!(original_signal, libc::SIG_ERR);
+            let restricted = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: original_limit.rlim_max,
+            };
+            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &restricted), 0);
+            Self {
+                original_limit,
+                original_signal,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for BackendWriteRefusal {
+    fn drop(&mut self) {
+        unsafe {
+            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &self.original_limit), 0);
+            libc::signal(libc::SIGXFSZ, self.original_signal);
+        }
+    }
 }
 
 #[cfg(test)]
