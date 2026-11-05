@@ -52,7 +52,18 @@ class LuaJitProbeTests(unittest.TestCase):
         self.assertIn('checkpoint("TRACE_COMPILED")', script)
         self.assertIn('require("jit.opt").start()\njit.flush()', script)
         self.assertIn('checkpoint("REMOTE_SUITE_PASS")', script)
-        self.assertIn('pcall(dofile', script)
+        self.assertIn('pcall(runner)', script)
+        self.assertIn('setfenv(runner, env)', script)
+        self.assertIn('setfenv(nested, env)', script)
+        self.assertIn('exact installed remote', script)
+
+    def test_real_remote_mock_is_scoped_to_fixture(self):
+        script = lua_entry(".probe-fixed", "result.txt")
+        self.assertIn('setmetatable({}, {__index = _G})', script)
+        self.assertIn('env._G = env', script)
+        self.assertIn('assert(path == production', script)
+        self.assertIn('assert(fixture_result', script)
+        self.assertIn('checkpoint("PRODUCTION_REMOTE_LOADED")', script)
         self.assertIn(r'BROADCASTER_LUAJIT_TEST_FAILURE_%s_%04d\n', script)
         self.assertNotIn('BROADCASTER_LUAJIT_TEST_FAILURE_%s_%04d\n', script)
 

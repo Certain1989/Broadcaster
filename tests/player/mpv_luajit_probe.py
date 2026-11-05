@@ -60,9 +60,35 @@ checkpoint("TRACE_COMPILED")
 require("jit.opt").start()
 jit.flush()
 checkpoint("JIT_POLICY_RESTORED")
--- Exercise the installed production remote with its real exhaustive mock
--- (remote OK/Back/Home, playback, subtitles, menu and overlay state).
-local ok, failure = pcall(dofile, "/app/share/broadcaster/{app_folder}/remote-tests.lua")
+-- The real mpv Lua VM has a live global `mp` object. The standalone remote
+-- fixture intentionally replaces global `mp` with a mock. Running it in the
+-- live mpv global environment corrupts the surrounding script API. Execute
+-- the unmodified test logic in a Lua 5.1 environment scoped to this fixture,
+-- including its nested dofile of the actual *installed* remote Lua source.
+local fixture = "/app/share/broadcaster/{app_folder}/remote-tests.lua"
+local production = "/app/share/broadcaster/broadcaster-mpv-remote.lua"
+local runner = assert(loadfile(fixture), "remote fixture could not be loaded")
+checkpoint("FIXTURE_LOADED")
+assert(loadfile(production), "installed production remote could not be loaded")
+checkpoint("PRODUCTION_REMOTE_LOADED")
+local env = setmetatable({{}}, {{__index = _G}})
+env._G = env
+local fixture_result = false
+env.print = function(message)
+    if message == "MPV graphical remote controls, metadata fallbacks and lifecycle PASS" then
+        fixture_result = true
+    else
+        error("unexpected remote fixture print output")
+    end
+end
+env.dofile = function(path)
+    assert(path == production, "fixture must load exact installed remote")
+    local nested = assert(loadfile(path), "could not load installed remote")
+    setfenv(nested, env)
+    return nested()
+end
+setfenv(runner, env)
+local ok, failure = pcall(runner)
 if not ok then
     -- Whitelist only exact publicly tracked test/script filenames and numeric
     -- source lines. Never forward script exception details, URLs or metadata.
@@ -76,6 +102,7 @@ if not ok then
                                   safe_source, safe_line))
     error("packaged remote suite failed")
 end
+assert(fixture_result, "remote fixture did not reach its PASS marker")
 checkpoint("REMOTE_SUITE_PASS")
 local file = assert(io.open("/app/share/broadcaster/{app_folder}/{marker}", "w"))
 file:write("{RESULT.strip()}\\n")
@@ -85,7 +112,8 @@ checkpoint("MARKER_WRITTEN")
 
 
 STAGES = ("LOADED", "JIT_IMPORTED", "JIT_ENABLED", "TRACE_COMPILED",
-          "JIT_POLICY_RESTORED", "REMOTE_SUITE_PASS", "MARKER_WRITTEN")
+          "JIT_POLICY_RESTORED", "FIXTURE_LOADED", "PRODUCTION_REMOTE_LOADED",
+          "REMOTE_SUITE_PASS", "MARKER_WRITTEN")
 
 
 def latest_stage(output):
