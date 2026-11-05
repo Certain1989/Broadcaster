@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+# Temporary read-only generator: checks out the immutable v0.3.1 release.
+name: I1 create genuine v0.3.1 SQLite fixtures
+on:
+  push:
+    branches:
+      - work/post031-d1-i1-rust-sqlite-20261105
+    paths:
+      - .github/workflows/i1-generate-v031-fixtures.yml
+permissions:
+  contents: read
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install native Rust and GTK build dependencies
+        run: pacman -Syu --noconfirm --needed base-devel git rust dbus gtk4 libadwaita blueprint-compiler meson gettext appstream lua ca-certificates
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 0fcdcec9a17c61e053ce0c5db1a2487b8baff245
+      - name: Generate fixtures using released code and bundled SQLite 3.53.2
+        shell: bash
+        env:
+          BROADCASTER_V031_FIXTURE_OUT: ${{ runner.temp }}/v031-fixtures
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '0fcdcec9a17c61e053ce0c5db1a2487b8baff245'
+          test "$(git rev-parse HEAD^{tree})" = '2f5c88166cab1cbb947c736f3724a01a11e53186'
+          cat >> src/streams/backup.rs <<'RS_GENERATOR'
+#[cfg(test)]
+mod released_v031_fixture_generator {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn generate_released_v031_sqlite_fixtures() {
+        assert_eq!(rusqlite::version(), "3.53.2", "must use released bundled SQLite");
+        let out = PathBuf::from(env::var("BROADCASTER_V031_FIXTURE_OUT").unwrap());
+        fs::create_dir_all(&out).unwrap();
+        let storage = Storage::at(out.join("released-v031-live.sqlite3"));
+        storage.initialize().unwrap();
+        {
+            let db = storage.connect().unwrap();
+            db.execute_batch(
+                "INSERT INTO iptv_sources
+                   (id,name,origin_kind,origin_locator,enabled,auto_refresh,
+                    refresh_interval_seconds,created_at,updated_at)
+                   VALUES ('legacy-playlist','Released playlist','remote_url',
+                    'https://example.invalid/playlist.m3u',1,1,43200,100,100);
+                 INSERT INTO iptv_channels
+                   (id,source_id,playlist_order,imported_name,stream_url,
+                    tvg_id,created_at,updated_at)
+                   VALUES ('legacy-channel','legacy-playlist',0,'Released channel',
+                    'https://example.invalid/watch.m3u8','legacy.tvg',100,100);
+                 INSERT INTO iptv_channel_overrides
+                   (channel_id,display_name_override,updated_at)
+                   VALUES ('legacy-channel','Retained channel name',101);
+                 INSERT INTO iptv_channel_favourites(channel_id)
+                   VALUES ('legacy-channel');
+                 UPDATE iptv_view_preferences SET favourites_only=1 WHERE id=1;
+                 INSERT INTO epg_sources
+                   (id,name,origin_kind,origin_locator,created_at,updated_at)
+                   VALUES ('legacy-guide','Released guide','local_file',
+                    '/nonexistent/epg.xml',100,100);
+                 INSERT INTO epg_channels(source_id,channel_id,display_name)
+                   VALUES ('legacy-guide','legacy.guide.channel','Guide channel');
+                 INSERT INTO epg_programmes
+                   (source_id,channel_id,start_utc,stop_utc,title,subtitle)
+                   VALUES ('legacy-guide','legacy.guide.channel',120000,121800,
+                    'Released programme','Released subtitle');
+                 INSERT INTO epg_playlist_links
+                   (playlist_source_id,guide_source_id,updated_at)
+                   VALUES ('legacy-playlist','legacy-guide',100);
+                 INSERT INTO epg_channel_overrides
+                   (iptv_channel_id,guide_source_id,guide_channel_id,updated_at)
+                   VALUES ('legacy-channel','legacy-guide','legacy.guide.channel',102);
+                 INSERT INTO epg_global_id_aliases
+                   (guide_source_id,iptv_tvg_id,guide_channel_id,updated_at)
+                   VALUES ('legacy-guide','legacy.tvg','legacy.guide.channel',102);
+                 UPDATE epg_settings SET shared_guide_source_id='legacy-guide'
+                    WHERE singleton=1;"
+            ).unwrap();
+            assert_eq!(
+                db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)).unwrap(),
+                "ok"
+            );
+            assert_eq!(
+                db.query_row("PRAGMA foreign_key_check", [], |r| r.get::<_, Option<String>>(0)).optional().unwrap().flatten(),
+                None
+            );
+        }
+        let counts = export(&storage, &out.join("released-v031-export.sqlite3")).unwrap();
+        assert_eq!((counts.playlists, counts.channels, counts.guides), (1, 1, 1));
+
+        // The live SQLite file must be self-contained, not an orphaned WAL image.
+        {
+            let db = storage.connect().unwrap();
+            let mode: String = db.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0)).unwrap();
+            assert_eq!(mode, "delete");
+        }
+        assert_eq!(
+            Storage::at(out.join("released-v031-live.sqlite3"))
+              .connect().unwrap()
+              .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 5
+        );
+    }
+}
+RS_GENERATOR
+          cargo test --locked --bin broadcaster \
+            streams::backup::released_v031_fixture_generator::generate_released_v031_sqlite_fixtures \
+            -- --exact --test-threads=1 --nocapture
+          cd "$BROADCASTER_V031_FIXTURE_OUT"
+          test "$(find . -maxdepth 1 -name '*.sqlite3' | wc -l)" -eq 2
+          sha256sum released-v031-*.sqlite3
+          gzip -n -9 released-v031-live.sqlite3 released-v031-export.sqlite3
+          sha256sum released-v031-*.gz
+          echo 'I1_V031_FIXTURE_BASE64_BEGIN'
+          for f in released-v031-live.sqlite3.gz released-v031-export.sqlite3.gz; do
+            echo "FILE: $f"
+            base64 -w76 "$f"
+            echo "END_FILE: $f"
+          done
+          echo 'I1_V031_FIXTURE_BASE64_END'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: released-v031-sqlite-fixtures
+          path: ${{ runner.temp }}/v031-fixtures/*.gz
+          if-no-files-found: error
