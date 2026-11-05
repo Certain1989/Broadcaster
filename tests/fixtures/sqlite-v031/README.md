@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
 # Released v0.3.1 SQLite compatibility fixtures
 
 These are **real SQLite database files**, not SQL text replayed under the new
@@ -20,8 +23,8 @@ media streams or user paths.
   It is an isolated `#[cfg(test)]` module appended **only in the disposable
   source checkout** to the original released `src/streams/backup.rs`. It calls
   released `Storage::initialize`, inserts fixed fake schema-v5 records, then
-  calls the original published D1 `backup::export`; it asserts runtime SQLite
-  3.53.2 and creates a standalone live DB and a genuine standalone D1 export.
+  calls the original published `backup::export`; it asserts runtime SQLite
+  3.53.2 and creates a standalone live DB and a genuine standalone backup export.
 - Successful generation: [GitHub Actions run 42047343786](https://github.com/Certain1989/Broadcaster/actions/runs/42047343786),
   read-only `I1 create genuine v0.3.1 SQLite fixtures`, artifact
   `released-v031-sqlite-fixtures`. No write-capable workflow or PR merge was
@@ -73,7 +76,7 @@ the existing backup tests, opens the old live database under **SQLite 3.54.1**,
 checks all source/channel/guide/programme/mapping/favourite/settings rows,
 schema IDs, integrity and foreign keys, reads the **old export** under the new
 engine, rejects a corrupt copy without replacing the active database, stages
-and confirms the old D1 export, then executes the production serialized
+and confirms the old backup export, then executes the production serialized
 **startup pre-open restore gate** and verifies that a durable recovery snapshot
 preserves the previous active data. This test makes no network requests and
 never opens a real user's database.
