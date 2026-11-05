@@ -28,7 +28,7 @@ Broadcaster is a lightweight, native Linux application for German public-service
 
 ## Network access and playlist consent (v0.3.1)
 
-Broadcaster checks untrusted remote playlist, programme-guide and logo requests against network-destination and redirect rules. **Private-LAN access for each HTTP(S) playlist is disabled by default.** If a trusted playlist really needs a private address, use **Add Playlist** or **Edit Source Defaults** and explicitly enable **Allow this playlist to connect to private LAN addresses (explicit opt-in)**. Permission applies only to that source and exact URL; changing the URL requires a new choice. Scheduled playlist refresh requires the current permission and does not override a revocation. XMLTV guides have their own explicit network rules; the playlist permission does not permit every imported stream or nested media resource.
+Broadcaster checks untrusted remote playlist, programme-guide and logo requests against network-destination and redirect rules. **Private-LAN access for each HTTP(S) playlist is disabled by default.** If a trusted playlist really needs a private address, use **Add Playlist** or **Edit Source Defaults** and explicitly enable **Allow this playlist to connect to private LAN addresses (explicit opt-in)**. Permission applies only to that source and exact URL; changing the URL requires a new choice. Scheduled playlist refresh requires the current permission and does not override a revocation. XMLTV guides have their own explicit rules; playlist permission does not permit every imported stream or nested media resource.
 
 When revocation cannot be saved, Broadcaster reports an error and blocks LAN access for that process. **If every persistent write fails**, an old GSettings grant may reappear after restart: restore writable storage and retry revocation before exiting. This limitation and the scope of mpv/external player access are documented in [network trust](docs/network-trust.md) and the [threat model](docs/threat-model.md). Do not publish sensitive playlist URLs or tokens in issue reports.
 
@@ -118,65 +118,7 @@ flatpak run io.github.Certain1989.Broadcaster
 For ARM64 (`aarch64`), use these matching commands instead:
 
 ```bash
-grep 'broadcaster-0.3.1-aarch64.flatpak use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install or update system-wide for a separate TV account, configure Flathub for system runtime dependencies and use `sudo flatpak install --system --or-update ./broadcaster-0.3.1-x86_64.flatpak`; start the app without sudo. Use **the same scope** as the existing installation when upgrading. `--user` and `--system` installations have separate deployment scopes; do not uninstall or delete application data to upgrade.
-
-Broadcaster uses GNOME Platform 51, which Flatpak can obtain from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable app ID above is different from `io.github.Certain1989.Broadcaster.Devel` used by CI development builds.
-
-
-### Black video after installing the Flatpak
-
-The GNOME Platform 51 Flatpak uses mpv with the runtime's FFmpeg libraries. H.264 playback requires the matching Freedesktop codec extension, `org.freedesktop.Platform.codecs-extra//26.08-extra`. Flatpak normally installs this automatically, but an incomplete installation can result in **audio playing while the video stays black**. Codec extensions are versioned by runtime: earlier Broadcaster builds using GNOME Platform 50 require `25.08-extra` instead; merely having the newer extension installed cannot satisfy an older runtime.
-
-Check the installed extensions and whether the running Broadcaster sandbox mounts `codecs-extra`:
-
-```bash
-flatpak list --runtime --columns=application,branch,installation | grep -E 'codecs-extra|org.gnome.Platform'
-flatpak run --command=sh io.github.Certain1989.Broadcaster \
-  -c "grep '^runtime-extensions=' /.flatpak-info"
-```
-
-If the matching `26.08-extra` extension is absent for this build, install it from Flathub and retry video playback:
-
-```bash
-flatpak install --user flathub org.freedesktop.Platform.codecs-extra//26.08-extra
-```
-
-For a system-wide Flatpak installation, use `--system` instead of `--user` (with Flathub configured system-wide). A per-user Broadcaster installation can also use a matching system-installed codec extension; **Broadcaster itself does not need to be installed system-wide**. If the extension is present and mounted but video still fails, report the Flatpak/runtime versions and a test with a public or synthetic video, not private stream URLs or credentials.
-
-## Build from source (Fedora example)
-
-```bash
-sudo dnf install git rust cargo meson ninja-build blueprint-compiler gettext \
-  gtk4-devel libadwaita-devel glib2-devel openssl-devel pkgconf-pkg-config \
-  desktop-file-utils appstream mpv
-git clone https://github.com/Certain1989/Broadcaster.git
-cd Broadcaster
-meson setup _build -Dprofile=development --prefix="$HOME/.local"
-meson compile -C _build
-meson test -C _build --print-errorlogs
-meson install -C _build
-GSETTINGS_SCHEMA_DIR="$HOME/.local/share/glib-2.0/schemas" \
-  "$HOME/.local/bin/broadcaster"
-```
-
-Use `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, `lua tests/mpv-remote.lua`, and `reuse lint` for further checks. See [contribution guidance](CONTRIBUTING.md). Native builds use the host's mpv; release Flatpaks bundle mpv with Lua support.
-
-## Playback and known limitations
-
-On the tested Bigscreen setup, OK/Enter activates items and opens the playback controls; arrows navigate, Back closes open overlays or returns to the previous view, and Home/Stop leave playback. With the playback overlay hidden, the directional arrows can seek. F11 or the application menu toggles saved fullscreen state. Exact bindings depend on your remote and compositor.
-
-The stock mpv mouse overlay can briefly flash at startup on some Wayland sessions; this is an accepted cosmetic limitation. Audio/subtitle labels are only as accurate as the stream metadata. The application interface is provided in English and German. Other translations are not currently shipped.
-
-## Development, maintenance and licensing
-
-Substantial implementation, testing and review used large language models. Automated checks and practical testing do not constitute independent certification or a guarantee against defects.
-
-Broadcaster is a hobby project provided **as-is**, subject to the applicable licence and law. There is no promised issue response time, maintenance schedule, future feature development or universal platform compatibility. Please remove credentials, tokens and private stream URLs from issue reports. See [security reporting](SECURITY.md) and the [technical overview](docs/maintenance-baseline.md).
-
-Application code is distributed under **GPL-3.0-or-later**, with some separately licensed assets and MIT-licensed inherited material. The subdued Broadcaster app icon was generated with ChatGPT and is offered under CC BY 4.0 to the extent protectable rights exist; this does not grant trademark or endorsement rights. See `COPYING`, `LICENSES/`, `REUSE.toml` and [artwork and attribution](docs/artwork-and-attribution.md).
-
-Broadcaster incorporates and adapts code from [Televido](https://github.com/d-k-bo/televido) and [Televido-Fritz](https://github.com/45054/televido-fritz), originally under GPL-3.0-or-later. Original copyright notices and applicable third-party licences are retained. These upstream projects do not endorse Broadcaster; this clean public source repository does not contain their complete inherited Git history.
- SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.3.1-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak install --user --or-update ./broadcaster-0.3.1-aarch64.flatpak
 ```
 
