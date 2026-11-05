@@ -175,8 +175,9 @@ impl TvSettings {
             }
             let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
             persist_lan_consent_with_ledger(&ledger, &token, allowed, || {
-                // Test-only kernel-enforced file-size limit makes the real
-                // keyfile GSettings backend reject this write, even as root.
+                // Test-only kernel-enforced open-file limit makes the real
+                // keyfile GSettings backend reject the write without touching
+                // the previously saved grant, even as root.
                 // The durable ledger was already fsynced before this point.
                 #[cfg(test)]
                 let _backend_refusal = (!allowed
@@ -323,15 +324,15 @@ fn update_lan_consent_with_write(id: &str, allowed: bool, persist: impl FnOnce()
     persisted
 }
 
-// RLIMIT_FSIZE rejects actual filesystem writes without depending on the
-// runner's UID or directory chmod. The scope covers only the GSettings call,
-// not the preceding fsynced revocation ledger. Used by an isolated child test.
+// With the backend already instantiated, RLIMIT_NOFILE=0 denies subsequent
+// keyfile opens without truncating a pre-existing keyfile. Unlike a zero
+// RLIMIT_FSIZE (which can damage the original file on failed flush), this
+// produces an actual backend refusal while leaving saved consent untouched.
+// The test's dedicated revoke subprocess retains the restriction through
+// process exit to reject deferred GLib writes; the OS restores it on exit.
 #[cfg(test)]
 struct BackendWriteRefusal {
     original_limit: libc::rlimit,
-    original_signal: libc::sighandler_t,
-    // Keyfile GSettings can defer a flush until the owning process exits.
-    // The isolated revoke subprocess must never restore write permission.
     until_process_exit: bool,
 }
 
@@ -340,17 +341,14 @@ impl BackendWriteRefusal {
     fn new() -> Self {
         unsafe {
             let mut original_limit = std::mem::zeroed();
-            assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut original_limit), 0);
-            let original_signal = libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
-            assert_ne!(original_signal, libc::SIG_ERR);
+            assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut original_limit), 0);
             let restricted = libc::rlimit {
                 rlim_cur: 0,
                 rlim_max: original_limit.rlim_max,
             };
-            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &restricted), 0);
+            assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &restricted), 0);
             Self {
                 original_limit,
-                original_signal,
                 until_process_exit: std::env::var_os("BROADCASTER_T1_REFUSE_KEYFILE_UNTIL_EXIT")
                     .is_some(),
             }
@@ -362,13 +360,13 @@ impl BackendWriteRefusal {
 impl Drop for BackendWriteRefusal {
     fn drop(&mut self) {
         if self.until_process_exit {
-            // Dedicated one-stage child process: let the kernel restore the
-            // limit on exit, so deferred GLib writes remain genuinely denied.
             return;
         }
         unsafe {
-            assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &self.original_limit), 0);
-            libc::signal(libc::SIGXFSZ, self.original_signal);
+            assert_eq!(
+                libc::setrlimit(libc::RLIMIT_NOFILE, &self.original_limit),
+                0
+            );
         }
     }
 }

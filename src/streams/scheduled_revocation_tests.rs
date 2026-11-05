@@ -173,11 +173,8 @@ async fn cold_process_stage() {
             gio::Settings::sync();
             assert!(!changed, "the real backend must refuse the removal");
             assert!(!settings.playlist_lan_allowed(SOURCE, LOCATOR));
-            let path = consent_ledger::path();
-            assert_eq!(path, consent_ledger_path(&root.join("data")));
-            let token = database_token(&storage);
-            assert!(consent_ledger::is_revoked(&path, &token).unwrap());
-            fs::File::open(&path).unwrap().sync_all().unwrap();
+            // RLIMIT_NOFILE=0 stays in force until child exit. The separate
+            // oracle process reopens the already-fsynced production ledger.
         }
         "oracle" => {
             assert_eq!(
@@ -185,7 +182,10 @@ async fn cold_process_stage() {
                 1,
                 "stale persisted GSettings disappeared"
             );
-            fs::rename(consent_ledger::path(), root.join("oracle-ledger")).unwrap();
+            let path = consent_ledger::path();
+            assert_eq!(path, consent_ledger_path(&root.join("data")));
+            assert!(consent_ledger::is_revoked(&path, &database_token(&storage)).unwrap());
+            fs::rename(path, root.join("oracle-ledger")).unwrap();
             // This is the *same* production read/assertion as the negative
             // stage. It MUST fail when the durable ledger is absent.
             let bypassed = settings.playlist_lan_allowed(SOURCE, LOCATOR);
