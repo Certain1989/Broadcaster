@@ -66,7 +66,8 @@ fn real_keyfile_revocation_survives_process_restart_and_due_refresh() {
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let _cleanup = Cleanup(root.clone());
     let (data, config) = data_paths(&root);
-    for path in [&data, &config] {
+    let cache = root.join("cache");
+    for path in [&data, &config, &cache] {
         fs::create_dir(path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -83,6 +84,7 @@ fn real_keyfile_revocation_survives_process_restart_and_due_refresh() {
             .env("BROADCASTER_T1_MARKERS", marker_path(&root))
             .env("XDG_DATA_HOME", &data)
             .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_CACHE_HOME", &cache)
             .env("GSETTINGS_BACKEND", "keyfile")
             .output()
             .expect("child process must launch")
@@ -137,6 +139,17 @@ async fn cold_process_stage() {
     let stage = std::env::var("BROADCASTER_T1_STAGE")
         .expect("helper must only be invoked by orchestrated cross-process test");
     let root = PathBuf::from(std::env::var("BROADCASTER_T1_ROOT").unwrap());
+    let isolated_cache = root.join("cache");
+    assert_eq!(
+        std::env::var_os("XDG_CACHE_HOME"),
+        Some(isolated_cache.clone().into_os_string()),
+        "the native child must not inherit the user's cache"
+    );
+    assert_eq!(
+        glib::user_cache_dir(),
+        isolated_cache,
+        "GLib logo-cache access must resolve inside the disposable fixture"
+    );
     let storage = Storage::new();
     let settings = TvSettings::get();
     match stage.as_str() {
@@ -231,7 +244,19 @@ async fn cold_process_stage() {
         "positive" => {
             assert_eq!(stored_consents().len(), 1);
             assert!(settings.playlist_lan_allowed(SOURCE, LOCATOR));
+            // The real successful-refresh path prunes logo files. Prove it
+            // targets only this child's private cache rather than the user's.
+            let logos = root.join("cache").join("broadcaster").join("logos");
+            fs::create_dir_all(&logos).unwrap();
+            fs::set_permissions(&logos, fs::Permissions::from_mode(0o700)).unwrap();
+            let stale = logos.join(format!("{}.img", "f".repeat(64)));
+            fs::write(&stale, b"unreferenced synthetic logo").unwrap();
+            assert!(stale.is_file());
             scheduled_scan(true, &root).await;
+            assert!(
+                !stale.exists(),
+                "successful refresh must prune only the disposable cache"
+            );
         }
         "both_fail" => {
             // Exercise the *other* policy boundary separately from the
