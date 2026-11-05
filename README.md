@@ -102,7 +102,7 @@ To find playlists for **My Channels**, browse [IPTV-org's country, language and 
 
 Broadcaster neither hosts nor supplies media. Stream availability, channel metadata, subtitles, regional restrictions and service uptime are controlled by broadcasters and external catalogue providers. Remote key mapping depends on your desktop and hardware; Fedora KDE Plasma Bigscreen/Wayland is the primary tested TV environment. Other Linux desktops may work but are not guaranteed.
 
-The [v0.3.1 release notes](docs/release-v0.3.1-notes.md) describe the new features and their limits; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
+The [v0.3.1 release notes](docs/release-v0.3.1-notes.md) summarize this security/stability update and its limits; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
 
 ## Install Broadcaster
 
