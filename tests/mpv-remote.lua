@@ -5,6 +5,7 @@ local keys, commands, screen, timer = {}, {}, "", nil
 local now, pause, timepos, duration, speed = 100, false, 45, 180, 1
 local title, sid, aid, fullscreen = "Japan: Die Todesstrafe", "no", "1", false
 local updates, removals = 0, 0
+local osd_w, osd_h = 1920, 1080
 local tracks = {
     {type="audio",id=1,lang="de",title="Original",selected=true},
     {type="audio",id=2,lang="en",title="English",selected=false},
@@ -13,7 +14,7 @@ local tracks = {
 }
 mp = {
     get_time=function() return now end,
-    get_osd_size=function() return 1920,1080 end,
+    get_osd_size=function() return osd_w, osd_h end,
     get_property=function(key, default)
         if key == "media-title" then return title end
         if key == "sid" then return sid end
@@ -38,7 +39,7 @@ mp = {
         assert(format == "ass-events")
         local overlay = {res_x=1280,res_y=720,data=""}
         function overlay:update()
-            assert(self.res_x == 1280 and self.res_y == 720)
+            assert(self.res_x == 1280 and self.res_y == math.max(540, math.floor(1280 * osd_h / osd_w + 0.5)))
             screen=self.data; updates=updates+1
         end
         function overlay:remove() screen="";removals=removals+1 end
@@ -73,6 +74,36 @@ local function displays(s) assert(screen:find(s,1,true), "missing "..s) end
 local locale = (os.getenv("LC_ALL") or os.getenv("LC_MESSAGES") or os.getenv("LANGUAGE") or os.getenv("LANG") or "en"):lower()
 local german = locale == "de" or locale:match("^de[%._@:%-]") ~= nil
 
+-- The real ASS overlay highlights the active label in cyan. Assert that
+-- output rather than reading an implementation-only selection variable.
+local function caption(i)
+    local labels = {
+        german and "−10 Sekunden" or "−10 seconds",
+        pause and (german and "▶  Abspielen" or "▶  Play") or "Ⅱ  Pause",
+        german and "+10 Sekunden" or "+10 seconds", german and "Ton" or "Audio",
+        german and "Untertitel" or "Subtitles",
+        german and "Tempo" or "Speed",
+        german and "Vollbild" or "Fullscreen",
+        german and "Beenden" or "Exit",
+    }
+    return labels[i]
+end
+local function focused(i)
+    assert(screen:find("H00CAFF&}" .. caption(i), 1, true),
+           "expected highlighted button " .. tostring(i) .. ": " .. caption(i))
+end
+local function timeline_focused()
+    for i=1,8 do
+        assert(not screen:find("H00CAFF&}" .. caption(i), 1, true),
+               "button highlight must clear on timeline")
+    end
+end
+local function reset_controls()
+    if screen ~= "" then press("MENU") end
+    press("MENU")
+    focused(2)
+end
+
 assert(screen=="")
 press("ENTER")
 displays("Japan: Die Todesstrafe")
@@ -83,6 +114,45 @@ else
 end
 displays("m 93") -- independent positioned vector backdrop rather than text-only UI
 displays("\\p1");displays("\\pos(0,0)")
+
+-- Unequal 3/5-row geometry: exercise the actual remote bindings and ASS focus.
+focused(2)
+press("DOWN");focused(6) -- Play/Pause -> Speed
+press("UP");focused(2)
+reset_controls()
+press("LEFT");focused(1);press("DOWN");focused(4);press("UP");focused(1)
+reset_controls()
+press("RIGHT");focused(3);press("DOWN");focused(8);press("UP");focused(3)
+reset_controls()
+press("DOWN");press("LEFT");focused(5);press("UP");focused(1) -- Subtitles -> -10
+reset_controls()
+press("DOWN");press("RIGHT");focused(7);press("UP");focused(2) -- Fullscreen -> Play
+reset_controls()
+press("LEFT");press("LEFT");focused(1)
+press("RIGHT");press("RIGHT");focused(3);press("RIGHT");focused(3)
+reset_controls()
+press("LEFT");press("DOWN");focused(4);press("LEFT");focused(4)
+for i=5,8 do press("RIGHT");focused(i) end
+press("RIGHT");focused(8);press("DOWN");focused(8)
+for i=7,4,-1 do press("LEFT");focused(i) end
+press("LEFT");focused(4)
+reset_controls()
+press("UP");timeline_focused()
+press("LEFT");last("seek",-10);timeline_focused()
+press("RIGHT");last("seek",10);timeline_focused()
+press("DOWN");focused(2)
+reset_controls()
+press("DOWN");focused(6);press("ENTER")
+displays(german and "Wiedergabegeschwindigkeit" or "Playback speed")
+press("GO_BACK");focused(6);press("UP");focused(2)
+-- The same virtual coordinate layout must behave at both HD and FHD.
+osd_w, osd_h = 1280, 720
+reset_controls();press("DOWN");focused(6)
+osd_w, osd_h = 1280, 900
+timer();focused(6) -- non-16:9 render preserves selected button
+osd_w, osd_h = 1920, 1080
+reset_controls()
+
 local before = updates
 timer(); assert(updates==before,"unchanged frame should not be redrawn")
 press("ENTER");last("cycle","pause");assert(pause)
@@ -91,8 +161,8 @@ press("RIGHT");press("ENTER");last("seek",10)
 press("LEFT");press("LEFT");press("ENTER");last("seek",-10)
 press("UP");press("RIGHT");last("seek",10) -- focus timeline
 press("DOWN")
--- From Play/Pause, down selects Subtitles, left selects Audio.
-press("DOWN");press("LEFT");press("ENTER")
+-- From Play/Pause, Down selects Speed; twice Left reaches Audio.
+press("DOWN");press("LEFT");press("LEFT");press("ENTER")
 displays(german and "Tonspuren" or "Audio tracks")
 displays(german and "Tonspur 1" or "Audio track 1")
 displays(german and "Englisch" or "English")
@@ -131,7 +201,7 @@ tracks = {
     {type="audio",id=7,codec="aac",lang="",title="",selected=true},
     {type="audio",id=9,lang="es-ES",title="Alternate",selected=false},
 }
-press("DOWN");press("DOWN");press("LEFT");press("ENTER")
+press("DOWN");press("DOWN");press("LEFT");press("LEFT");press("ENTER")
 displays(german and "Tonspur 1" or "Audio track 1")
 displays(german and "Sprache nicht angegeben" or "Language not provided")
 displays("aac")
