@@ -4,7 +4,7 @@
 """Fail-closed local assertions for the packaged LuaJIT/remote probe."""
 import unittest
 
-from mpv_luajit_probe import adapted_remote_test, lua_entry, RESULT
+from mpv_luajit_probe import adapted_remote_test, lua_entry, latest_stage, RESULT
 
 
 class LuaJitProbeTests(unittest.TestCase):
@@ -27,6 +27,14 @@ class LuaJitProbeTests(unittest.TestCase):
                        'remote-tests.lua', 'file:write', RESULT.strip()):
             with self.subTest(clause=clause):
                 self.assertIn(clause, script)
+
+    def test_stage_parser_does_not_echo_untrusted_diagnostics(self):
+        self.assertEqual(latest_stage("bad provider tokens, URL, credentials"), "NONE")
+        self.assertEqual(latest_stage("BROADCASTER_LUAJIT_STAGE_JIT_ENABLED\n"
+                                      "private details never shown"), "JIT_ENABLED")
+        self.assertEqual(latest_stage("BROADCASTER_LUAJIT_STAGE_LOADED\n"
+                                      "BROADCASTER_LUAJIT_STAGE_TRACE_COMPILED\n"),
+                         "TRACE_COMPILED")
 
 
 if __name__ == '__main__':

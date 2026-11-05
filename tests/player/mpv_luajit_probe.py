@@ -30,11 +30,20 @@ def adapted_remote_test(source):
 
 def lua_entry(app_folder, marker):
     return f'''-- Ephemeral packaged-LuaJIT validation script; not part of the app.
+-- Export fixed stage tokens only. Python never logs media, local paths or
+-- arbitrary script diagnostics and still requires the success marker.
+local function checkpoint(stage)
+    io.stderr:write("BROADCASTER_LUAJIT_STAGE_" .. stage .. "\\n")
+    io.stderr:flush()
+end
+checkpoint("LOADED")
 local jit = assert(require("jit"))
+checkpoint("JIT_IMPORTED")
 assert(type(jit.version) == "string" and
        jit.version:find("LuaJIT 2.1", 1, true) == 1,
        "mpv did not embed LuaJIT 2.1")
 assert(jit.status(), "LuaJIT JIT is disabled in packaged mpv")
+checkpoint("JIT_ENABLED")
 jit.flush()
 require("jit.opt").start("hotloop=1")
 local function arithmetic()
@@ -44,13 +53,28 @@ local function arithmetic()
 end
 for i = 1, 20 do assert(arithmetic() == 500500) end
 assert(require("jit.util").traceinfo(1), "LuaJIT did not compile a JIT trace")
+checkpoint("TRACE_COMPILED")
 -- Exercise the installed production remote with its real exhaustive mock
 -- (remote OK/Back/Home, playback, subtitles, menu and overlay state).
 dofile("/app/share/broadcaster/{app_folder}/remote-tests.lua")
+checkpoint("REMOTE_SUITE_PASS")
 local file = assert(io.open("/app/share/broadcaster/{app_folder}/{marker}", "w"))
 file:write("{RESULT.strip()}\\n")
 assert(file:close())
+checkpoint("MARKER_WRITTEN")
 '''
+
+
+STAGES = ("LOADED", "JIT_IMPORTED", "JIT_ENABLED", "TRACE_COMPILED",
+          "REMOTE_SUITE_PASS", "MARKER_WRITTEN")
+
+
+def latest_stage(output):
+    # Deliberately never surface arbitrary stdout/stderr from mpv or any
+    # third-party script. Return only one fixed stage name from known tokens.
+    completed = [name for name in STAGES
+                 if f"BROADCASTER_LUAJIT_STAGE_{name}" in output]
+    return completed[-1] if completed else "NONE"
 
 
 def synthetic_wav(path):
@@ -99,7 +123,8 @@ def main():
         passed = marker.is_file() and marker.read_text(encoding="utf-8") == RESULT
         print("Packaged LuaJIT oracle:",
               "mpv_exit_ok=", result.returncode == 0,
-              "jit_and_remote_marker=", passed)
+              "jit_and_remote_marker=", passed,
+              "last_completed_stage=", latest_stage(result.stdout + result.stderr))
         if result.returncode != 0 or not passed:
             raise AssertionError("packaged LuaJIT JIT/remote probe failed")
         print("PASS packaged LuaJIT 2.1 JIT trace and real Broadcaster remote tests")
