@@ -21,6 +21,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: 0fcdcec9a17c61e053ce0c5db1a2487b8baff245
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: archlinux-container
+          cache-targets: true
+          cache-all-crates: false
       - name: Generate fixtures using released code and bundled SQLite 3.53.2
         shell: bash
         env:
@@ -35,6 +40,7 @@ jobs:
           mod released_v031_fixture_generator {
               use super::*;
               use std::env;
+              use rusqlite::OptionalExtension;
           
               #[test]
               fn generate_released_v031_sqlite_fixtures() {
