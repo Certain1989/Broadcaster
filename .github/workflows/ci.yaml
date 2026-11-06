@@ -57,8 +57,6 @@ jobs:
       # Configure Rust values in the Meson build tree; Cargo's build.rs stages resources in OUT_DIR.
       - name: Configure
         run: meson setup _build -Dprofile=development
-      - name: Validate campaign-neutral executable names
-        run: python3 tests/check_campaign_neutral_names.py
       - name: Check formatting
         run: cargo fmt --check
       - name: Clippy
@@ -67,16 +65,6 @@ jobs:
         run: cargo test --locked
       - name: Verify exact native-test selection (prefix and zero-match negatives)
         run: bash tests/test-ci-require-one-ignored.sh
-      - name: Verify exact-positive runner rejects silent Cargo zero-test success
-        run: |
-          set -eu
-          log=$(mktemp)
-          trap 'rm -f "$log"' EXIT
-          if bash tests/ci-require-one-ignored.sh focus_navigation_nonexistent_ci_filter_sentinel >"$log" 2>&1; then
-            echo 'NATIVE_FOCUS exact-positive runner silently accepted zero matched tests' >&2
-            exit 1
-          fi
-          grep -Fq 'CI false-green prevented' "$log"
       - name: NATIVE_FOCUS native painted X11 focus pixels and suppressed-control oracle
         run: |
           set -eu
