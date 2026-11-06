@@ -4,14 +4,9 @@
 name: EPG capacity diagnostics
 
 # Synthetic-only diagnostics. No downloaded EPGs, secrets or write permissions.
-# Separate from routine CI: targeted EPG PRs run the core suite;
-# manual dispatch selects either core or IMPORT_CAPACITY-specific diagnostics.
+# Opt-in after the initial capacity acceptance campaign. Dispatch core or
+# import_capacity after changes to EPG import, SQLite capacity or limits.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/epg-capacity.yaml'
-      - 'src/epg/**'
   workflow_dispatch:
     inputs:
       suite:
@@ -32,8 +27,6 @@ concurrency:
 
 jobs:
   importer-capacity:
-    # Only execute repository-owned PR code. No fork head runs here.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     container:
@@ -59,7 +52,7 @@ jobs:
       - name: Compile opt-in Rust/SQLite diagnostics
         run: cargo test --locked --release --no-run
       - name: Measure O01 rowid TEMP footprint through the actual importer
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 8
         run: |
           # Six 100/1k/10k synthetic cases, <=420s combined, no 25k+ stress.
@@ -67,50 +60,50 @@ jobs:
           df -h .
 
       - name: Benchmark fabricated DE-size gzip import into SQLite
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_de_synthetic -- --ignored --nocapture --test-threads=1
           df -h .
       - name: Verify bounded rejection of fabricated US-count gzip input
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_us_baseline_rejection -- --ignored --nocapture --test-threads=1
           df -h .
 
       - name: Benchmark streamed DE-sized plain XMLTV
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_de_plain_streamed_success -- --ignored --nocapture --test-threads=1
           df -h .
       - name: Benchmark streamed US-sized gzip XMLTV
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_us_streamed_success -- --ignored --nocapture --test-threads=1
           df -h .
       - name: Benchmark streamed ten-country-shaped gzip XMLTV
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_combined_gzip_streamed_success -- --ignored --nocapture --test-threads=1
           df -h .
       - name: Benchmark streamed ten-country-shaped plain XMLTV
-        if: (github.event_name == 'workflow_dispatch' && inputs.suite == 'core') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+        if: inputs.suite == 'core'
         timeout-minutes: 12
         run: |
           /usr/bin/time -v timeout --signal=TERM 600s cargo test --locked --release epg_capacity_combined_plain_streamed_success -- --ignored --nocapture --test-threads=1
           df -h .
       - name: IMPORT_CAPACITY IMPORT_DURABILITY/SQLITE_TEMP_CAPACITY persistence, rollback and concurrency negative tests
-        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'import_capacity'
+        if: inputs.suite == 'import_capacity'
         timeout-minutes: 8
         run: |
           /usr/bin/time -v timeout --signal=TERM 420s cargo test --locked --release epg::ingest::tests -- --nocapture --test-threads=1
           /usr/bin/time -v timeout --signal=TERM 120s cargo test --locked --release epg::tests:: -- --nocapture --test-threads=1
       - name: IMPORT_CAPACITY exact SUPPORTED_FLOOR production-floor real XMLTV importer (15k/1.5m)
-        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'import_capacity'
+        if: inputs.suite == 'import_capacity'
         timeout-minutes: 17
         run: |
           /usr/bin/time -v timeout --signal=TERM 960s cargo test --locked --release epg_capacity_supported_floor_streamed -- --ignored --nocapture --test-threads=1
