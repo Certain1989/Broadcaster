@@ -1,0 +1,580 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: Isolated signed Flatpak remote proof
+
+on:
+  pull_request:
+    paths:
+      - 'build-aux/signed-remote/**'
+      - '.github/workflows/signed-flatpak-remote-proof.yaml'
+      - 'docs/signed-flatpak-remote-proof.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep only the newest Signed remote PR proof alive; no cross-workstream cancellation.
+concurrency:
+  group: signed-remote-nonproduction-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# No GitHub Pages, deployment, releases, tags, write scopes or stored production key.
+jobs:
+  guards:
+    runs-on: ubuntu-24.04
+    steps:
+      # Pin to the PR *head* commit, not GitHub's synthetic refs/pull/N/merge.
+      # This is a disposable nonproduction build; do not persist Git credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source provenance
+        env:
+          SIGNED_REMOTE_EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
+          if [ "$actual" != "$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" ]; then
+            echo "Signed remote source mismatch: checkout=$actual expected=$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" >&2
+            exit 1
+          fi
+          echo "Signed remote verified exact source checkout: $actual"
+      - name: Install native packaging tools before checking negative oracles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+      - name: Syntax and negative-path guards
+        run: |
+          bash -n build-aux/signed-remote/*.sh
+          python3 -m py_compile build-aux/signed-remote/http-meter.py
+          bash build-aux/signed-remote/test-staging-guards.sh
+
+  bundles:
+    needs: guards
+    runs-on: ${{ matrix.variant.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+      volumes:
+        - /usr/local/lib/android:/unused-runner-android
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      # Pin to the PR *head* commit, not GitHub's synthetic refs/pull/N/merge.
+      # This is a disposable nonproduction build; do not persist Git credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source provenance
+        env:
+          SIGNED_REMOTE_EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
+          if [ "$actual" != "$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" ]; then
+            echo "Signed remote source mismatch: checkout=$actual expected=$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" >&2
+            exit 1
+          fi
+          echo "Signed remote verified exact source checkout: $actual"
+      - name: Reclaim unused Android SDK
+        if: matrix.variant.arch == 'x86_64'
+        run: rm -rf /unused-runner-android/*
+      - name: Build real Devel candidate bundle for Signed remote (NOT a stable release)
+        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
+        with:
+          manifest-path: build-aux/io.github.Certain1989.Broadcaster.Devel.json
+          bundle: broadcaster-signed-remote-${{ matrix.variant.arch }}.flatpak
+          arch: ${{ matrix.variant.arch }}
+          run-tests: true
+          verbose: true
+          upload-artifact: false
+      - name: Verify bundle and architecture identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch=${{ matrix.variant.arch }}
+          test -s "broadcaster-signed-remote-$arch.flatpak"
+          ostree --repo=signed-remote-verify init --mode=archive-z2
+          flatpak build-import-bundle signed-remote-verify "broadcaster-signed-remote-$arch.flatpak"
+          ostree --repo=signed-remote-verify refs | grep -Fx "app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+          sha256sum "broadcaster-signed-remote-$arch.flatpak"
+      - name: Build second real changed-content Devel revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch=${{ matrix.variant.arch }}
+          app=io.github.Certain1989.Broadcaster.Devel
+          # This marker changes /app bytes; the compiled Broadcaster binary stays untouched.
+          printf 'signed-remote-nonproduction-content-revision-2\n' \
+            > flatpak_app/files/share/broadcaster/signed-remote-transport-test-marker.txt
+          flatpak build-export --arch="$arch" --no-update-summary \
+            "$RUNNER_TEMP/signed-remote-second-build-repo" flatpak_app master
+          flatpak build-bundle --arch="$arch" "$RUNNER_TEMP/signed-remote-second-build-repo" \
+            "broadcaster-signed-remote-v2-$arch.flatpak" "$app" master
+          test -s "broadcaster-signed-remote-v2-$arch.flatpak"
+          ostree --repo="$RUNNER_TEMP/signed-remote-second-build-repo" refs | \
+            grep -Fx "app/$app/$arch/master"
+          sha256sum "broadcaster-signed-remote-v2-$arch.flatpak"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-remote-bundle-${{ matrix.variant.arch }}
+          path: |
+            broadcaster-signed-remote-${{ matrix.variant.arch }}.flatpak
+            broadcaster-signed-remote-v2-${{ matrix.variant.arch }}.flatpak
+          if-no-files-found: error
+          retention-days: 2
+
+  isolated-remote:
+    needs: bundles
+    runs-on: ${{ matrix.variant.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      # Pin to the PR *head* commit, not GitHub's synthetic refs/pull/N/merge.
+      # This is a disposable nonproduction build; do not persist Git credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source provenance
+        env:
+          SIGNED_REMOTE_EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
+          if [ "$actual" != "$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" ]; then
+            echo "Signed remote source mismatch: checkout=$actual expected=$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" >&2
+            exit 1
+          fi
+          echo "Signed remote verified exact source checkout: $actual"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: signed-remote-bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Install isolated packaging/trust tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+      - name: Stage disposable signed remote containing both real candidate architectures
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/signed-remote-flatpak-data
+        run: |
+          set -euo pipefail
+          dir=$RUNNER_TEMP/signed-remote-key
+          bash build-aux/signed-remote/make-test-key.sh "$dir"
+          bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-v1" - \
+            dist/broadcaster-signed-remote-x86_64.flatpak dist/broadcaster-signed-remote-aarch64.flatpak "$dir"
+          test -s "$RUNNER_TEMP/signed-remote-v1/signed-remote-test.flatpakrepo"
+          test -s "$RUNNER_TEMP/signed-remote-v1/signed-remote-test.flatpakref"
+          test -s "$RUNNER_TEMP/signed-remote-v1/repo/summary.sig"
+          flatpak --user remote-add --from broadcaster-signed-remote-test "$RUNNER_TEMP/signed-remote-v1/signed-remote-test.flatpakrepo"
+          flatpak --user remote-ls broadcaster-signed-remote-test | grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-signed-remote-test io.github.Certain1989.Broadcaster.Devel
+          first=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$first"
+          # Disposable synthetic user data: normal updates must not remove it.
+          # This does not simulate an existing stable user's real database.
+          user_data="$HOME/.var/app/io.github.Certain1989.Broadcaster.Devel/data"
+          mkdir -p "$user_data"
+          echo 'signed-remote-disposable-data-preserved' > "$user_data/signed-remote-preservation-test.txt"
+          # Distinct signed content revisions: v2 has a changed /app file.
+          bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-v2" "$RUNNER_TEMP/signed-remote-v1" \
+            "dist/broadcaster-signed-remote-v2-x86_64.flatpak" \
+            "dist/broadcaster-signed-remote-v2-aarch64.flatpak" "$dir"
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            before=$(ostree --repo="$RUNNER_TEMP/signed-remote-v1/repo" rev-parse "$ref")
+            after=$(ostree --repo="$RUNNER_TEMP/signed-remote-v2/repo" rev-parse "$ref")
+            test -n "$before" && test -n "$after" && test "$before" != "$after"
+          done
+          # Negative: replay an x86 bundle under the aarch64 filename.
+          cp "dist/broadcaster-signed-remote-v2-x86_64.flatpak" "$RUNNER_TEMP/replayed-aarch64.flatpak"
+          if bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-mixed" "$RUNNER_TEMP/signed-remote-v1" \
+               "dist/broadcaster-signed-remote-v2-x86_64.flatpak" "$RUNNER_TEMP/replayed-aarch64.flatpak" \
+               "$dir" >"$RUNNER_TEMP/signed-remote-mixed.log" 2>&1; then
+            echo 'Signed remote accepted mixed-version arch staging' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/signed-remote-mixed"
+          grep -Fq 'Unchanged aarch64 ref after import' "$RUNNER_TEMP/signed-remote-mixed.log"
+          # Negative: a new unapproved test key cannot extend the previous remote.
+          bash build-aux/signed-remote/make-test-key.sh "$RUNNER_TEMP/signed-remote-other-key"
+          if bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-wrong-key" "$RUNNER_TEMP/signed-remote-v1" \
+               "dist/broadcaster-signed-remote-v2-x86_64.flatpak" "dist/broadcaster-signed-remote-v2-aarch64.flatpak" \
+               "$RUNNER_TEMP/signed-remote-other-key" >"$RUNNER_TEMP/signed-remote-wrong-key.log" 2>&1; then
+            echo 'Signed remote accepted unexpected signing-key rotation' >&2
+            exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/signed-remote-wrong-key"
+          grep -Fq 'Key change requires' "$RUNNER_TEMP/signed-remote-wrong-key.log"
+          # Loopback HTTP server verifies static transport, without publishing remotely.
+          python3 -u build-aux/signed-remote/http-meter.py 18389 \
+            "$RUNNER_TEMP/signed-remote-v2/repo" >"$RUNNER_TEMP/signed-remote-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18389/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18389/summary >/dev/null
+          flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-signed-remote-test
+          flatpak --user remote-ls broadcaster-signed-remote-test >/dev/null
+          # Offline safety: a disconnected remote may error or return a cached
+          # no-op, but MUST NOT advance the installed revision.
+          flatpak --user remote-modify --url="http://127.0.0.1:18390" broadcaster-signed-remote-test
+          if flatpak --user update -y --noninteractive --no-deps \
+               io.github.Certain1989.Broadcaster.Devel >"$RUNNER_TEMP/signed-remote-offline.log" 2>&1; then
+            echo 'Signed remote offline update returned success (cached no-op); checking unchanged revision'
+          fi
+          test "$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)" = "$first"
+          flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-signed-remote-test
+          echo 'Signed remote offline no-advance: PASS (not a required error-code oracle)'
+          # Negative: publish the signed v2 summary while withholding its
+          # architecture-specific commit object. A normal update must fail
+          # without replacing the previously installed valid revision.
+          new_ref=$(ostree --repo="$RUNNER_TEMP/signed-remote-v2/repo" rev-parse \
+            "app/io.github.Certain1989.Broadcaster.Devel/${{ matrix.variant.arch }}/master")
+          commit_object="$RUNNER_TEMP/signed-remote-v2/repo/objects/${new_ref:0:2}/${new_ref:2}.commit"
+          test -s "$commit_object"
+          mv "$commit_object" "$RUNNER_TEMP/signed-remote-withheld.commit"
+          test "$(curl -s -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:18389/objects/${new_ref:0:2}/${new_ref:2}.commit")" = 404
+          if flatpak --user update -y --noninteractive --no-deps \
+               io.github.Certain1989.Broadcaster.Devel >"$RUNNER_TEMP/signed-remote-partial.log" 2>&1; then
+            echo 'Incomplete HTTP publication was accepted as an update' >&2
+            exit 1
+          fi
+          test "$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)" = "$first"
+          mv "$RUNNER_TEMP/signed-remote-withheld.commit" "$commit_object"
+          # Restore the complete object graph; normal update must now work.
+          flatpak --user update -y --noninteractive --no-deps io.github.Certain1989.Broadcaster.Devel
+          second=$(flatpak --user info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$second" && test "$first" != "$second"
+          installed=$(flatpak --user info --show-location io.github.Certain1989.Broadcaster.Devel)
+          grep -Fx 'signed-remote-nonproduction-content-revision-2' \
+            "$installed/files/share/broadcaster/signed-remote-transport-test-marker.txt"
+          echo "Signed remote actual packaged file changed and updated on ${{ matrix.variant.arch }}"
+          grep -Fx 'signed-remote-disposable-data-preserved' "$user_data/signed-remote-preservation-test.txt"
+          echo 'Signed remote synthetic per-user data survived normal Devel update'
+          # Negative: summary signed by the original trusted test key, but all
+          # commits in this complete repository are signed by another disposable key.
+          # Re-signing a summary does NOT re-sign imported commits.
+          bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-forged-key" - \
+            "dist/broadcaster-signed-remote-v2-x86_64.flatpak" \
+            "dist/broadcaster-signed-remote-v2-aarch64.flatpak" "$RUNNER_TEMP/signed-remote-other-key"
+          trusted_fingerprint=$(cat "$RUNNER_TEMP/signed-remote-key/.signed-remote-disposable-fingerprint")
+          flatpak build-update-repo --gpg-sign="$trusted_fingerprint" \
+            --gpg-homedir="$RUNNER_TEMP/signed-remote-key" "$RUNNER_TEMP/signed-remote-forged-key/repo"
+          sed -e "s#^Url=.*#Url=file://$RUNNER_TEMP/signed-remote-forged-key/repo#" \
+              -e 's#^Name=.*#Name=broadcaster-signed-remote-forged#' \
+              "$RUNNER_TEMP/signed-remote-v2/signed-remote-test.flatpakrepo" > "$RUNNER_TEMP/forged.flatpakrepo"
+          # Fresh system scope: accept the trusted summary before testing commit trust.
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Expected a clean disposable system installation' >&2
+            exit 1
+          fi
+          sudo flatpak --system remote-add --from broadcaster-signed-remote-forged \
+            "$RUNNER_TEMP/forged.flatpakrepo" >"$RUNNER_TEMP/forged.log" 2>&1
+          sudo flatpak --system remote-ls broadcaster-signed-remote-forged | \
+            grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+               broadcaster-signed-remote-forged io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/forged.log" 2>&1; then
+            echo 'Wrong-key-signed commit installed despite trusted summary; trust test FAILED' >&2
+            exit 1
+          fi
+          if ! grep -Eiq 'gpg|signature|verification|not signed|trusted key|public key' "$RUNNER_TEMP/forged.log"; then
+            echo 'Forged commit install failed for unrelated reason; not a trust PASS' >&2
+            cat "$RUNNER_TEMP/forged.log"
+            exit 1
+          fi
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Wrong-key install left an application installed' >&2
+            exit 1
+          fi
+          echo 'Signed remote trusted-summary onboarding succeeded; wrong-key commit installation rejected'
+          # Negative: an otherwise valid dual-arch repository with a trusted
+          # signed summary but UNSIGNED imported commits must not install.
+          # This complements wrong-key commit rejection, and tests a distinct
+          # failure mode without changing stable IDs or production keys.
+          unsigned_repo="$RUNNER_TEMP/signed-remote-unsigned/repo"
+          mkdir -p "$RUNNER_TEMP/signed-remote-unsigned"
+          ostree --repo="$unsigned_repo" init --mode=archive-z2
+          flatpak build-import-bundle --no-update-summary "$unsigned_repo" \
+            "dist/broadcaster-signed-remote-v2-x86_64.flatpak"
+          flatpak build-import-bundle --no-update-summary "$unsigned_repo" \
+            "dist/broadcaster-signed-remote-v2-aarch64.flatpak"
+          flatpak build-update-repo --gpg-sign="$trusted_fingerprint" \
+            --gpg-homedir="$RUNNER_TEMP/signed-remote-key" "$unsigned_repo"
+          test -s "$unsigned_repo/summary.sig"
+          sed -e "s#^Url=.*#Url=file://$unsigned_repo#" \
+              -e 's#^Name=.*#Name=broadcaster-signed-remote-unsigned#' \
+              "$RUNNER_TEMP/signed-remote-v2/signed-remote-test.flatpakrepo" > "$RUNNER_TEMP/unsigned.flatpakrepo"
+          sudo flatpak --system remote-add --from broadcaster-signed-remote-unsigned \
+            "$RUNNER_TEMP/unsigned.flatpakrepo" >"$RUNNER_TEMP/unsigned.log" 2>&1
+          sudo flatpak --system remote-ls broadcaster-signed-remote-unsigned | \
+            grep -F 'io.github.Certain1989.Broadcaster.Devel'
+          if sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+               broadcaster-signed-remote-unsigned io.github.Certain1989.Broadcaster.Devel >>"$RUNNER_TEMP/unsigned.log" 2>&1; then
+            echo 'Unsigned commit installed despite trusted summary; trust test FAILED' >&2
+            exit 1
+          fi
+          if ! grep -Eiq 'gpg|signature|verification|not signed|trusted key|public key' "$RUNNER_TEMP/unsigned.log"; then
+            echo 'Unsigned commit install failed for unrelated reason; not a trust PASS' >&2
+            cat "$RUNNER_TEMP/unsigned.log"
+            exit 1
+          fi
+          if sudo flatpak --system info io.github.Certain1989.Broadcaster.Devel >/dev/null 2>&1; then
+            echo 'Unsigned commit install left an application installed' >&2
+            exit 1
+          fi
+          echo 'Signed remote trusted-summary onboarding succeeded; unsigned commit installation rejected'
+          # Keep the native proof step below the Actions run-script size ceiling.
+          bash build-aux/signed-remote/test-summary-signatures.sh
+          # Observational same-origin old-valid-signed-summary replay; no anti-rollback claim.
+          bash build-aux/signed-remote/test-signed-replay.sh
+          # Positive system-scope counterpart: this uses a separate test remote
+          # and the same signed Devel revisions, never the stable application.
+          sudo flatpak --system remote-add --from broadcaster-signed-remote-system \
+            "$RUNNER_TEMP/signed-remote-v1/signed-remote-test.flatpakrepo"
+          sudo flatpak --system install -y --noninteractive --no-deps --no-related \
+            broadcaster-signed-remote-system io.github.Certain1989.Broadcaster.Devel
+          system_first=$(sudo flatpak --system info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$system_first" && test "$system_first" = "$first"
+          sudo flatpak --system remote-modify --url="http://127.0.0.1:18389" broadcaster-signed-remote-system
+          sudo flatpak --system update -y --noninteractive --no-deps \
+            io.github.Certain1989.Broadcaster.Devel
+          system_second=$(sudo flatpak --system info --show-commit io.github.Certain1989.Broadcaster.Devel)
+          test -n "$system_second" && test "$system_second" = "$second"
+          system_location=$(sudo flatpak --system info --show-location io.github.Certain1989.Broadcaster.Devel)
+          grep -Fx 'signed-remote-nonproduction-content-revision-2' \
+            "$system_location/files/share/broadcaster/signed-remote-transport-test-marker.txt"
+          echo "Signed remote system-scope signed changed-content update: PASS on ${{ matrix.variant.arch }}"
+          # Disposable standalone-bundle migration after the independent
+          # positive user/system update tests. Never use a stable app ID or
+          # owner installation. Reinstall explicitly from the signed v1
+          # remote, then verify its origin, normal v2 update, and user data.
+          # This is a Devel simulation, NOT proof of a stable-user migration.
+          app=io.github.Certain1989.Broadcaster.Devel
+          flatpak --user uninstall -y --noninteractive "$app"
+          flatpak --user install -y --noninteractive --no-deps --no-related --bundle \
+            "dist/broadcaster-signed-remote-${{ matrix.variant.arch }}.flatpak"
+          bundle_first=$(flatpak --user info --show-commit "$app")
+          test "$bundle_first" = "$first"
+          grep -Fx 'signed-remote-disposable-data-preserved' "$user_data/signed-remote-preservation-test.txt"
+          flatpak --user remote-add --from broadcaster-signed-remote-migrate \
+            "$RUNNER_TEMP/signed-remote-v1/signed-remote-test.flatpakrepo"
+          flatpak --user install --reinstall -y --noninteractive --no-deps --no-related \
+            broadcaster-signed-remote-migrate "$app"
+          test "$(flatpak --user info --show-origin "$app")" = broadcaster-signed-remote-migrate
+          test "$(flatpak --user info --show-commit "$app")" = "$first"
+          grep -Fx 'signed-remote-disposable-data-preserved' "$user_data/signed-remote-preservation-test.txt"
+          flatpak --user remote-modify --url="http://127.0.0.1:18389" broadcaster-signed-remote-migrate
+          flatpak --user update -y --noninteractive --no-deps "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$second"
+          grep -Fx 'signed-remote-disposable-data-preserved' "$user_data/signed-remote-preservation-test.txt"
+          test "$(sudo flatpak --system info --show-commit "$app")" = "$system_second"
+          echo "Signed remote disposable standalone bundle-to-signed-remote migration: PASS on ${{ matrix.variant.arch }}"
+          echo 'Signed remote dual-architecture user/system signed changed-content update, mixed-arch/key rejection, partial HTTP publication and wrong-key oracle: PASS'
+          cat "$RUNNER_TEMP/signed-remote-v1/METRICS.txt"
+          cat "$RUNNER_TEMP/signed-remote-v2/METRICS.txt"
+          printf 'Loopback HTTP GET requests (including retries and probes): '
+          grep -c 'GET /' "$RUNNER_TEMP/signed-remote-http.log" || true
+          body_bytes=$(awk '/SIGNED_REMOTE_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
+            END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/signed-remote-http.log")
+          echo "Loopback HTTP response body bytes served (no headers/TLS): $body_bytes"
+
+  # Nonproduction-only hosting feasibility experiment: measured delta storage
+  # without changing either native signed-update integration environment.
+  static-delta-capacity:
+    needs: bundles
+    runs-on: ${{ matrix.variant.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      # Pin to the PR *head* commit, not GitHub's synthetic refs/pull/N/merge.
+      # This is a disposable nonproduction build; do not persist Git credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source provenance
+        env:
+          SIGNED_REMOTE_EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
+          if [ "$actual" != "$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" ]; then
+            echo "Signed remote source mismatch: checkout=$actual expected=$SIGNED_REMOTE_EXPECTED_SOURCE_SHA" >&2
+            exit 1
+          fi
+          echo "Signed remote verified exact source checkout: $actual"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: signed-remote-bundle-*
+          path: dist
+          merge-multiple: true
+      - name: Install isolated packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak ostree gnupg
+      - name: Generate and measure signed static deltas for both Devel refs
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/signed-remote-delta-key"
+          bash build-aux/signed-remote/make-test-key.sh "$key"
+          bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-delta-v1" - \
+            dist/broadcaster-signed-remote-x86_64.flatpak dist/broadcaster-signed-remote-aarch64.flatpak "$key"
+          bash build-aux/signed-remote/stage-signed-remote.sh "$RUNNER_TEMP/signed-remote-delta-v2" \
+            "$RUNNER_TEMP/signed-remote-delta-v1" \
+            dist/broadcaster-signed-remote-v2-x86_64.flatpak dist/broadcaster-signed-remote-v2-aarch64.flatpak "$key"
+          # Work on a disposable copy. This must never change the signed-update test repo.
+          repo="$RUNNER_TEMP/signed-remote-delta-copy/repo"
+          mkdir -p "$RUNNER_TEMP/signed-remote-delta-copy"
+          cp -a "$RUNNER_TEMP/signed-remote-delta-v2/repo" "$repo"
+          before_bytes=$(du -sb "$repo" | cut -f1)
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            ostree --repo="$repo" rev-parse "$ref" > "$RUNNER_TEMP/signed-remote-delta-$arch.ref"
+          done
+          fingerprint=$(cat "$key/.signed-remote-disposable-fingerprint")
+          # Bounded experiment; failure must not be misreported as a measured capacity result.
+          timeout 240s flatpak build-update-repo --generate-static-deltas \
+            --static-delta-jobs=2 --gpg-sign="$fingerprint" \
+            --gpg-homedir="$key" "$repo"
+          test -s "$repo/summary" && test -s "$repo/summary.sig"
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            test "$(ostree --repo="$repo" rev-parse "$ref")" = "$(cat "$RUNNER_TEMP/signed-remote-delta-$arch.ref")"
+          done
+          test -d "$repo/deltas"
+          delta_files=$(find "$repo/deltas" -type f | wc -l)
+          test "$delta_files" -gt 0
+          after_bytes=$(du -sb "$repo" | cut -f1)
+          delta_bytes=$(du -sb "$repo/deltas" | cut -f1)
+          cat <<EOF
+          Signed remote NONPRODUCTION static-delta capacity experiment: PASS
+          Baseline dual-arch v2 repository bytes: $before_bytes
+          With generated static deltas repository bytes: $after_bytes
+          Static delta directory bytes (includes filesystem metadata): $delta_bytes
+          Static delta files: $delta_files
+          EOF
+          ostree --repo="$repo" static-delta list
+          # Scratch deltas above describe from-empty installs. Also measure
+          # explicit v1 -> v2 application deltas, which are a different cost.
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            old=$(ostree --repo="$RUNNER_TEMP/signed-remote-delta-v1/repo" rev-parse "$ref")
+            new=$(ostree --repo="$repo" rev-parse "$ref")
+            test -n "$old" && test -n "$new" && test "$old" != "$new"
+            timeout 120s ostree --repo="$repo" static-delta generate \
+              --from="$old" --to="$new"
+            ostree --repo="$repo" static-delta show "$old-$new" | grep -F "From: $old"
+          done
+          # Regenerate the signed summary after adding incremental deltas.
+          flatpak build-update-repo --gpg-sign="$fingerprint" \
+            --gpg-homedir="$key" "$repo"
+          test -s "$repo/summary" && test -s "$repo/summary.sig"
+          for arch in x86_64 aarch64; do
+            ref="app/io.github.Certain1989.Broadcaster.Devel/$arch/master"
+            test "$(ostree --repo="$repo" rev-parse "$ref")" = "$(cat "$RUNNER_TEMP/signed-remote-delta-$arch.ref")"
+          done
+          echo "Signed remote dual-arch repository bytes with scratch and incremental deltas: $(du -sb "$repo" | cut -f1)"
+          echo "Signed remote static delta directory bytes with incremental deltas: $(du -sb "$repo/deltas" | cut -f1)"
+          echo "Signed remote static delta files with incremental deltas: $(find "$repo/deltas" -type f | wc -l)"
+          ostree --repo="$repo" static-delta list
+          # Verify a native client uses the incremental delta over loopback HTTP
+          # on each architecture. This is neither CDN hosting nor a stable update.
+          arch="${{ matrix.variant.arch }}"
+          test "$(flatpak --default-arch)" = "$arch"
+          export XDG_DATA_HOME="$RUNNER_TEMP/signed-remote-delta-flatpak-data"
+          app=io.github.Certain1989.Broadcaster.Devel
+          flatpak --user remote-add --from broadcaster-signed-remote-delta \
+            "$RUNNER_TEMP/signed-remote-delta-v1/signed-remote-test.flatpakrepo"
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-signed-remote-delta "$app"
+          old_installed=$(flatpak --user info --show-commit "$app")
+          test "$old_installed" = "$(ostree --repo="$RUNNER_TEMP/signed-remote-delta-v1/repo" rev-parse \
+            app/io.github.Certain1989.Broadcaster.Devel/$arch/master)"
+          python3 -u build-aux/signed-remote/http-meter.py 18391 "$repo" >"$RUNNER_TEMP/signed-remote-delta-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18391/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18391/summary >/dev/null
+          flatpak --user remote-modify --url="http://127.0.0.1:18391" broadcaster-signed-remote-delta
+          flatpak --user update -y --noninteractive --no-deps "$app"
+          new_installed=$(flatpak --user info --show-commit "$app")
+          test "$new_installed" != "$old_installed"
+          test "$new_installed" = "$(ostree --repo="$repo" rev-parse \
+            app/io.github.Certain1989.Broadcaster.Devel/$arch/master)"
+          installed=$(flatpak --user info --show-location "$app")
+          grep -Fx 'signed-remote-nonproduction-content-revision-2' \
+            "$installed/files/share/broadcaster/signed-remote-transport-test-marker.txt"
+          grep -F 'GET /deltas/' "$RUNNER_TEMP/signed-remote-delta-http.log"
+          delta_http_bytes=$(awk '/SIGNED_REMOTE_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
+            END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/signed-remote-delta-http.log")
+          echo "Signed remote $arch incremental static delta HTTP update: PASS"
+          echo "Signed remote $arch incremental update HTTP body bytes (includes readiness probes): $delta_http_bytes"
+          echo "Signed remote $arch incremental update HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/signed-remote-delta-http.log")"
+          # Compare the same native-arch v1 -> v2 update with ordinary loose objects,
+          # using a separate Flatpak user installation and the unmodified v2 repo.
+          # This is a loopback transport comparison, not a Pages/CDN benchmark.
+          export XDG_DATA_HOME="$RUNNER_TEMP/signed-remote-nodelta-flatpak-data"
+          flatpak --user remote-add --from broadcaster-signed-remote-nodelta \
+            "$RUNNER_TEMP/signed-remote-delta-v1/signed-remote-test.flatpakrepo"
+          flatpak --user install -y --noninteractive --no-deps --no-related \
+            broadcaster-signed-remote-nodelta "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$old_installed"
+          python3 -u build-aux/signed-remote/http-meter.py 18392 \
+            "$RUNNER_TEMP/signed-remote-delta-v2/repo" >"$RUNNER_TEMP/signed-remote-nodelta-http.log" 2>&1 &
+          baseline_pid=$!
+          trap 'kill "$server_pid" "$baseline_pid" 2>/dev/null || true' EXIT
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS http://127.0.0.1:18392/summary >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          curl -fsS http://127.0.0.1:18392/summary >/dev/null
+          flatpak --user remote-modify --url="http://127.0.0.1:18392" broadcaster-signed-remote-nodelta
+          flatpak --user update -y --noninteractive --no-deps "$app"
+          test "$(flatpak --user info --show-commit "$app")" = "$new_installed"
+          installed=$(flatpak --user info --show-location "$app")
+          grep -Fx 'signed-remote-nonproduction-content-revision-2' \
+            "$installed/files/share/broadcaster/signed-remote-transport-test-marker.txt"
+          if grep -Fq 'GET /deltas/' "$RUNNER_TEMP/signed-remote-nodelta-http.log"; then
+            echo 'Unexpected static delta request in no-delta control' >&2
+            exit 1
+          fi
+          no_delta_http_bytes=$(awk '/SIGNED_REMOTE_BODY_BYTES [0-9]+$/ { total += $NF; count++ }
+            END { if (count == 0) exit 1; printf "%.0f", total }' "$RUNNER_TEMP/signed-remote-nodelta-http.log")
+          echo "Signed remote $arch no-delta loose-object HTTP update: PASS"
+          echo "Signed remote $arch no-delta HTTP body bytes (includes readiness probes): $no_delta_http_bytes"
+          echo "Signed remote $arch no-delta HTTP GET requests (includes readiness probes): $(grep -c 'GET /' "$RUNNER_TEMP/signed-remote-nodelta-http.log")"
+          echo "Signed remote $arch measured delta vs no-delta HTTP body bytes: $delta_http_bytes vs $no_delta_http_bytes"

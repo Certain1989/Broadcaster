@@ -1,0 +1,224 @@
+<!-- SPDX-FileCopyrightText: 2026 Broadcaster contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+
+# Signed Flatpak update remotes — nonproduction proof
+
+> **Forward-port note (2026-11-03):** This document describes the updated
+> nonproduction proof fixture on integrated v0.3.0 source. Historical CI runs
+> below belong to the earlier prototype and must not be interpreted as
+> validation of this forward-ported source. See the current draft PR checks
+> for exact-source Fast/REUSE and native dual-architecture evidence.
+
+This directory documents a **disposable local proof**, not a released update
+service. Existing GitHub Releases provide standalone `.flatpak` bundles; they
+do not automatically supply a persistent update origin. No background updater,
+extra application sandbox privilege, stable signing key or public upload is
+introduced here.
+
+## Architecture and trust boundary
+
+A normal update requires a long-lived, HTTP-served archive-z2 OSTree repository
+with signed app commits and a signed summary. Clients pin the public signing
+key through an onboarding `.flatpakrepo`/`.flatpakref`, and Flatpak performs
+updates outside the application. A GitHub Release download notification is
+**not** equivalent to this. Stable and Devel have different Flatpak IDs and
+must never share a ref accidentally.
+
+The Signed remote proof takes **two real Devel bundle artifacts** (`x86_64`, `aarch64`)
+and an explicitly disposable GPG secret key. It imports both as signed
+`app/io.github.Certain1989.Broadcaster.Devel/<arch>/master` refs with
+`--no-update-summary`, checks both identities, and only then writes one
+signed summary. It produces a local `file://` test remote and reports repository
+bytes, object-file count and input bundle sizes. It does not contact a hosting
+service, alter the application's executable or provision a production remote.
+The signing key stays outside the staged output.
+
+For a throwaway Linux host with `flatpak`, `ostree`, `gpg`, and two *verified*
+architecture-specific CI bundles:
+
+```sh
+bash build-aux/signed-remote/make-test-key.sh /tmp/broadcaster-signed-remote-key
+bash build-aux/signed-remote/stage-signed-remote.sh \
+  /tmp/broadcaster-signed-remote-v1 - \
+  dist/broadcaster-signed-remote-x86_64.flatpak dist/broadcaster-signed-remote-aarch64.flatpak \
+  /tmp/broadcaster-signed-remote-key
+flatpak remote-add --user --from broadcaster-signed-remote-test \
+  /tmp/broadcaster-signed-remote-v1/signed-remote-test.flatpakrepo
+flatpak remote-ls --user --arch='*' broadcaster-signed-remote-test
+```
+
+A subsequent revision uses the *same test public key* and the preceding output
+directory as the second argument. Staging refuses existing destinations,
+missing/invalid bundles, unexpected refs, and changed test keys; failures
+leave the prior output untouched. The output directory and private key must
+never be published, committed or copied to a public Pages directory. The
+`signed-remote-public-key.gpg` file is public material only.
+
+The Signed remote PR workflow constructs **two distinct packaged-content revisions** of
+Broadcaster Devel independently on native x86-64 and ARM64 runners (the second
+adds a named Signed remote test-only `/app` marker, without changing the application
+binary). An isolated signed remote contains both architecture refs at each
+revision. Clients on **both native architectures** install the first revision
+and use ordinary `flatpak update` to reach the second, checking the changed
+installed marker. The update is served from a loopback static HTTP server, not public hosting.
+Replayed/mismatched architecture refs and unplanned test-key rotation are rejected
+before signing a new summary. The **exact-HEAD 2026-11-01 proof** (commit
+`ed203427eeee3d9fb178ae34c3a3450e7fcbbe74`, Signed remote run 41345527157)
+passed on native x86-64 and AArch64: a fresh system-scope remote accepted a
+summary re-signed with the **trusted** disposable key and listed the Devel ref,
+but rejected installation of commits signed only by an **untrusted** key for a
+signature-related reason. No app was left installed by the rejected attempt.
+This isolates **commit trust** from successful remote onboarding; it does not
+independently prove summary-signature enforcement. A prior experiment changed
+only a signed `summary` byte while leaving valid signed commits and Flatpak
+still installed them. Do not describe that experiment as a successful summary
+signature rejection or a commit-signature bypass. OSTree's separate
+`gpg-verify-summary` policy still needs independent distribution/security
+review before production onboarding. This proves a
+normal signed **content update** on both architectures and local HTTP transport
+when the exact-head proof succeeds, not a distinct upstream release-version
+upgrade or GitHub Pages delivery; both remain acceptance requirements.
+
+## Exact-source provenance and CI evidence
+
+The Signed remote proof must build and test the **actual authorized PR head**, not just
+report the PR head SHA attached to a workflow run. During the successful
+2026-11-02 Signed remote proof run 41474285724, the default `actions/checkout`
+behavior checked out GitHub's synthetic PR merge commit
+`a62b31ef700369ffa6ccf7743690610eeb5b0ad7` (merging feature head
+`8dfd986fba2d760a9d6277cde30ad4e6b712a61e` into base
+`326ff67bef597f424ceec8ca62417efc244f19b9`). Thus its dual-arch
+signature/update results are **merge-checkout evidence**, not literal
+feature-HEAD source execution, despite the workflow run's associated head SHA.
+There is no demonstrated source-content discrepancy, but equality of source
+trees was not established by that run.
+
+From feature commit `f5cb65bec04fa77ed10eacbdcf523f02e78be842`,
+all four Signed remote jobs explicitly checkout the pull-request head SHA (or the
+dispatch SHA) and assert `git rev-parse HEAD` matches that exact expected
+40-character SHA. Checkout credentials are not persisted. Only subsequent
+successful native runs can establish exact-source proof under this policy;
+prior green merge-checkout results remain useful but are not relabeled.
+
+The latest pre-provenance-correction native run 41474285724 passed both
+architectures' real changed-content user/system updates, negative missing and
+corrupted root/nested indexed summary signatures, wrong-key and unsigned-commit
+rejection, partial-publication checks and disposable Devel migration. Its
+remaining gaps are separate-actor review, stable user-data migration, production
+source/tag release binding, key rotation/recovery, hosted HTTP/CDN/retention
+feasibility and recurrent Flatpak/OSTree critical diagnostics. This prototype
+still provides no stable update service.
+
+## Production path — separate owner decision required
+
+A future release pipeline must bind signing to a separately accepted source
+commit and release tag, verify both architecture builds and their SHA-256
+checksums, assemble objects/deltas in an unpublished staging area, validate
+each architecture and trusted key, and **atomically switch the served summary
+only after the entire repository is reachable**. A partial upload must leave
+the old signed summary and every object reachable by it intact. Preserve old
+objects for rollback; do not prune old commits before the retention decision.
+Document historical key transitions and client public-key updates. A lost or
+compromised private key requires an explicit owner-led recovery/rotation plan,
+not an unattended CI reset. Release keys must live in restricted owner-controlled
+custody, never in Git, artifact uploads, logs, or a public Pages build.
+
+## Hosting feasibility remains unresolved
+
+GitHub Pages documents a **1 GiB published-site limit**, **100 GiB/month soft
+bandwidth limit**, and 10-minute deployment timeout. An archive-z2 repository
+causes many small HTTP requests; static deltas trade additional storage for
+fewer requests. For two architectures, measure staged repo size, file count,
+from-empty and incremental delta bytes, HTTP keep-alive/cache behavior,
+request/transfer totals, deployment churn and retained historical commits.
+The workflow's METRICS.txt gives a first unhosted baseline only; the
+loopback-only Python server logs actual HTTP response-body bytes sent
+(including repeated requests, probes and retries) alongside GET counts.
+At exact commit `ed203427eeee3d9fb178ae34c3a3450e7fcbbe74`, the native
+x86-64 test served **33,745,755 bytes** and the AArch64 test **39,301,134
+bytes**; each run included several installations, update probes and recovery
+tests, so these are **not** one-user update sizes. The dual-arch repository
+occupied about **20.38 MB / 142 files** at v1 and **42.05 MB / 855 files**
+at v2. These measurements exclude request/response headers, TLS, CDN caches,
+real WAN overhead, delta compression and historical-retention growth. No
+actual GitHub Pages deployment or cache test was performed; a production
+capacity decision **cannot** be inferred from this loopback baseline.
+At exact commit `d68a6051d2590cc7abf8800fea61d303e66e2dcd`,
+[Signed remote proof run 41355855869](https://github.com/Certain1989/Broadcaster/actions/runs/41355855869)
+passed including the disposable static-delta experiment. The two-architecture
+v2 repository measured **42,046,829 bytes before** and **46,925,469 bytes
+after** scratch-delta generation: **4,878,640 bytes of total repository
+growth**, with **4,877,586 bytes / eight files** in the delta directory.
+The experiment generated from-empty deltas, **not** an explicitly measured
+v1-to-v2 transfer. Those sizes are local filesystem occupancy, not
+bandwidth savings or GitHub Pages feasibility.
+
+At exact commit `26c970e57f8888f06bb457b3dfc5a21726371398`,
+[Signed remote proof run 41362213853](https://github.com/Certain1989/Broadcaster/actions/runs/41362213853)
+and Fast CI passed. Explicit v1-to-v2 static deltas were generated
+for both architecture refs. A real x86-64 client requested two delta objects,
+verified the updated commit and installed content, and received **10,278,094
+HTTP response-body bytes / 12 GETs** (including readiness probes). That
+checkpoint established delta use, not a matched bandwidth comparison.
+
+At exact commit `2065623b1fc535a36282ba9ac16d946246a58177`,
+[Signed remote proof run 41370900319](https://github.com/Certain1989/Broadcaster/actions/runs/41370900319),
+[Fast CI 41370900318](https://github.com/Certain1989/Broadcaster/actions/runs/41370900318)
+and REUSE **all passed** on 2026-11-02. Both native architecture signed
+update/security/migration jobs and the capacity job passed. In this run the
+dual-architecture repository occupied **42,046,821 bytes** without generated
+deltas, **46,925,257 bytes** with from-empty deltas, and **58,199,538
+bytes** after explicit v1-to-v2 deltas for both refs. The final delta
+directory occupied **16,150,949 bytes / 12 files** (including filesystem
+metadata). The matched x86-64 v1-to-v2 client controls measured:
+
+| Loopback update path | HTTP response-body bytes | GETs |
+| --- | ---: | ---: |
+| Signed incremental static delta | 10,277,934 | 12 |
+| Signed loose objects, no static delta | 11,252,577 | 695 |
+
+Both paths verified the same expected new commit and installed changed
+content, and the no-delta control made no `/deltas/` requests. The delta
+path transferred **974,643 fewer response-body bytes (~8.66%)** and used
+**683 fewer GETs** in this one synthetic x86-64 comparison. Totals include
+readiness probes, exclude headers/TLS/CDN, and vary slightly with
+per-run metadata. This is **local transport evidence**, not a production
+bandwidth or caching forecast; delta storage increased repository occupancy.
+An AArch64 incremental-delta *client* and real multi-version, hosted
+WAN/CDN/retention tests remain unverified. No GitHub Pages site or production
+remote was published.
+
+GitHub Release attachments alone are not an immutable path-preserving OSTree
+object service. If Pages exceeds limits or cannot serve valid update semantics,
+choose a suitable separately approved static host or repository service;
+never silently replace updates with notifications.
+
+## Migration and negative cases requiring owner-device/integration evidence
+
+A standalone `.flatpak` installation may be under `--user` or `--system`.
+Check `flatpak list --app --columns=application,installation,branch,origin`
+and `flatpak info` first; explicitly opt into a matching-scope stable remote
+while preserving the same stable application ID and user data directory.
+Do not silently replace a system installation with a duplicate user install.
+Devel test refs intentionally do not replace an existing stable install.
+Reinstall/uninstall experiments must use disposable installations/data; confirm
+persistent app data survives. On both native architectures, the
+exact-HEAD Signed remote proof exercised **user- and system-scope** Devel v1→v2
+changed-content updates, then installed a disposable standalone **Devel**
+bundle, explicitly reinstalled it from a signed v1 remote, verified the
+selected origin and updated normally to signed v2. A synthetic per-user
+data marker survived both transitions and the independent system installation
+was not altered by user-scope migration. This is **not** proof of migrating an
+existing stable installation, SQLite database, GSettings, portal grants or a
+real user profile. It also points the user-scope remote at an
+unreachable loopback port before the update and requires the installed commit
+to remain unchanged. Flatpak may return an error **or** a cached no-op in this
+offline case; neither is misreported as a signature failure. Test
+offline/partial publication, wrong GPG key,
+tampered and missing signatures, absent ARM64 ref, mixed refs, rollback, key
+rotation, interrupted update, absent runtime, and two **actual** application
+versions on both architectures before claiming the full update objective.
+
+See [Flatpak repository hosting](https://docs.flatpak.org/en/latest/hosting-a-repository.html),
+[Flatpak bundle import](https://docs.flatpak.org/en/latest/single-file-bundles.html),
+and [GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits).
