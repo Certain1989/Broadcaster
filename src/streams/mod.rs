@@ -3,7 +3,6 @@
 
 //! Bounded IPTV retrieval, parsing, async orchestration, and SQLite persistence.
 //! A lazy GTK catalogue is registered alongside the off-main backend.
-#![allow(dead_code)]
 
 pub(crate) mod backup;
 pub(crate) mod consent_ledger;

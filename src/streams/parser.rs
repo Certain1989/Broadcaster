@@ -63,10 +63,17 @@ pub(crate) struct ParseWarning {
 /// Canonical parsed-playlist representation; no duplicate import model or identity algorithm.
 pub(crate) struct ParsedPlaylist {
     pub channels: Vec<IncomingChannel>,
+    // Test-verified parse limits, skipped-entry counts and privacy-safe
+    // diagnostics remain part of the parse contract even when UI only reads
+    // channels. Do not discard their negative-test oracles for a lint.
+    #[allow(dead_code)]
     pub candidates: usize,
+    #[allow(dead_code)]
     pub skipped: usize,
+    #[allow(dead_code)]
     pub source_label: Option<String>,
     /// Aggregated, bounded and deliberately free of user-controlled text.
+    #[allow(dead_code)]
     pub warnings: Vec<ParseWarning>,
 }
 

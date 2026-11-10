@@ -334,6 +334,8 @@ fn online_backup_cancellable(
 
 /// Export as a new, private 0600 file in the user-chosen folder. The hard-link
 /// is an atomic no-clobber publish even under a destination symlink race.
+// Test convenience only; production export remains cancellable.
+#[cfg(test)]
 pub(crate) fn export(storage: &Storage, destination: &Path) -> StorageResult<SnapshotCounts> {
     export_cancellable(storage, destination, &AtomicBool::new(false))
 }
@@ -434,6 +436,8 @@ fn check_space(dir: &Path, required: u64) -> StorageResult<()> {
 
 /// Untrusted picker input: bound a no-follow single-file copy in the private
 /// application directory; NEVER open the user-selected original read/write.
+// Test convenience only; production import uses the cancellable preflight.
+#[cfg(test)]
 pub(crate) fn prepare_import(storage: &Storage, input: &Path) -> StorageResult<PreparedImport> {
     prepare_import_cancellable(storage, input, &AtomicBool::new(false))
 }

@@ -163,7 +163,10 @@ pub struct Source {
     pub order: u32,
     pub defaults: SourceDefaults,
     pub revision: i64,
+    // Preserve SQLite/backup-compatible source timestamps in the DTO.
+    #[allow(dead_code)]
     pub created_at: i64,
+    #[allow(dead_code)]
     pub updated_at: i64,
     pub last_attempt_at: Option<i64>,
     pub last_success_at: Option<i64>,
@@ -507,6 +510,8 @@ pub struct FacetChoice {
 }
 #[derive(Clone, Debug)]
 pub struct FilterOptions {
+    // The DTO retains its dimension tag for query/selection contracts.
+    #[allow(dead_code)]
     pub dimension: FilterDimension,
     pub choices: Vec<FacetChoice>,
 }

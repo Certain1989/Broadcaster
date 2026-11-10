@@ -139,17 +139,25 @@ pub(crate) enum RefreshStage {
 pub(crate) enum ServiceEvent {
     State {
         source_id: SourceId,
+        // Retain the generation/stage event envelope for refresh lifecycle
+        // compatibility; the current UI rereads authoritative state.
+        #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         stage: RefreshStage,
     },
     Preview {
         source_id: SourceId,
+        #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         preview: RefreshPreview,
     },
     Finished {
         source_id: SourceId,
+        #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         outcome: Result<(), ServiceError>,
     },
 }
@@ -160,7 +168,9 @@ pub(crate) enum SourceSelection {
 }
 
 pub(crate) enum RefreshOutcome {
-    Committed(Source),
+    // Preserve the committed source result in the refresh API; callers may
+    // currently only inspect which outcome occurred.
+    Committed(#[allow(dead_code)] Source),
     ConfirmationRequired(RefreshTicket),
 }
 
@@ -206,6 +216,8 @@ pub(crate) struct StreamsService {
 impl StreamsService {
     /// Initialize/migrate SQLite off the GTK thread. Safe to invoke from a
     /// GLib future; all later repository operations use the same worker bridge.
+    // Active production GTK startup lives behind cfg(not(test)).
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) async fn open() -> Result<Self, ServiceError> {
         let service = Self::with_storage(Storage::new()).await?;
         if !super::backup::suppress_automatic_refresh_this_startup() {
@@ -243,6 +255,8 @@ impl StreamsService {
 
     /// No daemon: a weak process-lifetime GLib task performs off-main due
     /// scans and never fetches for an unconsented source.
+    // Started by production-only open(), not by test storage setup.
+    #[cfg_attr(test, allow(dead_code))]
     fn start_opt_in_scheduler(&self) {
         let weak = Arc::downgrade(&self.inner);
         crate::utils::spawn(async move {
@@ -1115,11 +1129,6 @@ impl StreamsService {
         })
         .await
     }
-    pub(crate) async fn reorder_source(&self, id: &str, order: u32) -> Result<(), ServiceError> {
-        let id = id.to_owned();
-        self.db(move |s| s.reorder_source(&id, order, now()).map_err(Into::into))
-            .await
-    }
     pub(crate) async fn delete_source(
         &self,
         confirmed: ConfirmedSourceDeletion,
@@ -1157,6 +1166,8 @@ impl StreamsService {
         self.db(move |s| s.query_channels(&query).map_err(Into::into))
             .await
     }
+    // Read by production-only GTK startup; test builds skip that path.
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) async fn favourites_only(&self) -> Result<bool, ServiceError> {
         self.db(|store| store.favourites_only().map_err(Into::into))
             .await

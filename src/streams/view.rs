@@ -314,7 +314,10 @@ mod imp {
         pub(super) projection: OnceCell<ProjectionService>,
         pub(super) projection_serial: Cell<u64>,
         pub(super) epg_generation: Cell<u64>,
+        // Read by the production-only EPG timer, absent in test builds.
+        #[cfg_attr(test, allow(dead_code))]
         pub(super) epg_ticks: Cell<u64>,
+        #[cfg_attr(test, allow(dead_code))]
         pub(super) epg_poll_busy: Cell<bool>,
         pub(super) logos: RefCell<LogoState>,
         pub(super) manager_list: RefCell<Option<glib::WeakRef<gtk::ListBox>>>,
@@ -1573,6 +1576,8 @@ impl TvStreamsView {
     /// A single view-owned clock; no per-row timers, network polling or work on
     /// GTK's main thread. One independent persistent SQLite data_version reader
     /// catches successful commits by scheduled guide refresh and other views.
+    // Launched by cfg(not(test)) production catalogue startup.
+    #[cfg_attr(test, allow(dead_code))]
     fn start_epg_clock(&self) {
         let weak = self.downgrade();
         glib::timeout_add_local(Duration::from_secs(1), move || {
@@ -1590,6 +1595,8 @@ impl TvStreamsView {
             .map_or(0, |d| d.as_secs().min(i64::MAX as u64) as i64)
     }
 
+    // Invoked from the production EPG timer above.
+    #[cfg_attr(test, allow(dead_code))]
     fn tick_epg_clock(&self) {
         let imp = self.imp();
         let ticks = imp.epg_ticks.get().wrapping_add(1);
@@ -2329,20 +2336,6 @@ impl TvStreamsView {
 
     pub(crate) fn edit_selected(&self, id: ChannelId) {
         super::editor::show_metadata_editor(self, id);
-    }
-
-    fn show_import_placeholder(&self) {
-        if let Some(window) = self.root().and_downcast::<gtk::Window>() {
-            if let Some(overlay) = window
-                .first_child()
-                .and_then(|_| self.ancestor(adw::ToastOverlay::static_type()))
-                .and_downcast::<adw::ToastOverlay>()
-            {
-                overlay.add_toast(adw::Toast::new(&gettext(
-                    "Playlist import and source management arrive in the next stage",
-                )));
-            }
-        }
     }
 
     /// Exercises the actual GtkListView activate signal with a fabricated

@@ -382,6 +382,8 @@ impl Storage {
         Ok(ids)
     }
 
+    // Deterministic test wrapper; scheduler calls due_source_ids_excluding.
+    #[cfg(test)]
     pub fn due_source_ids(&self, at: i64, limit: i64) -> StorageResult<Vec<String>> {
         self.due_source_ids_excluding(at, limit, &HashSet::new())
     }
@@ -393,6 +395,9 @@ impl Storage {
         )
     }
 
+    // Source-order persistence has direct storage regression coverage; its
+    // UI-facing service adapter is not currently wired. Keep the DB contract.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn reorder_source(&self, id: &str, order: u32, at: i64) -> StorageResult<()> {
         self.update_source(
             "UPDATE iptv_sources SET source_order=?1, revision=revision+1,updated_at=?2 WHERE id=?3",
@@ -599,6 +604,8 @@ pub enum ErrorCode {
     InvalidPlaylist,
     Permission,
     Reauthorization,
+    // Preserve the existing persisted error-code vocabulary and SQL mapping.
+    #[allow(dead_code)]
     Cancelled,
     Write,
     ApprovalRequired,
