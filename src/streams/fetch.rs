@@ -358,6 +358,8 @@ impl PlaylistTransport for ScheduledTestTransport {
     }
 }
 
+// Fixture wrapper; production uses the explicit LAN-consent path.
+#[cfg(test)]
 pub(super) async fn fetch_redirects_with_resolver<R: PlaylistResolver>(
     url: &mut Url,
     resolver: &R,
@@ -399,6 +401,8 @@ impl PlaylistTransport for ReqwestTransport {
     }
 }
 
+// Fixture wrapper; guarded per-hop transport policy remains production code.
+#[cfg(test)]
 pub(super) async fn fetch_redirects_with_transport<R: PlaylistResolver, T: PlaylistTransport>(
     url: &mut Url,
     resolver: &R,

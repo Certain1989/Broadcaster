@@ -592,9 +592,14 @@ fn render_selected(
 
 pub(crate) struct FacetPicker {
     pub(crate) root: gtk::Box,
+    // Retain the chooser configuration and strong GTK/Rc owners for the
+    // lifetime of the picker; callbacks capture only weak references.
+    #[allow(dead_code)]
     kind: FacetDimension,
     selected: Rc<RefCell<BTreeSet<String>>>,
+    #[allow(dead_code)]
     checks: Rc<RefCell<Vec<(String, gtk::CheckButton)>>>,
+    #[allow(dead_code)]
     selected_box: gtk::Box,
     error: gtk::Label,
     chooser: gtk::Expander,
@@ -1058,6 +1063,8 @@ impl FacetPicker {
         next.add_controller(up);
     }
 
+    // Native focus regression fixture only.
+    #[cfg(test)]
     pub(crate) fn focus(&self) {
         self.chooser.set_expanded(true);
         self.chooser.grab_focus();
