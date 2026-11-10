@@ -592,8 +592,8 @@ fn render_selected(
 
 pub(crate) struct FacetPicker {
     pub(crate) root: gtk::Box,
-    // Retain the chooser configuration and strong GTK/Rc owners for the
-    // lifetime of the picker; callbacks capture only weak references.
+    // Retain the chooser dimension and shared selection/widget state in the
+    // picker; individual callbacks independently capture strong or weak refs.
     #[allow(dead_code)]
     kind: FacetDimension,
     selected: Rc<RefCell<BTreeSet<String>>>,
