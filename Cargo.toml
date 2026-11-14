@@ -27,7 +27,7 @@ serde_json = "1.0.138"
 ring = "0.17.14"
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "backup"] }
 quick-xml = "=0.42.0"
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 uuid = { version = "1.28.0", features = ["v4"] }
 # Full default Unicode case folding for XMLTV name suggestions (including ß -> ss).
 unicode-casefold = "=0.2.0"
