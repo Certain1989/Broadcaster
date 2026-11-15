@@ -169,7 +169,13 @@ Use `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `
 
 On the tested Bigscreen setup, OK/Enter activates items and opens the playback controls; arrows navigate, Back closes open overlays or returns to the previous view, and Home/Stop leave playback. With the playback overlay hidden, the directional arrows can seek. F11 or the application menu toggles saved fullscreen state. Exact bindings depend on your remote and compositor.
 
-The stock mpv mouse overlay can briefly flash at startup on some Wayland sessions; this is an accepted cosmetic limitation. Audio/subtitle labels are only as accurate as the stream metadata. The application interface is provided in English and German. Other translations are not currently shipped.
+### TV-only playback: hide mpv's mouse controls
+
+On some Wayland setups, mpv's built-in mouse on-screen controller (OSC) briefly appears when a stream starts. If you use **only a directional TV remote** for playback, open **Settings → Playback → mpv Arguments**, choose **Add Argument**, and enter `--osc=no` as a separate argument. On the tested TV setup this prevents the flash while keeping Broadcaster's own remote playback overlay (OK/Enter, arrows and Back) available. The change applies to the next playback; remove the argument to restore the default mpv mouse controller.
+
+**Mouse and remote together:** Leave this option unset if you also rely on mpv's mouse-operated on-screen playback controls. Disabling the OSC removes those controls, so the startup flash may remain when both input methods are needed. `--osc=no` does not disable the mouse in Broadcaster's main GTK interface.
+
+Audio/subtitle labels are only as accurate as the stream metadata. The application interface is provided in English and German. Other translations are not currently shipped.
 
 ## Development, maintenance and licensing
 

@@ -169,7 +169,13 @@ Weitere Prüfungen: `cargo fmt --check`, `cargo clippy --locked --all-targets --
 
 In der erprobten Bigscreen-Umgebung aktiviert OK/Enter Einträge und öffnet die Wiedergabesteuerung; Pfeiltasten navigieren, Zurück schließt Menüs oder kehrt zur vorherigen Ansicht zurück und Home/Stop verlassen die Wiedergabe. Bei ausgeblendeter mpv-Leiste dienen Pfeiltasten zum Springen. F11 und das Anwendungsmenü wechseln den gespeicherten Vollbildmodus. Die konkrete Steuerung hängt von der Systemkonfiguration ab.
 
-Die reguläre mpv-Mausbedienoberfläche kann bei manchen Wayland-Starts kurz aufblitzen; dies ist eine akzeptierte kosmetische Einschränkung. Bezeichnungen für Ton- und Untertitelspuren hängen von den Stream-Metadaten ab. Die Anwendungsoberfläche wird auf Englisch und Deutsch angeboten. Weitere Übersetzungen werden derzeit nicht mitgeliefert.
+### Wiedergabe nur mit TV-Fernbedienung: mpv-Maussteuerung ausblenden
+
+Bei manchen Wayland-Konfigurationen erscheint die integrierte Maus-Bedienoberfläche (OSC) von mpv beim Start eines Streams kurz. Wird die Wiedergabe **ausschließlich mit einer Richtungsfernbedienung** gesteuert, unter **Einstellungen → Wiedergabe → mpv-Argumente** über **Argument hinzufügen** den Eintrag `--osc=no` als eigenes Argument hinzufügen. In der getesteten TV-Konfiguration verhindert das das Aufblitzen; Broadcasters separate Wiedergabesteuerung über OK/Enter, Pfeiltasten und Zurück bleibt nutzbar. Die Änderung wirkt ab der nächsten Wiedergabe; durch Entfernen des Arguments wird die mpv-Maussteuerung wieder aktiviert.
+
+**Maus und Fernbedienung zusammen:** Wer die eingeblendeten mpv-Wiedergabeschaltflächen auch mit der Maus bedient, sollte diese Option nicht setzen. `--osc=no` schaltet diese Maussteuerung ab; bei Verwendung beider Eingabemethoden kann das kurze Aufblitzen daher bestehen bleiben. Die Mausbedienung der eigentlichen GTK-Oberfläche von Broadcaster bleibt davon unberührt.
+
+Bezeichnungen für Ton- und Untertitelspuren hängen von den Stream-Metadaten ab. Die Anwendungsoberfläche wird auf Englisch und Deutsch angeboten. Weitere Übersetzungen werden derzeit nicht mitgeliefert.
 
 ## Entwicklung, Wartung und Lizenzen
 
