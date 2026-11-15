@@ -15,7 +15,7 @@ eyre = "0.6.14"
 futures-util = "0.3.31"
 gettext-rs = { version = "0.8", features = ["gettext-system"] }
 gtk = { version = "0.11.5", package = "gtk4", features = ["gnome_46", "blueprint"] }
-ammonia = "4.2.4"
+ammonia = "4.2.5"
 regex = "1"
 indexmap = { version = "2.7.1", features = ["serde"] }
 libc = "0.2"
