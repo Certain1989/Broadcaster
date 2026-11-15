@@ -106,7 +106,7 @@ The [v0.3.3 release notes](docs/release-v0.3.3-notes.md) cover the dependency up
 
 ## Install Broadcaster
 
-Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.3 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.3) (once publication is complete). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
+Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.3 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.3). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
 
 ```bash
 grep 'broadcaster-0.3.3-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
