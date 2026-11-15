@@ -44,7 +44,7 @@ Guides are **optional**. Broadcaster does not automatically download a guide URL
 
 New guides have **automatic refresh enabled by default** in the Add Guide dialog, with a 24-hour age threshold. You can turn this off when adding a guide or change the interval (6–168 hours) in guide settings. Broadcaster checks due, enabled guides when the guide service starts and approximately once a minute **while the app is running**; it does not update them while closed. Manual guide refresh remains available. **M3U playlists have a separate optional refresh schedule**, configured for each source in Manage Sources. It is disabled by default; when enabled, the interval is 6–168 hours, and updates are checked only while Broadcaster runs. Unexpectedly large channel-list shrinkage requires manual confirmation. The XMLTV guide scheduler does not refresh M3U playlists.
 
-A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.3.2 release notes](docs/release-v0.3.2-notes.md) for the latest changes and limitations.
+A missing or failed guide import must not stop ordinary channel playback or Mediathek use. Now/Next is not a full programme-grid EPG, and externally supplied listings may be incomplete. See the [v0.3.3 release notes](docs/release-v0.3.3-notes.md) for the latest dependency updates, and the [v0.3.2 notes](docs/release-v0.3.2-notes.md) for earlier compatibility details.
 
 For details on private recovery snapshots, disk limits and abandoned guide downloads, see [EPG/SQLite storage operations](docs/epg-sqlite-storage.md).
 
@@ -58,7 +58,7 @@ In **My Channels → Manage Sources → Backup / Restore**, select **Export Comp
 
 ## Screenshots
 
-The following screenshots were captured in v0.2.5 and remain representative of the largely unchanged v0.3.2 interface. New playlist-refresh and database backup/restore dialogs are not pictured. Programme titles, times and IPTV availability come from third-party sources and can change.
+The following screenshots were captured in v0.2.5 and remain representative of the largely unchanged v0.3.3 interface. New playlist-refresh and database backup/restore dialogs are not pictured. Programme titles, times and IPTV availability come from third-party sources and can change.
 
 ### Mediathek search
 
@@ -102,27 +102,27 @@ To find playlists for **My Channels**, browse [IPTV-org's country, language and 
 
 Broadcaster neither hosts nor supplies media. Stream availability, channel metadata, subtitles, regional restrictions and service uptime are controlled by broadcasters and external catalogue providers. Remote key mapping depends on your desktop and hardware; Fedora KDE Plasma Bigscreen/Wayland is the primary tested TV environment. Other Linux desktops may work but are not guaranteed.
 
-The [v0.3.2 release notes](docs/release-v0.3.2-notes.md) describe the maintenance update, spatial playback controls and compatibility limits; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
+The [v0.3.3 release notes](docs/release-v0.3.3-notes.md) cover the dependency updates; the [v0.3.2 notes](docs/release-v0.3.2-notes.md) document the preceding playback-control and compatibility changes; the [v0.2.5 notes](docs/release-v0.2.5-notes.md) remain available for the earlier guide release. Download the published production Flatpak for your architecture, and verify its checksum before installation.
 
 ## Install Broadcaster
 
-Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.2 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.2) (once publication is complete). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
+Download the production Flatpak for your architecture and the matching `SHA256SUMS` from the [Broadcaster v0.3.3 release page](https://github.com/Certain1989/Broadcaster/releases/tag/v0.3.3) (once publication is complete). The example below uses Intel/AMD x86_64; use `aarch64` for ARM64. The same `--or-update` command installs Broadcaster for the first time or updates an existing installation in the selected scope.
 
 ```bash
-grep 'broadcaster-0.3.2-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
+grep 'broadcaster-0.3.3-x86_64.flatpak$' SHA256SUMS | sha256sum -c -
 flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user --or-update ./broadcaster-0.3.2-x86_64.flatpak
+flatpak install --user --or-update ./broadcaster-0.3.3-x86_64.flatpak
 flatpak run io.github.Certain1989.Broadcaster
 ```
 
 For ARM64 (`aarch64`), use these matching commands instead:
 
 ```bash
-grep 'broadcaster-0.3.2-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
-flatpak install --user --or-update ./broadcaster-0.3.2-aarch64.flatpak
+grep 'broadcaster-0.3.3-aarch64.flatpak$' SHA256SUMS | sha256sum -c -
+flatpak install --user --or-update ./broadcaster-0.3.3-aarch64.flatpak
 ```
 
-The checksum command checks the downloaded bundle against the release's `SHA256SUMS`; use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install or update system-wide for a separate TV account, configure Flathub for system runtime dependencies and use `sudo flatpak install --system --or-update ./broadcaster-0.3.2-x86_64.flatpak`; start the app without sudo. Use **the same scope** as the existing installation when upgrading. `--user` and `--system` installations have separate deployment scopes; do not uninstall or delete application data to upgrade.
+The checksum command checks the downloaded bundle against the release's `SHA256SUMS`; use the corresponding ARM64 filename in **both** commands when applicable. For removal use `flatpak uninstall --user io.github.Certain1989.Broadcaster`. To install or update system-wide for a separate TV account, configure Flathub for system runtime dependencies and use `sudo flatpak install --system --or-update ./broadcaster-0.3.3-x86_64.flatpak`; start the app without sudo. Use **the same scope** as the existing installation when upgrading. `--user` and `--system` installations have separate deployment scopes; do not uninstall or delete application data to upgrade.
 
 Broadcaster uses GNOME Platform 51, which Flatpak can obtain from Flathub. **Broadcaster itself is not distributed via Flathub.** Standalone Flatpak bundles do **not** configure automatic application updates; install later verified releases manually. The stable app ID above is different from `io.github.Certain1989.Broadcaster.Devel` used by CI development builds.
 
