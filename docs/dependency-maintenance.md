@@ -17,7 +17,7 @@ already runs `cargo audit --deny warnings`. A separate read-only
 the same advisory policy on the current default-branch `Cargo.lock`, with
 a manual dispatch option. Schedules only run after integration into
 `main`, may be delayed/disabled by GitHub during inactivity, and rely on
-the maintainer watching failed Actions runs; **no alert-delivery SLA**.
+deduplicated GitHub issues on failures, with **no alert-delivery SLA**.
 
 The exact `quick-xml`, `flate2` and `unicode-casefold` constraints
 need conscious compatibility review if updated (XMLTV handling, gzip and
@@ -33,12 +33,13 @@ The manifest pins explicit Git commits for mpv, libass, libplacebo,
 blueprint-compiler and LuaJIT. The version-tagged sources include
 `x-checker-data` for the upstream
 [Flatpak External Data Checker](https://github.com/flathub-infra/flatpak-external-data-checker).
-A maintainer may run it manually against
-`build-aux/io.github.Certain1989.Broadcaster.json` to *inspect* newer
-tags. **No checker bot, scheduled auto-update PR, automatic merge, signing
-key or new dependency permission is installed.** Checker's suggestions
-are not trusted code; separately inspect upstream release notes, tags,
-commit provenance, transitive changes and compatibility.
+The [maintenance workflow](../.github/workflows/native-dependencies.yml)
+checks tags weekly in a read-only job and may open a **draft** manifest-only
+proposal after separate validation on a clean checkout. This is not an
+automatic merge, signing key, trust endorsement or additional Flatpak
+application permission. See [maintenance automation](maintenance-automation.md).
+Checker's suggestions remain untrusted; separately inspect upstream release
+notes, tags, commit provenance, transitive changes and compatibility.
 
 LuaJIT is pinned to a commit rather than a tagged release. Check its
 upstream history and candidate commit explicitly; no tag-based checker

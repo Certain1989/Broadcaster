@@ -3,7 +3,6 @@
 name: Weekly RustSec advisory audit
 
 # Read-only advisory check against the current default-branch Cargo.lock.
-# The schedule does not run until this workflow is integrated into main.
 on:
   schedule:
     - cron: '37 6 * * 1'
@@ -29,3 +28,22 @@ jobs:
         run: pacman -Syu --noconfirm --needed git cargo-audit ca-certificates
       - name: Audit the locked dependencies against current RustSec advisories
         run: cargo audit --deny warnings --file Cargo.lock
+
+  incident:
+    if: always() && github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
+    needs: rustsec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Report RustSec failure or recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_RESULT: ${{ needs.rustsec.result }}
+        run: |
+          if [[ "$AUDIT_RESULT" == 'success' ]]; then status=pass; else status=fail; fi
+          python3 tools/maintenance/issue_sync.py --key rustsec --title 'RustSec audit requires attention' --status "$status"
+          [[ "$status" == pass ]]

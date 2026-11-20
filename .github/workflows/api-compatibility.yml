@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: Upstream API compatibility
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: broadcaster-api-compatibility
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Query public upstream APIs (bounded and read-only)
+        id: probe
+        continue-on-error: true
+        run: python3 tools/maintenance/api_compat.py --output "$RUNNER_TEMP/api-results.json"
+      - name: Retain each provider result for recurrence checks
+        if: always() && steps.probe.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: api-probe-results
+          path: ${{ runner.temp }}/api-results.json
+          if-no-files-found: warn
+          retention-days: 3
+      - name: Deduplicate issues or clear recovered incidents
+        if: always() && steps.probe.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -s "$RUNNER_TEMP/api-results.json" ]]; then
+            python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/api-results.json"
+            python3 tools/maintenance/issue_sync.py --key api-monitor --title 'API monitor execution failed' --status pass
+          else
+            python3 tools/maintenance/issue_sync.py --key api-monitor --title 'API monitor execution failed' --status fail
+          fi
+      - name: Preserve failing check status
+        if: steps.probe.outcome == 'failure'
+        run: exit 1

@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: Native Flatpak dependency updates
+
+on:
+  schedule:
+    - cron: '49 8 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: broadcaster-native-dependencies
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.validate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Read-only third-party Flatpak checker
+        id: checker
+        continue-on-error: true
+        uses: docker://ghcr.io/flathub-infra/flatpak-external-data-checker:latest@sha256:ea7b3bf6c05ff4536b5450a1ef451d157be544b95fb6abf56a32a80da4819526
+        with:
+          args: --update --edit-only build-aux/io.github.Certain1989.Broadcaster.json
+      - name: Validate exact manifest field allowlist and clean index
+        if: steps.checker.outcome == 'success'
+        id: validate
+        run: |
+          python3 tools/maintenance/native_candidate.py check \
+            --candidate "$RUNNER_TEMP/native-candidate.json" \
+            --output "$GITHUB_OUTPUT"
+      - name: Pass ONLY validated candidate manifest to publisher
+        if: steps.validate.outcome == 'success' && steps.validate.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-manifest-candidate
+          path: ${{ runner.temp }}/native-candidate.json
+          if-no-files-found: error
+          retention-days: 3
+      - name: Report checker errors as a failing read-only job
+        if: steps.checker.outcome == 'failure'
+        run: exit 1
+
+  publish:
+    needs: check
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main' && needs.check.result == 'success' && needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-manifest-candidate
+          path: ${{ runner.temp }}/native-candidate
+      - name: Validate candidate again in a fresh checkout and propose draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/maintenance/native_candidate.py apply \
+            --candidate "$RUNNER_TEMP/native-candidate/native-candidate.json"
+          # Do not overwrite an existing proposal or create duplicate PRs.
+          if [[ "$(gh pr list --state open --json title --jq 'map(select(.title == "Update bundled Flatpak dependencies")) | length')" != 0 ]]; then
+            echo 'Existing draft/native update PR; candidate left for review, no new branch.'
+            exit 0
+          fi
+          branch="automation/native-update-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore: propose native Flatpak dependency updates'
+          gh auth setup-git
+          git push --set-upstream origin "$branch"
+          gh pr create --draft --base main --head "$branch" \
+            --title 'Update bundled Flatpak dependencies' \
+            --body 'Checked four-component tag/commit allowlist. Review release notes, pinned commits and both Flatpak architectures. No automatic merge. Exact-candidate CI may require explicit workflow approval.'
+
+  report:
+    if: always() && github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
+    needs: [check, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: LuaJIT pinned commit drift (observation only)
+        id: luajit
+        continue-on-error: true
+        run: python3 tools/maintenance/luajit_drift.py --manifest build-aux/io.github.Certain1989.Broadcaster.json --output "$RUNNER_TEMP/luajit.json"
+      - name: Report LuaJIT drift or recovery
+        if: always() && steps.luajit.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/luajit.json"
+      - name: Report candidate checker/publishing failure or recovery
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+        run: |
+          if [[ "$CHECK_RESULT" == 'success' && ( "$PUBLISH_RESULT" == 'success' || "$PUBLISH_RESULT" == 'skipped' ) ]]; then
+            status=pass
+          else
+            status=fail
+          fi
+          python3 tools/maintenance/issue_sync.py --key native-checker \
+            --title 'Flatpak checker workflow failed' --status "$status"
+          [[ "$status" == pass ]]
+      - name: Preserve LuaJIT reference-check failure
+        if: steps.luajit.outcome == 'failure'
+        run: exit 1
