@@ -126,6 +126,25 @@ class NativeAndWatchdog(unittest.TestCase):
             self.assertEqual(result["status"], "fail")
             self.assertIn("not proof of ancestry", result["detail"])
 
+    def test_kuma_push_replaces_existing_status_and_msg(self):
+        from unittest.mock import patch
+        from urllib.parse import parse_qs, urlsplit
+        calls = []
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+        def fake_urlopen(request, timeout):
+            calls.append(request.full_url)
+            return Response()
+        with patch.object(watchdog.urllib.request, "urlopen", fake_urlopen):
+            watchdog.kuma_push("https://monitor.example/api/push/private-token?status=up&msg=OLD&ping=",
+                               False, "Probe missed")
+        query = parse_qs(urlsplit(calls[0]).query, keep_blank_values=True)
+        self.assertEqual(query["status"], ["down"])
+        self.assertEqual(query["msg"], ["Probe missed"])
+        self.assertEqual(query["ping"], [""])
+
     def test_watchdog_detects_expired_scheduled_success(self):
         now = dt.datetime.now(dt.timezone.utc)
         runs = {"workflow_runs": [

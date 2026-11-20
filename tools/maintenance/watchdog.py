@@ -47,13 +47,21 @@ def kuma_push(url, healthy, summary):
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.netloc or parts.username or parts.password:
         raise ValueError("Invalid KUMA_PUSH_URL")
-    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    # Uptime Kuma's generated push URL may already contain status/msg parameters.
+    # Replace them, do not append duplicates that could be interpreted as arrays.
+    query = [(key, value) for key, value in
+             urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+             if key not in ("status", "msg")]
     query.extend([("status", "up" if healthy else "down"), ("msg", summary[:140])])
     target = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
-    with urllib.request.urlopen(urllib.request.Request(
-            target, headers={"User-Agent": "Broadcaster-watchdog/1.0"}), timeout=15) as response:
-        if response.status != 200:
-            raise RuntimeError("Kuma push failed")
+    try:
+        with urllib.request.urlopen(urllib.request.Request(
+                target, headers={"User-Agent": "Broadcaster-watchdog/1.0"}), timeout=15) as response:
+            if response.status != 200:
+                raise RuntimeError("Kuma push returned non-200")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Never include a credential-bearing push URL in diagnostics.
+        raise RuntimeError("Kuma push failed (" + type(exc).__name__ + ")") from None
 
 
 def main():
