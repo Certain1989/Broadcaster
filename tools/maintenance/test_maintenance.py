@@ -188,6 +188,22 @@ class IssueContracts(unittest.TestCase):
         sync.synchronize([{**zapp, "key": "api-mediathek"}], api=issues, previous=previous)
         self.assertEqual(writes[0][0], "POST")
 
+    def test_previous_result_download_failure_does_not_hide_contract_issue(self):
+        writes = []
+        def api(method, path, payload=None):
+            if method == "GET": return []
+            writes.append((method, path))
+            return {"number": 23, "user": {"id": sync.BOT_ID},
+                    "body": payload.get("body")}
+        contract = {"key": "api-mediathek", "title": "Mediathek",
+                    "kind": "contract", "status": "fail", "detail": "broken schema"}
+        transient = {"key": "api-zapp", "title": "Zapp",
+                     "kind": "transient", "status": "fail", "detail": "timeout"}
+        with patch.object(sync, "previous_scheduled_results",
+                          side_effect=urllib.error.URLError("API unavailable")):
+            sync.synchronize([transient, contract], api=api)
+        self.assertEqual(writes, [("POST", "/issues")])
+
     def test_previous_success_and_stale_result_do_not_count(self):
         now = dt.datetime.now(dt.timezone.utc)
         def runs(when):

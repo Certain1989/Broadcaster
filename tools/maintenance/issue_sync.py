@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -157,7 +158,15 @@ def synchronize(results, api=github, run_url=None, now=None, previous=None):
                                and item["key"] in ("api-mediathek", "api-zapp")
                                for item in results)
     if unresolved_transient and previous is None:
-        previous = previous_scheduled_results(api=api, now=now)
+        try:
+            previous = previous_scheduled_results(api=api, now=now)
+        except (ValueError, OSError, TimeoutError, urllib.error.URLError,
+                zipfile.BadZipFile, TypeError, KeyError):
+            # Missing GitHub Actions API/artifact evidence cannot justify
+            # an incident for a first transient failure. Still process any
+            # independent contract failures in the same result set.
+            print("Previous provider evidence unavailable; deferring transient alerts")
+            previous = {}
     for item in results:
         matching = [issue for issue in issues if owned_issue(issue, item["key"])]
         if len(matching) > 1:
