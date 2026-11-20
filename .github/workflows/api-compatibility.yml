@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   probe:
-    if: github.repository == 'Certain1989/Broadcaster'
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
@@ -31,6 +31,14 @@ jobs:
         id: probe
         continue-on-error: true
         run: python3 tools/maintenance/api_compat.py --output "$RUNNER_TEMP/api-results.json"
+      - name: Retain each provider result for recurrence checks
+        if: always() && steps.probe.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: api-probe-results
+          path: ${{ runner.temp }}/api-results.json
+          if-no-files-found: warn
+          retention-days: 3
       - name: Deduplicate issues or clear recovered incidents
         if: always() && steps.probe.outcome != 'skipped'
         env:

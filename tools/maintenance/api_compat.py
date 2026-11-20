@@ -53,7 +53,8 @@ def require(condition, message):
 def check_mediathek(fetch=request_json):
     base = "https://mediathekviewweb.de/api"
     channels = fetch(base + "/channels")
-    require(isinstance(channels, dict) and isinstance(channels.get("channels"), list),
+    require(isinstance(channels, dict) and channels.get("error") is None
+            and isinstance(channels.get("channels"), list),
             "Mediathek channels response changed shape")
     if not channels["channels"]:
         raise ProbeError("transient", "Mediathek catalogue empty")
@@ -63,7 +64,9 @@ def check_mediathek(fetch=request_json):
              "sortBy": "timestamp", "sortOrder": "desc", "future": False,
              "offset": 0, "size": 1}
     response = fetch(base + "/query", query)
-    require(isinstance(response, dict) and isinstance(response.get("result"), dict),
+    require(isinstance(response, dict) and response.get("error") is None
+            and response.get("err") is None
+            and isinstance(response.get("result"), dict),
             "Mediathek search response lacks result")
     result = response["result"]
     require(isinstance(result.get("results"), list) and isinstance(result.get("queryInfo"), dict),

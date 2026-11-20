@@ -3,6 +3,12 @@
 # SPDX-License-Identifier: CC0-1.0
 """No live network access: positive and negative regression cases."""
 import datetime as dt
+import copy
+import io
+import os
+import subprocess
+import urllib.error
+from unittest.mock import patch
 import json
 import tempfile
 import unittest
@@ -11,6 +17,7 @@ from pathlib import Path
 import api_compat as ap
 import issue_sync as sync
 import luajit_drift as lua
+import native_candidate as native
 
 
 class APIContracts(unittest.TestCase):
@@ -32,6 +39,28 @@ class APIContracts(unittest.TestCase):
         with self.assertRaises(ap.ProbeError) as error:
             ap.check_mediathek(fetch)
         self.assertEqual(error.exception.kind, "transient")
+
+    def test_mediathek_rejects_upstream_error_despite_channels(self):
+        with self.assertRaises(ap.ProbeError) as error:
+            ap.check_mediathek(lambda url, payload=None:
+                               {"error": "upstream failure", "channels": ["ARD"]})
+        self.assertEqual(error.exception.kind, "contract")
+
+    def test_mediathek_rejects_search_error(self):
+        def fetch(url, payload=None):
+            return {"channels": ["ARD"]} if payload is None else {
+                "err": "unavailable", "result": {"results": [{"title": "ok"}],
+                "queryInfo": {"totalResults": 1}}}
+        with self.assertRaises(ap.ProbeError):
+            ap.check_mediathek(fetch)
+
+    def test_http_429_and_502_are_transient(self):
+        for code in (429, 502):
+            with self.subTest(code=code), patch.object(ap.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(
+                    "https://example.invalid", code, "Unavailable", {}, io.BytesIO())):
+                with self.assertRaises(ap.ProbeError) as error:
+                    ap.request_json("https://example.invalid")
+                self.assertEqual(error.exception.kind, "transient")
 
     def test_mediathek_missing_fields_not_green(self):
         def fetch(url, payload=None):
@@ -88,11 +117,13 @@ class IssueContracts(unittest.TestCase):
             return [] if path.startswith("/issues?") else {"workflow_runs": []}
         sync.synchronize([{"key": "api-zapp", "title": "Zapp", "status": "fail",
                            "kind": "transient", "detail": "timeout"}], api=api,
+                         previous={},
                          run_url="https://github.com/Certain1989/Broadcaster/actions/runs/1")
         self.assertFalse(any(method == "POST" for method, _, _ in actions))
 
     def test_existing_issue_updates_without_duplicate_and_closes(self):
-        issue = {"number": 42, "body": sync.marker("api-zapp") + "\nolder"}
+        issue = {"number": 42, "body": sync.marker("api-zapp") + "\nolder",
+                 "user": {"id": sync.BOT_ID}}
         writes = []
         def api(method, path, payload=None):
             if method == "GET":
@@ -108,14 +139,147 @@ class IssueContracts(unittest.TestCase):
         sync.synchronize([{**item, "status": "pass"}], api=api)
         self.assertEqual(writes[0][2], {"state": "closed"})
 
-    def test_transient_requires_recent_failure(self):
-        recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=20)).isoformat()
+    def test_untrusted_issue_marker_never_modified(self):
+        user_issue = {"number": 42, "body": sync.marker("api-zapp") + "\nspoof",
+                      "user": {"id": 123}}
+        writes = []
         def api(method, path, payload=None):
-            return {"workflow_runs": [{"created_at": recent, "conclusion": "failure"}]}
-        self.assertTrue(sync.repeated_transient(api))
+            if method == "GET": return [user_issue]
+            writes.append((method, path, payload))
+            return {"number": 43, "body": payload.get("body"), "user": {"id": sync.BOT_ID}}
+        good = {"key": "api-zapp", "title": "Zapp", "status": "pass",
+                "kind": "none", "detail": "recovered"}
+        sync.synchronize([good], api=api)
+        self.assertEqual(writes, [])
+        sync.synchronize([{**good, "status": "fail", "kind": "contract"}], api=api)
+        self.assertEqual(writes[0][0], "POST")
+        self.assertEqual(writes[0][1], "/issues")
+
+    def test_marker_requires_first_line_even_for_bot(self):
+        bad = {"body": "user text\n" + sync.marker("api-zapp") + "\n",
+               "user": {"id": sync.BOT_ID}}
+        self.assertFalse(sync.owned_issue(bad, "api-zapp"))
+
+    def test_previous_completed_run_is_scoped_by_provider(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        recent = (now - dt.timedelta(hours=22)).isoformat()
+        def api(method, path, payload=None):
+            if "/actions/workflows/" in path:
+                return {"workflow_runs": [
+                    {"id": 12, "event": "schedule", "head_branch": "main",
+                     "created_at": recent, "status": "completed", "conclusion": "failure"}]}
+            if "/artifacts" in path:
+                return {"artifacts": [{"name": sync.RESULT_ARTIFACT, "id": 18, "expired": False}]}
+            raise AssertionError(path)
+        previous = sync.previous_scheduled_results(api=api,
+            read_artifact=lambda _: json.dumps([
+                {"key": "api-mediathek", "status": "fail", "kind": "contract"},
+                {"key": "api-zapp", "status": "pass", "kind": "none"}]).encode(), now=now)
+        self.assertEqual(previous["api-mediathek"]["status"], "fail")
+        writes = []
+        def issues(method, path, payload=None):
+            if method == "GET": return []
+            writes.append((method, path))
+            return {"number": 5, "body": payload.get("body"), "user": {"id": sync.BOT_ID}}
+        zapp = {"key": "api-zapp", "title": "Zapp", "status": "fail",
+                "kind": "transient", "detail": "timeout"}
+        sync.synchronize([zapp], api=issues, previous=previous)
+        self.assertEqual(writes, [])  # Mediathek failure must NOT count for Zapp
+        sync.synchronize([{**zapp, "key": "api-mediathek"}], api=issues, previous=previous)
+        self.assertEqual(writes[0][0], "POST")
+
+    def test_previous_success_and_stale_result_do_not_count(self):
+        now = dt.datetime.now(dt.timezone.utc)
+        def runs(when):
+            def api(method, path, payload=None):
+                if "/actions/workflows/" in path:
+                    return {"workflow_runs": [
+                        {"id": 11, "event": "schedule", "head_branch": "main",
+                         "created_at": when.isoformat(), "status": "completed"}]}
+                if "/artifacts" in path:
+                    return {"artifacts": [{"name": sync.RESULT_ARTIFACT, "id": 9}]}
+                raise AssertionError(path)
+            return api
+        self.assertIsNone(sync.previous_scheduled_results(api=runs(now - dt.timedelta(days=4)),
+                                                          read_artifact=lambda _: b"[]", now=now))
+        good = json.dumps([
+            {"key": "api-mediathek", "status": "pass", "kind": "none"},
+            {"key": "api-zapp", "status": "pass", "kind": "none"}]).encode()
+        previous = sync.previous_scheduled_results(api=runs(now - dt.timedelta(hours=23)),
+            read_artifact=lambda _: good, now=now)
+        self.assertEqual(previous["api-zapp"]["status"], "pass")
+        self.assertIsNone(sync.previous_scheduled_results(api=runs(now - dt.timedelta(hours=23)),
+            read_artifact=lambda _: b"not json", now=now))
+
 
 
 class NativeContracts(unittest.TestCase):
+    def fixture(self):
+        modules = []
+        for name in ("mpv", "libass", "libplacebo", "blueprint-compiler", "luajit"):
+            source = {"type": "git", "url": "https://example.invalid/" + name,
+                      "commit": "a" * 40}
+            if name != "luajit":
+                source["tag"] = "v1.0.0"
+                source["x-checker-data"] = {"type": "git"}
+            modules.append({"name": name, "sources": [source]})
+        return {"id": "test", "modules": modules}
+
+    def test_native_allows_only_approved_tag_commit_pairs(self):
+        old = self.fixture()
+        candidate = copy.deepcopy(old)
+        source = candidate["modules"][0]["sources"][0]
+        source["tag"] = "v1.0.1"
+        source["commit"] = "b" * 40
+        self.assertEqual(native.validate(old, candidate), ["mpv"])
+        candidate["modules"][0]["config-opts"] = ["--unsafe"]
+        with self.assertRaises(ValueError):
+            native.validate(old, candidate)
+
+    def test_native_rejects_unrelated_luajit_change(self):
+        old = self.fixture()
+        candidate = copy.deepcopy(old)
+        candidate["modules"][-1]["sources"][0]["commit"] = "b" * 40
+        with self.assertRaises(ValueError):
+            native.validate(old, candidate)
+
+    def test_native_rejects_prestaged_unrelated_file(self):
+        oldcwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            try:
+                os.chdir(directory)
+                subprocess.run(["git", "init", "-q"], check=True)
+                manifest = Path(native.MANIFEST)
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text(json.dumps(self.fixture()))
+                subprocess.run(["git", "add", str(manifest)], check=True)
+                subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=t@example.invalid",
+                                "commit", "-qm", "baseline"], check=True)
+                Path("unexpected.sh").write_text("echo unexpected\n")
+                subprocess.run(["git", "add", "unexpected.sh"], check=True)
+                with self.assertRaisesRegex(ValueError, "staged"):
+                    native.assert_worktree(allow_manifest=True)
+            finally:
+                os.chdir(oldcwd)
+
+    def test_checker_job_has_no_write_permissions(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/native-dependencies.yml").read_text()
+        checker = workflow.split("\n  check:\n", 1)[1].split("\n  publish:\n", 1)[0]
+        self.assertIn("      contents: read", checker)
+        self.assertNotIn("contents: write", checker)
+        self.assertNotIn("pull-requests: write", checker)
+        self.assertNotIn("GH_TOKEN:", checker)
+        self.assertIn("upload-artifact", checker)
+        publisher = workflow.split("\n  publish:\n", 1)[1].split("\n  report:\n", 1)[0]
+        self.assertIn("download-artifact", publisher)
+        self.assertIn("native_candidate.py apply", publisher)
+        for path in (".github/workflows/api-compatibility.yml",
+                     ".github/workflows/native-dependencies.yml",
+                     ".github/workflows/rustsec-weekly.yml"):
+            text = (root / path).read_text()
+            self.assertIn("github.ref == 'refs/heads/main'", text)
+
     def test_luajit_pin_drift_is_not_ancestry_claim(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"

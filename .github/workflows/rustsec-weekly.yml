@@ -30,7 +30,7 @@ jobs:
         run: cargo audit --deny warnings --file Cargo.lock
 
   incident:
-    if: always() && github.repository == 'Certain1989/Broadcaster'
+    if: always() && github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/main'
     needs: rustsec
     runs-on: ubuntu-24.04
     timeout-minutes: 3
