@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+name: Native Flatpak dependency updates
+
+on:
+  schedule:
+    - cron: '49 8 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: broadcaster-native-dependencies
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.repository == 'Certain1989/Broadcaster'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true
+      - name: Check tagged native sources without creating PRs yet
+        id: checker
+        continue-on-error: true
+        uses: docker://ghcr.io/flathub-infra/flatpak-external-data-checker:latest@sha256:ea7b3bf6c05ff4536b5450a1ef451d157be544b95fb6abf56a32a80da4819526
+        with:
+          args: --update --edit-only build-aux/io.github.Certain1989.Broadcaster.json
+      - name: Open one reviewable draft PR (never force-push)
+        if: steps.checker.outcome == 'success'
+        id: proposed
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest='build-aux/io.github.Certain1989.Broadcaster.json'
+          git diff --check
+          git diff --quiet -- "$manifest" && exit 0
+          [[ "$(git diff --name-only | wc -l)" -eq 1 ]]
+          [[ "$(git diff --name-only)" == "$manifest" ]]
+          if [[ "$(gh pr list --state open --json title --jq 'map(select(.title == "Update bundled Flatpak dependencies")) | length')" != 0 ]]; then
+            echo 'Update PR already open; no duplicate branch or PR created.'
+            exit 0
+          fi
+          branch="automation/native-update-${GITHUB_RUN_ID}"
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "$manifest"
+          git commit -m 'chore: propose native Flatpak dependency updates'
+          git push --set-upstream origin "$branch"
+          gh pr create --draft --base main --head "$branch" \
+            --title 'Update bundled Flatpak dependencies' \
+            --body 'Generated using the pinned external-data checker. Review tags and commits and validate both Flatpak architectures before owner-approved integration. Never automatically merged or force-pushed.'
+      - name: LuaJIT v2.1 pinned-commit drift observation
+        id: luajit
+        if: always() && steps.checker.outcome != 'skipped'
+        run: python3 tools/maintenance/luajit_drift.py --manifest build-aux/io.github.Certain1989.Broadcaster.json --output "$RUNNER_TEMP/luajit.json"
+      - name: Report LuaJIT drift or recovery
+        if: always() && steps.luajit.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/luajit.json"
+      - name: Report checker failure or recovery
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKER_OUTCOME: ${{ steps.checker.outcome }}
+          PROPOSED_OUTCOME: ${{ steps.proposed.outcome }}
+        run: |
+          if [[ "$CHECKER_OUTCOME" == 'success' && ( "$PROPOSED_OUTCOME" == 'success' || "$PROPOSED_OUTCOME" == 'skipped' ) ]]; then
+            status=pass
+          else
+            status=fail
+          fi
+          python3 tools/maintenance/issue_sync.py --key native-checker --title 'Flatpak checker workflow failed' --status "$status"
+          [[ "$status" == pass ]]
