@@ -44,7 +44,8 @@ def main():
                 "detail": "Upstream Git reference check failed (" + type(exc).__name__ + ")"}
     Path(args.output).write_text(json.dumps([item], indent=2) + "\n", encoding="utf-8")
     print(item["key"] + ": " + item["status"] + " (" + item["detail"] + ")")
+    return int(item["kind"] == "transient")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

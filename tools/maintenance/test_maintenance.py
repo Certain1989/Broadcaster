@@ -25,6 +25,15 @@ class APIContracts(unittest.TestCase):
                 "queryInfo": {"totalResults": 12}}, "err": None}
         self.assertIn("valid", ap.check_mediathek(fetch))
 
+    def test_mediathek_empty_canary_is_transient(self):
+        def fetch(url, payload=None):
+            if payload is None:
+                return {"channels": ["ARD"]}
+            return {"result": {"results": [], "queryInfo": {"totalResults": 0}}}
+        with self.assertRaises(ap.ProbeError) as error:
+            ap.check_mediathek(fetch)
+        self.assertEqual(error.exception.kind, "transient")
+
     def test_mediathek_missing_fields_not_green(self):
         def fetch(url, payload=None):
             return {"channels": ["ARD"]} if payload is None else {"result": {"results": []}}

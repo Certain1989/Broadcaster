@@ -64,10 +64,11 @@ jobs:
             --body 'Generated using the pinned external-data checker. Review tags and commits and validate both Flatpak architectures before owner-approved integration. Never automatically merged or force-pushed.'
       - name: LuaJIT v2.1 pinned-commit drift observation
         id: luajit
+        continue-on-error: true
         if: always() && steps.checker.outcome != 'skipped'
         run: python3 tools/maintenance/luajit_drift.py --manifest build-aux/io.github.Certain1989.Broadcaster.json --output "$RUNNER_TEMP/luajit.json"
       - name: Report LuaJIT drift or recovery
-        if: always() && steps.luajit.outcome == 'success'
+        if: always() && steps.luajit.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/luajit.json"
@@ -85,3 +86,6 @@ jobs:
           fi
           python3 tools/maintenance/issue_sync.py --key native-checker --title 'Flatpak checker workflow failed' --status "$status"
           [[ "$status" == pass ]]
+      - name: Preserve failed LuaJIT reference check status
+        if: steps.luajit.outcome == 'failure'
+        run: exit 1

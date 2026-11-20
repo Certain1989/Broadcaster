@@ -33,7 +33,13 @@ jobs:
         if: always() && steps.probe.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/api-results.json"
+        run: |
+          if [[ -s "$RUNNER_TEMP/api-results.json" ]]; then
+            python3 tools/maintenance/issue_sync.py --results "$RUNNER_TEMP/api-results.json"
+            python3 tools/maintenance/issue_sync.py --key api-monitor --title 'API monitor execution failed' --status pass
+          else
+            python3 tools/maintenance/issue_sync.py --key api-monitor --title 'API monitor execution failed' --status fail
+          fi
       - name: Preserve failing check status
         if: steps.probe.outcome == 'failure'
         run: exit 1

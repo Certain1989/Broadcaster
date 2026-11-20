@@ -70,6 +70,10 @@ def check_mediathek(fetch=request_json):
             "Mediathek results/queryInfo changed shape")
     count = result["queryInfo"].get("totalResults")
     require(type(count) is int and count >= 0, "Mediathek totalResults invalid")
+    if count == 0:
+        raise ProbeError("transient", "Mediathek Tagesschau canary returned no matches")
+    if not result["results"]:
+        raise ProbeError("contract", "Mediathek reported matches but first page is empty")
     for item in result["results"]:
         require(isinstance(item, dict) and all(isinstance(item.get(k), str)
                 for k in ("title", "channel", "topic")), "Mediathek result fields invalid")
