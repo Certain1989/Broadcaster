@@ -106,6 +106,46 @@ class APIContracts(unittest.TestCase):
 
 
 class IssueContracts(unittest.TestCase):
+    def test_artifact_token_is_sent_only_to_initial_github_origin(self):
+        # No network or actual credentials are needed to reproduce the original leak.
+        request = sync.artifact_request(9, "INERT_TEST_TOKEN")
+        self.assertIn("Authorization", request.unredirected_hdrs)
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(request.get_header("Authorization"), "Bearer INERT_TEST_TOKEN")
+        redirected = sync.HTTPSOnlyRedirect().redirect_request(
+            request, None, 302, "Found", {},
+            "https://external-artifact-storage.invalid/zip"
+        )
+        self.assertIsNotNone(redirected)
+        self.assertIsNone(redirected.get_header("Authorization"))
+        self.assertNotIn("Authorization", redirected.headers)
+        self.assertNotIn("Authorization", redirected.unredirected_hdrs)
+
+    def test_artifact_redirect_refuses_http_downgrade(self):
+        request = sync.artifact_request(9, "INERT_TEST_TOKEN")
+        with self.assertRaises(urllib.error.HTTPError):
+            sync.HTTPSOnlyRedirect().redirect_request(
+                request, None, 302, "Found", {},
+                "http://external-artifact-storage.invalid/zip"
+            )
+
+    def test_authenticated_github_api_request_uses_unredirected_header(self):
+        captured = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+        def fake_open(request, timeout):
+            captured.append(request)
+            return Response()
+        with patch.dict(os.environ, {"GH_TOKEN": "INERT_TEST_TOKEN",
+                                    "GITHUB_REPOSITORY": sync.REPO}):
+            with patch.object(sync, "open_securely", side_effect=fake_open):
+                with patch.object(sync.json, "load", return_value={"ok": True}):
+                    sync.github("GET", "/issues")
+        self.assertEqual(len(captured), 1)
+        self.assertNotIn("Authorization", captured[0].headers)
+        self.assertEqual(captured[0].get_header("Authorization"), "Bearer INERT_TEST_TOKEN")
+
     def test_invalid_marker_rejected(self):
         with self.assertRaises(ValueError):
             sync.marker("x\nmalicious")

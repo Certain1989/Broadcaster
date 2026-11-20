@@ -9,6 +9,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -19,6 +20,32 @@ BOT_ID = 41898282  # github-actions[bot], immutable GitHub user ID
 RESULT_ARTIFACT = "api-probe-results"
 MAX_ZIP = 65536
 MAX_RESULT = 8192
+
+
+class HTTPSOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow an insecure redirect for authenticated GitHub requests."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme.lower() != "https":
+            raise urllib.error.HTTPError(
+                req.full_url, code, "Refusing non-HTTPS GitHub redirect", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def open_securely(request, timeout):
+    """Initial-origin credentials may not be forwarded on any redirect."""
+    return urllib.request.build_opener(HTTPSOnlyRedirect).open(request, timeout=timeout)
+
+
+def artifact_request(artifact_id, token):
+    if not isinstance(artifact_id, int) or artifact_id <= 0:
+        raise ValueError("Invalid artifact ID")
+    request = urllib.request.Request(BASE + f"/actions/artifacts/{artifact_id}/zip",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "Broadcaster-maintenance/1.0"})
+    request.add_unredirected_header("Authorization", "Bearer " + token)
+    return request
 
 
 def marker(key):
@@ -33,24 +60,19 @@ def github(method, path, payload=None):
     token = os.environ["GH_TOKEN"]
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(BASE + path, data=data, method=method,
-        headers={"Authorization": "Bearer " + token,
-                 "Accept": "application/vnd.github+json",
+        headers={"Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28",
                  "User-Agent": "Broadcaster-maintenance/1.0"})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    request.add_unredirected_header("Authorization", "Bearer " + token)
+    with open_securely(request, timeout=15) as response:
         return json.load(response)
 
 
 def artifact_bytes(artifact_id):
     if os.environ.get("GITHUB_REPOSITORY") != REPO:
         raise RuntimeError("Unexpected repository")
-    if not isinstance(artifact_id, int) or artifact_id <= 0:
-        raise ValueError("Invalid artifact ID")
-    request = urllib.request.Request(BASE + f"/actions/artifacts/{artifact_id}/zip",
-        headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"],
-                 "Accept": "application/vnd.github+json",
-                 "User-Agent": "Broadcaster-maintenance/1.0"})
-    with urllib.request.urlopen(request, timeout=20) as response:
+    request = artifact_request(artifact_id, os.environ["GH_TOKEN"])
+    with open_securely(request, timeout=20) as response:
         archive = response.read(MAX_ZIP + 1)
     if len(archive) > MAX_ZIP:
         raise ValueError("Previous probe artifact ZIP exceeds safety limit")
