@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Broadcaster contributors
+# SPDX-License-Identifier: CC0-1.0
+# Temporary, branch-scoped bootstrap; remove after Cargo.lock is generated.
+name: Temporary dependency lockfile refresh
+
+on:
+  push:
+    branches:
+      - maintenance/dependency-refresh-20261123
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.repository == 'Certain1989/Broadcaster' && github.ref == 'refs/heads/maintenance/dependency-refresh-20261123'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true
+      - name: Refresh the complete semver-compatible Cargo graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'maintenance/dependency-refresh-20261123'
+          cargo --version
+          cargo update
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+          python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+          locked = tomllib.loads(Path("Cargo.lock").read_text())
+          url = [p["version"] for p in locked["package"] if p["name"] == "url"]
+          assert url == ["2.5.9"], f"Expected fixed url 2.5.9, found {url}"
+          PY
+          git diff --check
+          git diff --stat -- Cargo.lock
+      - name: Commit resolved lockfile to the same feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo 'Nothing to commit; verified lockfile already matches'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- Cargo.lock
+          git commit -m 'build(deps): refresh compatible locked Rust dependencies'
+          git push origin HEAD:refs/heads/maintenance/dependency-refresh-20261123
