@@ -61,7 +61,7 @@
         {
           "type": "git",
           "url": "https://github.com/LuaJIT/LuaJIT.git",
-          "commit": "ea9eb7edb5eac4a9d175d74523db34fac0fa5180",
+          "commit": "96f7b297326e9fd454b7186c6858b2773f94a0dc",
           "disable-shallow-clone": true
         }
       ]
